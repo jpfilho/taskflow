@@ -1,0 +1,22 @@
+# ============================================
+# COMANDOS PARA EXECUTAR NO SERVIDOR
+# ============================================
+# Copie e cole estes comandos no terminal do servidor
+
+# 1. Criar diretório
+mkdir -p /var/www/html/task2026
+chmod 755 /var/www/html/task2026
+
+# 2. Ajustar permissões
+chown -R www-data:www-data /var/www/html/task2026
+chmod -R 755 /var/www/html/task2026
+
+# 3. Verificar se foi criado
+ls -la /var/www/html/ | grep task2026
+
+# 4. Verificar espaço disponível
+df -h /var/www/html
+
+# Pronto! Agora saia do servidor (digite: exit)
+# E execute no seu computador local:
+# scp -r build/web/* root@212.85.0.249:/var/www/html/task2026/
