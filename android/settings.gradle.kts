@@ -22,4 +22,7 @@ plugins {
     id("org.jetbrains.kotlin.android") version "2.1.0" apply false
 }
 
+// Incluir o módulo do plugin msal_flutter (hosted no cache do pub)
+includeBuild("${System.getProperty("user.home")}/.pub-cache/hosted/pub.dev/msal_flutter-2.0.1/android")
+
 include(":app")

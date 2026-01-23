@@ -23,6 +23,7 @@ class _LocalFormDialogState extends State<LocalFormDialog> {
   final _formKey = GlobalKey<FormState>();
   late TextEditingController _localController;
   late TextEditingController _descricaoController;
+  late TextEditingController _localInstalacaoSapController;
   
   final RegionalService _regionalService = RegionalService();
   final DivisaoService _divisaoService = DivisaoService();
@@ -52,6 +53,9 @@ class _LocalFormDialogState extends State<LocalFormDialog> {
     _descricaoController = TextEditingController(
       text: widget.local?.descricao ?? '',
     );
+    _localInstalacaoSapController = TextEditingController(
+      text: widget.local?.localInstalacaoSap ?? '',
+    );
     
     // Inicializar valores se estiver editando
     if (widget.local != null) {
@@ -66,6 +70,7 @@ class _LocalFormDialogState extends State<LocalFormDialog> {
   void dispose() {
     _localController.dispose();
     _descricaoController.dispose();
+    _localInstalacaoSapController.dispose();
     super.dispose();
   }
 
@@ -140,6 +145,9 @@ class _LocalFormDialogState extends State<LocalFormDialog> {
         descricao: _descricaoController.text.trim().isEmpty
             ? null
             : _descricaoController.text.trim(),
+        localInstalacaoSap: _localInstalacaoSapController.text.trim().isEmpty
+            ? null
+            : _localInstalacaoSapController.text.trim(),
         paraTodaRegional: _paraTodaRegional,
         paraTodaDivisao: _paraTodaDivisao,
         regionalId: _paraTodaRegional ? null : _selectedRegional?.id,
@@ -191,6 +199,17 @@ class _LocalFormDialogState extends State<LocalFormDialog> {
                 ),
                 textCapitalization: TextCapitalization.sentences,
                 maxLines: 2,
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _localInstalacaoSapController,
+                decoration: const InputDecoration(
+                  labelText: 'Local da Instalação SAP',
+                  border: OutlineInputBorder(),
+                  hintText: 'H-S-SAAA',
+                  helperText: 'Campo opcional',
+                ),
+                textCapitalization: TextCapitalization.characters,
               ),
               const SizedBox(height: 24),
               const Text(

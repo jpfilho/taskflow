@@ -160,6 +160,46 @@ class _DivisaoListViewState extends State<DivisaoListView> {
     }
   }
 
+  Future<void> _duplicateDivisao(Divisao divisao) async {
+    // Criar cópia com nome modificado
+    final duplicated = divisao.copyWith(
+      id: '',
+      divisao: '${divisao.divisao} (Cópia)',
+    );
+
+    final result = await showDialog<Divisao>(
+      context: context,
+      builder: (context) => DivisaoFormDialog(divisao: duplicated),
+    );
+
+    if (result != null) {
+      try {
+        final created = await _divisaoService.createDivisao(result);
+        if (created != null) {
+          await _loadDivisoes();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Divisão duplicada com sucesso!'),
+                backgroundColor: Colors.green,
+              ),
+            );
+          }
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(e.toString().replaceFirst('Exception: ', '')),
+              backgroundColor: Colors.red,
+              duration: const Duration(seconds: 4),
+            ),
+          );
+        }
+      }
+    }
+  }
+
   Future<void> _editDivisao(Divisao divisao) async {
     final result = await showDialog<Divisao>(
       context: context,
@@ -397,6 +437,12 @@ class _DivisaoListViewState extends State<DivisaoListView> {
                   tooltip: 'Editar',
                 ),
                 IconButton(
+                  icon: const Icon(Icons.copy),
+                  color: Colors.orange,
+                  onPressed: () => _duplicateDivisao(divisao),
+                  tooltip: 'Duplicar',
+                ),
+                IconButton(
                   icon: const Icon(Icons.delete),
                   color: Colors.red,
                   onPressed: () => _deleteDivisao(divisao),
@@ -447,6 +493,13 @@ class _DivisaoListViewState extends State<DivisaoListView> {
                         icon: const Icon(Icons.edit, size: 20, color: Colors.blue),
                         onPressed: () => _editDivisao(divisao),
                         tooltip: 'Editar',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.copy, size: 20, color: Colors.orange),
+                        onPressed: () => _duplicateDivisao(divisao),
+                        tooltip: 'Duplicar',
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(),
                       ),

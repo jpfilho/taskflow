@@ -1,0 +1,7 @@
+-dontwarn org.bouncycastle.**
+-keep class org.bouncycastle.** { *; }
+-dontwarn com.nimbusds.**
+-keep class com.nimbusds.** { *; }
+-dontwarn edu.umd.cs.findbugs.annotations.**
+-dontwarn com.microsoft.identity.**
+-keep class com.microsoft.identity.** { *; }

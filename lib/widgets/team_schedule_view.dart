@@ -14,6 +14,10 @@ import '../services/divisao_service.dart';
 import '../services/feriado_service.dart';
 import '../services/status_service.dart';
 import '../services/anexo_service.dart';
+import '../services/nota_sap_service.dart';
+import '../services/ordem_service.dart';
+import '../services/at_service.dart';
+import '../services/si_service.dart';
 import '../utils/responsive.dart';
 
 class TeamScheduleView extends StatefulWidget {
@@ -61,12 +65,14 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
   List<Executor> _executores = [];
   bool _isLoading = true;
   List<ExecutorTaskRow> _executorRows = [];
+  Map<String, Set<DateTime>> _conflictDaysByExecutor = {};
   final ScrollController _tableVerticalScrollController = ScrollController();
   final ScrollController _ganttVerticalScrollController = ScrollController();
   final ScrollController _ganttHorizontalScrollController = ScrollController();
   final double _rowHeight = 28.0;
   bool _isScrolling = false;
-  bool _showSegmentTexts = false; // Controla se os textos dos segmentos são exibidos (padrão: oculto)
+  bool _showSegmentTexts = true; // exibe textos por padrão
+  bool _showOnlyLocalText = true; // padrão: mostrar só local; botão alterna para local+tarefa
   
   // Variáveis para tipos de atividade e cores
   final TipoAtividadeService _tipoAtividadeService = TipoAtividadeService();
@@ -78,10 +84,34 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
   
   // Serviço de autenticação para obter perfil do usuário
   final AuthServiceSimples _authService = AuthServiceSimples();
+  // Normalização simples para comparações de nomes/logins (sem acentos e caixa-baixa)
+  String _normalizeText(String input) {
+    var normalized = input.toLowerCase().trim();
+    const withDiacritics = 'áàâãäåçéèêëíìîïñóòôõöúùûüýÿÁÀÂÃÄÅÇÉÈÊËÍÌÎÏÑÓÒÔÕÖÚÙÛÜÝ';
+    const without =        'aaaaaaceeeeiiiinooooouuuuyyAAAAAACEEEEIIIINOOOOOUUUUY';
+    for (var i = 0; i < withDiacritics.length && i < without.length; i++) {
+      normalized = normalized.replaceAll(withDiacritics[i], without[i]);
+    }
+    // Remover pontuação e espaços para comparar nomes compostos
+    normalized = normalized.replaceAll(RegExp(r'[^a-z0-9]'), '');
+    return normalized;
+  }
   
   // Serviços para modal de atividades
   final StatusService _statusService = StatusService();
   Map<String, Status> _statusMap = {}; // Mapa de código de status -> Status
+  
+  // Serviços do SAP
+  final NotaSAPService _notaSAPService = NotaSAPService();
+  final OrdemService _ordemService = OrdemService();
+  final ATService _atService = ATService();
+  final SIService _siService = SIService();
+  
+  // Mapas para armazenar contagens do SAP por tarefa
+  Map<String, int> _notasSAPCount = {};
+  Map<String, int> _ordensCount = {};
+  Map<String, int> _atsCount = {};
+  Map<String, int> _sisCount = {};
 
   @override
   void initState() {
@@ -106,6 +136,37 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
     });
     
     _loadData();
+    _loadSAPCounts();
+  }
+
+  Future<void> _loadSAPCounts() async {
+    if (_tasks.isEmpty) return;
+    try {
+      final taskIds = _tasks.map((t) => t.id).toList();
+      
+      final notasSAPFuture = _notaSAPService.contarNotasPorTarefas(taskIds);
+      final ordensFuture = _ordemService.contarOrdensPorTarefas(taskIds);
+      final atsFuture = _atService.contarATsPorTarefas(taskIds);
+      final sisFuture = _siService.contarSIsPorTarefas(taskIds);
+      
+      final results = await Future.wait([
+        notasSAPFuture,
+        ordensFuture,
+        atsFuture,
+        sisFuture,
+      ]);
+      
+      if (mounted) {
+        setState(() {
+          _notasSAPCount = results[0];
+          _ordensCount = results[1];
+          _atsCount = results[2];
+          _sisCount = results[3];
+        });
+      }
+    } catch (e) {
+      print('Erro ao carregar contagens SAP: $e');
+    }
   }
 
   @override
@@ -148,61 +209,86 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
       for (var status in statuses) {
         _statusMap[status.codigo] = status;
       }
-      print('✅ Status carregados: ${_statusMap.length}');
+      // debug silenciado
       
       // Carregar feriados
       await _loadFeriados();
       
-      // Usar tarefas filtradas se fornecidas, caso contrário buscar do TaskService
-      final tasks = widget.filteredTasks ?? await widget.taskService.getAllTasks();
-      print('✅ Tarefas carregadas: ${tasks.length}');
+      // Carregar todas as tarefas (sem filtrar por perfil) para permitir que executores multi-segmento
+      // vejam suas tarefas em qualquer segmento. A filtragem por perfil continua apenas para os executores.
+      final tasks = await widget.taskService.getAllTasks(aplicarPerfil: false);
+      // debug silenciado
       
       final executores = await widget.executorService.getAllExecutores();
       final executoresAtivos = executores.where((e) => e.ativo).toList();
       print('✅ Executores ativos: ${executoresAtivos.length}');
       
+      // Pré-processar referências de executores nas tarefas (id/nome/login/matrícula)
+      final Set<String> taskExecutorIds = {};
+      final Set<String> taskExecutorNamesNorm = {};
+      String norm(String v) => _normalizeText(v);
+      for (var task in tasks) {
+        for (var execId in task.executorIds) {
+          if (execId.isNotEmpty) taskExecutorIds.add(execId);
+        }
+        for (var execNome in task.executores) {
+          if (execNome.isNotEmpty) taskExecutorNamesNorm.add(norm(execNome));
+        }
+        if (task.executor.isNotEmpty) {
+          final parts = task.executor.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty);
+          for (var part in parts) {
+            taskExecutorNamesNorm.add(norm(part));
+          }
+        }
+        if (task.equipeExecutores != null) {
+          for (var ee in task.equipeExecutores!) {
+            if (ee.executorNome.isNotEmpty) {
+              taskExecutorNamesNorm.add(norm(ee.executorNome));
+            }
+          }
+        }
+      }
+
       // Filtrar executores pelo perfil do usuário
       final usuario = _authService.currentUser;
       List<Executor> executoresFiltrados = executoresAtivos;
       
+      // Filtrar sempre pelo perfil do usuário (regional/divisão/segmento), ignorando o perfil da tarefa
       if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
         print('🔒 Filtrando executores pelo perfil do usuário...');
         print('   Regionais do perfil: ${usuario.regionalIds.length}');
         print('   Divisões do perfil: ${usuario.divisaoIds.length}');
         print('   Segmentos do perfil: ${usuario.segmentoIds.length}');
         
-        // Se o usuário tem regionais configuradas, precisamos buscar as divisões dessas regionais
-        // e incluir essas divisões no filtro
-        Set<String> divisaoIdsPermitidas = Set.from(usuario.divisaoIds);
-        
-        // Se tiver regionais configuradas, buscar divisões das regionais
+        // Divisões permitidas: as do usuário + todas as divisões das regionais do usuário
+        final Set<String> divisaoIdsPermitidas = Set.from(usuario.divisaoIds);
         if (usuario.regionalIds.isNotEmpty) {
           try {
             final divisaoService = DivisaoService();
             final todasDivisoes = await divisaoService.getAllDivisoes();
             for (var regionalId in usuario.regionalIds) {
               final divisoesDaRegional = todasDivisoes.where((d) => d.regionalId == regionalId);
-              final divisaoIds = divisoesDaRegional.map((d) => d.id).toList();
-              divisaoIdsPermitidas.addAll(divisaoIds);
+              divisaoIdsPermitidas.addAll(divisoesDaRegional.map((d) => d.id));
             }
           } catch (e) {
             print('⚠️ Erro ao buscar divisões das regionais: $e');
           }
         }
         
+        // Mantém empregado se tiver divisão compatível E pelo menos um segmento do perfil
+        // OU se estiver explicitamente referenciado em alguma tarefa (id ou nome/login/matrícula)
         executoresFiltrados = executoresAtivos.where((executor) {
-          // Verificar se o executor pertence a uma divisão permitida (do perfil ou das regionais)
-          bool temDivisaoPermitida = divisaoIdsPermitidas.isEmpty || 
+          final temDivisaoPermitida = divisaoIdsPermitidas.isEmpty ||
               (executor.divisaoId != null && divisaoIdsPermitidas.contains(executor.divisaoId));
-          
-          // Verificar se o executor tem algum segmento do perfil
-          bool temSegmentoPermitido = usuario.segmentoIds.isEmpty ||
+
+          final temSegmentoPermitido = usuario.segmentoIds.isEmpty ||
               executor.segmentoIds.any((segmentoId) => usuario.segmentoIds.contains(segmentoId));
-          
+
+          // Somente executores que pertencem ao perfil (regional/divisão/segmento) do usuário
           return temDivisaoPermitida && temSegmentoPermitido;
         }).toList();
         
-        print('✅ Executores filtrados: ${executoresFiltrados.length} de ${executoresAtivos.length}');
+        print('✅ Executores filtrados (por perfil do usuário): ${executoresFiltrados.length} de ${executoresAtivos.length}');
       } else if (usuario != null && usuario.isRoot) {
         print('👑 Usuário root: mostrando todos os executores');
       } else {
@@ -228,104 +314,326 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
   }
 
   void _buildExecutorRows() {
-    print('🔨 _buildExecutorRows: Iniciando construção');
-    print('   Período: ${widget.startDate} a ${widget.endDate}');
-    
-    // Criar mapa de executores
-    final executorById = <String, Executor>{};
-    final executorByNome = <String, Executor>{};
-    final executorByNomeCompleto = <String, Executor>{};
-    
-    for (var executor in _executores) {
-      executorById[executor.id] = executor;
-      if (executor.nome.isNotEmpty) {
-        executorByNome[executor.nome.toUpperCase()] = executor;
-      }
-      if (executor.nomeCompleto != null && executor.nomeCompleto!.isNotEmpty) {
-        executorByNomeCompleto[executor.nomeCompleto!.toUpperCase()] = executor;
-      }
-    }
-    
-    // Criar mapa de executor -> lista de tarefas
-    final executorTasksMap = <String, List<Task>>{};
-    for (var executor in _executores) {
-      executorTasksMap[executor.id] = [];
-    }
-    
-    final periodStart = DateTime(widget.startDate.year, widget.startDate.month, widget.startDate.day);
-    final periodEnd = DateTime(widget.endDate.year, widget.endDate.month, widget.endDate.day);
-
-    // Processar tarefas e vincular aos executores
-    for (var task in _tasks) {
-      // Verificar se a tarefa tem segmentos no período selecionado
-      bool hasSegmentInPeriod = false;
-      for (var segment in task.ganttSegments) {
-        final startDate = DateTime(segment.dataInicio.year, segment.dataInicio.month, segment.dataInicio.day);
-        final endDate = DateTime(segment.dataFim.year, segment.dataFim.month, segment.dataFim.day);
-        
-        if (!(startDate.isAfter(periodEnd) || endDate.isBefore(periodStart))) {
-          hasSegmentInPeriod = true;
-          break;
-        }
-      }
-      
-      if (!hasSegmentInPeriod && task.ganttSegments.isEmpty) {
-        if (task.dataInicio.isAfter(periodEnd) || task.dataFim.isBefore(periodStart)) {
-          continue;
-        }
-      }
-      
-      // Coletar executores vinculados
-      final executoresVinculados = <Executor>{};
-      
-      for (var executorId in task.executorIds) {
-        final executor = executorById[executorId];
-        if (executor != null) executoresVinculados.add(executor);
-      }
-      
-      for (var executorNome in task.executores) {
-        if (executorNome.isNotEmpty && executorNome != '-N/A-') {
-          final executor = executorByNome[executorNome.toUpperCase()] ?? 
-                          executorByNomeCompleto[executorNome.toUpperCase()];
-          if (executor != null) executoresVinculados.add(executor);
-        }
-      }
-      
-      if (task.equipeExecutores != null) {
-        for (var equipeExecutor in task.equipeExecutores!) {
-          final executor = executorByNome[equipeExecutor.executorNome.toUpperCase()] ?? 
-                          executorByNomeCompleto[equipeExecutor.executorNome.toUpperCase()];
-          if (executor != null) executoresVinculados.add(executor);
-        }
-      }
-      
-      // Adicionar tarefa aos executores
-      for (var executor in executoresVinculados) {
-        if (!executorTasksMap.containsKey(executor.id)) {
-          executorTasksMap[executor.id] = [];
-        }
-        executorTasksMap[executor.id]!.add(task);
-      }
-    }
-
-    // Criar lista ordenada
-    final executorRows = <ExecutorTaskRow>[];
-    final sortedExecutores = _getSortedExecutores();
-    
-    for (var executor in sortedExecutores) {
-      final tasks = executorTasksMap[executor.id] ?? [];
-      executorRows.add(ExecutorTaskRow(
-        executor: executor,
-        tasks: tasks,
-      ));
-    }
-
-    print('✅ Dados construídos: ${executorRows.length} executores');
-    
-    setState(() {
-      _executorRows = executorRows;
-    });
+    _buildExecutorRowsFromView();
   }
+
+  /// Recarrega tarefas do banco e reconstrói linhas/segmentos a partir da view,
+  /// útil após exclusão/atualização para evitar conflitos stale.
+  Future<void> _reloadTasksAndRows() async {
+    try {
+      final tasks = await widget.taskService.getAllTasks(aplicarPerfil: false);
+      if (!mounted) return;
+      setState(() {
+        _tasks = tasks;
+      });
+      await _buildExecutorRowsFromView();
+    } catch (e, st) {
+      print('⚠️ Erro ao recarregar tarefas/linhas: $e');
+      print(st);
+    }
+  }
+
+
+
+  Future<void> _buildExecutorRowsFromView() async {
+    print('🔄 Carregando execuções via mv_execucoes_dia');
+    try {
+      final executorIds = _executores.map((e) => e.id).toList();
+      final rows = await widget.taskService.getExecucoesDia(
+        executorIds: executorIds,
+        startDate: widget.startDate,
+        endDate: widget.endDate,
+      );
+
+      final byExecutor = <String, List<Map<String, dynamic>>>{};
+      final conflictDaysByExecutor = <String, Set<DateTime>>{};
+      // Helpers para checar vínculo do executor com a tarefa e coletar segmentos não-EXECUÇÃO
+      bool matchesExecutor(Executor executor, {String? executorId, String? executorNome}) {
+        if (executorId != null && executorId.isNotEmpty && executorId == executor.id) {
+          return true;
+        }
+        final keys = <String>{
+          _normalizeText(executor.nome),
+          if (executor.nomeCompleto != null) _normalizeText(executor.nomeCompleto!),
+          if (executor.login != null) _normalizeText(executor.login!),
+          if (executor.matricula != null) _normalizeText(executor.matricula!),
+        }..removeWhere((e) => e.isEmpty);
+        if (executorNome != null && executorNome.isNotEmpty) {
+          if (keys.contains(_normalizeText(executorNome))) return true;
+        }
+        return false;
+      }
+
+      bool isTaskAssignedToExecutor(Task task, Executor executor) {
+        // Por ID
+        if (task.executorIds.any((id) => id.isNotEmpty && id == executor.id)) return true;
+
+        // Por nomes/textos livres
+        final keys = <String>{
+          _normalizeText(executor.nome),
+          if (executor.nomeCompleto != null) _normalizeText(executor.nomeCompleto!),
+          if (executor.login != null) _normalizeText(executor.login!),
+          if (executor.matricula != null) _normalizeText(executor.matricula!),
+        }..removeWhere((e) => e.isEmpty);
+
+        for (final nome in task.executores) {
+          if (nome.isNotEmpty && keys.contains(_normalizeText(nome))) return true;
+        }
+        if (task.executor.isNotEmpty) {
+          for (final nome in task.executor.split(',').map((e) => e.trim())) {
+            if (nome.isNotEmpty && keys.contains(_normalizeText(nome))) return true;
+          }
+        }
+        if (task.equipeExecutores != null) {
+          for (final ee in task.equipeExecutores!) {
+            if (ee.executorNome.isNotEmpty && keys.contains(_normalizeText(ee.executorNome))) {
+              return true;
+            }
+          }
+        }
+        for (final ep in task.executorPeriods) {
+          if (matchesExecutor(executor, executorId: ep.executorId, executorNome: ep.executorNome)) {
+            return true;
+          }
+        }
+        return false;
+      }
+
+      List<GanttSegment> nonExecSegmentsForExecutor(Task task, Executor executor) {
+        // Prioriza períodos específicos do executor
+        List<GanttSegment> pickSegments() {
+          bool foundExecutorPeriod = false;
+          for (final ep in task.executorPeriods) {
+            if (matchesExecutor(executor, executorId: ep.executorId, executorNome: ep.executorNome)) {
+              foundExecutorPeriod = true;
+              final segs = ep.periods
+                  .where((p) => p.tipoPeriodo.toUpperCase() != 'EXECUCAO')
+                  .toList();
+              if (segs.isNotEmpty) return segs;
+            }
+          }
+          // Se não encontrou não-execução no executor_periods, ou não havia períodos específicos,
+          // usar segmentos gerais da tarefa
+          if (!foundExecutorPeriod || task.ganttSegments.isNotEmpty) {
+            final segs = task.ganttSegments
+                .where((p) => p.tipoPeriodo.toUpperCase() != 'EXECUCAO')
+                .toList();
+            if (segs.isNotEmpty) return segs;
+          }
+          return task.ganttSegments
+              .where((p) => p.tipoPeriodo.toUpperCase() != 'EXECUCAO')
+              .toList();
+        }
+
+        // Normaliza deslocamento: apenas dia de ida (início) e dia de volta (fim)
+        List<GanttSegment> normalize(List<GanttSegment> segs) {
+          final List<GanttSegment> out = [];
+          for (final s in segs) {
+            final tipoPeriodo = s.tipoPeriodo.toUpperCase();
+            if (tipoPeriodo == 'DESLOCAMENTO') {
+              final startDay = DateTime(s.dataInicio.year, s.dataInicio.month, s.dataInicio.day);
+              final endDay = DateTime(s.dataFim.year, s.dataFim.month, s.dataFim.day);
+              out.add(GanttSegment(
+                dataInicio: startDay,
+                dataFim: startDay,
+                label: s.label,
+                tipo: s.tipo,
+                tipoPeriodo: s.tipoPeriodo,
+              ));
+              if (endDay.isAfter(startDay)) {
+                out.add(GanttSegment(
+                  dataInicio: endDay,
+                  dataFim: endDay,
+                  label: s.label,
+                  tipo: s.tipo,
+                  tipoPeriodo: s.tipoPeriodo,
+                ));
+              }
+            } else {
+              out.add(s);
+            }
+          }
+          return out;
+        }
+
+        final picked = pickSegments();
+        return picked.isEmpty ? picked : normalize(picked);
+      }
+
+      for (final r in rows) {
+        final execId = r['executor_id']?.toString() ?? '';
+        if (execId.isEmpty) continue;
+        byExecutor.putIfAbsent(execId, () => []).add(r);
+        final dayStr = r['day']?.toString();
+        if (dayStr != null && r['has_conflict'] == true) {
+          final d = DateTime.parse(dayStr);
+          final dayKey = DateTime(d.year, d.month, d.day);
+          conflictDaysByExecutor.putIfAbsent(execId, () => <DateTime>{}).add(dayKey);
+        }
+      }
+
+      final executorRows = <ExecutorTaskRow>[];
+      final sortedExecutores = _getSortedExecutores();
+
+      for (final executor in sortedExecutores) {
+        final list = byExecutor[executor.id] ?? [];
+        final tasksById = <String, Task>{};
+        final taskDays = <String, List<DateTime>>{};
+
+        for (final r in list) {
+          final taskId = r['task_id']?.toString() ?? '';
+          if (taskId.isEmpty) continue;
+          final dayStr = r['day']?.toString();
+          if (dayStr == null) continue;
+          final day = DateTime.parse(dayStr);
+          // Preferir nome do local (quando enviado pela view), caindo para local do próprio tasks/local_id
+          final locName = (r['local_nome'] ?? r['local'] ?? r['loc'] ?? '').toString();
+          final locKey = (r['loc_key'] ?? '').toString();
+          final locs = locName.isNotEmpty ? locName.split(RegExp(r'\s*\|\s*')).where((e) => e.isNotEmpty).toList() : <String>[];
+          final locIds = locKey.isNotEmpty ? locKey.split('|').where((e) => e.isNotEmpty).toList() : <String>[];
+          final taskStatus = r['task_status']?.toString() ?? '';
+          final taskTipo = r['task_tipo']?.toString() ?? '';
+          final taskLabel = (r['task_tarefa'] ?? r['task_tipo'] ?? '').toString();
+          final hasConflict = (r['has_conflict'] == true);
+
+          taskDays.putIfAbsent(taskId, () => []).add(day);
+
+          tasksById.putIfAbsent(
+            taskId,
+            () => Task(
+              id: taskId,
+              status: taskStatus,
+              statusNome: '',
+              regional: '',
+              divisao: '',
+              locais: locs,
+              segmento: '',
+              equipes: const [],
+              tipo: taskTipo,
+              tarefa: taskLabel,
+              executores: const [],
+              executor: '',
+              frota: '',
+              coordenador: '',
+              si: '',
+              dataInicio: day,
+              dataFim: day,
+              ganttSegments: const [],
+              executorPeriods: const [],
+              frotaPeriods: const [],
+              precisaSi: false,
+              executorIds: const [],
+              equipeIds: const [],
+              frotaIds: const [],
+              localIds: locIds,
+              hasConflict: hasConflict,
+            ),
+          );
+        }
+
+        // Montar segmentos do Gantt a partir das datas
+        for (final entry in tasksById.entries.toList()) {
+          final days = taskDays[entry.key] ?? [];
+          if (days.isEmpty) continue;
+          days.sort();
+          final segments = <GanttSegment>[];
+          DateTime? segStart;
+          DateTime? segEnd;
+          for (final d in days) {
+            final dDate = DateTime(d.year, d.month, d.day);
+            if (segStart == null) {
+              segStart = dDate;
+              segEnd = dDate;
+              continue;
+            }
+            if (dDate.difference(segEnd!).inDays <= 1) {
+              segEnd = dDate;
+            } else {
+              segments.add(GanttSegment(
+                dataInicio: segStart,
+                dataFim: segEnd,
+                label: '',
+                tipo: 'ADM',
+              ));
+              segStart = dDate;
+              segEnd = dDate;
+            }
+          }
+          if (segStart != null) {
+            segments.add(GanttSegment(
+              dataInicio: segStart,
+              dataFim: segEnd!,
+              label: '',
+              tipo: 'ADM',
+            ));
+          }
+
+          if (segments.isNotEmpty) {
+            tasksById[entry.key] = entry.value.copyWith(
+              ganttSegments: segments,
+              dataInicio: segments.first.dataInicio,
+              dataFim: segments.last.dataFim,
+            );
+          }
+        }
+
+        // Complementar com segmentos de PLANEJAMENTO/DESLOCAMENTO (não contam conflito)
+        for (final task in _tasks) {
+          if (task.status.toUpperCase() == 'CANC') continue;
+          if (!isTaskAssignedToExecutor(task, executor)) continue;
+
+          final nonExecSegments = nonExecSegmentsForExecutor(task, executor);
+          if (nonExecSegments.isEmpty) continue;
+
+          final existing = tasksById[task.id];
+          final mergedSegments = <GanttSegment>[
+            if (existing != null) ...existing.ganttSegments,
+            ...nonExecSegments,
+          ];
+          if (mergedSegments.isEmpty) continue;
+
+          DateTime minStart = mergedSegments.first.dataInicio;
+          DateTime maxEnd = mergedSegments.first.dataFim;
+          for (final seg in mergedSegments.skip(1)) {
+            if (seg.dataInicio.isBefore(minStart)) minStart = seg.dataInicio;
+            if (seg.dataFim.isAfter(maxEnd)) maxEnd = seg.dataFim;
+          }
+
+          final baseTask = existing ?? task;
+          tasksById[task.id] = baseTask.copyWith(
+            ganttSegments: mergedSegments,
+            dataInicio: minStart,
+            dataFim: maxEnd,
+            locais: task.locais.isNotEmpty ? task.locais : baseTask.locais,
+            localIds: task.localIds.isNotEmpty ? task.localIds : baseTask.localIds,
+            tarefa: task.tarefa.isNotEmpty ? task.tarefa : baseTask.tarefa,
+            tipo: task.tipo.isNotEmpty ? task.tipo : baseTask.tipo,
+            status: task.status.isNotEmpty ? task.status : baseTask.status,
+            hasConflict: existing?.hasConflict ?? false,
+          );
+        }
+
+        executorRows.add(ExecutorTaskRow(
+          executor: executor,
+          tasks: tasksById.values.toList(),
+        ));
+      }
+
+      setState(() {
+        _executorRows = executorRows;
+        _conflictDaysByExecutor = conflictDaysByExecutor;
+      });
+      print('✅ Dados via view: ${executorRows.length} executores');
+    } catch (e, st) {
+      print('❌ Erro ao construir executor rows via view: $e');
+      print(st);
+      setState(() {
+        _executorRows = [];
+        _conflictDaysByExecutor = {};
+      });
+    }
+  }
+
 
   List<Executor> _getSortedExecutores() {
     final sorted = List<Executor>.from(_executores);
@@ -403,9 +711,10 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
       // Ajustar tamanho do ícone para não ultrapassar a altura da linha
       final iconSize = (_rowHeight - 4).clamp(12.0, 20.0);
       
+      final textColor = _getSegmentTextColor(task);
       return Icon(
         iconData,
-        color: Colors.white,
+        color: textColor,
         size: iconSize,
         shadows: [
           Shadow(
@@ -417,20 +726,27 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
       );
     }
     
-    // Para EXECUCAO: mostrar texto (local e tarefa)
-    // Com altura reduzida, mostrar apenas uma linha se possível
+    // Para EXECUCAO: texto padrão = LOCAL. Botão pin alterna só local vs local+tarefa; Tt alterna visibilidade.
     final fontSize = _getOptimalFontSize(barWidth);
     final availableHeight = _rowHeight - 4; // Descontar padding
-    
-    // Se a altura disponível for muito pequena, mostrar apenas local ou tarefa
-    if (availableHeight < 20) {
+    final textColor = _getSegmentTextColor(task);
+    final localText = _getTruncatedText(
+      task.locais.isNotEmpty ? task.locais.join(', ') : '-',
+      barWidth,
+    );
+    final taskText = _getTruncatedText(task.tarefa, barWidth);
+
+    // Se textos estão ocultos pelo Tt, não renderiza conteúdo
+    if (!_showSegmentTexts) {
+      return const SizedBox.shrink();
+    }
+
+    // Linha única se altura pequena ou modo "só local"
+    if (availableHeight < 20 || _showOnlyLocalText) {
       return Text(
-        _getTruncatedText(
-          task.locais.isNotEmpty ? task.locais.first : task.tarefa,
-          barWidth,
-        ),
+        localText.isNotEmpty ? localText : taskText,
         style: TextStyle(
-          color: Colors.white,
+          color: textColor,
           fontSize: fontSize.clamp(8.0, 10.0),
           fontWeight: FontWeight.w600,
           shadows: [
@@ -446,23 +762,19 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
         textAlign: TextAlign.center,
       );
     }
-    
-    // Se houver altura suficiente, mostrar duas linhas
+
+    // Duas linhas: local e tarefa
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       crossAxisAlignment: CrossAxisAlignment.center,
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Linha 1: Local
-        if (task.locais.isNotEmpty)
+        if (localText.isNotEmpty)
           Flexible(
             child: Text(
-              _getTruncatedText(
-                task.locais.join(', '),
-                barWidth,
-              ),
+              localText,
               style: TextStyle(
-                color: Colors.white,
+                color: textColor,
                 fontSize: fontSize.clamp(8.0, 10.0),
                 fontWeight: FontWeight.w600,
                 shadows: [
@@ -478,16 +790,12 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
               textAlign: TextAlign.center,
             ),
           ),
-        // Linha 2: Tarefa
-        if (task.tarefa.isNotEmpty)
+        if (taskText.isNotEmpty)
           Flexible(
             child: Text(
-              _getTruncatedText(
-                task.tarefa,
-                barWidth,
-              ),
+              taskText,
               style: TextStyle(
-                color: Colors.white,
+                color: textColor,
                 fontSize: fontSize.clamp(8.0, 10.0),
                 fontWeight: FontWeight.w500,
                 shadows: [
@@ -566,9 +874,18 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
         return Colors.blue[900]!; // Azul escuro para deslocamento (sempre)
       case 'EXECUCAO':
       default:
-        // Para execução, usar cor do tipo de atividade (se definida)
+        // PRIORIDADE 2: Verificar se o tipo de atividade tem cor de segmento definida
         if (task.tipo.isNotEmpty) {
           final tipoAtividade = _tipoAtividadeMap[task.tipo];
+          if (tipoAtividade != null && tipoAtividade.corSegmento != null && tipoAtividade.corSegmento!.isNotEmpty) {
+            try {
+              final color = tipoAtividade.segmentBackgroundColor;
+              return color;
+            } catch (e) {
+              print('⚠️ Erro ao converter cor de segmento do tipo de atividade "${tipoAtividade.corSegmento}": $e');
+            }
+          }
+          // PRIORIDADE 3: Se não houver cor de segmento, usar cor principal do tipo de atividade
           if (tipoAtividade != null && tipoAtividade.cor != null && tipoAtividade.cor!.isNotEmpty) {
             try {
               // Converter hexadecimal para Color
@@ -580,9 +897,25 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
             }
           }
         }
-        // Se não houver cor do tipo de atividade, usar cinza padrão
+        // Se não houver cor definida, usar cinza padrão
         return Colors.grey[400]!;
     }
+  }
+
+  Color _getSegmentTextColor(Task task) {
+    // Verificar se o tipo de atividade tem cor de texto do segmento definida
+    if (task.tipo.isNotEmpty) {
+      final tipoAtividade = _tipoAtividadeMap[task.tipo];
+      if (tipoAtividade != null && tipoAtividade.corTextoSegmento != null && tipoAtividade.corTextoSegmento!.isNotEmpty) {
+        try {
+          return tipoAtividade.segmentTextColor;
+        } catch (e) {
+          print('⚠️ Erro ao converter cor do texto do segmento: $e');
+        }
+      }
+    }
+    // Cor padrão branca
+    return Colors.white;
   }
 
   @override
@@ -607,7 +940,9 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
     // Calcular largura mínima dos dias (mínimo 30px para legibilidade)
     final minDayWidth = 30.0;
     final totalGanttWidth = days.length * minDayWidth;
-    final tableWidth = 400.0;
+    // Largura da tabela: DIVISÃO(100) + EMPRESA(100) + FUNÇÃO(100) + MATRÍCULA(100) + TAREFAS(80) + NOME(150) = 630px
+    // Adicionar margem para garantir que todas as colunas sejam visíveis
+    final tableWidth = 650.0;
     
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -684,6 +1019,9 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
 
 
   Widget _buildExecutorTable() {
+    final isCompact = Responsive.isMobile(context) || Responsive.isTablet(context);
+    final monthHeaderHeight = isCompact ? 0.0 : 25.0;
+
     if (_executorRows.isEmpty) {
       return const Center(child: Text('Nenhum executor encontrado'));
     }
@@ -696,18 +1034,19 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
       child: Column(
         children: [
           // Espaço equivalente à linha de meses do Gantt (25px)
-          Container(
-            height: 25,
-            decoration: BoxDecoration(
-              color: Colors.grey[100],
-              border: Border(
-                bottom: BorderSide(
-                  color: Colors.grey[300]!,
-                  width: 1,
+          if (monthHeaderHeight > 0)
+            Container(
+              height: monthHeaderHeight,
+              decoration: BoxDecoration(
+                color: Colors.grey[100],
+                border: Border(
+                  bottom: BorderSide(
+                    color: Colors.grey[300]!,
+                    width: 1,
+                  ),
                 ),
               ),
             ),
-          ),
           // Cabeçalho fixo - mesma formatação de atividades
           Container(
             height: 50,
@@ -810,6 +1149,10 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
   }
 
   Widget _buildGanttView(List<DateTime> days, double dayWidth) {
+    final isCompact = Responsive.isMobile(context) || Responsive.isTablet(context);
+    final monthHeaderHeight = isCompact ? 0.0 : 25.0;
+    final dayHeaderHeight = 50.0;
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final totalWidth = days.length * dayWidth;
@@ -826,74 +1169,101 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
               Column(
                 children: [
                   // Linha de meses mesclados
-                  Container(
-                    height: 25,
-                    decoration: BoxDecoration(
-                      color: Colors.grey[100],
-                      border: Border(
-                        bottom: BorderSide(
-                          color: Colors.grey[300]!,
-                          width: 1,
+                  if (monthHeaderHeight > 0)
+                    Container(
+                      height: monthHeaderHeight,
+                      decoration: BoxDecoration(
+                        color: Colors.grey[100],
+                        border: Border(
+                          bottom: BorderSide(
+                            color: Colors.grey[300]!,
+                            width: 1,
+                          ),
                         ),
                       ),
-                    ),
-                    child: Stack(
-                      children: [
-                        Align(
-                          alignment: Alignment.topLeft,
-                          child: SingleChildScrollView(
-                            controller: _ganttHorizontalScrollController,
-                            scrollDirection: Axis.horizontal,
-                            physics: needsScroll 
-                              ? const AlwaysScrollableScrollPhysics() 
-                              : const NeverScrollableScrollPhysics(),
-                            padding: EdgeInsets.zero,
-                            child: SizedBox(
-                              width: totalWidth,
-                              height: 25,
-                              child: Stack(
-                                alignment: Alignment.topLeft,
-                                fit: StackFit.loose,
-                                children: [
-                                  // Meses mesclados
-                                  ..._buildMergedMonthHeaders(days, dayWidth),
-                                ],
+                      child: Stack(
+                        children: [
+                          Align(
+                            alignment: Alignment.topLeft,
+                            child: SingleChildScrollView(
+                              controller: _ganttHorizontalScrollController,
+                              scrollDirection: Axis.horizontal,
+                              physics: needsScroll 
+                                ? const AlwaysScrollableScrollPhysics() 
+                                : const NeverScrollableScrollPhysics(),
+                              padding: EdgeInsets.zero,
+                              child: SizedBox(
+                                width: totalWidth,
+                                height: monthHeaderHeight,
+                                child: Stack(
+                                  alignment: Alignment.topLeft,
+                                  fit: StackFit.loose,
+                                  children: [
+                                    // Meses mesclados
+                                    ..._buildMergedMonthHeaders(days, dayWidth),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                        // Botão para mostrar/ocultar textos dos segmentos
+                        // Botões para controle de texto: pin (local vs local+tarefa) e Tt (mostrar/ocultar)
                         Positioned(
                           right: 8,
                           top: 0,
                           bottom: 0,
-                          child: Tooltip(
-                            message: _showSegmentTexts ? 'Ocultar textos' : 'Mostrar textos',
-                            child: IconButton(
-                              icon: Icon(
-                                _showSegmentTexts ? Icons.text_fields : Icons.text_fields_outlined,
-                                size: 18,
-                                color: Colors.grey[700],
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Tooltip(
+                                message: _showOnlyLocalText ? 'Mostrar local e tarefa' : 'Mostrar só local',
+                                child: IconButton(
+                                  icon: Icon(
+                                    _showOnlyLocalText ? Icons.location_on : Icons.location_on_outlined,
+                                    size: 18,
+                                    color: Colors.grey[700],
+                                  ),
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(
+                                    minWidth: 32,
+                                    minHeight: 24,
+                                  ),
+                                  onPressed: () {
+                                    setState(() {
+                                      _showOnlyLocalText = !_showOnlyLocalText;
+                                    });
+                                  },
+                                ),
                               ),
-                              padding: EdgeInsets.zero,
-                              constraints: const BoxConstraints(
-                                minWidth: 32,
-                                minHeight: 24,
+                              const SizedBox(width: 6),
+                              Tooltip(
+                                message: _showSegmentTexts ? 'Ocultar textos' : 'Mostrar textos',
+                                child: IconButton(
+                                  icon: Icon(
+                                    _showSegmentTexts ? Icons.text_fields : Icons.text_fields_outlined,
+                                    size: 18,
+                                    color: Colors.grey[700],
+                                  ),
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(
+                                    minWidth: 32,
+                                    minHeight: 24,
+                                  ),
+                                  onPressed: () {
+                                    setState(() {
+                                      _showSegmentTexts = !_showSegmentTexts;
+                                    });
+                                  },
+                                ),
                               ),
-                              onPressed: () {
-                                setState(() {
-                                  _showSegmentTexts = !_showSegmentTexts;
-                                });
-                              },
-                            ),
+                            ],
                           ),
                         ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
                   // Linha de dias
                   Container(
-                    height: 50,
+                    height: dayHeaderHeight,
                     decoration: BoxDecoration(
                       color: Colors.grey[100],
                       border: Border(
@@ -914,7 +1284,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                       padding: EdgeInsets.zero,
                       child: SizedBox(
                         width: totalWidth,
-                        height: 50,
+                        height: dayHeaderHeight,
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.start,
                           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -923,8 +1293,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                           children: days.map((day) {
                               final isWeekend = day.weekday == 6 || day.weekday == 7;
                               final isFeriado = _isFeriado(day);
-                              // Verificar se há conflito neste dia (múltiplas tarefas para a mesma pessoa)
-                              final hasConflict = _hasConflictOnDay(day);
+                              final hasConflict = _hasAnyExecutorConflictOnDay(day);
                               return Container(
                                 width: dayWidth,
                                 height: 50,
@@ -940,9 +1309,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                                               : Colors.white),
                                   border: Border(
                                     right: BorderSide(
-                                      color: hasConflict
-                                          ? Colors.red[400]!
-                                          : Colors.grey[300]!,
+                                      color: hasConflict ? Colors.red[400]! : Colors.grey[300]!,
                                       width: hasConflict ? 2 : 1,
                                     ),
                                   ),
@@ -950,12 +1317,21 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                                 alignment: Alignment.centerLeft,
                                 child: Padding(
                                   padding: const EdgeInsets.only(left: 2.0),
-                                  child: Text(
-                                    day.day.toString().padLeft(2, '0'),
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: hasConflict ? FontWeight.bold : FontWeight.normal,
-                                      color: hasConflict ? Colors.red[900] : Colors.black,
+                                  child: Tooltip(
+                                    message: hasConflict
+                                        ? 'Conflito de execução em locais diferentes'
+                                        : (isFeriado ? 'Feriado' : ''),
+                                    child: Text(
+                                      day.day.toString().padLeft(2, '0'),
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: hasConflict ? FontWeight.bold : FontWeight.normal,
+                                        color: hasConflict
+                                            ? Colors.red[900]
+                                            : isFeriado
+                                                ? Colors.purple[900]
+                                                : (isWeekend ? Colors.grey[800] : Colors.black),
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -1084,57 +1460,89 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                   ...row.tasks.expand((task) {
                     // Verificar se há períodos específicos para este executor
                     ExecutorPeriod? executorPeriod;
+                    final execKeys = <String>{
+                      _normalizeText(row.executor.nome),
+                      if (row.executor.nomeCompleto != null) _normalizeText(row.executor.nomeCompleto!),
+                      if (row.executor.login != null) _normalizeText(row.executor.login!),
+                      if (row.executor.matricula != null) _normalizeText(row.executor.matricula!),
+                    }..removeWhere((e) => e.isEmpty);
+                    
                     for (var ep in task.executorPeriods) {
-                      if (ep.executorId == row.executor.id) {
+                      final normEpName = _normalizeText(ep.executorNome);
+                      final sameId = ep.executorId.toLowerCase() == row.executor.id.toLowerCase();
+                      final sameNameNorm = normEpName.isNotEmpty && execKeys.contains(normEpName);
+                      if (sameId || sameNameNorm) {
                         executorPeriod = ep;
                         break;
                       }
                     }
                     
                     // Usar períodos do executor se disponível, senão usar segmentos gerais
-                    final segmentsToUse = executorPeriod != null && executorPeriod.periods.isNotEmpty
-                        ? executorPeriod.periods
-                        : task.ganttSegments;
+                    // e garantir inclusão de PLANEJAMENTO/DESLOCAMENTO mesmo com executorPeriod.
+                    final List<GanttSegment> segmentsToUse = [];
+                    if (executorPeriod != null && executorPeriod.periods.isNotEmpty) {
+                      // Sempre incluir períodos específicos do executor
+                      segmentsToUse.addAll(executorPeriod.periods);
+                      // Adicionar trechos não-EXEC dos ganttSegments (planejamento/deslocamento)
+                      for (final seg in task.ganttSegments) {
+                        if (seg.tipoPeriodo.toUpperCase() != 'EXECUCAO') {
+                          segmentsToUse.add(seg);
+                        }
+                      }
+                    } else {
+                      segmentsToUse.addAll(task.ganttSegments);
+                    }
+                    // Segments não-EXEC (planejamento/deslocamento) já foram anexados em ganttSegments
+                    // quando construímos tasksById. Aqui apenas garantimos que, se o executorPeriod
+                    // existir, os não-EXEC dos ganttSegments sejam adicionados junto.
                     
                     return segmentsToUse.map((segment) {
-                      final startDate = DateTime(
+                      // Normalizar datas do segmento
+                      final rawStart = DateTime(
                         segment.dataInicio.year,
                         segment.dataInicio.month,
                         segment.dataInicio.day,
                       );
-                      final endDate = DateTime(
+                      final rawEnd = DateTime(
                         segment.dataFim.year,
                         segment.dataFim.month,
                         segment.dataFim.day,
                       );
                       
-                      // Verificar se o segmento está no período
-                      final periodEnd = DateTime(widget.endDate.year, widget.endDate.month, widget.endDate.day);
+                      // Período visível da tela
                       final periodStart = DateTime(widget.startDate.year, widget.startDate.month, widget.startDate.day);
+                      final periodEnd = DateTime(widget.endDate.year, widget.endDate.month, widget.endDate.day);
                       
-                      if (startDate.isAfter(periodEnd) || endDate.isBefore(periodStart)) {
+                      // Se está totalmente fora do range, descartar
+                      if (rawStart.isAfter(periodEnd) || rawEnd.isBefore(periodStart)) {
                         return null;
                       }
                       
-                      final startOffset = _getDayOffset(startDate, days, dayWidth);
-                      final duration = endDate.difference(startDate).inDays + 1;
+                      // Clampar para o range visível (garante inclusive no último dia)
+                      final visibleStart = rawStart.isBefore(periodStart) ? periodStart : rawStart;
+                      final visibleEnd = rawEnd.isAfter(periodEnd) ? periodEnd : rawEnd;
+                      
+                      // Se por algum motivo ficou inválido, descartar
+                      if (visibleEnd.isBefore(visibleStart)) return null;
+                      
+                      final startOffset = _getDayOffset(visibleStart, days, dayWidth);
+                      final duration = visibleEnd.difference(visibleStart).inDays + 1; // inclusive
                       final barWidth = duration * dayWidth;
                       
-                      // Verificar se o segmento tem conflito em algum dos seus dias
-                      bool hasConflictInSegment = false;
-                      var currentDay = startDate;
-                      while (currentDay.isBefore(endDate.add(const Duration(days: 1)))) {
-                        if (_hasConflictOnDayForExecutor(currentDay, row.executor.id)) {
-                          hasConflictInSegment = true;
-                          break;
+                      // Avaliar conflito por dia: se a view sinalizou conflito para o executor no dia,
+                      // e o segmento cobre o dia, marcamos como conflito (independente de outras checagens locais).
+                      List<DateTime> conflictDays = [];
+                      var currentDay = visibleStart;
+                      while (currentDay.isBefore(visibleEnd.add(const Duration(days: 1)))) {
+                        final hasConflictThisExecutor = _hasConflictOnDayForExecutor(currentDay, row.executor.id);
+                        if (hasConflictThisExecutor) {
+                          conflictDays.add(currentDay);
                         }
                         currentDay = currentDay.add(const Duration(days: 1));
                       }
                       
-                      // Se houver conflito, usar cor vermelha; caso contrário, usar cor original
-                      final segmentColor = hasConflictInSegment 
-                          ? Colors.red[600]! 
-                          : _getSegmentColor(segment, task);
+                      // Cor base do segmento
+                      final segmentColor = _getSegmentColor(segment, task);
                       
                       // Encontrar o índice do segmento
                       final segmentIndex = segmentsToUse.indexOf(segment);
@@ -1153,6 +1561,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                           dayWidth: dayWidth,
                           days: days,
                           color: segmentColor,
+                          conflictDays: conflictDays,
                           taskService: widget.taskService,
                           onTasksUpdated: () async {
                             // Recarregar tarefas do banco para garantir que as alterações sejam refletidas
@@ -1369,19 +1778,36 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
   }
 
   void _showExecutorTasks(Executor executor, List<Task> tasks) {
-    // Filtrar tarefas que estão no período
-    final tasksNoPeriodo = tasks.where((task) {
-      // Verificar se a tarefa tem segmentos no período
-      if (task.ganttSegments.isNotEmpty) {
-        return task.ganttSegments.any((segment) {
-          return (segment.dataInicio.isBefore(widget.endDate.add(const Duration(days: 1))) &&
-                  segment.dataFim.isAfter(widget.startDate.subtract(const Duration(days: 1))));
-        });
+    // Filtrar tarefas que cruzam o período (segmentos gerais ou por executor; fallback datas gerais)
+    final periodStart = DateTime(widget.startDate.year, widget.startDate.month, widget.startDate.day);
+    final periodEnd = DateTime(widget.endDate.year, widget.endDate.month, widget.endDate.day);
+
+    bool cruzaPeriodo(Task task) {
+      // Segmentos gerais
+      for (var segment in task.ganttSegments) {
+        final s = DateTime(segment.dataInicio.year, segment.dataInicio.month, segment.dataInicio.day);
+        final e = DateTime(segment.dataFim.year, segment.dataFim.month, segment.dataFim.day);
+        if (!(s.isAfter(periodEnd) || e.isBefore(periodStart))) return true;
       }
-      // Fallback: verificar dataInicio e dataFim
-      return (task.dataInicio.isBefore(widget.endDate.add(const Duration(days: 1))) &&
-              task.dataFim.isAfter(widget.startDate.subtract(const Duration(days: 1))));
-    }).toList();
+      // Segmentos por executor
+      for (var ep in task.executorPeriods) {
+        for (var segment in ep.periods) {
+          final s = DateTime(segment.dataInicio.year, segment.dataInicio.month, segment.dataInicio.day);
+          final e = DateTime(segment.dataFim.year, segment.dataFim.month, segment.dataFim.day);
+          if (!(s.isAfter(periodEnd) || e.isBefore(periodStart))) return true;
+        }
+      }
+      // Fallback datas gerais se não houver segmentos
+      final semSegmentos = task.ganttSegments.isEmpty &&
+          (task.executorPeriods.isEmpty || task.executorPeriods.every((ep) => ep.periods.isEmpty));
+      if (semSegmentos) {
+        return !(task.dataInicio.isAfter(periodEnd) || task.dataFim.isBefore(periodStart));
+      }
+      return false;
+    }
+
+    final tasksNoPeriodo = tasks.where(cruzaPeriodo).toList()
+      ..sort((a, b) => a.dataInicio.compareTo(b.dataInicio));
 
     if (tasksNoPeriodo.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1524,13 +1950,15 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                     icon: const Icon(Icons.more_vert, size: 18, color: Colors.grey),
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(),
-                    onSelected: (value) {
+                    onSelected: (value) async {
                       switch (value) {
                         case 'edit':
                           onEdit?.call(task);
                           break;
                         case 'delete':
-                          onDelete?.call(task);
+                          final res = onDelete?.call(task);
+                          if (res is Future) await res;
+                          await _reloadTasksAndRows();
                           break;
                         case 'duplicate':
                           onDuplicate?.call(task);
@@ -1772,6 +2200,22 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                     ),
                   ],
                 ),
+                // Informações do SAP
+                if ((_notasSAPCount[task.id] ?? 0) > 0 ||
+                    (_ordensCount[task.id] ?? 0) > 0 ||
+                    (_atsCount[task.id] ?? 0) > 0 ||
+                    (_sisCount[task.id] ?? 0) > 0)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.inventory_2, size: 16, color: Colors.blue[600]),
+                      const SizedBox(width: 4),
+                      Text(
+                        'SAP: ${(_notasSAPCount[task.id] ?? 0) + (_ordensCount[task.id] ?? 0) + (_atsCount[task.id] ?? 0) + (_sisCount[task.id] ?? 0)}',
+                        style: TextStyle(fontSize: 12, color: Colors.blue[700], fontWeight: FontWeight.w600),
+                      ),
+                    ],
+                  ),
               ],
             ),
           ],
@@ -1904,43 +2348,50 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
     return '';
   }
 
-  // Verificar se há conflito em um dia (múltiplas tarefas para qualquer pessoa)
-  bool _hasConflictOnDay(DateTime day) {
-    final dayStart = DateTime(day.year, day.month, day.day);
-    final dayEnd = dayStart.add(const Duration(days: 1));
-    
-    for (var row in _executorRows) {
-      int taskCount = 0;
-      for (var task in row.tasks) {
-        for (var segment in task.ganttSegments) {
-          final segmentStart = DateTime(
-            segment.dataInicio.year,
-            segment.dataInicio.month,
-            segment.dataInicio.day,
-          );
-          final segmentEnd = DateTime(
-            segment.dataFim.year,
-            segment.dataFim.month,
-            segment.dataFim.day,
-          ).add(const Duration(days: 1));
-          
-          // Verificar se o segmento sobrepõe o dia
-          if (segmentStart.isBefore(dayEnd) && segmentEnd.isAfter(dayStart)) {
-            taskCount++;
-            if (taskCount > 1) {
-              return true; // Conflito encontrado para este executor
-            }
-          }
-        }
-      }
+  // Retorna uma chave de localização (preferencialmente IDs) para comparar conflitos
+  String _taskLocationKey(Task task) {
+    if (task.localIds.isNotEmpty) {
+      return task.localIds.join('|');
     }
-    return false;
+    if (task.localId != null && task.localId!.isNotEmpty) {
+      return task.localId!;
+    }
+    if (task.locais.isNotEmpty) {
+      return task.locais.join('|');
+    }
+    return '';
   }
 
-  // Verificar se há conflito em um dia para um executor específico
+  bool _overlapsDay(DateTime start, DateTime end, DateTime dayStart, DateTime dayEnd) {
+    // Converte tudo para dia local e trata o fim como exclusivo (próximo dia 00:00)
+    final s = start.toLocal();
+    final e = end.toLocal();
+    final localDayStart = DateTime(dayStart.year, dayStart.month, dayStart.day);
+    final localDayEndExclusive = localDayStart.add(const Duration(days: 1));
+    return s.isBefore(localDayEndExclusive) && e.isAfter(localDayStart);
+  }
+
+  // Verificar se há conflito em um dia para um executor específico (somente segmentos de EXECUÇÃO)
   bool _hasConflictOnDayForExecutor(DateTime day, String executorId) {
     final dayStart = DateTime(day.year, day.month, day.day);
     final dayEnd = dayStart.add(const Duration(days: 1));
+
+    // Se a view já sinalizou conflito para este executor/dia, priorizar esse sinal
+    final conflicts = _conflictDaysByExecutor[executorId];
+    if (conflicts != null && conflicts.contains(dayStart)) {
+      return true;
+    }
+
+    final executor = _executores.firstWhere(
+      (e) => e.id == executorId,
+      orElse: () => Executor(id: executorId, nome: ''),
+    );
+    final Set<String> execKeys = {
+      _normalizeText(executor.nome),
+      if (executor.nomeCompleto != null) _normalizeText(executor.nomeCompleto!),
+      if (executor.login != null) _normalizeText(executor.login!),
+      if (executor.matricula != null) _normalizeText(executor.matricula!),
+    }..removeWhere((e) => e.isEmpty);
     
     // Encontrar a linha do executor
     final row = _executorRows.firstWhere(
@@ -1950,69 +2401,69 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
     
     if (row.tasks.isEmpty) return false;
     
-    // Contar quantas TAREFAS DIFERENTES têm segmentos sobrepondo este dia
-    // Não contar como conflito se os segmentos são da mesma tarefa
-    Set<String> tasksWithSegmentsOnDay = {};
+    // Contar quantos LOCAIS DIFERENTES têm segmentos de EXECUÇÃO sobrepondo este dia
+    // Não contar conflito se estiverem no mesmo local
+    Set<String> locationsWithSegmentsOnDay = {};
     
     for (var task in row.tasks) {
-      bool taskHasSegmentOnDay = false;
+      // Ignorar tarefas canceladas ou reprogramadas
+      if (task.status == 'CANC' || task.status == 'REPR') {
+        continue;
+      }
+      bool taskHasExecSegmentOnDay = false;
+      bool hasSpecificForExecutor = false;
       
-      // Priorizar períodos específicos do executor (executorPeriods)
+      // Checar se existe algum período específico para este executor
       for (var executorPeriod in task.executorPeriods) {
-        if (executorPeriod.executorId == executorId && executorPeriod.periods.isNotEmpty) {
+        final epId = executorPeriod.executorId;
+        final matchesExecutor =
+            (epId.isNotEmpty && epId.toLowerCase() == executorId.toLowerCase()) ||
+            execKeys.contains(_normalizeText(executorPeriod.executorNome));
+        if (matchesExecutor && executorPeriod.periods.isNotEmpty) {
+          hasSpecificForExecutor = true;
           for (var period in executorPeriod.periods) {
-            final periodStart = DateTime(
-              period.dataInicio.year,
-              period.dataInicio.month,
-              period.dataInicio.day,
-            );
-            final periodEnd = DateTime(
-              period.dataFim.year,
-              period.dataFim.month,
-              period.dataFim.day,
-            ).add(const Duration(days: 1));
-            
-            // Verificar se o período sobrepõe o dia
-            if (periodStart.isBefore(dayEnd) && periodEnd.isAfter(dayStart)) {
-              taskHasSegmentOnDay = true;
+            if (period.tipoPeriodo.toUpperCase() != 'EXECUCAO') continue;
+            if (_overlapsDay(period.dataInicio, period.dataFim, dayStart, dayEnd)) {
+              taskHasExecSegmentOnDay = true;
               break;
             }
           }
-          if (taskHasSegmentOnDay) break;
+          if (taskHasExecSegmentOnDay) break;
         }
       }
       
-      // Se não encontrou em períodos específicos, verificar segmentos gerais da tarefa
-      if (!taskHasSegmentOnDay) {
+      // Só usar segmentos gerais se NÃO houver períodos específicos para este executor
+      if (!hasSpecificForExecutor && !taskHasExecSegmentOnDay) {
         for (var segment in task.ganttSegments) {
-          final segmentStart = DateTime(
-            segment.dataInicio.year,
-            segment.dataInicio.month,
-            segment.dataInicio.day,
-          );
-          final segmentEnd = DateTime(
-            segment.dataFim.year,
-            segment.dataFim.month,
-            segment.dataFim.day,
-          ).add(const Duration(days: 1));
-          
-          // Verificar se o segmento sobrepõe o dia
-          if (segmentStart.isBefore(dayEnd) && segmentEnd.isAfter(dayStart)) {
-            taskHasSegmentOnDay = true;
+          if (segment.tipoPeriodo.toUpperCase() != 'EXECUCAO') continue;
+          if (_overlapsDay(segment.dataInicio, segment.dataFim, dayStart, dayEnd)) {
+            taskHasExecSegmentOnDay = true;
             break;
           }
         }
       }
       
-      // Adicionar a tarefa ao conjunto se tem algum segmento/período no dia
+      // Adicionar o local ao conjunto se tem algum segmento/período de EXECUÇÃO no dia
       // Uma tarefa só conta uma vez, mesmo que tenha múltiplos segmentos/períodos
-      if (taskHasSegmentOnDay) {
-        tasksWithSegmentsOnDay.add(task.id);
+      if (taskHasExecSegmentOnDay) {
+        final locKey = _taskLocationKey(task);
+        // Se não houver local, usar o próprio id da tarefa para garantir unicidade
+        locationsWithSegmentsOnDay.add(locKey.isNotEmpty ? locKey : 'task-${task.id}');
       }
     }
     
-    // Conflito só existe se há mais de uma TAREFA DIFERENTE sobrepondo o dia
-    return tasksWithSegmentsOnDay.length > 1;
+    // Conflito só existe se há mais de um LOCAL diferente sobrepondo o dia
+    return locationsWithSegmentsOnDay.length > 1;
+  }
+
+  // Verificar se qualquer executor possui conflito no dia (para o cabeçalho)
+  bool _hasAnyExecutorConflictOnDay(DateTime day) {
+    for (var row in _executorRows) {
+      if (_hasConflictOnDayForExecutor(day, row.executor.id)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   // Verificar se um executor tem conflito em qualquer dia do período
@@ -2039,6 +2490,7 @@ class _DraggableExecutorSegment extends StatefulWidget {
   final double dayWidth;
   final List<DateTime> days;
   final Color color;
+  final List<DateTime>? conflictDays;
   final TaskService? taskService;
   final Function()? onTasksUpdated;
   final VoidCallback? onDragStart;
@@ -2055,6 +2507,7 @@ class _DraggableExecutorSegment extends StatefulWidget {
     required this.dayWidth,
     required this.days,
     required this.color,
+    this.conflictDays,
     this.taskService,
     this.onTasksUpdated,
     this.onDragStart,
@@ -2295,7 +2748,7 @@ class _DraggableExecutorSegmentState extends State<_DraggableExecutorSegment> {
           dataAtualizacao: DateTime.now(),
         );
         
-        print('   ✅ Tarefa atualizada com ${updatedExecutorPeriods.length} ExecutorPeriods');
+        // debug silenciado
       } else {
         // Atualizar segmentos gerais da tarefa
         print('📝 Atualizando segmentos gerais da tarefa');
@@ -2462,21 +2915,58 @@ class _DraggableExecutorSegmentState extends State<_DraggableExecutorSegment> {
                             ]
                           : null,
                     ),
-                    child: Center(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 2.0, vertical: 0),
-                        child: widget.buildSegmentContent(
-                          GanttSegment(
-                            dataInicio: effectiveStartDate,
-                            dataFim: effectiveEndDate,
-                            label: widget.segment.label,
-                            tipo: widget.segment.tipo,
-                            tipoPeriodo: widget.segment.tipoPeriodo,
+                    child: Stack(
+                      children: [
+                        // Cor base do segmento
+                        Container(
+                          decoration: BoxDecoration(
+                            color: widget.color,
+                            borderRadius: BorderRadius.circular(3),
                           ),
-                          widget.task,
-                          currentBarWidth,
                         ),
-                      ),
+                        // Conteúdo do segmento (texto) acima de tudo
+                        Center(
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 2.0, vertical: 0),
+                            child: widget.buildSegmentContent(
+                              GanttSegment(
+                                dataInicio: effectiveStartDate,
+                                dataFim: effectiveEndDate,
+                                label: widget.segment.label,
+                                tipo: widget.segment.tipo,
+                                tipoPeriodo: widget.segment.tipoPeriodo,
+                              ),
+                              widget.task,
+                              currentBarWidth,
+                            ),
+                          ),
+                        ),
+                        // Overlay de conflito POR DIA (acima de tudo), só nos dias conflitantes
+                        if ((widget.conflictDays?.isNotEmpty ?? false))
+                          Positioned.fill(
+                            child: IgnorePointer(
+                              child: Row(
+                                children: widget.days.map((day) {
+                                  final dayStart = DateTime(day.year, day.month, day.day);
+                                  final dayEnd = dayStart.add(const Duration(days: 1));
+                                  final coversDay = effectiveStartDate.isBefore(dayEnd) && effectiveEndDate.isAfter(dayStart);
+                                  if (!coversDay) return const SizedBox.shrink();
+                                  final isConflictDay = widget.conflictDays!.any((d) =>
+                                      d.year == day.year && d.month == day.month && d.day == day.day);
+                                  return Expanded(
+                                    child: Container(
+                                      decoration: BoxDecoration(
+                                        color: isConflictDay ? Colors.red[600]!.withOpacity(0.9) : Colors.transparent,
+                                        borderRadius: isConflictDay ? BorderRadius.circular(3) : null,
+                                        border: isConflictDay ? Border.all(color: Colors.red[800]!, width: 3) : null,
+                                      ),
+                                    ),
+                                  );
+                                }).toList(),
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                 ),
@@ -2657,6 +3147,17 @@ class _ExecutorTasksModalState extends State<_ExecutorTasksModal> {
     return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year.toString().substring(2)}';
   }
 
+  List<GanttSegment> _executorExecPeriods(Task task) {
+    for (var executorPeriod in task.executorPeriods) {
+      if (executorPeriod.executorId == widget.executor.id) {
+        return executorPeriod.periods
+            .where((p) => p.tipoPeriodo.toUpperCase() == 'EXECUCAO')
+            .toList();
+      }
+    }
+    return [];
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -2703,7 +3204,7 @@ class _ExecutorTasksModalState extends State<_ExecutorTasksModal> {
             ],
           ),
           const SizedBox(height: 16),
-          // Conteúdo: PageView se houver múltiplas tarefas, ou card simples
+          // Ordenar tarefas por início/fim antes de renderizar
           if (widget.tasks.length > 1)
             Expanded(
               child: PageView.builder(
@@ -2715,21 +3216,62 @@ class _ExecutorTasksModalState extends State<_ExecutorTasksModal> {
                   });
                 },
                 itemBuilder: (context, index) {
-                  final task = widget.tasks[index];
+                  final sortedTasks = [...widget.tasks]..sort((a, b) {
+                    final cmpInicio = a.dataInicio.compareTo(b.dataInicio);
+                    if (cmpInicio != 0) return cmpInicio;
+                    return a.dataFim.compareTo(b.dataFim);
+                  });
+                  final task = sortedTasks[index];
                   final imagens = _imagensPorTarefa[task.id] ?? [];
+                  final execPeriods = _executorExecPeriods(task);
+                  final hasExecPeriods = execPeriods.isNotEmpty;
                   return SingleChildScrollView(
-                    child: widget.buildTaskCard(
-                      task,
-                      imagens: imagens,
-                      onEdit: widget.onEdit,
-                      onDelete: widget.onDelete,
-                      onDuplicate: widget.onDuplicate,
-                      onCreateSubtask: widget.onCreateSubtask,
-                      imagePageControllers: _imagePageControllers,
-                      currentImageIndex: _currentImageIndex,
-                      onImagePageChanged: () {
-                        setState(() {});
-                      },
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Card(
+                          margin: const EdgeInsets.only(bottom: 12),
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Período da tarefa', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.grey[800])),
+                                const SizedBox(height: 4),
+                                Text('${_formatDate(task.dataInicio)} - ${_formatDate(task.dataFim)}'),
+                                if (hasExecPeriods) ...[
+                                  const SizedBox(height: 10),
+                                  Text('Período(s) do executor', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.grey[800])),
+                                  const SizedBox(height: 4),
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 4,
+                                    children: execPeriods
+                                        .map((p) => Chip(
+                                              label: Text('${_formatDate(p.dataInicio)} - ${_formatDate(p.dataFim)}'),
+                                              backgroundColor: Colors.blue[50],
+                                            ))
+                                        .toList(),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ),
+                        widget.buildTaskCard(
+                          task,
+                          imagens: imagens,
+                          onEdit: widget.onEdit,
+                          onDelete: widget.onDelete,
+                          onDuplicate: widget.onDuplicate,
+                          onCreateSubtask: widget.onCreateSubtask,
+                          imagePageControllers: _imagePageControllers,
+                          currentImageIndex: _currentImageIndex,
+                          onImagePageChanged: () {
+                            setState(() {});
+                          },
+                        ),
+                      ],
                     ),
                   );
                 },
@@ -2738,19 +3280,63 @@ class _ExecutorTasksModalState extends State<_ExecutorTasksModal> {
           else
             Expanded(
               child: SingleChildScrollView(
-                child: widget.buildTaskCard(
-                  widget.tasks.first,
-                  imagens: _imagensPorTarefa[widget.tasks.first.id] ?? [],
-                  onEdit: widget.onEdit,
-                  onDelete: widget.onDelete,
-                  onDuplicate: widget.onDuplicate,
-                  onCreateSubtask: widget.onCreateSubtask,
-                  imagePageControllers: _imagePageControllers,
-                  currentImageIndex: _currentImageIndex,
-                  onImagePageChanged: () {
-                    setState(() {});
-                  },
-                ),
+                child: (() {
+                  final sortedTasks = [...widget.tasks]..sort((a, b) {
+                    final cmpInicio = a.dataInicio.compareTo(b.dataInicio);
+                    if (cmpInicio != 0) return cmpInicio;
+                    return a.dataFim.compareTo(b.dataFim);
+                  });
+                  final task = sortedTasks.first;
+                  final execPeriods = _executorExecPeriods(task);
+                  final hasExecPeriods = execPeriods.isNotEmpty;
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Card(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Período da tarefa', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.grey[800])),
+                              const SizedBox(height: 4),
+                              Text('${_formatDate(task.dataInicio)} - ${_formatDate(task.dataFim)}'),
+                              if (hasExecPeriods) ...[
+                                const SizedBox(height: 10),
+                                Text('Período(s) do executor', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.grey[800])),
+                                const SizedBox(height: 4),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 4,
+                                  children: execPeriods
+                                      .map((p) => Chip(
+                                            label: Text('${_formatDate(p.dataInicio)} - ${_formatDate(p.dataFim)}'),
+                                            backgroundColor: Colors.blue[50],
+                                          ))
+                                      .toList(),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                      widget.buildTaskCard(
+                        task,
+                        imagens: _imagensPorTarefa[task.id] ?? [],
+                        onEdit: widget.onEdit,
+                        onDelete: widget.onDelete,
+                        onDuplicate: widget.onDuplicate,
+                        onCreateSubtask: widget.onCreateSubtask,
+                        imagePageControllers: _imagePageControllers,
+                        currentImageIndex: _currentImageIndex,
+                        onImagePageChanged: () {
+                          setState(() {});
+                        },
+                      ),
+                    ],
+                  );
+                })(),
               ),
             ),
           // Indicadores e navegação (apenas se houver múltiplas tarefas)

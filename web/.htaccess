@@ -4,7 +4,7 @@
 # Habilitar RewriteEngine
 <IfModule mod_rewrite.c>
     RewriteEngine On
-    RewriteBase /
+    RewriteBase /task2026/
     
     # Não reescrever arquivos existentes
     RewriteCond %{REQUEST_FILENAME} !-f

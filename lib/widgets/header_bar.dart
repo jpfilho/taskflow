@@ -5,6 +5,7 @@ import '../services/theme_service.dart';
 import '../providers/theme_provider.dart';
 import 'perfil_usuario_view.dart';
 import 'sync_status_widget.dart';
+import 'dart:async';
 
 class HeaderBar extends StatefulWidget {
   final DateTime startDate;
@@ -25,6 +26,7 @@ class HeaderBar extends StatefulWidget {
   final VoidCallback? onToggleGantt; // Callback para alternar visibilidade do Gantt
   final bool? showGantt; // Se o Gantt está visível
   final bool? isAtividadesScreen; // Se está na tela de atividades
+  final bool canEditTasks; // Se pode criar/editar tarefas e ver config
 
   const HeaderBar({
     super.key,
@@ -46,6 +48,7 @@ class HeaderBar extends StatefulWidget {
     this.onToggleGantt,
     this.showGantt,
     this.isAtividadesScreen,
+    this.canEditTasks = true,
   });
 
   @override
@@ -127,24 +130,42 @@ class _HeaderBarState extends State<HeaderBar> {
     final themeProvider = ThemeProvider();
     final currentTheme = themeProvider.currentTheme;
     
-    final backgroundColor = ThemeService.getBarBackgroundColor(currentTheme);
-    final textColor = ThemeService.getBarTextColor(currentTheme);
-    final iconColor = ThemeService.getBarIconColor(currentTheme);
-    
-    return Container(
-      height: isMobile ? 60 : 60,
-      color: backgroundColor,
-      padding: EdgeInsets.symmetric(horizontal: isMobile ? 8 : 16),
-      child: isMobile 
-          ? _buildMobileHeader(context, textColor, iconColor)
-          : _buildDesktopHeader(context, textColor, iconColor),
+    return StreamBuilder<String>(
+      stream: ColorThemeNotifier().colorChangeStream.where((barType) => barType == 'appbar'),
+      builder: (context, streamSnapshot) {
+        return FutureBuilder<Map<String, Color>>(
+          future: Future.wait([
+            ThemeService.getBarBackgroundColor(currentTheme, barType: 'appbar'),
+            ThemeService.getBarTextColor(currentTheme, barType: 'appbar'),
+            ThemeService.getBarIconColor(currentTheme, barType: 'appbar'),
+          ]).then((colors) => {
+            'background': colors[0],
+            'text': colors[1],
+            'icon': colors[2],
+          }),
+          builder: (context, snapshot) {
+        final backgroundColor = snapshot.data?['background'] ?? ThemeService.getBarBackgroundColorSync(currentTheme);
+        final textColor = snapshot.data?['text'] ?? ThemeService.getBarTextColorSync(currentTheme);
+        final iconColor = snapshot.data?['icon'] ?? ThemeService.getBarIconColorSync(currentTheme);
+        
+        return Container(
+          height: isMobile ? 60 : 60,
+          color: backgroundColor,
+          padding: EdgeInsets.symmetric(horizontal: isMobile ? 8 : 16),
+          child: isMobile 
+              ? _buildMobileHeader(context, textColor, iconColor)
+              : _buildDesktopHeader(context, textColor, iconColor),
+        );
+          },
+        );
+      },
     );
   }
 
   Widget _buildMobileHeader(BuildContext context, Color textColor, Color iconColor) {
     final themeProvider = ThemeProvider();
     final currentTheme = themeProvider.currentTheme;
-    final backgroundColor = ThemeService.getBarBackgroundColor(currentTheme);
+    final backgroundColor = ThemeService.getBarBackgroundColorSync(currentTheme);
     
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -249,7 +270,7 @@ class _HeaderBarState extends State<HeaderBar> {
               const SizedBox(width: 4),
               IconButton(
                 icon: Icon(Icons.add, color: iconColor, size: 18),
-                onPressed: widget.onCreate,
+                onPressed: widget.canEditTasks ? widget.onCreate : null,
                 tooltip: 'Criar',
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
@@ -261,13 +282,14 @@ class _HeaderBarState extends State<HeaderBar> {
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
               ),
-              IconButton(
-                icon: Icon(Icons.settings, color: iconColor, size: 18),
-                onPressed: widget.onConfig,
-                tooltip: 'Configurações',
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-              ),
+              if (widget.canEditTasks)
+                IconButton(
+                  icon: Icon(Icons.settings, color: iconColor, size: 18),
+                  onPressed: widget.onConfig,
+                  tooltip: 'Configurações',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                ),
             ],
           ),
         ),
@@ -278,14 +300,18 @@ class _HeaderBarState extends State<HeaderBar> {
   Widget _buildDesktopHeader(BuildContext context, Color textColor, Color iconColor) {
     final themeProvider = ThemeProvider();
     final currentTheme = themeProvider.currentTheme;
-    final backgroundColor = ThemeService.getBarBackgroundColor(currentTheme);
+    final backgroundColor = ThemeService.getBarBackgroundColorSync(currentTheme);
     
     // Verificar tipo de dispositivo
     final isMobile = Responsive.isMobile(context);
     final isTablet = Responsive.isTablet(context);
     final isDesktop = Responsive.isDesktop(context);
     final screenWidth = MediaQuery.of(context).size.width;
+    final screenHeight = MediaQuery.of(context).size.height;
     final isLargeDesktop = isDesktop && screenWidth >= 1280;
+    
+    // Detectar se é tablet mesmo quando em landscape (largura > 1024 mas altura < 1024)
+    final isTabletLandscape = !isMobile && screenWidth >= 1024 && screenHeight < 1024;
     
     return Builder(
       builder: (context) => Row(
@@ -343,13 +369,12 @@ class _HeaderBarState extends State<HeaderBar> {
           ),
           // Seletor de visualização (apenas quando onViewModeChanged estiver definido E estiver na tela de atividades)
           // Em mobile/tablet, esses botões devem estar no footbar (não aparecem aqui)
-          // Em desktop grande (>=1280px), mostrar no header
+          // Em desktop grande (>=1280px) ou tablet (incluindo landscape), mostrar no header
           if (widget.onViewModeChanged != null && 
               widget.currentViewMode != null && 
               widget.isAtividadesScreen == true &&
               !isMobile && 
-              !isTablet && 
-              isLargeDesktop) ...[
+              (isTablet || isTabletLandscape || isLargeDesktop)) ...[
             const SizedBox(width: 12),
             Container(
               decoration: BoxDecoration(
@@ -363,12 +388,15 @@ class _HeaderBarState extends State<HeaderBar> {
                   _buildViewModeButton(Icons.view_kanban, 'Planner', 'planner'),
                   _buildViewModeButton(Icons.calendar_month, 'Calendário', 'calendar'),
                   _buildViewModeButton(Icons.dynamic_feed, 'Feed', 'feed'),
+                  _buildViewModeButton(Icons.dashboard, 'Dashboard', 'dashboard'),
                 ],
               ),
             ),
           ],
-          // Botão para mostrar/ocultar Gantt (apenas quando o modo for 'split')
-          if (widget.onToggleGantt != null && widget.currentViewMode == 'split') ...[
+          // Botão para mostrar/ocultar Gantt (apenas quando o modo for 'split' E estiver na tela de atividades)
+          if (widget.onToggleGantt != null && 
+              widget.currentViewMode == 'split' && 
+              widget.isAtividadesScreen == true) ...[
             const SizedBox(width: 8),
             Tooltip(
               message: widget.showGantt == true ? 'Ocultar Gantt' : 'Mostrar Gantt',
@@ -426,7 +454,7 @@ class _HeaderBarState extends State<HeaderBar> {
           // Ações
           IconButton(
             icon: Icon(Icons.add_circle_outline, color: iconColor),
-            onPressed: widget.onCreate,
+            onPressed: widget.canEditTasks ? widget.onCreate : null,
             tooltip: 'Criar',
           ),
           IconButton(
@@ -434,11 +462,12 @@ class _HeaderBarState extends State<HeaderBar> {
             onPressed: widget.onChat,
             tooltip: 'Chat',
           ),
-          IconButton(
-            icon: Icon(Icons.settings, color: iconColor),
-            onPressed: widget.onConfig,
-            tooltip: 'Configurações',
-          ),
+          if (widget.canEditTasks)
+            IconButton(
+              icon: Icon(Icons.settings, color: iconColor),
+              onPressed: widget.onConfig,
+              tooltip: 'Configurações',
+            ),
           const SizedBox(width: 8),
           const SizedBox(width: 8),
           // Menu do usuário com perfil e logout
@@ -498,7 +527,7 @@ class _HeaderBarState extends State<HeaderBar> {
   Widget _buildViewModeButton(IconData icon, String tooltip, String mode) {
     final themeProvider = ThemeProvider();
     final currentTheme = themeProvider.currentTheme;
-    final iconColor = ThemeService.getBarIconColor(currentTheme);
+    final iconColor = ThemeService.getBarIconColorSync(currentTheme);
     
     final isSelected = widget.currentViewMode == mode;
     return Tooltip(

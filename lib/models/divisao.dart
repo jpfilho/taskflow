@@ -60,22 +60,13 @@ class Divisao {
     List<String> segmentoIds = [];
     List<String> segmentosNomes = [];
     
-    // Debug: imprimir estrutura recebida
-    if (map['divisoes_segmentos'] != null) {
-      print('🔍 divisoes_segmentos encontrado: ${map['divisoes_segmentos']}');
-      print('🔍 Tipo: ${map['divisoes_segmentos'].runtimeType}');
-    }
-    
     // Se vier da tabela de relacionamento (estrutura nova)
     if (map['divisoes_segmentos'] != null) {
       final relacionamentos = map['divisoes_segmentos'];
       if (relacionamentos is List) {
-        print('🔍 Processando ${relacionamentos.length} relacionamentos');
         for (var rel in relacionamentos) {
           if (rel is Map<String, dynamic>) {
-            print('🔍 Relacionamento: $rel');
             final segmentoData = rel['segmentos'];
-            print('🔍 Segmento data: $segmentoData');
             
             if (segmentoData != null) {
               // Pode ser um Map ou um objeto aninhado
@@ -90,7 +81,6 @@ class Divisao {
               if (segmentoMap != null) {
                 final segmentoId = segmentoMap['id'] as String?;
                 final segmentoNome = segmentoMap['segmento'] as String?;
-                print('🔍 Segmento ID: $segmentoId, Nome: $segmentoNome');
                 if (segmentoId != null && segmentoId.isNotEmpty) {
                   segmentoIds.add(segmentoId);
                 }
@@ -103,7 +93,6 @@ class Divisao {
         }
       } else if (relacionamentos is Map<String, dynamic>) {
         // Se for um único objeto ao invés de lista
-        print('🔍 Relacionamento único: $relacionamentos');
         final segmentoData = relacionamentos['segmentos'];
         if (segmentoData is Map<String, dynamic>) {
           final segmentoId = segmentoData['id'] as String?;
@@ -117,9 +106,6 @@ class Divisao {
         }
       }
     }
-    
-    print('✅ Segmentos IDs extraídos: $segmentoIds');
-    print('✅ Segmentos nomes extraídos: $segmentosNomes');
     
     // Fallback para compatibilidade com estrutura antiga (se houver segmento_id direto)
     if (segmentoIds.isEmpty && map['segmento_id'] != null) {

@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
+import 'package:flutter/foundation.dart';
 import '../models/task.dart';
 import '../models/status.dart';
 import '../models/feriado.dart';
@@ -15,8 +17,10 @@ class GanttChart extends StatefulWidget {
   final DateTime startDate;
   final DateTime endDate;
   final ScrollController scrollController;
+  final ScrollController? horizontalController;
   final TaskService? taskService;
   final Function()? onTasksUpdated;
+  final Function(Task)? onTaskUpdated; // Callback para atualizar apenas uma tarefa específica
   final Function(Task)? onEdit;
   final Function(Task)? onDelete;
   final Function(Task)? onDuplicate;
@@ -34,8 +38,10 @@ class GanttChart extends StatefulWidget {
     required this.startDate,
     required this.endDate,
     required this.scrollController,
+    this.horizontalController,
     this.taskService,
     this.onTasksUpdated,
+    this.onTaskUpdated,
     this.onEdit,
     this.onDelete,
     this.onDuplicate,
@@ -55,6 +61,7 @@ class GanttChart extends StatefulWidget {
 class _GanttChartState extends State<GanttChart> {
   late ScrollController _horizontalScrollController;
   late ScrollController _monthHeaderScrollController;
+  bool _ownsHorizontalController = true;
   final List<ScrollController> _rowScrollControllers = [];
   bool _isScrolling = false;
   DateTime _displayStartDate = DateTime.now();
@@ -91,10 +98,265 @@ class _GanttChartState extends State<GanttChart> {
 
   bool _isScrollingProgrammatically = false; // Flag para evitar atualizações durante scroll programático
 
+  // ---------- Conflitos (mesma lógica da tela de equipes) ----------
+  String _taskLocationKey(Task task) {
+    if (task.localIds.isNotEmpty) return task.localIds.join('|');
+    if (task.localId != null && task.localId!.isNotEmpty) return task.localId!;
+    if (task.locais.isNotEmpty) return task.locais.join('|');
+    return '';
+  }
+
+  Set<String> get _allExecutorIds {
+    final ids = <String>{};
+    for (final task in widget.tasks) {
+      ids.addAll(task.executorIds);
+      for (final ep in task.executorPeriods) {
+        if (ep.executorId.isNotEmpty) ids.add(ep.executorId);
+      }
+      if (task.executor.isNotEmpty) ids.add(task.executor);
+    }
+    return ids;
+  }
+
+  bool _taskHasExecutionOnDayForExecutor(Task task, String executorId, DateTime dayStart, DateTime dayEnd) {
+    // Priorizar executorPeriods
+    bool hasIndividual = false;
+    for (final ep in task.executorPeriods) {
+      if (ep.executorId != executorId) continue;
+      hasIndividual = true;
+      for (final period in ep.periods) {
+        if (period.tipoPeriodo.toUpperCase() != 'EXECUCAO') continue;
+        final ps = period.dataInicio;
+        final pe = period.dataFim;
+        if (ps.isBefore(dayEnd) && pe.isAfter(dayStart)) {
+          return true;
+        }
+      }
+    }
+
+    if (hasIndividual) return false; // Já avaliou períodos específicos
+
+    // Usar segmentos gerais
+    for (final segment in task.ganttSegments) {
+      if (segment.tipoPeriodo.toUpperCase() != 'EXECUCAO') continue;
+      final ss = segment.dataInicio;
+      final se = segment.dataFim;
+      if (ss.isBefore(dayEnd) && se.isAfter(dayStart)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool _hasConflictOnDayForExecutor(DateTime day, String executorId) {
+    final dayStart = DateTime(day.year, day.month, day.day);
+    final dayEnd = dayStart.add(const Duration(days: 1));
+
+    final locations = <String>{};
+
+    for (final task in widget.tasks) {
+      if (task.status == 'CANC' || task.status == 'REPR') continue;
+
+      // Verificar se a tarefa envolve esse executor
+      final involvesExecutor = task.executorIds.contains(executorId) ||
+          task.executor == executorId ||
+          task.executorPeriods.any((ep) => ep.executorId == executorId);
+      if (!involvesExecutor) continue;
+
+      final hasExec = _taskHasExecutionOnDayForExecutor(task, executorId, dayStart, dayEnd);
+      if (hasExec) {
+        final locKey = _taskLocationKey(task);
+        locations.add(locKey.isNotEmpty ? locKey : 'task-${task.id}');
+      }
+    }
+
+    return locations.length > 1;
+  }
+
+  // Corrige datas de segmentos legados que podem ter sido salvos com dataFim +1 dia
+  DateTime _normalizeLegacyEndDate(Task task, DateTime start, DateTime end) {
+    // Data a partir da qual os novos salvamentos já estão corrigidos
+    // Considerar como legado tudo que foi salvo antes de 15/02/2026
+    final legacyCutoff = DateTime(2026, 2, 15);
+    final updatedAt = task.dataAtualizacao;
+    final isLegacy = updatedAt == null || updatedAt.isBefore(legacyCutoff);
+
+    if (!isLegacy) return end;
+
+    // Só ajustar se houver duração positiva; evita encurtar períodos de 1 dia
+    if (end.isAfter(start)) {
+      final corrected = end.subtract(const Duration(days: 1));
+      return corrected.isBefore(start) ? start : corrected;
+    }
+    return end;
+  }
+
+  bool _hasAnyExecutorConflictOnDay(DateTime day) {
+    for (final executorId in _allExecutorIds) {
+      if (_hasConflictOnDayForExecutor(day, executorId)) return true;
+    }
+    return false;
+  }
+
+  // Faixa de datas onde a tarefa tem segmentos de EXECUÇÃO
+  DateTimeRange? _getExecutionDateRange(Task task) {
+    DateTime? minStart;
+    DateTime? maxEnd;
+
+    void consider(DateTime s, DateTime e) {
+      minStart = (minStart == null || s.isBefore(minStart!)) ? s : minStart;
+      maxEnd = (maxEnd == null || e.isAfter(maxEnd!)) ? e : maxEnd;
+    }
+
+    for (final ep in task.executorPeriods) {
+      for (final p in ep.periods) {
+        if (p.tipoPeriodo.toUpperCase() != 'EXECUCAO') continue;
+        final s = DateTime(p.dataInicio.year, p.dataInicio.month, p.dataInicio.day);
+        final e = DateTime(p.dataFim.year, p.dataFim.month, p.dataFim.day);
+        consider(s, e);
+      }
+    }
+
+    for (final seg in task.ganttSegments) {
+      if (seg.tipoPeriodo.toUpperCase() != 'EXECUCAO') continue;
+      final s = DateTime(seg.dataInicio.year, seg.dataInicio.month, seg.dataInicio.day);
+      final e = DateTime(seg.dataFim.year, seg.dataFim.month, seg.dataFim.day);
+      consider(s, e);
+    }
+
+    if (minStart != null && maxEnd != null) {
+      return DateTimeRange(start: minStart!, end: maxEnd!);
+    }
+    return null;
+  }
+
+  bool _taskHasExecutionOnDay(Task task, DateTime day) {
+    final dayStart = DateTime(day.year, day.month, day.day);
+    final dayEnd = dayStart.add(const Duration(days: 1));
+
+    // executorPeriods (qualquer executor da tarefa)
+    for (final ep in task.executorPeriods) {
+      for (final p in ep.periods) {
+        if (p.tipoPeriodo.toUpperCase() != 'EXECUCAO') continue;
+        if (p.dataInicio.isBefore(dayEnd) && p.dataFim.isAfter(dayStart)) {
+          return true;
+        }
+      }
+    }
+
+    // ganttSegments gerais
+    for (final seg in task.ganttSegments) {
+      if (seg.tipoPeriodo.toUpperCase() != 'EXECUCAO') continue;
+      if (seg.dataInicio.isBefore(dayEnd) && seg.dataFim.isAfter(dayStart)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  bool _taskHasExecutionForExecutorOnDay(Task task, String executorId, DateTime dayStart, DateTime dayEnd) {
+    // executorPeriods (específicos do executor)
+    for (final ep in task.executorPeriods) {
+      if (ep.executorId != executorId) continue;
+      for (final p in ep.periods) {
+        if (p.tipoPeriodo.toUpperCase() != 'EXECUCAO') continue;
+        if (p.dataInicio.isBefore(dayEnd) && p.dataFim.isAfter(dayStart)) {
+          return true;
+        }
+      }
+    }
+    // Sem período específico: usar segmentos gerais
+    for (final seg in task.ganttSegments) {
+      if (seg.tipoPeriodo.toUpperCase() != 'EXECUCAO') continue;
+      if (seg.dataInicio.isBefore(dayEnd) && seg.dataFim.isAfter(dayStart)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  List<DateTime> _getConflictDaysForTask(Task task, DateTime start, DateTime end) {
+    final execRange = _getExecutionDateRange(task);
+    if (execRange == null) return const [];
+
+    final executorIds = _getExecutorIdsForTask(task);
+    if (executorIds.isEmpty) return const [];
+
+    final conflictDays = <DateTime>[];
+    final rangeStart = execRange.start.isBefore(start) ? start : execRange.start;
+    final rangeEnd = execRange.end.isAfter(end) ? end : execRange.end;
+
+    var currentDay = DateTime(rangeStart.year, rangeStart.month, rangeStart.day);
+    final endDay = DateTime(rangeEnd.year, rangeEnd.month, rangeEnd.day);
+
+    while (!currentDay.isAfter(endDay)) {
+      bool hasConflict = false;
+      for (final execId in executorIds) {
+        final dayStart = DateTime(currentDay.year, currentDay.month, currentDay.day);
+        final dayEnd = dayStart.add(const Duration(days: 1));
+        if (!_taskHasExecutionForExecutorOnDay(task, execId, dayStart, dayEnd)) {
+          continue; // este executor não executa neste dia
+        }
+        if (_hasConflictOnDayForExecutor(currentDay, execId)) {
+          hasConflict = true;
+          break;
+        }
+      }
+      if (hasConflict) {
+        conflictDays.add(currentDay);
+      }
+      currentDay = currentDay.add(const Duration(days: 1));
+    }
+
+    return conflictDays;
+  }
+
+  Set<String> _getExecutorIdsForTask(Task task) {
+    final ids = <String>{};
+    ids.addAll(task.executorIds);
+    if (task.executor.isNotEmpty) ids.add(task.executor);
+    for (final ep in task.executorPeriods) {
+      if (ep.executorId.isNotEmpty) ids.add(ep.executorId);
+    }
+    return ids;
+  }
+
+  List<DateTime> _getConflictDaysForSegment(Task task, DateTime start, DateTime end) {
+    final executorIds = _getExecutorIdsForTask(task);
+    if (executorIds.isEmpty) return const [];
+
+    final conflictDays = <DateTime>[];
+    var currentDay = DateTime(start.year, start.month, start.day);
+    final endDay = DateTime(end.year, end.month, end.day);
+
+    while (!currentDay.isAfter(endDay)) {
+      bool hasConflict = false;
+      for (final execId in executorIds) {
+        final dayStart = DateTime(currentDay.year, currentDay.month, currentDay.day);
+        final dayEnd = dayStart.add(const Duration(days: 1));
+        if (!_taskHasExecutionForExecutorOnDay(task, execId, dayStart, dayEnd)) {
+          continue; // este executor não executa neste dia
+        }
+        if (_hasConflictOnDayForExecutor(currentDay, execId)) {
+          hasConflict = true;
+          break;
+        }
+      }
+      if (hasConflict) {
+        conflictDays.add(currentDay);
+      }
+      currentDay = currentDay.add(const Duration(days: 1));
+    }
+
+    return conflictDays;
+  }
+
   @override
   void initState() {
     super.initState();
-    _horizontalScrollController = ScrollController();
+    _horizontalScrollController = widget.horizontalController ?? ScrollController();
+    _ownsHorizontalController = widget.horizontalController == null;
     _monthHeaderScrollController = ScrollController();
 
     // Inicializar com o range fornecido, mas expandir para permitir navegação
@@ -141,18 +403,7 @@ class _GanttChartState extends State<GanttChart> {
         if (forceReload || !_loadedSubtasks.containsKey(mainTask.id)) {
           try {
             final subtasks = await widget.taskService!.getSubtasks(mainTask.id);
-            print('📋 DEBUG Gantt: Carregadas ${subtasks.length} subtarefas para ${mainTask.id.substring(0, 8)} (forceReload: $forceReload)');
-            for (var subtask in subtasks) {
-              print('   Subtarefa: ${subtask.tarefa} (${subtask.id.substring(0, 8)})');
-              print('     Segmentos: ${subtask.ganttSegments.length}');
-              if (subtask.ganttSegments.isNotEmpty) {
-                for (var seg in subtask.ganttSegments) {
-                  print('       Segmento: ${seg.dataInicio.toString().substring(0, 10)} até ${seg.dataFim.toString().substring(0, 10)} (${seg.tipo})');
-                }
-              } else {
-                print('       ⚠️ Subtarefa não tem segmentos!');
-              }
-            }
+            if (!mounted) return;
             setState(() {
               _loadedSubtasks[mainTask.id] = subtasks;
               // Por padrão, subtarefas começam colapsadas
@@ -168,12 +419,16 @@ class _GanttChartState extends State<GanttChart> {
               }
             });
           } catch (e) {
-            print('Erro ao carregar subtarefas de ${mainTask.id}: $e');
+            if (mounted) {
+              debugPrint('Erro ao carregar subtarefas de ${mainTask.id}: $e');
+            }
           }
         }
       }
     } catch (e) {
-      print('Erro ao carregar subtarefas: $e');
+      if (mounted) {
+        debugPrint('Erro ao carregar subtarefas: $e');
+      }
     }
   }
 
@@ -186,7 +441,7 @@ class _GanttChartState extends State<GanttChart> {
         };
       });
     } catch (e) {
-      print('Erro ao carregar status no Gantt: $e');
+      debugPrint('Erro ao carregar status no Gantt: $e');
     }
   }
 
@@ -199,7 +454,7 @@ class _GanttChartState extends State<GanttChart> {
         };
       });
     } catch (e) {
-      print('Erro ao carregar tipos de atividade no Gantt: $e');
+      debugPrint('Erro ao carregar tipos de atividade no Gantt: $e');
     }
   }
 
@@ -214,7 +469,7 @@ class _GanttChartState extends State<GanttChart> {
         _feriadosMap = feriadosMap;
       });
     } catch (e) {
-      print('Erro ao carregar feriados no Gantt: $e');
+      debugPrint('Erro ao carregar feriados no Gantt: $e');
     }
   }
 
@@ -226,13 +481,14 @@ class _GanttChartState extends State<GanttChart> {
 
   // Método auxiliar para calcular largura dos dias baseado na largura da tela
   double _calculateDayWidth(BuildContext? context) {
-    if (context == null) return 40.0; // Fallback padrão
+    if (context == null) return 28.0; // Fallback padrão (reduzido em 30%)
     
     final screenWidth = MediaQuery.of(context).size.width;
     final ganttWidth = screenWidth * 0.5; // Gantt ocupa 50% da tela
     final daysInMonth = 30.0;
     // Calcular dayWidth para que 30 dias caibam na largura disponível
-    return (ganttWidth / daysInMonth).clamp(20.0, 60.0); // Mínimo 20px, máximo 60px
+    // Reduzido em 30%: multiplicar por 0.7
+    return ((ganttWidth / daysInMonth) * 0.7).clamp(14.0, 42.0); // Mínimo 14px, máximo 42px (30% menor)
   }
 
   void _onScrollChanged() {
@@ -277,25 +533,14 @@ class _GanttChartState extends State<GanttChart> {
   }
   
   void _syncMonthHeader() {
-    // Debug
-    print('🔄 DEBUG _syncMonthHeader: Iniciando sincronização');
-    print('   _isScrolling: $_isScrolling');
-    
-    // Verificar se os controllers estão prontos
     final horizontalHasClients = _horizontalScrollController.hasClients;
     final horizontalPositions = horizontalHasClients ? _horizontalScrollController.positions.length : 0;
     final monthHasClients = _monthHeaderScrollController.hasClients;
     
-    print('   horizontalHasClients: $horizontalHasClients');
-    print('   horizontalPositions: $horizontalPositions');
-    print('   monthHasClients: $monthHasClients');
-    
     if (!horizontalHasClients || horizontalPositions != 1) {
-      print('   ⚠️ DEBUG _syncMonthHeader: Controller horizontal não está pronto');
       return;
     }
     if (!monthHasClients) {
-      print('   ⚠️ DEBUG _syncMonthHeader: Controller do mês não está pronto');
       return;
     }
     
@@ -303,23 +548,12 @@ class _GanttChartState extends State<GanttChart> {
     final monthOffset = _monthHeaderScrollController.offset;
     final difference = (monthOffset - horizontalOffset).abs();
     
-    print('   horizontalOffset: $horizontalOffset');
-    print('   monthOffset: $monthOffset');
-    print('   difference: $difference');
-    
-    // Sincronizar apenas se a diferença for significativa (mais de 0.1 pixels)
     if (difference > 0.1) {
-      print('   ✅ DEBUG _syncMonthHeader: Sincronizando mês para $horizontalOffset');
-      // Não usar _isScrolling aqui para evitar conflito com _syncScroll
-      // Apenas fazer o jumpTo diretamente
       try {
         _monthHeaderScrollController.jumpTo(horizontalOffset);
-        print('   ✅ DEBUG _syncMonthHeader: jumpTo executado');
       } catch (e) {
-        print('   ❌ DEBUG _syncMonthHeader: Erro ao sincronizar: $e');
+        debugPrint('Erro ao sincronizar header do mês: $e');
       }
-    } else {
-      print('   ℹ️ DEBUG _syncMonthHeader: Diferença muito pequena ($difference), não sincronizando');
     }
   }
   
@@ -341,15 +575,7 @@ class _GanttChartState extends State<GanttChart> {
     final horizontalOffset = _horizontalScrollController.offset;
     final difference = (horizontalOffset - monthOffset).abs();
     
-    print('   monthOffset: $monthOffset');
-    print('   horizontalOffset: $horizontalOffset');
-    print('   difference: $difference');
-    
-    // Sincronizar apenas se a diferença for significativa (mais de 0.1 pixels)
     if (difference > 0.1) {
-      print('   ✅ DEBUG _syncHorizontalScroll: Sincronizando horizontal para $monthOffset');
-      // Não usar _isScrolling aqui para evitar conflito com _syncScroll
-      // Apenas fazer o jumpTo diretamente
       try {
         _horizontalScrollController.jumpTo(monthOffset);
         // Também sincronizar as linhas de tarefas
@@ -358,12 +584,9 @@ class _GanttChartState extends State<GanttChart> {
             controller.jumpTo(monthOffset);
           }
         }
-        print('   ✅ DEBUG _syncHorizontalScroll: jumpTo executado');
       } catch (e) {
-        print('   ❌ DEBUG _syncHorizontalScroll: Erro ao sincronizar: $e');
+        debugPrint('Erro ao sincronizar header horizontal: $e');
       }
-    } else {
-      print('   ℹ️ DEBUG _syncHorizontalScroll: Diferença muito pequena ($difference), não sincronizando');
     }
   }
 
@@ -377,20 +600,19 @@ class _GanttChartState extends State<GanttChart> {
     final newTasksWithPeriods = widget.tasks.where((t) => t.executorPeriods.isNotEmpty).length;
     
     if (oldTasksWithPeriods != newTasksWithPeriods) {
-      print('🔄 DEBUG Gantt: didUpdateWidget - Tarefas com períodos mudaram');
-      print('   Antes: $oldTasksWithPeriods tarefas com períodos');
-      print('   Depois: $newTasksWithPeriods tarefas com períodos');
+      // debug silenciado
+      // debug silenciado
       
       // Listar tarefas com períodos
       for (var task in widget.tasks.where((t) => t.executorPeriods.isNotEmpty)) {
-        print('     - ${task.id.substring(0, 8)}: ${task.tarefa} (${task.executorPeriods.length} períodos)');
+        // debug silenciado
       }
       
       // Forçar rebuild para mostrar os botões de expansão
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
           setState(() {
-            print('   ✅ setState chamado para atualizar botões de expansão');
+            // debug silenciado
           });
         }
       });
@@ -432,7 +654,6 @@ class _GanttChartState extends State<GanttChart> {
         !newExpanded.every((id) => oldExpanded.contains(id))) {
       // Apenas atualizar o estado local se necessário (sem múltiplos setState)
       // O rebuild será automático através do ValueKey do ListView
-      print('🔄 DEBUG Gantt: expandedTasks mudou de ${oldExpanded.length} para ${newExpanded.length}');
       // Não chamar setState aqui - deixar o Flutter fazer o rebuild naturalmente
     }
     // Atualizar range se as datas mudaram
@@ -466,7 +687,7 @@ class _GanttChartState extends State<GanttChart> {
     }
     // Verificar se as tarefas mudaram
     if (oldWidget.tasks.length != widget.tasks.length) {
-      print('📊 GanttChart: Número de tarefas mudou de ${oldWidget.tasks.length} para ${widget.tasks.length}');
+      // debug silenciado
       
       // Recarregar subtarefas quando as tarefas mudarem (pode ter sido criada uma nova subtarefa)
       // Usar forceReload=true para garantir que as subtarefas sejam recarregadas
@@ -487,10 +708,10 @@ class _GanttChartState extends State<GanttChart> {
       // Se estava vazio e agora tem tarefas, e o scroll já foi inicializado
       // Forçar rebuild para renderizar os segmentos, sem mexer no scroll
       if (oldWidget.tasks.isEmpty && widget.tasks.isNotEmpty && _hasInitializedScroll) {
-        print('🔍 DEBUG: Tarefas carregadas após scroll inicializado');
-        print('   Tarefas com segmentos: ${widget.tasks.where((t) => t.ganttSegments.isNotEmpty).length}');
-        print('   Período selecionado: ${widget.startDate.toString().substring(0, 10)} até ${widget.endDate.toString().substring(0, 10)}');
-        print('   Scroll atual: ${_horizontalScrollController.hasClients ? _horizontalScrollController.offset : "N/A"}');
+        // debug silenciado
+        // debug silenciado
+        // debug silenciado
+        // debug silenciado
         // Forçar rebuild imediato
         setState(() {});
         // Aguardar múltiplos frames para garantir que os segmentos sejam renderizados
@@ -502,7 +723,7 @@ class _GanttChartState extends State<GanttChart> {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (mounted) {
                 // Segundo callback: garantir que os segmentos sejam renderizados
-                print('🔍 DEBUG: Rebuild final após carregamento de tarefas');
+                // debug silenciado
                 setState(() {});
                 // Terceiro callback: garantir renderização completa
                 WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -523,7 +744,7 @@ class _GanttChartState extends State<GanttChart> {
     final oldSegmentsCount = oldWidget.tasks.fold<int>(0, (sum, task) => sum + task.ganttSegments.length);
     final newSegmentsCount = widget.tasks.fold<int>(0, (sum, task) => sum + task.ganttSegments.length);
     if (oldSegmentsCount != newSegmentsCount) {
-      print('📊 GanttChart: Número de segmentos mudou de $oldSegmentsCount para $newSegmentsCount');
+      // debug silenciado
       // Apenas forçar rebuild, sem múltiplos callbacks que causam problemas
       setState(() {});
     }
@@ -539,7 +760,7 @@ class _GanttChartState extends State<GanttChart> {
         }
       }
       if (segmentsChanged) {
-        print('📊 GanttChart: Segmentos das tarefas mudaram');
+        // debug silenciado
         setState(() {});
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) {
@@ -558,7 +779,9 @@ class _GanttChartState extends State<GanttChart> {
     // _horizontalScrollController.removeListener(_syncMonthHeader);
     // _syncHorizontalScroll não é mais um listener direto
     // _monthHeaderScrollController.removeListener(_syncHorizontalScroll);
-    _horizontalScrollController.dispose();
+    if (_ownsHorizontalController) {
+      _horizontalScrollController.dispose();
+    }
     _monthHeaderScrollController.dispose();
     for (var controller in _rowScrollControllers) {
       controller.dispose();
@@ -569,9 +792,8 @@ class _GanttChartState extends State<GanttChart> {
 
   // Construir lista hierárquica de tarefas (principais + subtarefas expandidas)
   List<Task> _buildHierarchicalTasks() {
-    print('🔨 DEBUG Gantt: _buildHierarchicalTasks chamado');
-    print('   expandedTasks: ${_expandedTasks.toList()}');
-    print('   widget.expandedTasks: ${widget.expandedTasks?.toList()}');
+    // debug silenciado
+    // debug silenciado
     
     final List<Task> hierarchicalTasks = [];
     final mainTasks = widget.tasks.where((t) => t.parentId == null).toList();
@@ -581,19 +803,18 @@ class _GanttChartState extends State<GanttChart> {
       final isExpanded = _expandedTasks.contains(mainTask.id);
       
       if (mainTask.executorPeriods.isNotEmpty) {
-        print('   Tarefa ${mainTask.id.substring(0, 8)}: isExpanded=$isExpanded, executorPeriods=${mainTask.executorPeriods.length}');
+        // debug silenciado
       }
       
       // Se a tarefa está expandida e tem subtarefas carregadas, adicionar as subtarefas
       if (isExpanded && _loadedSubtasks.containsKey(mainTask.id)) {
         final subtasks = _loadedSubtasks[mainTask.id]!;
-        print('📋 DEBUG Gantt: Adicionando ${subtasks.length} subtarefas da tarefa ${mainTask.id.substring(0, 8)}');
         for (var subtask in subtasks) {
-          print('   - Subtarefa: ${subtask.tarefa} (${subtask.id.substring(0, 8)})');
-          print('     Segmentos: ${subtask.ganttSegments.length}');
+          // debug silenciado
+          // debug silenciado
           if (subtask.ganttSegments.isNotEmpty) {
             for (var seg in subtask.ganttSegments) {
-              print('       Segmento: ${seg.dataInicio} até ${seg.dataFim}');
+              // debug silenciado
             }
           }
         }
@@ -602,10 +823,9 @@ class _GanttChartState extends State<GanttChart> {
       
       // Se a tarefa está expandida e tem períodos por executor, criar linhas virtuais para cada executor
       if (isExpanded && mainTask.executorPeriods.isNotEmpty) {
-        print('👥 DEBUG Gantt: Adicionando ${mainTask.executorPeriods.length} períodos por executor da tarefa ${mainTask.id.substring(0, 8)}');
-        print('   Tarefa: ${mainTask.tarefa}');
+        // debug silenciado
         for (var executorPeriod in mainTask.executorPeriods) {
-          print('   - Executor: ${executorPeriod.executorNome} (${executorPeriod.periods.length} períodos)');
+          // debug silenciado
           
           // Criar uma tarefa virtual representando o executor
           // Usar um ID único baseado no ID da tarefa + ID do executor
@@ -663,9 +883,66 @@ class _GanttChartState extends State<GanttChart> {
           hierarchicalTasks.add(virtualTask);
         }
       }
+
+      // Linhas virtuais para períodos por frota
+      if (isExpanded && mainTask.frotaPeriods.isNotEmpty) {
+        for (var frotaPeriod in mainTask.frotaPeriods) {
+          final virtualTaskId = '${mainTask.id}_frota_${frotaPeriod.frotaId}';
+
+          DateTime? minDate;
+          DateTime? maxDate;
+          for (var period in frotaPeriod.periods) {
+            if (minDate == null || period.dataInicio.isBefore(minDate)) {
+              minDate = period.dataInicio;
+            }
+            if (maxDate == null || period.dataFim.isAfter(maxDate)) {
+              maxDate = period.dataFim;
+            }
+          }
+
+          final virtualTask = Task(
+            id: virtualTaskId,
+            parentId: mainTask.id,
+            statusId: mainTask.statusId,
+            regionalId: mainTask.regionalId,
+            divisaoId: mainTask.divisaoId,
+            segmentoId: mainTask.segmentoId,
+            localIds: mainTask.localIds,
+            executorIds: mainTask.executorIds,
+            equipeIds: mainTask.equipeIds,
+            frotaIds: [frotaPeriod.frotaId],
+            localId: mainTask.localId,
+            equipeId: mainTask.equipeId,
+            status: mainTask.status,
+            statusNome: mainTask.statusNome,
+            regional: mainTask.regional,
+            divisao: mainTask.divisao,
+            locais: mainTask.locais,
+            tipo: mainTask.tipo,
+            ordem: mainTask.ordem,
+            tarefa: '${frotaPeriod.frotaNome} - ${mainTask.tarefa}',
+            executores: mainTask.executores,
+            equipes: mainTask.equipes,
+            executor: mainTask.executor,
+            frota: frotaPeriod.frotaNome,
+            coordenador: mainTask.coordenador,
+            si: mainTask.si,
+            dataInicio: minDate ?? mainTask.dataInicio,
+            dataFim: maxDate ?? mainTask.dataFim,
+            ganttSegments: frotaPeriod.periods,
+            executorPeriods: const [],
+            frotaPeriods: const [],
+            observacoes: mainTask.observacoes,
+            horasPrevistas: mainTask.horasPrevistas,
+            horasExecutadas: mainTask.horasExecutadas,
+            prioridade: mainTask.prioridade,
+          );
+
+          hierarchicalTasks.add(virtualTask);
+        }
+      }
     }
     
-    print('📊 DEBUG Gantt: Total de tarefas hierárquicas: ${hierarchicalTasks.length} (${mainTasks.length} principais + ${hierarchicalTasks.length - mainTasks.length} linhas expandidas)');
     return hierarchicalTasks;
   }
 
@@ -673,7 +950,7 @@ class _GanttChartState extends State<GanttChart> {
   // Método para scrollar para um período específico
   void _scrollToPeriod(DateTime startDate, DateTime endDate, {bool animate = true}) {
     if (!_horizontalScrollController.hasClients) {
-      print('⚠️ DEBUG _scrollToPeriod: Controller não tem clients');
+      // debug silenciado
       return;
     }
     
@@ -684,20 +961,20 @@ class _GanttChartState extends State<GanttChart> {
     final dayWidth = _calculateDayWidth(context);
     final startOffset = _getDayOffset(startDate, days, dayWidth);
     
-    print('🔍 DEBUG _scrollToPeriod: Calculando scroll');
-    print('   startDate: ${startDate.toString().substring(0, 10)}');
-    print('   endDate: ${endDate.toString().substring(0, 10)}');
-    print('   startOffset: $startOffset');
+    // debug silenciado
+    // debug silenciado
+    // debug silenciado
+    // debug silenciado
     double maxScrollExtent = 0.0;
     if (_horizontalScrollController.hasClients && _horizontalScrollController.positions.length == 1) {
       maxScrollExtent = _horizontalScrollController.position.maxScrollExtent;
     }
-    print('   maxScrollExtent: $maxScrollExtent');
+    // debug silenciado
     
     if (startOffset >= 0) {
       final scrollPosition = (startOffset - (dayWidth * 2)).clamp(0.0, maxScrollExtent);
-      print('🔍 DEBUG _scrollToPeriod: scrollPosition calculada: $scrollPosition');
-      print('   animate: $animate');
+      // debug silenciado
+      // debug silenciado
       
       if (animate) {
         _horizontalScrollController.animateTo(
@@ -732,19 +1009,19 @@ class _GanttChartState extends State<GanttChart> {
           }
         }
         
-        print('🔍 DEBUG _scrollToPeriod: Aplicando jumpTo para $scrollPosition');
+        // debug silenciado
         // Aguardar um frame para garantir que o scroll seja aplicado e os segmentos renderizados
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          print('🔍 DEBUG _scrollToPeriod: PostFrameCallback após jumpTo');
-          print('   Controller offset após jumpTo: ${_horizontalScrollController.offset}');
+          // debug silenciado
+          // debug silenciado
           // Aguardar mais um frame para garantir que tudo foi renderizado
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            print('🔍 DEBUG _scrollToPeriod: PostFrameCallback final - resetando flag e rebuild');
+            // debug silenciado
             // Resetar flag após garantir que tudo foi renderizado
             _isScrollingProgrammatically = false;
             // Forçar rebuild para garantir que os segmentos sejam renderizados na posição correta
             if (mounted) {
-              print('🔍 DEBUG _scrollToPeriod: Executando setState() final');
+              // debug silenciado
               setState(() {});
             }
           });
@@ -770,7 +1047,7 @@ class _GanttChartState extends State<GanttChart> {
           final hexColor = tipoAtividade.cor!.replaceFirst('#', '');
           return Color(int.parse('FF$hexColor', radix: 16));
         } catch (e) {
-          print('⚠️ Erro ao converter cor do tipo de atividade "${tipoAtividade.cor}": $e');
+          // debug silenciado
         }
       }
     }
@@ -779,7 +1056,14 @@ class _GanttChartState extends State<GanttChart> {
     return Colors.grey[400]!;
   }
   
-  Color _getSegmentColorByPeriod(GanttSegment segment, Task task) {
+  /// Clareia uma cor misturando com branco
+  Color _lightenColor(Color color, double factor) {
+    // factor: 0.0 = cor original, 1.0 = branco puro
+    // Usar 0.4 para deixar 40% mais claro
+    return Color.lerp(color, Colors.white, factor) ?? color;
+  }
+
+  Color _getSegmentColorByPeriod(GanttSegment segment, Task task, {Task? parentTask, bool isSubtask = false}) {
     // PRIORIDADE 1: Verificar o tipo de período
     // DESLOCAMENTO e PLANEJAMENTO sempre usam suas cores específicas, independente do tipo de atividade
     switch (segment.tipoPeriodo.toUpperCase()) {
@@ -789,22 +1073,44 @@ class _GanttChartState extends State<GanttChart> {
         return Colors.blue[900]!; // Azul escuro para deslocamento (sempre)
       case 'EXECUCAO':
       default:
-        // Para execução, usar cor do tipo de atividade (se definida)
+        Color baseColor;
+        
+        // Se for subtarefa e tiver tarefa pai, usar a cor da tarefa pai
+        if (isSubtask && parentTask != null) {
+          // Obter a cor da tarefa pai (recursivamente, mas sem considerar subtarefa)
+          baseColor = _getSegmentColorByPeriod(segment, parentTask, isSubtask: false);
+          // Clarear a cor em 40%
+          final lightenedColor = _lightenColor(baseColor, 0.4);
+          // debug silenciado
+          return lightenedColor;
+        }
+        
+        // PRIORIDADE 2: Verificar se o tipo de atividade tem cor de segmento definida
         if (task.tipo.isNotEmpty) {
           final tipoAtividade = _tipoAtividadeMap[task.tipo];
+          if (tipoAtividade != null && tipoAtividade.corSegmento != null && tipoAtividade.corSegmento!.isNotEmpty) {
+            try {
+              baseColor = tipoAtividade.segmentBackgroundColor;
+              // debug silenciado
+              return baseColor;
+            } catch (e) {
+              // debug silenciado
+            }
+          }
+          // PRIORIDADE 3: Se não houver cor de segmento, usar cor principal do tipo de atividade
           if (tipoAtividade != null && tipoAtividade.cor != null && tipoAtividade.cor!.isNotEmpty) {
             try {
               // Converter hexadecimal para Color
               final hexColor = tipoAtividade.cor!.replaceFirst('#', '');
-              final color = Color(int.parse('FF$hexColor', radix: 16));
-              print('🎨 Gantt: Usando cor do tipo de atividade "${task.tipo}": ${tipoAtividade.cor}');
-              return color;
+              baseColor = Color(int.parse('FF$hexColor', radix: 16));
+              // debug silenciado
+              return baseColor;
             } catch (e) {
-              print('⚠️ Erro ao converter cor do tipo de atividade "${tipoAtividade.cor}": $e');
+              // debug silenciado
             }
           }
         }
-        // Se não houver cor do tipo de atividade, usar cinza padrão
+        // Se não houver cor definida, usar cinza padrão
         return Colors.grey[400]!;
     }
   }
@@ -820,7 +1126,8 @@ class _GanttChartState extends State<GanttChart> {
     final ganttWidth = screenWidth * 0.5; // Gantt ocupa 50% da tela
     final daysInMonth = 30.0;
     // Calcular dayWidth para que 30 dias caibam na largura disponível
-    final dayWidth = (ganttWidth / daysInMonth).clamp(20.0, 60.0); // Mínimo 20px, máximo 60px
+    // Reduzido em 30%: multiplicar por 0.7
+    final dayWidth = ((ganttWidth / daysInMonth) * 0.7).clamp(14.0, 42.0); // Mínimo 14px, máximo 42px (30% menor)
     
     final today = DateTime.now();
     final todayOffset = _getTodayOffset(today, days, dayWidth);
@@ -832,39 +1139,34 @@ class _GanttChartState extends State<GanttChart> {
       final targetDate = widget.startDate;
       
       final initialOffset = _getDayOffset(targetDate, days, dayWidth);
-      print('🔍 DEBUG Gantt: Inicializando scroll');
-      print('   Período selecionado: ${widget.startDate.toString().substring(0, 10)} até ${widget.endDate.toString().substring(0, 10)}');
-      print('   Target date: ${targetDate.toString().substring(0, 10)}');
-      print('   Initial offset: $initialOffset');
-      print('   Total width: $totalWidth');
-      print('   Days range: ${days.first.toString().substring(0, 10)} até ${days.last.toString().substring(0, 10)}');
-      print('   Tarefas com segmentos: ${widget.tasks.where((t) => t.ganttSegments.isNotEmpty).length}');
-      print('   Usando período do DatePicker (não expandido)');
+      // debug silenciado
+      // debug silenciado
+      // debug silenciado
+      // debug silenciado
+      // debug silenciado
+      // debug silenciado
+      // debug silenciado
 
       // Scroll para a posição correta na primeira renderização
       // Usar múltiplos callbacks para garantir que tudo seja renderizado corretamente
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        print('🔍 DEBUG Gantt: PostFrameCallback 1 - Verificando controllers');
-        print('   Controller hasClients: ${_horizontalScrollController.hasClients}');
-        print('   _hasInitializedScroll: $_hasInitializedScroll');
-        print('   initialOffset >= 0: ${initialOffset >= 0}');
+        // debug silenciado
+        // debug silenciado
+        // debug silenciado
         
         // Primeiro callback: garantir que os controllers estejam prontos
         if (_horizontalScrollController.hasClients && !_hasInitializedScroll) {
-          print('🔍 DEBUG Gantt: PostFrameCallback 2 - Aplicando scroll');
           // Aguardar mais um frame para garantir que os segmentos sejam renderizados
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            print('🔍 DEBUG Gantt: PostFrameCallback 3 - Executando scroll');
-            print('   mounted: $mounted');
-            print('   Controller hasClients: ${_horizontalScrollController.hasClients}');
+            // debug silenciado
+            // debug silenciado
             
             if (mounted && _horizontalScrollController.hasClients) {
               _hasInitializedScroll = true;
-              print('🔍 DEBUG Gantt: Marcando _hasInitializedScroll = true');
               if (_horizontalScrollController.hasClients && _horizontalScrollController.positions.length == 1) {
-                print('   Max scroll extent: ${_horizontalScrollController.position.maxScrollExtent}');
+                // debug silenciado
               } else {
-                print('   Max scroll extent: N/A (controller não disponível)');
+                // debug silenciado
               }
               
               // Como mostramos apenas o período selecionado, scroll deve começar em 0
@@ -877,13 +1179,10 @@ class _GanttChartState extends State<GanttChart> {
                 }
               }
               
-              print('🔍 DEBUG Gantt: Scroll aplicado para 0, aguardando renderização');
               
               // Aguardar mais um frame após o scroll para garantir renderização completa
               WidgetsBinding.instance.addPostFrameCallback((_) {
-                print('🔍 DEBUG Gantt: PostFrameCallback 4 - Forçando rebuild final');
                 if (mounted) {
-                  print('🔍 DEBUG Gantt: Executando setState() final');
                   // Forçar rebuild para garantir que os segmentos sejam renderizados na posição correta
                   setState(() {});
                 }
@@ -891,7 +1190,6 @@ class _GanttChartState extends State<GanttChart> {
             }
           });
         } else {
-          print('⚠️ DEBUG Gantt: Condições não atendidas para scroll inicial');
         }
       });
     }
@@ -921,12 +1219,12 @@ class _GanttChartState extends State<GanttChart> {
                   child: NotificationListener<ScrollNotification>(
                     onNotification: (notification) {
                       // Quando o scroll do mês muda, sincronizar com o scroll horizontal
-                      print('📢 DEBUG NotificationListener (mês): Tipo: ${notification.runtimeType}');
+                      // debug silenciado
                       if (notification is ScrollUpdateNotification) {
-                        print('   ScrollUpdateNotification - offset: ${notification.metrics.pixels}');
+                        // debug silenciado
                         _syncHorizontalScroll();
                       } else if (notification is ScrollEndNotification) {
-                        print('   ScrollEndNotification - offset: ${notification.metrics.pixels}');
+                        // debug silenciado
                         _syncHorizontalScroll();
                       }
                       return false;
@@ -945,6 +1243,31 @@ class _GanttChartState extends State<GanttChart> {
                           children: [
                             // Meses mesclados
                             ..._buildMergedMonthHeaders(days, dayWidth),
+                            // Ícone de arrastar no lado esquerdo do cabeçalho
+                            Positioned(
+                              left: 0,
+                              top: 0,
+                              bottom: 0,
+                              child: Container(
+                                width: 30,
+                                decoration: BoxDecoration(
+                                  color: Colors.grey[200],
+                                  border: Border(
+                                    right: BorderSide(
+                                      color: Colors.grey[400]!,
+                                      width: 1,
+                                    ),
+                                  ),
+                                ),
+                                child: Center(
+                                  child: Icon(
+                                    Icons.drag_handle,
+                                    color: Colors.grey[700],
+                                    size: 20,
+                                  ),
+                                ),
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -1025,12 +1348,12 @@ class _GanttChartState extends State<GanttChart> {
                     child: NotificationListener<ScrollNotification>(
                       onNotification: (notification) {
                         // Quando o scroll horizontal muda, sincronizar com o cabeçalho do mês
-                        print('📢 DEBUG NotificationListener (horizontal): Tipo: ${notification.runtimeType}');
+                        // debug silenciado
                         if (notification is ScrollUpdateNotification) {
-                          print('   ScrollUpdateNotification - offset: ${notification.metrics.pixels}');
+                          // debug silenciado
                           _syncMonthHeader();
                         } else if (notification is ScrollEndNotification) {
-                          print('   ScrollEndNotification - offset: ${notification.metrics.pixels}');
+                          // debug silenciado
                           _syncMonthHeader();
                         }
                         return false;
@@ -1154,7 +1477,6 @@ class _GanttChartState extends State<GanttChart> {
           // Corpo do Gantt com scroll horizontal habilitado
           Builder(
             builder: (context) {
-              print('🔄 DEBUG Gantt: Builder rebuild - expandedTasks: ${_expandedTasks.toList()}');
               // Calcular lista hierárquica uma vez para evitar múltiplas chamadas
               final hierarchicalTasks = _buildHierarchicalTasks();
               
@@ -1212,21 +1534,19 @@ class _GanttChartState extends State<GanttChart> {
                       // Debug: verificar se a tarefa tem períodos por executor (sempre verificar, não apenas quando hasExecutorPeriods)
                       if (!isSubtask && !isExecutorRow) {
                         if (task.executorPeriods.isNotEmpty) {
-                          print('🔍 DEBUG Gantt: Tarefa ${task.id.substring(0, 8)} tem ${task.executorPeriods.length} períodos por executor');
-                          print('   Tarefa: ${task.tarefa}');
-                          print('   Está expandida: $isExpanded');
-                          print('   hasExecutorPeriods: $hasExecutorPeriods');
+                          // debug silenciado
+                          // debug silenciado
+                          // debug silenciado
                           for (var ep in task.executorPeriods) {
-                            print('     - Executor: ${ep.executorNome} (${ep.periods.length} períodos)');
+                            // debug silenciado
                           }
                         } else {
                           // Debug: verificar se a tarefa deveria ter períodos mas não tem
                           // (pode indicar problema de carregamento)
                           if (task.tarefa.toLowerCase().contains('recuperação') || 
                               task.tarefa.toLowerCase().contains('reator')) {
-                            print('⚠️ DEBUG Gantt: Tarefa ${task.id.substring(0, 8)} NÃO tem períodos por executor');
-                            print('   Tarefa: ${task.tarefa}');
-                            print('   executorPeriods.length: ${task.executorPeriods.length}');
+                            // debug silenciado
+                            // debug silenciado
                           }
                         }
                       }
@@ -1288,7 +1608,6 @@ class _GanttChartState extends State<GanttChart> {
                       
                       // Debug inicial
                       if (index == 0) {
-                        print('🔍 DEBUG Gantt: sortColumn=${widget.sortColumn}, getSortValue=${widget.getSortValue != null}');
                       }
                       
                       if (widget.sortColumn != null && 
@@ -1306,21 +1625,19 @@ class _GanttChartState extends State<GanttChart> {
                           
                           // Debug - mostrar quando detectar mudança
                           if (mudouGrupo) {
-                            print('🔴 DEBUG Gantt linha $index: MUDOU GRUPO!');
-                            print('   Coluna: ${widget.sortColumn}');
-                            print('   Valor anterior: "$previousValue"');
-                            print('   Valor atual: "$currentValue"');
+                            // debug silenciado
+                            // debug silenciado
+                            // debug silenciado
                           }
                         } catch (e, stackTrace) {
                           // Se houver erro, não mostrar linha separadora
-                          print('❌ Erro ao verificar mudança de grupo no Gantt: $e');
-                          print('Stack trace: $stackTrace');
+                        debugPrint('Erro ao verificar mudança de grupo no Gantt: $e');
+                          // debug silenciado
                           mudouGrupo = false;
                         }
                       } else {
                         // Debug para entender por que não está verificando
                         if (index < 3) {
-                          print('⚠️ DEBUG Gantt linha $index: Não verificando mudança - sortColumn=${widget.sortColumn}, previousTask=${previousTask != null}, isSubtask=$isSubtask, isExecutorRow=$isExecutorRow, getSortValue=${widget.getSortValue != null}');
                         }
                       }
                       
@@ -1423,11 +1740,12 @@ class _GanttChartState extends State<GanttChart> {
                                       segment.dataInicio.month,
                                       segment.dataInicio.day,
                                     );
-                                    final endDate = DateTime(
+                                    final rawEndDate = DateTime(
                                       segment.dataFim.year,
                                       segment.dataFim.month,
                                       segment.dataFim.day,
                                     );
+                                    final endDate = _normalizeLegacyEndDate(task, startDate, rawEndDate);
                                     
                                     final startOffset = _getDayOffset(
                                       startDate,
@@ -1436,8 +1754,15 @@ class _GanttChartState extends State<GanttChart> {
                                     );
                                     
                                     // Calcular duração em dias (inclusive)
-                                    final duration = endDate.difference(startDate).inDays + 1;
-                                    final barWidth = duration * dayWidth;
+                                    // Duração inclusiva: ex. 09/01 a 11/01 = 3 dias
+                                    final duration = math.max(
+                                      1,
+                                      endDate.difference(startDate).inDays + 1,
+                                    );
+                                    final barWidth = math.max(
+                                      dayWidth * 0.5,
+                                      duration * dayWidth - (dayWidth * 0.5), // encurta meio dia para não invadir o próximo
+                                    );
                                     
                                     // Verificar se o clique está dentro do segmento
                                     if (clickX >= startOffset && clickX <= startOffset + barWidth) {
@@ -1491,8 +1816,15 @@ class _GanttChartState extends State<GanttChart> {
                                       );
                                       
                                       // Calcular duração em dias (inclusive)
-                                      final duration = endDate.difference(startDate).inDays + 1;
-                                      final barWidth = duration * dayWidth;
+                                      // Inclusivo
+                                      final duration = math.max(
+                                        1,
+                                        endDate.difference(startDate).inDays + 1,
+                                      );
+                                      final barWidth = math.max(
+                                        dayWidth * 0.5,
+                                        duration * dayWidth - (dayWidth * 0.5),
+                                      );
                                       
                                       // Verificar se o movimento está dentro do segmento
                                       if (moveX >= startOffset && moveX <= startOffset + barWidth) {
@@ -1567,8 +1899,15 @@ class _GanttChartState extends State<GanttChart> {
                                     alignment: Alignment.topLeft,
                                     fit: StackFit.loose,
                                     children: [
-                                    // Grid de dias - mesma estrutura exata do cabeçalho para alinhamento perfeito
-                                    Row(
+                                    // Grid de dias - mesma estrutura do cabeçalho; aplica conflito apenas na linha da tarefa
+                                    Builder(
+                                      builder: (context) {
+                                        final taskConflictDays = _getConflictDaysForTask(
+                                          task,
+                                          widget.startDate,
+                                          widget.endDate,
+                                        );
+                                        return Row(
                                       mainAxisAlignment: MainAxisAlignment.start,
                                       crossAxisAlignment: CrossAxisAlignment.stretch,
                                       textDirection: TextDirection.ltr,
@@ -1576,24 +1915,46 @@ class _GanttChartState extends State<GanttChart> {
                                       children: days.map((day) {
                                         final isWeekend = _isWeekend(day);
                                         final isFeriado = _isFeriado(day);
+                                            final hasConflict = taskConflictDays.any((d) =>
+                                                d.year == day.year &&
+                                                d.month == day.month &&
+                                                d.day == day.day);
                                         return Container(
                                           width: dayWidth,
                                           height: rowHeight,
                                           padding: EdgeInsets.zero,
                                           margin: EdgeInsets.zero,
                                           decoration: BoxDecoration(
-                                            color: isFeriado
+                                                color: hasConflict
+                                                    ? Colors.red[200]
+                                                    : isFeriado
                                                 ? Colors.purple[100]
                                                 : isWeekend
                                                     ? Colors.grey[200]
                                                     : Colors.white,
-                                            border: Border.all(
+                                                border: Border(
+                                                  right: BorderSide(
+                                                    color: hasConflict ? Colors.red[400]! : Colors.grey[300]!,
+                                                    width: hasConflict ? 2 : 1,
+                                                  ),
+                                                  bottom: BorderSide(
                                               color: Colors.grey[300]!,
                                               width: 1,
+                                                  ),
+                                                  top: BorderSide(
+                                                    color: Colors.grey[300]!,
+                                                    width: 1,
+                                                  ),
+                                                  left: BorderSide(
+                                                    color: Colors.grey[300]!,
+                                                    width: 1,
+                                                  ),
                                             ),
                                           ),
                                         );
                                       }).toList(),
+                                        );
+                                      },
                                     ),
                                   // Linhas verticais entre os meses (no primeiro dia de cada mês)
                                   ...days.asMap().entries.where((entry) {
@@ -1627,21 +1988,19 @@ class _GanttChartState extends State<GanttChart> {
                                   Builder(
                                     builder: (context) {
                                       if (task.ganttSegments.isEmpty) {
-                                        print('⚠️ DEBUG Gantt: Tarefa ${task.id.substring(0, 8)} (${task.parentId != null ? "SUBTAREFA" : "PRINCIPAL"}) não tem segmentos');
-                                        print('   Tarefa: ${task.tarefa}');
-                                        print('   dataInicio: ${task.dataInicio}');
-                                        print('   dataFim: ${task.dataFim}');
-                                        print('   ganttSegments.length: ${task.ganttSegments.length}');
+                                        // debug silenciado
+                                        // debug silenciado
+                                        // debug silenciado
+                                        // debug silenciado
                                       } else {
                                         final tipoTarefa = task.parentId != null ? "SUBTAREFA" : "PRINCIPAL";
-                                        print('✅ DEBUG Gantt: $tipoTarefa ${task.id.substring(0, 8)} tem ${task.ganttSegments.length} segmentos');
-                                        print('   Tarefa: ${task.tarefa}');
-                                        print('   Período Gantt: ${widget.startDate.toString().substring(0, 10)} até ${widget.endDate.toString().substring(0, 10)}');
+                                        // debug silenciado
+                                        // debug silenciado
                                         for (var seg in task.ganttSegments) {
                                           final segStart = seg.dataInicio.toString().substring(0, 10);
                                           final segEnd = seg.dataFim.toString().substring(0, 10);
                                           final dentroPeriodo = !seg.dataFim.isBefore(widget.startDate) && !seg.dataInicio.isAfter(widget.endDate);
-                                          print('   Segmento: $segStart até $segEnd (dentro do período: $dentroPeriodo)');
+                                          // debug silenciado
                                         }
                                       }
                                       return const SizedBox.shrink();
@@ -1683,24 +2042,29 @@ class _GanttChartState extends State<GanttChart> {
                                     if (startDate.isBefore(widget.startDate)) {
                                       // Começar em 0 (início do período)
                                       startOffset = 0;
-                                      // Ajustar data de início para o início do período
+                                      // Ajustar datas aos limites visíveis
                                       final adjustedStartDate = widget.startDate;
-                                      // Se termina depois do período, ajustar também
                                       final adjustedEndDate = endDate.isAfter(widget.endDate) 
                                           ? widget.endDate 
                                           : endDate;
+                                      // Inclusivo
                                       final duration = adjustedEndDate.difference(adjustedStartDate).inDays + 1;
-                                      barWidth = (duration > 0 ? duration : 1) * dayWidth;
+                                      barWidth = math.max(
+                                        dayWidth,
+                                        (duration > 0 ? duration : 1) * dayWidth,
+                                      );
                                     } else {
                                       // Segmento começa dentro do período
                                       startOffset = _getDayOffset(startDate, days, dayWidth);
-                                      
-                                      // Se termina depois do período, ajustar a largura
                                       final adjustedEndDate = endDate.isAfter(widget.endDate) 
                                           ? widget.endDate 
                                           : endDate;
+                                      // Inclusivo
                                       final duration = adjustedEndDate.difference(startDate).inDays + 1;
-                                      barWidth = (duration > 0 ? duration : 1) * dayWidth;
+                                      barWidth = math.max(
+                                        dayWidth,
+                                        (duration > 0 ? duration : 1) * dayWidth,
+                                      );
                                     }
                                     
                                     // Garantir que barWidth nunca seja negativo
@@ -1719,8 +2083,44 @@ class _GanttChartState extends State<GanttChart> {
                                       return const SizedBox.shrink();
                                     }
 
+                                    // Buscar tarefa pai se for subtarefa
+                                    Task? parentTask;
+                                    if (isSubtask && task.parentId != null) {
+                                      try {
+                                        parentTask = hierarchicalTasks.firstWhere(
+                                          (t) => t.id == task.parentId,
+                                        );
+                                      } catch (e) {
+                                        // Se não encontrar a tarefa pai, não usar cor clareada
+                                        parentTask = null;
+                                      }
+                                    }
+
                                     // Cache da cor para evitar recálculo
-                                    final segmentColor = _getSegmentColorByPeriod(segment, task);
+                                    final segmentColor = _getSegmentColorByPeriod(
+                                      segment, 
+                                      task, 
+                                      parentTask: parentTask,
+                                      isSubtask: isSubtask,
+                                    );
+                                    // Obter cor do texto do tipo de atividade se disponível
+                                    Color segmentTextColor = Colors.white;
+                                    if (task.tipo.isNotEmpty) {
+                                      final tipoAtividade = _tipoAtividadeMap[task.tipo];
+                                      if (tipoAtividade != null && tipoAtividade.corTextoSegmento != null && tipoAtividade.corTextoSegmento!.isNotEmpty) {
+                                        try {
+                                          segmentTextColor = tipoAtividade.segmentTextColor;
+                                        } catch (e) {
+                                          // debug silenciado
+                                        }
+                                      }
+                                    }
+
+                                    // Conflitos: marcar dias conflitantes (EXECUCAO)
+                                    final isExecutionSegment = segment.tipoPeriodo.toUpperCase() == 'EXECUCAO';
+                                    final conflictDays = isExecutionSegment
+                                        ? _getConflictDaysForSegment(task, startDate, endDate)
+                                        : const <DateTime>[];
                                     
                                     return Positioned(
                                       left: startOffset,
@@ -1732,10 +2132,14 @@ class _GanttChartState extends State<GanttChart> {
                                           task: task,
                                           segmentIndex: segmentIndex,
                                           segment: segment,
+                                          normalizedStartDate: startDate,
+                                          normalizedEndDate: endDate,
                                           barWidth: barWidth,
                                           dayWidth: dayWidth,
                                           days: days,
                                           color: segmentColor,
+                                          textColor: segmentTextColor,
+                                          conflictDays: conflictDays,
                                           taskService: widget.taskService,
                                           onTasksUpdated: widget.onTasksUpdated,
                                           onDragStart: _onSegmentDragStart,
@@ -1991,12 +2395,17 @@ class _DraggableSegment extends StatefulWidget {
   final Task task;
   final int segmentIndex;
   final GanttSegment segment;
+  final DateTime normalizedStartDate;
+  final DateTime normalizedEndDate;
   final double barWidth;
   final double dayWidth;
   final List<DateTime> days;
   final Color color;
+  final Color textColor;
+  final List<DateTime>? conflictDays;
   final TaskService? taskService;
   final Function()? onTasksUpdated;
+  final Function(Task)? onTaskUpdated; // Callback para atualizar apenas uma tarefa específica
   final VoidCallback? onDragStart; // Callback quando o arrasto do segmento começa
   final VoidCallback? onDragEnd; // Callback quando o arrasto do segmento termina
 
@@ -2004,12 +2413,17 @@ class _DraggableSegment extends StatefulWidget {
     required this.task,
     required this.segmentIndex,
     required this.segment,
+    required this.normalizedStartDate,
+    required this.normalizedEndDate,
     required this.barWidth,
     required this.dayWidth,
     required this.days,
     required this.color,
+    this.textColor = Colors.white,
+    this.conflictDays,
     this.taskService,
     this.onTasksUpdated,
+    this.onTaskUpdated,
     this.onDragStart,
     this.onDragEnd,
   });
@@ -2157,21 +2571,27 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
     }
 
     // Apenas atualizar visualmente durante o arrasto (não salvar no banco ainda)
+    // Normalizar para manter apenas a data (evita horas/milisegundos que podem gerar +1 dia)
+    DateTime normalizeDate(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
+
     setState(() {
-      _currentStartDate = newStartDate;
-      _currentEndDate = newEndDate;
+      _currentStartDate = newStartDate != null ? normalizeDate(newStartDate) : null;
+      _currentEndDate = newEndDate != null ? normalizeDate(newEndDate) : null;
     });
   }
 
   void _onPanEnd(DragEndDetails details) async {
     // Salvar no banco apenas quando o arrasto terminar
     if (_currentStartDate != null && _currentEndDate != null && widget.taskService != null) {
+      // Normalizar antes de salvar para evitar desvio de um dia
+      final normalizedStart = DateTime(_currentStartDate!.year, _currentStartDate!.month, _currentStartDate!.day);
+      final normalizedEnd = DateTime(_currentEndDate!.year, _currentEndDate!.month, _currentEndDate!.day);
       // Verificar se é uma tarefa virtual (executor row)
       final isExecutorRow = widget.task.id.contains('_executor_');
       
       if (isExecutorRow) {
         // É uma tarefa virtual - salvar como ExecutorPeriod da tarefa principal
-        print('💾 GanttChart _onPanEnd: Salvando alterações do período do executor (tarefa virtual)');
+        // debug silenciado
         print('   - Tarefa virtual ID: ${widget.task.id}');
         print('   - SegmentIndex: ${widget.segmentIndex}');
         print('   - Data início: ${_currentStartDate}');
@@ -2241,7 +2661,7 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
         
         // Salvar no banco
         await widget.taskService!.updateTask(mainTaskId, updatedTask);
-        print('✅ Tarefa principal atualizada com ExecutorPeriods');
+        // debug silenciado
       } else {
         // É uma tarefa normal - salvar como ganttSegment
         final updatedSegments = List<GanttSegment>.from(widget.task.ganttSegments);
@@ -2249,8 +2669,8 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
           label: widget.segment.label,
           tipo: widget.segment.tipo,
           tipoPeriodo: widget.segment.tipoPeriodo, // Preservar tipoPeriodo
-          dataInicio: _currentStartDate!,
-          dataFim: _currentEndDate!,
+          dataInicio: normalizedStart,
+          dataFim: normalizedEnd,
         );
         
         print('💾 GanttChart _onPanEnd: Salvando alterações do segmento');
@@ -2275,19 +2695,22 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
         );
 
         // Salvar no banco apenas uma vez ao finalizar o arrasto
-        await widget.taskService!.updateTask(widget.task.id, updatedTask);
-      }
-      
-      // Aguardar a atualização dos dados (para ambos os casos: tarefa virtual e normal)
-      final onTasksUpdated = widget.onTasksUpdated;
-      if (onTasksUpdated != null) {
-        print('🔄 Chamando onTasksUpdated após salvar alterações...');
-        final result = onTasksUpdated();
-        // Se for uma Future, aguardar
-        if (result is Future) {
-          await result;
+        final savedTask = await widget.taskService!.updateTask(widget.task.id, updatedTask);
+        
+        // Atualizar apenas a tarefa específica sem recarregar tudo
+        if (savedTask != null) {
+          widget.onTaskUpdated?.call(savedTask);
+        } else {
+          // Fallback: recarregar tudo se não conseguir atualizar a tarefa específica
+          final onTasksUpdated = widget.onTasksUpdated;
+          if (onTasksUpdated != null) {
+            print('🔄 Fallback: Recarregando todas as tarefas após arrasto...');
+            final result = onTasksUpdated();
+            if (result is Future) {
+              await result;
+            }
+          }
         }
-        print('✅ onTasksUpdated concluído');
       }
       
       // Manter as datas temporárias até que o widget seja atualizado com os novos dados
@@ -2451,20 +2874,24 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
     final savedTask = await widget.taskService!.updateTask(widget.task.id, updatedTask);
     
     if (savedTask != null) {
-      print('✅ Tarefa salva com sucesso! Segmentos: ${savedTask.ganttSegments.length}');
+      // debug silenciado
     } else {
       print('⚠️ Erro ao salvar tarefa no banco');
     }
     
-    // Aguardar a atualização dos dados antes de mostrar a mensagem
-    final onTasksUpdated = widget.onTasksUpdated;
-    if (onTasksUpdated != null) {
-      print('🔄 Atualizando lista de tarefas...');
-      final result = onTasksUpdated();
-      if (result is Future) {
-        await result;
+    // Atualizar apenas a tarefa específica sem recarregar tudo
+    if (savedTask != null) {
+      widget.onTaskUpdated?.call(savedTask);
+    } else {
+      // Fallback: recarregar tudo se não conseguir atualizar a tarefa específica
+      final onTasksUpdated = widget.onTasksUpdated;
+      if (onTasksUpdated != null) {
+        print('🔄 Fallback: Recarregando todas as tarefas...');
+        final result = onTasksUpdated();
+        if (result is Future) {
+          await result;
+        }
       }
-      print('✅ Lista de tarefas atualizada');
     }
 
     // Mostrar mensagem de sucesso
@@ -2686,7 +3113,7 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
               onPressed: () async {
                 if (widget.taskService == null) return;
 
-                print('💾 Salvando segmento atualizado no Gantt:');
+                // debug silenciado
                 print('   Tarefa ID: ${widget.task.id}');
                 print('   Índice do segmento: ${widget.segmentIndex}');
                 print('   Tipo selecionado no dropdown: $selectedTipo');
@@ -2753,7 +3180,7 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
 
                 print('   📤 Enviando tarefa atualizada para TaskService:');
                 print('      Tarefa ID: ${updatedTask.id}');
-                print('      Segmentos: ${updatedTask.ganttSegments.length}');
+                // debug silenciado
                 for (var seg in updatedTask.ganttSegments) {
                   print('        - tipo: ${seg.tipo}, início: ${seg.dataInicio.toString().substring(0, 10)}, fim: ${seg.dataFim.toString().substring(0, 10)}');
                 }
@@ -2767,11 +3194,13 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
                   for (var seg in savedTask.ganttSegments) {
                     print('        - tipo: ${seg.tipo}, início: ${seg.dataInicio.toString().substring(0, 10)}, fim: ${seg.dataFim.toString().substring(0, 10)}');
                   }
+                  // Atualizar apenas a tarefa específica sem recarregar tudo
+                  widget.onTaskUpdated?.call(savedTask);
                 } else {
                   print('   ❌ Erro ao salvar tarefa');
+                  // Fallback: recarregar tudo se não conseguir atualizar
+                  widget.onTasksUpdated?.call();
                 }
-
-                widget.onTasksUpdated?.call();
 
                 Navigator.pop(context);
                 if (mounted) {
@@ -2906,20 +3335,24 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
     final savedTask = await widget.taskService!.updateTask(widget.task.id, updatedTask);
     
     if (savedTask != null) {
-      print('✅ Tarefa salva com sucesso! Segmentos: ${savedTask.ganttSegments.length}');
+      // debug silenciado
     } else {
       print('⚠️ Erro ao salvar tarefa no banco');
     }
     
-    // Aguardar a atualização dos dados antes de mostrar a mensagem
-    final onTasksUpdated = widget.onTasksUpdated;
-    if (onTasksUpdated != null) {
-      print('🔄 Atualizando lista de tarefas...');
-      final result = onTasksUpdated();
-      if (result is Future) {
-        await result;
+    // Atualizar apenas a tarefa específica sem recarregar tudo
+    if (savedTask != null) {
+      widget.onTaskUpdated?.call(savedTask);
+    } else {
+      // Fallback: recarregar tudo se não conseguir atualizar a tarefa específica
+      final onTasksUpdated = widget.onTasksUpdated;
+      if (onTasksUpdated != null) {
+        print('🔄 Fallback: Recarregando todas as tarefas...');
+        final result = onTasksUpdated();
+        if (result is Future) {
+          await result;
+        }
       }
-      print('✅ Lista de tarefas atualizada');
     }
 
     // Mostrar mensagem de sucesso
@@ -3014,7 +3447,7 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
       
       return Icon(
         iconData,
-        color: Colors.white,
+        color: widget.textColor,
         size: _getOptimalFontSize(barWidth) * 1.5,
         shadows: [
           Shadow(
@@ -3040,9 +3473,9 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
               barWidth,
             ),
             style: TextStyle(
-              color: Colors.white,
+              color: widget.textColor,
               fontSize: _getOptimalFontSize(barWidth),
-              fontWeight: FontWeight.w600,
+              fontWeight: FontWeight.normal,
               shadows: [
                 Shadow(
                   offset: const Offset(0.5, 0.5),
@@ -3063,9 +3496,9 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
               barWidth,
             ),
             style: TextStyle(
-              color: Colors.white,
+              color: widget.textColor,
               fontSize: _getOptimalFontSize(barWidth),
-              fontWeight: FontWeight.w500,
+              fontWeight: FontWeight.normal,
               shadows: [
                 Shadow(
                   offset: const Offset(0.5, 0.5),
@@ -3120,7 +3553,20 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
 
     final currentBarWidth = _getCurrentBarWidth();
     final currentOffset = _getCurrentOffset();
-
+    final effectiveStartDate = _currentStartDate ?? widget.normalizedStartDate;
+    final effectiveEndDate = _currentEndDate ?? widget.normalizedEndDate;
+    // Tornar o fim inclusivo para que o último dia seja renderizado
+    final effectiveEndDateExclusive = DateTime(
+      effectiveEndDate.year,
+      effectiveEndDate.month,
+      effectiveEndDate.day,
+    ).add(const Duration(days: 1));
+    final segmentDays = widget.days.where((day) {
+      final dayStart = DateTime(day.year, day.month, day.day);
+      final dayEnd = dayStart.add(const Duration(days: 1));
+      return effectiveStartDate.isBefore(dayEnd) &&
+          effectiveEndDateExclusive.isAfter(dayStart);
+    }).toList();
     return Transform.translate(
       offset: Offset(currentOffset, 0),
       child: MouseRegion(
@@ -3142,15 +3588,31 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
           },
           child: Stack(
             children: [
-              // Barra principal
+              // Fundo por dia para evidenciar conflitos
+              Row(
+                children: segmentDays.map((day) {
+                  final isConflictDay = widget.conflictDays?.any((d) =>
+                          d.year == day.year && d.month == day.month && d.day == day.day) ??
+                      false;
+                  return Container(
+                    width: widget.dayWidth, // manter alinhado à grade
+                    height: 48.0,
+                    decoration: BoxDecoration(
+                      color: isConflictDay
+                          ? Colors.red[600]!
+                          : (_isDragging ? widget.color.withOpacity(0.7) : widget.color),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  );
+                }).toList(),
+              ),
+              // Barra principal com texto
               Center(
                 child: Container(
-                  width: currentBarWidth-1,
+                  width: currentBarWidth - 1,
                   height: 48.0, // Altura reduzida para mostrar as linhas da grade
                   decoration: BoxDecoration(
-                    color: _isDragging
-                        ? widget.color.withOpacity(0.7)
-                        : widget.color,
+                    color: Colors.transparent,
                     borderRadius: BorderRadius.circular(2),
                     border: _isDragging
                         ? Border.all(

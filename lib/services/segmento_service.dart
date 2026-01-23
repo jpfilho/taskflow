@@ -15,6 +15,8 @@ class SegmentoService {
       id: map['id'] as String,
       segmento: map['segmento'] as String,
       descricao: map['descricao'] as String?,
+      cor: map['cor'] as String?,
+      corTexto: map['cor_texto'] as String?,
       createdAt: map['created_at'] != null
           ? DateTime.parse(map['created_at'] as String)
           : null,
@@ -29,6 +31,8 @@ class SegmentoService {
     return {
       'segmento': segmento.segmento,
       'descricao': segmento.descricao,
+      'cor': segmento.cor,
+      'cor_texto': segmento.corTexto,
     };
   }
 
@@ -115,6 +119,8 @@ class SegmentoService {
             id,
             segmento,
             descricao,
+            cor,
+            cor_texto,
             created_at,
             updated_at
           )

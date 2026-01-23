@@ -13,6 +13,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:record/record.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
+import 'package:desktop_drop/desktop_drop.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
@@ -153,6 +154,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+
   Future<void> _mostrarOpcoesAnexo() async {
     showModalBottomSheet(
       context: context,
@@ -260,6 +262,17 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  bool _isImageFile(XFile file) {
+    final name = file.name.toLowerCase();
+    final mime = (file.mimeType ?? '').toLowerCase();
+    return mime.startsWith('image/') ||
+        name.endsWith('.png') ||
+        name.endsWith('.jpg') ||
+        name.endsWith('.jpeg') ||
+        name.endsWith('.gif') ||
+        name.endsWith('.webp');
+  }
+
   Future<void> _processarImagem(XFile imageFile) async {
     try {
       if (mounted) {
@@ -297,6 +310,7 @@ class _ChatScreenState extends State<ChatScreen> {
       
       Anexo anexo;
       if (kIsWeb) {
+        debugPrint('[Chat] upload imagem (web) task=${grupo.tarefaId} file=$fileName bytes=${bytes.length}');
         anexo = await anexoService.uploadAnexoFromBytes(
           taskId: grupo.tarefaId,
           bytes: bytes,
@@ -304,14 +318,16 @@ class _ChatScreenState extends State<ChatScreen> {
           mimeType: mimeType,
         );
       } else {
+        debugPrint('[Chat] upload imagem (device) task=${grupo.tarefaId} file=${imageFile.path}');
         anexo = await anexoService.uploadAnexo(
           taskId: grupo.tarefaId,
           file: File(imageFile.path),
         );
       }
 
-      // Obter URL pública do arquivo
-      final arquivoUrl = anexoService.getPublicUrl(anexo);
+      // Obter URL (pública ou assinada)
+      final arquivoUrl = await anexoService.getSignedUrl(anexo);
+      debugPrint('[Chat] upload imagem OK task=${grupo.tarefaId} id=${anexo.id} path=${anexo.caminhoArquivo} url=$arquivoUrl');
 
       // Enviar mensagem com imagem (sem nome do arquivo)
       await _enviarMensagemComAnexo(
@@ -329,6 +345,7 @@ class _ChatScreenState extends State<ChatScreen> {
         );
       }
     } catch (e) {
+      debugPrint('[Chat] erro ao processar/enviar imagem: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -380,6 +397,7 @@ class _ChatScreenState extends State<ChatScreen> {
           mimeType = file.extension != null 
               ? _getMimeTypeFromExtension(file.extension!)
               : null;
+          debugPrint('[Chat] upload anexo (web) task=${grupo.tarefaId} file=$fileName bytes=${bytes.length}');
         } else {
           // Mobile/Desktop: ler do arquivo usando path
           if (file.path == null) {
@@ -388,6 +406,7 @@ class _ChatScreenState extends State<ChatScreen> {
           final fileObj = File(file.path!);
           bytes = await fileObj.readAsBytes();
           mimeType = _getMimeTypeFromExtension(fileName.split('.').last);
+          debugPrint('[Chat] upload anexo (device) task=${grupo.tarefaId} file=${file.path} bytes=${bytes.length}');
         }
 
         if (bytes.isEmpty) {
@@ -411,9 +430,10 @@ class _ChatScreenState extends State<ChatScreen> {
             file: File(file.path!),
           );
         }
+        debugPrint('[Chat] upload anexo OK task=${grupo.tarefaId} id=${anexo.id} path=${anexo.caminhoArquivo}');
 
-        // Obter URL pública do arquivo
-        final arquivoUrl = anexoService.getPublicUrl(anexo);
+        // Obter URL assinada do arquivo
+        final arquivoUrl = await anexoService.getSignedUrl(anexo);
 
         // Determinar tipo de arquivo
         final tipoArquivo = anexo.tipoArquivo;
@@ -437,6 +457,7 @@ class _ChatScreenState extends State<ChatScreen> {
         }
       }
     } catch (e) {
+      debugPrint('[Chat] erro ao enviar arquivo: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -837,7 +858,7 @@ class _ChatScreenState extends State<ChatScreen> {
         mimeType: 'audio/m4a',
       );
 
-      final arquivoUrl = anexoService.getPublicUrl(anexo);
+      final arquivoUrl = await anexoService.getSignedUrl(anexo);
 
       await _enviarMensagemComAnexo(
         conteudo: '',
@@ -2005,7 +2026,15 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return DropTarget(
+      onDragDone: (details) async {
+        for (final file in details.files) {
+          if (_isImageFile(file)) {
+            await _processarImagem(file);
+          }
+        }
+      },
+      child: Scaffold(
       appBar: AppBar(
         title: Text(_grupoNome ?? 'Chat'),
         backgroundColor: const Color(0xFF075E54),
@@ -2364,6 +2393,7 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ],
       ),
+    ),
     );
   }
 }

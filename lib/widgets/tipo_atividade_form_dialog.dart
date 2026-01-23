@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/tipo_atividade.dart';
 import '../models/segmento.dart';
 import '../services/segmento_service.dart';
+import 'color_picker_dialog.dart';
 
 class TipoAtividadeFormDialog extends StatefulWidget {
   final TipoAtividade? tipoAtividade;
@@ -20,36 +21,16 @@ class _TipoAtividadeFormDialogState extends State<TipoAtividadeFormDialog> {
   late TextEditingController _codigoController;
   late TextEditingController _descricaoController;
   late TextEditingController _corController;
+  late TextEditingController _corSegmentoController;
+  late TextEditingController _corTextoSegmentoController;
   final SegmentoService _segmentoService = SegmentoService();
   List<Segmento> _segmentos = [];
   Set<String> _selectedSegmentoIds = {}; // Múltiplos segmentos
   bool _ativo = true;
   bool _isLoadingSegmentos = true;
   Color _selectedColor = Colors.blue;
-  
-  // Cores pré-definidas
-  static const List<Color> _predefinedColors = [
-    Colors.red,
-    Colors.pink,
-    Colors.purple,
-    Colors.deepPurple,
-    Colors.indigo,
-    Colors.blue,
-    Colors.lightBlue,
-    Colors.cyan,
-    Colors.teal,
-    Colors.green,
-    Colors.lightGreen,
-    Colors.lime,
-    Colors.yellow,
-    Colors.amber,
-    Colors.orange,
-    Colors.deepOrange,
-    Colors.brown,
-    Colors.grey,
-    Colors.blueGrey,
-    Colors.black,
-  ];
+  Color _selectedSegmentBackgroundColor = Colors.grey;
+  Color _selectedSegmentTextColor = Colors.white;
 
   @override
   void initState() {
@@ -65,6 +46,33 @@ class _TipoAtividadeFormDialogState extends State<TipoAtividadeFormDialog> {
     if (corHex != null && corHex.isNotEmpty) {
       _selectedColor = _hexToColor(corHex) ?? Colors.blue;
     }
+    
+    // Inicializar cor do segmento
+    if (widget.tipoAtividade != null && widget.tipoAtividade!.corSegmento != null && widget.tipoAtividade!.corSegmento!.isNotEmpty) {
+      try {
+        _selectedSegmentBackgroundColor = widget.tipoAtividade!.segmentBackgroundColor;
+        _corSegmentoController = TextEditingController(text: widget.tipoAtividade!.corSegmento);
+      } catch (e) {
+        _selectedSegmentBackgroundColor = Colors.grey;
+        _corSegmentoController = TextEditingController(text: '#808080');
+      }
+    } else {
+      _corSegmentoController = TextEditingController(text: '#808080');
+    }
+
+    // Inicializar cor do texto do segmento
+    if (widget.tipoAtividade != null && widget.tipoAtividade!.corTextoSegmento != null && widget.tipoAtividade!.corTextoSegmento!.isNotEmpty) {
+      try {
+        _selectedSegmentTextColor = widget.tipoAtividade!.segmentTextColor;
+        _corTextoSegmentoController = TextEditingController(text: widget.tipoAtividade!.corTextoSegmento);
+      } catch (e) {
+        _selectedSegmentTextColor = Colors.white;
+        _corTextoSegmentoController = TextEditingController(text: '#FFFFFF');
+      }
+    } else {
+      _corTextoSegmentoController = TextEditingController(text: '#FFFFFF');
+    }
+    
     _ativo = widget.tipoAtividade?.ativo ?? true;
     _loadSegmentos();
   }
@@ -74,6 +82,8 @@ class _TipoAtividadeFormDialogState extends State<TipoAtividadeFormDialog> {
     _codigoController.dispose();
     _descricaoController.dispose();
     _corController.dispose();
+    _corSegmentoController.dispose();
+    _corTextoSegmentoController.dispose();
     super.dispose();
   }
 
@@ -89,110 +99,55 @@ class _TipoAtividadeFormDialogState extends State<TipoAtividadeFormDialog> {
     }
   }
 
-  void _showColorPicker() {
-    Color tempColor = _selectedColor;
-    final tempCorController = TextEditingController(text: _corController.text);
-    
-    showDialog(
+  Future<void> _showColorPicker() async {
+    final color = await showDialog<Color>(
       context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) {
-          return AlertDialog(
-            title: const Text('Selecionar Cor'),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Cores pré-definidas
-                  const Text(
-                    'Cores Pré-definidas:',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: _predefinedColors.map((color) {
-                      final isSelected = color.value == tempColor.value;
-                      return GestureDetector(
-                        onTap: () {
-                          setDialogState(() {
-                            tempColor = color;
-                            tempCorController.text = _colorToHex(color);
-                          });
-                        },
-                        child: Container(
-                          width: 40,
-                          height: 40,
-                          decoration: BoxDecoration(
-                            color: color,
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: isSelected ? Colors.black : Colors.grey,
-                              width: isSelected ? 3 : 1,
-                            ),
-                          ),
-                          child: isSelected
-                              ? const Icon(Icons.check, color: Colors.white, size: 20)
-                              : null,
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                  const SizedBox(height: 20),
-                  // Campo para inserir cor hexadecimal manualmente
-                  const Text(
-                    'Ou digite o código hexadecimal:',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: tempCorController,
-                    decoration: InputDecoration(
-                      hintText: '#FF5733',
-                      prefixIcon: Container(
-                        width: 40,
-                        height: 40,
-                        margin: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: tempColor,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.grey),
-                        ),
-                      ),
-                    ),
-                    onChanged: (value) {
-                      final color = _hexToColor(value);
-                      if (color != null) {
-                        setDialogState(() {
-                          tempColor = color;
-                        });
-                      }
-                    },
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Cancelar'),
-              ),
-              TextButton(
-                onPressed: () {
-                  setState(() {
-                    _selectedColor = tempColor;
-                    _corController.text = tempCorController.text;
-                  });
-                  Navigator.of(context).pop();
-                },
-                child: const Text('OK'),
-              ),
-            ],
-          );
-        },
+      builder: (context) => ColorPickerDialog(
+        initialColor: _selectedColor,
+        title: 'Selecionar Cor do Tipo de Atividade',
       ),
     );
+
+    if (color != null) {
+      setState(() {
+        _selectedColor = color;
+        _corController.text = _colorToHex(color);
+      });
+    }
+  }
+
+  Future<void> _showSegmentBackgroundColorPicker() async {
+    final color = await showDialog<Color>(
+      context: context,
+      builder: (context) => ColorPickerDialog(
+        initialColor: _selectedSegmentBackgroundColor,
+        title: 'Selecionar Cor de Fundo do Segmento',
+      ),
+    );
+
+    if (color != null) {
+      setState(() {
+        _selectedSegmentBackgroundColor = color;
+        _corSegmentoController.text = _colorToHex(color);
+      });
+    }
+  }
+
+  Future<void> _showSegmentTextColorPicker() async {
+    final color = await showDialog<Color>(
+      context: context,
+      builder: (context) => ColorPickerDialog(
+        initialColor: _selectedSegmentTextColor,
+        title: 'Selecionar Cor do Texto do Segmento',
+      ),
+    );
+
+    if (color != null) {
+      setState(() {
+        _selectedSegmentTextColor = color;
+        _corTextoSegmentoController.text = _colorToHex(color);
+      });
+    }
   }
 
   Future<void> _loadSegmentos() async {
@@ -222,12 +177,17 @@ class _TipoAtividadeFormDialogState extends State<TipoAtividadeFormDialog> {
   void _save() {
     if (_formKey.currentState!.validate()) {
       final corHex = _corController.text.trim();
+      final corSegmentoValue = _corSegmentoController.text.trim();
+      final corTextoSegmentoValue = _corTextoSegmentoController.text.trim();
+      
       final tipoAtividade = TipoAtividade(
         id: widget.tipoAtividade?.id ?? '',
         codigo: _codigoController.text.trim().toUpperCase(),
         descricao: _descricaoController.text.trim(),
         ativo: _ativo,
         cor: corHex.isNotEmpty ? corHex : null,
+        corSegmento: corSegmentoValue.isNotEmpty ? corSegmentoValue : null,
+        corTextoSegmento: corTextoSegmentoValue.isNotEmpty ? corTextoSegmentoValue : null,
         segmentoIds: _selectedSegmentoIds.toList(),
         segmentos: _segmentos
             .where((s) => _selectedSegmentoIds.contains(s.id))
@@ -282,77 +242,99 @@ class _TipoAtividadeFormDialogState extends State<TipoAtividadeFormDialog> {
               ),
               const SizedBox(height: 16),
               // Cor (opcional)
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Cor (opcional)',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
+              InkWell(
+                onTap: _showColorPicker,
+                child: InputDecorator(
+                  decoration: const InputDecoration(
+                    labelText: 'Cor',
+                    border: OutlineInputBorder(),
+                    suffixIcon: Icon(Icons.color_lens),
                   ),
-                  const SizedBox(height: 8),
-                  Row(
+                  child: Row(
                     children: [
-                      GestureDetector(
-                        onTap: _showColorPicker,
-                        child: Container(
-                          width: 50,
-                          height: 50,
-                          decoration: BoxDecoration(
-                            color: _selectedColor,
-                            shape: BoxShape.circle,
-                            border: Border.all(color: Colors.grey, width: 2),
-                          ),
-                          child: _corController.text.isEmpty
-                              ? const Icon(Icons.color_lens, color: Colors.white)
-                              : null,
+                      Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: _selectedColor,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.grey),
                         ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
-                        child: TextFormField(
-                          controller: _corController,
-                          decoration: InputDecoration(
-                            labelText: 'Código hexadecimal',
-                            hintText: '#FF5733',
-                            border: const OutlineInputBorder(),
-                            prefixIcon: Container(
-                              width: 40,
-                              height: 40,
-                              margin: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: _selectedColor,
-                                shape: BoxShape.circle,
-                                border: Border.all(color: Colors.grey),
-                              ),
-                            ),
-                          ),
-                          onChanged: (value) {
-                            final color = _hexToColor(value);
-                            if (color != null) {
-                              setState(() {
-                                _selectedColor = color;
-                              });
-                            }
-                          },
+                        child: Text(
+                          _corController.text.isEmpty ? 'Não definida' : _corController.text,
+                          style: const TextStyle(fontSize: 16),
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      IconButton(
-                        icon: const Icon(Icons.clear),
-                        onPressed: () {
-                          setState(() {
-                            _corController.clear();
-                            _selectedColor = Colors.blue;
-                          });
-                        },
-                        tooltip: 'Limpar cor',
                       ),
                     ],
                   ),
-                ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              // Seletor de cor de fundo do segmento
+              InkWell(
+                onTap: _showSegmentBackgroundColorPicker,
+                child: InputDecorator(
+                  decoration: const InputDecoration(
+                    labelText: 'Cor de Fundo do Segmento',
+                    border: OutlineInputBorder(),
+                    suffixIcon: Icon(Icons.color_lens),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: _selectedSegmentBackgroundColor,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.grey),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          _corSegmentoController.text,
+                          style: const TextStyle(fontSize: 16),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              // Seletor de cor do texto do segmento
+              InkWell(
+                onTap: _showSegmentTextColorPicker,
+                child: InputDecorator(
+                  decoration: const InputDecoration(
+                    labelText: 'Cor do Texto do Segmento',
+                    border: OutlineInputBorder(),
+                    suffixIcon: Icon(Icons.format_color_text),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: _selectedSegmentTextColor,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.grey),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          _corTextoSegmentoController.text,
+                          style: const TextStyle(fontSize: 16),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
               const SizedBox(height: 16),
               // Segmentos (múltipla seleção)

@@ -1,10 +1,19 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models/task.dart';
 import '../models/grupo_chat.dart';
 import '../services/task_service.dart';
 import '../services/anexo_service.dart';
 import '../services/chat_service.dart';
 import '../services/divisao_service.dart';
+import '../services/nota_sap_service.dart';
+import '../services/ordem_service.dart';
+import '../services/at_service.dart';
+import '../services/si_service.dart';
+import '../models/nota_sap.dart';
+import '../models/ordem.dart';
+import '../models/at.dart';
+import '../models/si.dart';
 import '../widgets/chat_screen.dart';
 import '../utils/responsive.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -33,6 +42,18 @@ class MaintenanceCalendarView extends StatefulWidget {
 
 class _MaintenanceCalendarViewState extends State<MaintenanceCalendarView> {
   DateTime _currentMonth = DateTime.now();
+  
+  // Serviços do SAP
+  final NotaSAPService _notaSAPService = NotaSAPService();
+  final OrdemService _ordemService = OrdemService();
+  final ATService _atService = ATService();
+  final SIService _siService = SIService();
+
+  // Mapas para armazenar contagens do SAP por tarefa
+  Map<String, int> _notasSAPCount = {};
+  Map<String, int> _ordensCount = {};
+  Map<String, int> _atsCount = {};
+  Map<String, int> _sisCount = {};
 
   @override
   Widget build(BuildContext context) {
@@ -554,6 +575,9 @@ class _MaintenanceCalendarViewState extends State<MaintenanceCalendarView> {
               ),
             ),
           ],
+          // Informações SAP
+          const SizedBox(height: 12),
+          _buildSAPActionButton(task),
           ],
         ),
       ),
@@ -632,8 +656,8 @@ class _MaintenanceCalendarViewState extends State<MaintenanceCalendarView> {
       }
       
       // Abrir tela de chat em uma nova rota
-      if (mounted && grupoChat != null) {
-        final grupoId = grupoChat.id;
+      if (mounted) {
+        final grupoId = grupoChat?.id;
         if (grupoId != null && grupoId.isNotEmpty) {
           Navigator.of(context).push(
             MaterialPageRoute(
@@ -759,6 +783,869 @@ class _MaintenanceCalendarViewState extends State<MaintenanceCalendarView> {
         ],
       ),
     );
+  }
+
+  Widget _buildSAPActionButton(Task task) {
+    final totalSAPItems = (_notasSAPCount[task.id] ?? 0) +
+        (_ordensCount[task.id] ?? 0) +
+        (_atsCount[task.id] ?? 0) +
+        (_sisCount[task.id] ?? 0);
+
+    if (totalSAPItems == 0) {
+      return const SizedBox.shrink();
+    }
+
+    return PopupMenuButton<String>(
+      icon: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Icon(Icons.business, size: 24, color: Colors.blue[600]),
+          Positioned(
+            right: -4,
+            top: -4,
+            child: Container(
+              padding: const EdgeInsets.all(3),
+              decoration: BoxDecoration(
+                color: Colors.red,
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 1),
+              ),
+              constraints: const BoxConstraints(
+                minWidth: 18,
+                minHeight: 18,
+              ),
+              child: Text(
+                totalSAPItems.toString(),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ),
+        ],
+      ),
+      tooltip: 'Itens SAP Vinculados',
+      onSelected: (value) {
+        switch (value) {
+          case 'notas':
+            _mostrarNotasSAP(task);
+            break;
+          case 'ordens':
+            _mostrarOrdens(task);
+            break;
+          case 'ats':
+            _mostrarATs(task);
+            break;
+          case 'sis':
+            _mostrarSIs(task);
+            break;
+        }
+      },
+      itemBuilder: (context) => [
+        if ((_notasSAPCount[task.id] ?? 0) > 0)
+          PopupMenuItem(
+            value: 'notas',
+            child: Row(
+              children: [
+                const Icon(Icons.description, color: Colors.blue, size: 18),
+                const SizedBox(width: 8),
+                Text('Notas SAP (${_notasSAPCount[task.id]})'),
+              ],
+            ),
+          ),
+        if ((_ordensCount[task.id] ?? 0) > 0)
+          PopupMenuItem(
+            value: 'ordens',
+            child: Row(
+              children: [
+                const Icon(Icons.receipt_long, color: Colors.orange, size: 18),
+                const SizedBox(width: 8),
+                Text('Ordens (${_ordensCount[task.id]})'),
+              ],
+            ),
+          ),
+        if ((_atsCount[task.id] ?? 0) > 0)
+          PopupMenuItem(
+            value: 'ats',
+            child: Row(
+              children: [
+                const Icon(Icons.assignment, color: Colors.purple, size: 18),
+                const SizedBox(width: 8),
+                Text('ATs (${_atsCount[task.id]})'),
+              ],
+            ),
+          ),
+        if ((_sisCount[task.id] ?? 0) > 0)
+          PopupMenuItem(
+            value: 'sis',
+            child: Row(
+              children: [
+                const Icon(Icons.info, color: Colors.teal, size: 18),
+                const SizedBox(width: 8),
+                Text('SIs (${_sisCount[task.id]})'),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _mostrarNotasSAP(Task task) async {
+    try {
+      final notas = await _notaSAPService.getNotasPorTarefa(task.id);
+      if (!mounted) return;
+      
+      if (notas.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Nenhuma nota SAP vinculada')),
+        );
+        return;
+      }
+      
+      _mostrarDialogNotasSAP(notas, task);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro ao carregar notas: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _mostrarOrdens(Task task) async {
+    try {
+      final ordens = await _ordemService.getOrdensPorTarefa(task.id);
+      if (!mounted) return;
+      
+      if (ordens.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Nenhuma ordem vinculada')),
+        );
+        return;
+      }
+      
+      _mostrarDialogOrdens(ordens, task);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro ao carregar ordens: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _mostrarATs(Task task) async {
+    try {
+      final ats = await _atService.getATsPorTarefa(task.id);
+      if (!mounted) return;
+      
+      if (ats.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Nenhuma AT vinculada')),
+        );
+        return;
+      }
+      
+      _mostrarDialogATs(ats, task);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro ao carregar ATs: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _mostrarSIs(Task task) async {
+    try {
+      final sis = await _siService.getSIsPorTarefa(task.id);
+      if (!mounted) return;
+      
+      if (sis.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Nenhuma SI vinculada')),
+        );
+        return;
+      }
+      
+      _mostrarDialogSIs(sis, task);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro ao carregar SIs: $e')),
+        );
+      }
+    }
+  }
+
+  void _mostrarDialogNotasSAP(List<NotaSAP> notas, Task task) {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Container(
+          width: MediaQuery.of(context).size.width * 0.9,
+          constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [Colors.blue[600]!, Colors.blue[400]!],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(16),
+                    topRight: Radius.circular(16),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(Icons.description, color: Colors.white, size: 24),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Notas SAP Vinculadas',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Text(
+                            'Tarefa: ${task.tarefa}',
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.9),
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: ListView.builder(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: notas.length,
+                  itemBuilder: (context, index) {
+                    final nota = notas[index];
+                    return _buildNotaSAPCard(nota, index);
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNotaSAPCard(NotaSAP nota, int index) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+        border: Border.all(color: Colors.blue.withOpacity(0.2)),
+      ),
+      child: ExpansionTile(
+        leading: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.blue.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: const Icon(Icons.description, color: Colors.blue, size: 20),
+        ),
+        title: Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Nota: ${nota.nota}',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: nota.nota));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Nota copiada!'),
+                    duration: Duration(seconds: 1),
+                  ),
+                );
+              },
+              tooltip: 'Copiar nota',
+            ),
+          ],
+        ),
+        subtitle: nota.tipo != null ? Text('Tipo: ${nota.tipo}') : null,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildInfoRowModern('Tipo', nota.tipo),
+                _buildInfoRowModern('Status Sistema', nota.statusSistema),
+                _buildInfoRowModern('Status Usuário', nota.statusUsuario),
+                _buildInfoRowModern('Descrição', nota.descricao),
+                _buildInfoRowModern('Local Instalação', nota.localInstalacao),
+                _buildInfoRowModern('Ordem', nota.ordem),
+                _buildInfoRowModern('GPM', nota.gpm),
+                _buildInfoRowModern('Centro Trabalho', nota.centroTrabalhoResponsavel),
+                if (nota.inicioDesejado != null)
+                  _buildInfoRowModern('Início Desejado', _formatDate(nota.inicioDesejado!)),
+                if (nota.conclusaoDesejada != null)
+                  _buildInfoRowModern('Conclusão Desejada', _formatDate(nota.conclusaoDesejada!)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _mostrarDialogOrdens(List<Ordem> ordens, Task task) {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Container(
+          width: MediaQuery.of(context).size.width * 0.9,
+          constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [Colors.orange[600]!, Colors.orange[400]!],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(16),
+                    topRight: Radius.circular(16),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(Icons.receipt_long, color: Colors.white, size: 24),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Ordens Vinculadas',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Text(
+                            'Tarefa: ${task.tarefa}',
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.9),
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: ListView.builder(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: ordens.length,
+                  itemBuilder: (context, index) {
+                    final ordem = ordens[index];
+                    return _buildOrdemCard(ordem, index);
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOrdemCard(Ordem ordem, int index) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+        border: Border.all(color: Colors.orange.withOpacity(0.2)),
+      ),
+      child: ExpansionTile(
+        leading: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.orange.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: const Icon(Icons.receipt_long, color: Colors.orange, size: 20),
+        ),
+        title: Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Ordem: ${ordem.ordem}',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: ordem.ordem));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Ordem copiada!'),
+                    duration: Duration(seconds: 1),
+                  ),
+                );
+              },
+              tooltip: 'Copiar ordem',
+            ),
+          ],
+        ),
+        subtitle: ordem.tipo != null ? Text('Tipo: ${ordem.tipo}') : null,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildInfoRowModern('Tipo', ordem.tipo),
+                _buildInfoRowModern('Status Sistema', ordem.statusSistema),
+                _buildInfoRowModern('Status Usuário', ordem.statusUsuario),
+                _buildInfoRowModern('Texto Breve', ordem.textoBreve),
+                _buildInfoRowModern('Denominação Local', ordem.denominacaoLocalInstalacao),
+                _buildInfoRowModern('Denominação Objeto', ordem.denominacaoObjeto),
+                _buildInfoRowModern('Local Instalação', ordem.localInstalacao),
+                _buildInfoRowModern('Código SI', ordem.codigoSI),
+                _buildInfoRowModern('GPM', ordem.gpm),
+                if (ordem.inicioBase != null)
+                  _buildInfoRowModern('Início Base', _formatDate(ordem.inicioBase!)),
+                if (ordem.fimBase != null)
+                  _buildInfoRowModern('Fim Base', _formatDate(ordem.fimBase!)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _mostrarDialogATs(List<AT> ats, Task task) {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Container(
+          width: MediaQuery.of(context).size.width * 0.9,
+          constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [Colors.purple[600]!, Colors.purple[400]!],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(16),
+                    topRight: Radius.circular(16),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(Icons.assignment, color: Colors.white, size: 24),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'ATs Vinculadas',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Text(
+                            'Tarefa: ${task.tarefa}',
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.9),
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: ListView.builder(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: ats.length,
+                  itemBuilder: (context, index) {
+                    final at = ats[index];
+                    return _buildATCard(at, index);
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildATCard(AT at, int index) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+        border: Border.all(color: Colors.purple.withOpacity(0.2)),
+      ),
+      child: ExpansionTile(
+        leading: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.purple.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: const Icon(Icons.assignment, color: Colors.purple, size: 20),
+        ),
+        title: Row(
+          children: [
+            Expanded(
+              child: Text(
+                'AT: ${at.autorzTrab}',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: at.autorzTrab));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('AT copiada!'),
+                    duration: Duration(seconds: 1),
+                  ),
+                );
+              },
+              tooltip: 'Copiar AT',
+            ),
+          ],
+        ),
+        subtitle: at.statusSistema != null ? Text('Status: ${at.statusSistema}') : null,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildInfoRowModern('Edificação', at.edificacao),
+                _buildInfoRowModern('Status Sistema', at.statusSistema),
+                _buildInfoRowModern('Status Usuário', at.statusUsuario),
+                _buildInfoRowModern('Texto Breve', at.textoBreve),
+                _buildInfoRowModern('Local Instalação', at.localInstalacao),
+                _buildInfoRowModern('Centro Trabalho', at.cntrTrab),
+                _buildInfoRowModern('Cen', at.cen),
+                _buildInfoRowModern('SI', at.si),
+                if (at.dataInicio != null)
+                  _buildInfoRowModern('Data Início', _formatDate(at.dataInicio!)),
+                if (at.dataFim != null)
+                  _buildInfoRowModern('Data Fim', _formatDate(at.dataFim!)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _mostrarDialogSIs(List<SI> sis, Task task) {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Container(
+          width: MediaQuery.of(context).size.width * 0.9,
+          constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [Colors.teal[600]!, Colors.teal[400]!],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(16),
+                    topRight: Radius.circular(16),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(Icons.info, color: Colors.white, size: 24),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'SIs Vinculadas',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Text(
+                            'Tarefa: ${task.tarefa}',
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.9),
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: ListView.builder(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: sis.length,
+                  itemBuilder: (context, index) {
+                    final si = sis[index];
+                    return _buildSICard(si, index);
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSICard(SI si, int index) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+        border: Border.all(color: Colors.teal.withOpacity(0.2)),
+      ),
+      child: ExpansionTile(
+        leading: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.teal.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: const Icon(Icons.info, color: Colors.teal, size: 20),
+        ),
+        title: Row(
+          children: [
+            Expanded(
+              child: Text(
+                'SI: ${si.solicitacao}',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: si.solicitacao));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('SI copiada!'),
+                    duration: Duration(seconds: 1),
+                  ),
+                );
+              },
+              tooltip: 'Copiar SI',
+            ),
+          ],
+        ),
+        subtitle: si.tipo != null ? Text('Tipo: ${si.tipo}') : null,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildInfoRowModern('Tipo', si.tipo),
+                _buildInfoRowModern('Status Sistema', si.statusSistema),
+                _buildInfoRowModern('Status Usuário', si.statusUsuario),
+                _buildInfoRowModern('Texto Breve', si.textoBreve),
+                _buildInfoRowModern('Local Instalação', si.localInstalacao),
+                _buildInfoRowModern('Criado Por', si.criadoPor),
+                _buildInfoRowModern('Centro Trabalho', si.cntrTrab),
+                _buildInfoRowModern('Cen', si.cen),
+                _buildInfoRowModern('Atrib AT', si.atribAT),
+                if (si.dataInicio != null)
+                  _buildInfoRowModern('Data Início', _formatDate(si.dataInicio!)),
+                if (si.dataFim != null)
+                  _buildInfoRowModern('Data Fim', _formatDate(si.dataFim!)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInfoRowModern(String label, String? value) {
+    if (value == null || value.isEmpty) return const SizedBox.shrink();
+    
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 140,
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey[700],
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(
+                fontSize: 13,
+                color: Colors.black87,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatDate(DateTime date) {
+    return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
   }
 
   Color _getStatusColor(String status) {

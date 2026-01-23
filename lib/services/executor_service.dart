@@ -1,6 +1,7 @@
 import '../models/executor.dart';
 import '../config/supabase_config.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter/foundation.dart';
 import 'local_database_service.dart';
 import 'connectivity_service.dart';
 import 'sync_service.dart';
@@ -62,12 +63,14 @@ class ExecutorService {
           .map((map) => _executorFromMap(map as Map<String, dynamic>))
           .toList();
       
-      // Salvar no banco local
+      // Salvar no banco local (apenas se não for web)
+      if (!kIsWeb) {
       for (var executor in executores) {
         try {
           await _saveExecutorToLocal(executor);
         } catch (e) {
           print('⚠️ Erro ao salvar executor no banco local: $e');
+          }
         }
       }
       
@@ -80,6 +83,7 @@ class ExecutorService {
   }
 
   Future<List<Executor>> _getAllExecutoresFromLocal() async {
+    if (kIsWeb) return [];
     try {
       final db = await _localDb.database;
       final executoresRows = await db.query('executores_local', orderBy: 'nome ASC');
@@ -624,6 +628,49 @@ class ExecutorService {
     }
   }
 
+  // Buscar coordenadores filtrados por regional, divisão e segmento (mesma lógica dos executores)
+  Future<List<Executor>> getCoordenadoresFiltrados({
+    String? regionalId,
+    String? divisaoId,
+    String? segmentoId,
+  }) async {
+    try {
+      print('🔍 DEBUG ExecutorService.getCoordenadoresFiltrados:');
+      print('   regionalId: $regionalId');
+      print('   divisaoId: $divisaoId');
+      print('   segmentoId: $segmentoId');
+      
+      // Primeiro buscar executores filtrados pelo perfil
+      List<Executor> executores = await getExecutoresFiltrados(
+        regionalId: regionalId,
+        divisaoId: divisaoId,
+        segmentoId: segmentoId,
+      );
+      
+      print('   Executores filtrados pelo perfil: ${executores.length}');
+      
+      // Depois filtrar apenas os que são coordenadores ou gerentes
+      final coordenadores = executores.where((executor) {
+        if (executor.funcao == null || executor.funcao!.isEmpty) {
+          return false;
+        }
+        final funcaoUpper = executor.funcao!.toUpperCase();
+        return funcaoUpper.contains('COORDENADOR') || funcaoUpper.contains('GERENTE');
+      }).toList();
+      
+      print('✅ DEBUG ExecutorService.getCoordenadoresFiltrados: ${coordenadores.length} coordenadores após filtro de função');
+      for (var coord in coordenadores) {
+        print('   - ${coord.nomeCompleto ?? coord.nome} (${coord.funcao})');
+      }
+      
+      return coordenadores;
+    } catch (e, stackTrace) {
+      print('❌ Erro ao buscar coordenadores filtrados: $e');
+      print('   Stack trace: $stackTrace');
+      return [];
+    }
+  }
+
   // Buscar executores por login (case-insensitive) - OTIMIZADO
   // Retorna apenas id, nome e login para melhor performance
   Future<List<Executor>> getExecutoresPorLogin(String login) async {
@@ -721,6 +768,59 @@ class ExecutorService {
     } catch (e) {
       print('Erro ao buscar executores por login: $e');
       return [];
+    }
+  }
+
+  // Verificar se o executor do login é COORDENADOR ou GERENTE
+  Future<bool> isCoordenadorOuGerentePorLogin(String login) async {
+    try {
+      if (login.isEmpty) return false;
+      final loginLower = login.toLowerCase().trim();
+
+      // Se offline, negar acesso por segurança
+      if (!_connectivity.isConnected) {
+        print('⚠️ Sem conexão para validar função do executor. Acesso negado.');
+        return false;
+      }
+
+      final response = await _supabase
+          .from('executores')
+          .select('login, funcoes!left(funcao)')
+          .eq('ativo', true)
+          .ilike('login', loginLower)
+          .maybeSingle()
+          .timeout(
+            const Duration(seconds: 5),
+            onTimeout: () {
+              print('⚠️ Timeout ao validar função do executor');
+              return null;
+            },
+          );
+
+      if (response == null) {
+        print('⚠️ Executor não encontrado para login: $loginLower');
+        return false;
+      }
+
+      String? funcao;
+      final funcoesMap = response['funcoes'];
+      if (funcoesMap is Map<String, dynamic>) {
+        funcao = funcoesMap['funcao'] as String?;
+      }
+
+      if (funcao == null || funcao.isEmpty) {
+        print('⚠️ Executor sem função definida para login: $loginLower');
+        return false;
+      }
+
+      final funcaoUpper = funcao.toUpperCase();
+      final permitido = funcaoUpper.contains('COORDENADOR') || funcaoUpper.contains('GERENTE');
+      // debug silenciado
+      return permitido;
+    } catch (e, stackTrace) {
+      print('❌ Erro ao validar função do executor por login: $e');
+      print('   Stack trace: $stackTrace');
+      return false;
     }
   }
 }

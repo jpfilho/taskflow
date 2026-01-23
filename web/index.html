@@ -18,7 +18,7 @@
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
+<meta name="description" content="Task Flow - Sistema de Gestão de Tarefas">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
@@ -29,7 +29,65 @@
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>task2026</title>
+<title>task2026</title>
+  <!-- MSAL JS para login Microsoft no Flutter Web -->
+  <script src="https://alcdn.msauth.net/browser/2.38.0/js/msal-browser.min.js"></script>
+  <script>
+    // Configuração MSAL JS para Web
+    const msalConfig = {
+      auth: {
+        clientId: "90414d95-ac9b-4b95-9fc2-ebf677253e99",
+        authority: "https://login.microsoftonline.com/8a0ffb54-9716-4a93-9158-9e3a7206f18e",
+        // Usa o caminho atual + /auth-callback para suportar localhost e /task2026/
+        redirectUri: window.location.origin + window.location.pathname.replace(/\/$/, '') + "/auth-callback",
+        postLogoutRedirectUri: window.location.origin + window.location.pathname,
+      },
+      cache: {
+        cacheLocation: "localStorage",
+        storeAuthStateInCookie: false,
+      },
+    };
+
+    const loginRequest = {
+      scopes: ["openid", "profile", "email"], // sem User.Read para evitar consent admin
+    };
+
+    const msalInstance = new msal.PublicClientApplication(msalConfig);
+
+    async function msalLogin() {
+      // Tenta silent primeiro
+      const accounts = msalInstance.getAllAccounts();
+      if (accounts.length > 0) {
+        msalInstance.setActiveAccount(accounts[0]);
+        const silent = await msalInstance.acquireTokenSilent({
+          ...loginRequest,
+          account: accounts[0],
+        }).catch(() => null);
+        if (silent && silent.accessToken) {
+          return {
+            email: silent.account?.username,
+            idToken: silent.idToken,
+            accessToken: silent.accessToken,
+          };
+        }
+      }
+
+      // Popup interativo
+      const result = await msalInstance.acquireTokenPopup(loginRequest);
+      return {
+        email: result.account?.username,
+        idToken: result.idToken,
+        accessToken: result.accessToken,
+      };
+    }
+
+    // Handler do redirect (caso venha por redirect)
+    msalInstance.handleRedirectPromise().then((response) => {
+      if (response && response.account) {
+        msalInstance.setActiveAccount(response.account);
+      }
+    });
+  </script>
   <link rel="manifest" href="manifest.json">
   
   <style>

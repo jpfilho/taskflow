@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:convert' show utf8;
-import 'dart:html' as html;
 import 'dart:typed_data' show Uint8List;
 import 'package:excel/excel.dart';
+
+// Import condicional para web
+import 'html_stub.dart' as html if (dart.library.html) 'dart:html';
 import 'data/mock_data.dart';
 import 'models/task.dart';
 import 'services/task_service.dart';
@@ -19,6 +21,7 @@ import 'widgets/planner_view.dart';
 import 'widgets/task_form_dialog.dart';
 import 'widgets/task_view_dialog.dart';
 import 'widgets/dashboard.dart';
+import 'widgets/comprehensive_dashboard.dart';
 import 'widgets/team_schedule_view.dart';
 import 'services/executor_service.dart';
 import 'widgets/fleet_schedule_view.dart';
@@ -35,7 +38,15 @@ import 'widgets/cost_management_view.dart';
 import 'widgets/configuracao_view.dart';
 import 'widgets/chat_view.dart';
 import 'widgets/notas_sap_view.dart';
+import 'widgets/ordem_view.dart';
+import 'widgets/at_view.dart';
+import 'widgets/si_view.dart';
+import 'widgets/linhas_transmissao_view.dart';
+import 'widgets/supressao_vegetacao_view.dart';
+import 'widgets/horas_sap_view.dart';
+import 'widgets/demandas_view.dart';
 import 'widgets/login_screen.dart';
+import 'widgets/resizable_panel.dart';
 import 'services/auth_service_simples.dart';
 import 'utils/responsive.dart';
 
@@ -44,9 +55,18 @@ import 'services/sync_service.dart';
 import 'services/connectivity_service.dart';
 import 'providers/theme_provider.dart';
 import 'services/theme_service.dart';
+import 'dart:async';
+// sqflite FFI para desktop
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Inicializar FFI do sqflite para plataformas desktop (não-web)
+  if (!kIsWeb) {
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
+  }
   
   // Inicializar banco de dados local
   try {
@@ -55,7 +75,7 @@ void main() async {
   } catch (e) {
     print('⚠️ Erro ao inicializar banco local: $e');
   }
-  
+
   // Inicializar serviço de conectividade
   try {
     await ConnectivityService().initialize();
@@ -201,10 +221,13 @@ class _AuthWrapperState extends State<AuthWrapper> {
   }
 
   Future<void> _checkAuth() async {
-    setState(() {
-      _isAuthenticated = _authService.isAuthenticated;
-      _isLoading = false;
-    });
+    final restored = await _authService.restoreSession();
+    if (mounted) {
+      setState(() {
+        _isAuthenticated = restored || _authService.isAuthenticated;
+        _isLoading = false;
+      });
+    }
   }
 
   @override
@@ -230,6 +253,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
     return MainScreen(
       themeProvider: widget.themeProvider,
       onLogout: () {
+        _authService.signOut();
         setState(() {
           _isAuthenticated = false;
         });
@@ -251,20 +275,26 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   final ScrollController _tableScrollController = ScrollController();
   final ScrollController _ganttScrollController = ScrollController();
+  bool _isSyncingScroll = false; // Flag para evitar loops infinitos na sincronização
+  double _lastTableOffset = 0.0; // Último offset conhecido da tabela
+  double _lastGanttOffset = 0.0; // Último offset conhecido do Gantt
+  double? _savedTableScrollPosition; // Posição do scroll salva antes de operações que podem resetar
+  double? _savedGanttScrollPosition; // Posição do scroll do Gantt salva antes de operações que podem resetar
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final TaskService _taskService = TaskService();
   final ExecutorService _executorService = ExecutorService();
   final FrotaService _frotaService = FrotaService();
   final AuthServiceSimples _authService = AuthServiceSimples();
   
-  List<Task> _tasks = []; // Inicializar com lista vazia
+  List<Task> _tasks = []; // Tarefas filtradas (para telas gerais)
+  List<Task> _tasksSemFiltros = []; // Tarefas sem filtros (para tela de equipes)
   Task? _selectedTask; // Tarefa selecionada para edição/deleção
   Map<String, String?> _currentFilters = {}; // Filtros ativos
   String _searchQuery = ''; // Termo de busca atual
   // Inicializar com primeiro e último dia do mês/ano atual
   late DateTime _startDate;
   late DateTime _endDate;
-  int _selectedTab = 0; // Para mobile: 0 = Tabela, 1 = Gantt, 2 = Planner, 3 = Calendário, 4 = Feed
+  int _selectedTab = 0; // Para mobile: 0 = Tabela, 1 = Gantt, 2 = Planner, 3 = Calendário, 4 = Feed, 5 = Dashboard
   String _viewMode = 'split'; // 'split', 'table', 'gantt', 'planner', 'calendar', 'feed'
   bool _sidebarExpanded = false; // Estado da sidebar (expandida/retraída)
   int _sidebarSelectedIndex = 0; // Índice selecionado na sidebar (0 = Grid/Tabela)
@@ -273,6 +303,9 @@ class _MainScreenState extends State<MainScreen> {
   int _tasksVersion = 0; // Versão das tarefas para forçar rebuild quando necessário
   bool _showGantt = true; // Controla se o Gantt está visível
   bool _isFiltering = false; // Estado de processamento de filtros
+  bool _canEditTasks = false; // Permissão para criar/editar tarefas
+  bool _canEditTasksChecked = false; // Indica se a permissão já foi verificada
+  bool _isCheckingTaskPermission = false; // Evita múltiplas verificações simultâneas
   
   // Cache para executores do usuário (otimização de performance)
   Set<String>? _cachedExecutorIds;
@@ -305,26 +338,239 @@ class _MainScreenState extends State<MainScreen> {
     });
   }
 
-  void _onTaskExpanded(String taskId, bool isExpanded) {
-    print('🔄 DEBUG main: _onTaskExpanded chamado - taskId: ${taskId.substring(0, 8)}, isExpanded: $isExpanded');
-    print('   Estado antes: ${_expandedTasks.toList()}');
-    
-    setState(() {
-      // Criar um novo Set para forçar rebuild dos widgets (nova referência)
-      final newExpandedTasks = Set<String>.from(_expandedTasks);
-      if (isExpanded) {
-        newExpandedTasks.add(taskId);
-      } else {
-        newExpandedTasks.remove(taskId);
+  Future<void> _loadTaskEditPermission() async {
+    if (_isCheckingTaskPermission) return;
+    _isCheckingTaskPermission = true;
+
+    try {
+      final usuario = _authService.currentUser;
+      if (usuario == null) {
+        print('🔐 Permissão tarefas: usuário não autenticado -> negar (sem criar/editar)');
+        _canEditTasks = false;
+        _canEditTasksChecked = true;
+        return;
       }
-      // Substituir completamente o Set para que os widgets detectem a mudança
-      _expandedTasks = newExpandedTasks;
-      // Incrementar versão para forçar rebuild
+
+      // Root sempre pode
+      if (usuario.isRoot) {
+        print('🔐 Permissão tarefas: usuário root (${usuario.email ?? 'sem email'}) -> permitir (root)');
+        _canEditTasks = true;
+        _canEditTasksChecked = true;
+        return;
+      }
+
+      final email = usuario.email;
+      if (email == null || email.isEmpty) {
+        print('🔐 Permissão tarefas: usuário sem email -> negar (sem criar/editar)');
+        _canEditTasks = false;
+        _canEditTasksChecked = true;
+        return;
+      }
+
+      final permitido = await _executorService.isCoordenadorOuGerentePorLogin(email);
+      print(
+        '🔐 Permissão tarefas: login=$email | isRoot=${usuario.isRoot} | coordenador/gerente=$permitido '
+        '| regra: apenas coordenador ou gerente pode criar/editar',
+      );
+      _canEditTasks = permitido;
+      _canEditTasksChecked = true;
+    } catch (e, stackTrace) {
+      print('❌ Erro ao verificar permissão de edição de tarefas: $e');
+      print('   Stack trace: $stackTrace');
+      _canEditTasks = false;
+      _canEditTasksChecked = true;
+    } finally {
+      _isCheckingTaskPermission = false;
+      if (mounted) {
+        setState(() {});
+      }
+    }
+  }
+
+  Future<bool> _ensureCanEditTasks() async {
+    if (!_canEditTasksChecked) {
+      await _loadTaskEditPermission();
+    }
+
+    if (!_canEditTasks) {
+      _showErrorMessage('Apenas coordenador ou gerente pode criar/editar tarefas.');
+      return false;
+    }
+
+    return true;
+  }
+
+  Future<void> _onTaskExpanded(String taskId, bool isExpanded) async {
+    print('🔄 DEBUG main: _onTaskExpanded chamado - taskId: ${taskId.substring(0, 8)}, isExpanded: $isExpanded');
+    // debug silenciado
+    
+    // Atualizar estado de expansão
+    final newExpandedTasks = Set<String>.from(_expandedTasks);
+    if (isExpanded) {
+      newExpandedTasks.add(taskId);
+    } else {
+      newExpandedTasks.remove(taskId);
+    }
+    _expandedTasks = newExpandedTasks;
+
+    // Manter subtarefas em _tasks para que TaskTable e Gantt usem a mesma lista hierárquica
+    // Remover subtarefas existentes do pai (evita duplicar em reexpansões)
+    _tasks.removeWhere((t) => t.parentId == taskId);
+
+    if (isExpanded) {
+      try {
+        final subtasks = await _taskService.getSubtasks(taskId);
+        if (subtasks.isNotEmpty) {
+          final parentIndex = _tasks.indexWhere((t) => t.id == taskId);
+          if (parentIndex != -1) {
+            _tasks.insertAll(parentIndex + 1, subtasks);
+          } else {
+            _tasks.addAll(subtasks);
+          }
+        }
+      } catch (e) {
+        print('⚠️ Erro ao carregar subtarefas para $taskId: $e');
+      }
+    }
+
+    // Forçar rebuild
+    setState(() {
       _tasksVersion++;
-      
-      print('   Estado depois: ${_expandedTasks.toList()}');
       print('   _tasksVersion: $_tasksVersion');
     });
+  }
+
+  // Salvar posição do scroll antes de operações que podem resetar
+  void _saveScrollPositions() {
+    if (_tableScrollController.hasClients) {
+      _savedTableScrollPosition = _tableScrollController.offset;
+    }
+    if (_ganttScrollController.hasClients) {
+      _savedGanttScrollPosition = _ganttScrollController.offset;
+    }
+  }
+  
+  // Restaurar posição do scroll após operações que podem resetar
+  void _restoreScrollPositions() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        if (_savedTableScrollPosition != null && _tableScrollController.hasClients) {
+          _tableScrollController.jumpTo(_savedTableScrollPosition!);
+          _lastTableOffset = _savedTableScrollPosition!;
+        }
+        if (_savedGanttScrollPosition != null && _ganttScrollController.hasClients) {
+          _ganttScrollController.jumpTo(_savedGanttScrollPosition!);
+          _lastGanttOffset = _savedGanttScrollPosition!;
+        }
+        // Limpar posições salvas após restaurar
+        _savedTableScrollPosition = null;
+        _savedGanttScrollPosition = null;
+      }
+    });
+  }
+
+  // Sincronizar scroll da tabela para o Gantt
+  void _syncTableToGantt() {
+    if (_isSyncingScroll) return; // Evitar loops infinitos
+    
+    try {
+      if (!_ganttScrollController.hasClients || !_tableScrollController.hasClients) {
+        return;
+      }
+      
+      final tableOffset = _tableScrollController.offset;
+      
+      // Verificar se o offset realmente mudou (tolerância mínima apenas para evitar chamadas desnecessárias)
+      if ((tableOffset - _lastTableOffset).abs() < 0.001) {
+        return; // Offset não mudou, ignorar
+      }
+      
+      _lastTableOffset = tableOffset;
+      
+      // Verificar novamente antes de acessar o offset do Gantt
+      if (!_ganttScrollController.hasClients) {
+        return;
+      }
+      
+      final ganttOffset = _ganttScrollController.offset;
+      
+      // Sincronizar SEMPRE que houver qualquer diferença (sem tolerância)
+      if ((ganttOffset - tableOffset).abs() > 0.001) {
+        _isSyncingScroll = true;
+        // Sincronizar imediatamente sem delay
+        try {
+          if (_ganttScrollController.hasClients && mounted) {
+            _lastGanttOffset = tableOffset;
+            _ganttScrollController.jumpTo(tableOffset);
+          }
+        } catch (e) {
+          // Ignorar erros de scroll (controller pode ter sido desanexado)
+          print('⚠️ Erro ao sincronizar scroll tabela->Gantt: $e');
+        } finally {
+          // Resetar flag imediatamente após o frame
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              _isSyncingScroll = false;
+            }
+          });
+        }
+      }
+    } catch (e) {
+      // Ignorar erros de scroll (controller pode ter sido desanexado)
+      print('⚠️ Erro em _syncTableToGantt: $e');
+    }
+  }
+  
+  // Sincronizar scroll do Gantt para a tabela
+  void _syncGanttToTable() {
+    if (_isSyncingScroll) return; // Evitar loops infinitos
+    
+    try {
+      if (!_tableScrollController.hasClients || !_ganttScrollController.hasClients) {
+        return;
+      }
+      
+      final ganttOffset = _ganttScrollController.offset;
+      
+      // Verificar se o offset realmente mudou (tolerância mínima apenas para evitar chamadas desnecessárias)
+      if ((ganttOffset - _lastGanttOffset).abs() < 0.001) {
+        return; // Offset não mudou, ignorar
+      }
+      
+      _lastGanttOffset = ganttOffset;
+      
+      // Verificar novamente antes de acessar o offset da tabela
+      if (!_tableScrollController.hasClients) {
+        return;
+      }
+      
+      final tableOffset = _tableScrollController.offset;
+      
+      // Sincronizar SEMPRE que houver qualquer diferença (sem tolerância)
+      if ((tableOffset - ganttOffset).abs() > 0.001) {
+        _isSyncingScroll = true;
+        // Sincronizar imediatamente sem delay
+        try {
+          if (_tableScrollController.hasClients && mounted) {
+            _lastTableOffset = ganttOffset;
+            _tableScrollController.jumpTo(ganttOffset);
+          }
+        } catch (e) {
+          // Ignorar erros de scroll (controller pode ter sido desanexado)
+          print('⚠️ Erro ao sincronizar scroll Gantt->tabela: $e');
+        } finally {
+          // Resetar flag imediatamente após o frame
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              _isSyncingScroll = false;
+            }
+          });
+        }
+      }
+    } catch (e) {
+      // Ignorar erros de scroll (controller pode ter sido desanexado)
+      print('⚠️ Erro em _syncGanttToTable: $e');
+    }
   }
 
   @override
@@ -337,29 +583,20 @@ class _MainScreenState extends State<MainScreen> {
     
     // Carregar tarefas (do Supabase ou mock)
     _loadTasks();
+
+    // Carregar permissões de edição/criação de tarefas
+    _loadTaskEditPermission();
     
-    // Sincronizar scroll entre tabela e Gantt
-    _tableScrollController.addListener(() {
-      if (_ganttScrollController.hasClients && _tableScrollController.hasClients) {
-        final offset = _tableScrollController.offset;
-        if ((_ganttScrollController.offset - offset).abs() > 1.0) {
-          _ganttScrollController.jumpTo(offset);
-        }
-      }
-    });
-    
-    _ganttScrollController.addListener(() {
-      if (_tableScrollController.hasClients && _ganttScrollController.hasClients) {
-        final offset = _ganttScrollController.offset;
-        if ((_tableScrollController.offset - offset).abs() > 1.0) {
-          _tableScrollController.jumpTo(offset);
-        }
-      }
-    });
+    // Sincronizar scroll entre tabela e Gantt (100% sincronizado)
+    _tableScrollController.addListener(_syncTableToGantt);
+    _ganttScrollController.addListener(_syncGanttToTable);
   }
 
   @override
   void dispose() {
+    // Remover listeners antes de dispor
+    _tableScrollController.removeListener(_syncTableToGantt);
+    _ganttScrollController.removeListener(_syncGanttToTable);
     _tableScrollController.dispose();
     _ganttScrollController.dispose();
     super.dispose();
@@ -367,7 +604,7 @@ class _MainScreenState extends State<MainScreen> {
 
   // Função para ordenar tarefas por período (data de início e fim)
   // Estado de ordenação
-  String _sortColumn = 'PERÍODO'; // Coluna padrão: PERÍODO
+  String _sortColumn = 'LOCAL'; // Coluna padrão ajustada para LOCAL
   bool _sortAscending = true; // Direção padrão: crescente
   
   List<Task> _sortTasks(List<Task> tasks) {
@@ -376,6 +613,20 @@ class _MainScreenState extends State<MainScreen> {
     
     sortedTasks.sort((a, b) {
       int comparison = 0;
+
+      DateTime _getStart(Task t) {
+        if (t.ganttSegments.isNotEmpty) {
+          return t.ganttSegments.first.dataInicio;
+        }
+        return t.dataInicio;
+      }
+
+      DateTime _getEnd(Task t) {
+        if (t.ganttSegments.isNotEmpty) {
+          return t.ganttSegments.first.dataFim;
+        }
+        return t.dataFim;
+      }
       
       switch (_sortColumn) {
         case 'PERÍODO':
@@ -412,28 +663,76 @@ class _MainScreenState extends State<MainScreen> {
           final statusA = a.statusNome.isNotEmpty ? a.statusNome : a.status;
           final statusB = b.statusNome.isNotEmpty ? b.statusNome : b.status;
           comparison = statusA.compareTo(statusB);
+          if (comparison == 0) {
+            final aStart = _getStart(a);
+            final bStart = _getStart(b);
+            comparison = aStart.compareTo(bStart);
+            if (comparison == 0) {
+              comparison = _getEnd(a).compareTo(_getEnd(b));
+            }
+          }
           break;
           
         case 'LOCAL':
           final localA = a.locais.isNotEmpty ? a.locais.first : '';
           final localB = b.locais.isNotEmpty ? b.locais.first : '';
           comparison = localA.compareTo(localB);
+          if (comparison == 0) {
+            final aStart = _getStart(a);
+            final bStart = _getStart(b);
+            comparison = aStart.compareTo(bStart);
+            if (comparison == 0) {
+              comparison = _getEnd(a).compareTo(_getEnd(b));
+            }
+          }
           break;
           
         case 'TIPO':
           comparison = a.tipo.compareTo(b.tipo);
+          if (comparison == 0) {
+            final aStart = _getStart(a);
+            final bStart = _getStart(b);
+            comparison = aStart.compareTo(bStart);
+            if (comparison == 0) {
+              comparison = _getEnd(a).compareTo(_getEnd(b));
+            }
+          }
           break;
           
         case 'TAREFA':
           comparison = a.tarefa.compareTo(b.tarefa);
+          if (comparison == 0) {
+            final aStart = _getStart(a);
+            final bStart = _getStart(b);
+            comparison = aStart.compareTo(bStart);
+            if (comparison == 0) {
+              comparison = _getEnd(a).compareTo(_getEnd(b));
+            }
+          }
           break;
           
         case 'EXECUTOR':
           comparison = a.executor.compareTo(b.executor);
+          if (comparison == 0) {
+            final aStart = _getStart(a);
+            final bStart = _getStart(b);
+            comparison = aStart.compareTo(bStart);
+            if (comparison == 0) {
+              comparison = _getEnd(a).compareTo(_getEnd(b));
+            }
+          }
           break;
           
         case 'COORDENADOR':
           comparison = a.coordenador.compareTo(b.coordenador);
+          if (comparison == 0) {
+            final aStart = _getStart(a);
+            final bStart = _getStart(b);
+            comparison = aStart.compareTo(bStart);
+            if (comparison == 0) {
+              comparison = _getEnd(a).compareTo(_getEnd(b));
+            }
+          }
           break;
           
         default:
@@ -486,36 +785,364 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   // Carregar tarefas do Supabase ou mock
+  // Adicionar uma nova tarefa à lista sem recarregar tudo (evita o "pisca" ao criar)
+  Future<void> _addTaskToList(String taskId) async {
+    try {
+      // Buscar a tarefa recém-criada do banco
+      final newTask = await _taskService.getTaskById(taskId);
+      if (newTask == null) {
+        print('⚠️ Tarefa $taskId não encontrada após criação');
+        return;
+      }
+
+      // Verificar se a tarefa passa pelos filtros atuais antes de adicionar
+      setState(() {
+        bool shouldAdd = true;
+        
+        // Aplicar filtros de perfil
+        final usuario = _authService.currentUser;
+        if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
+          bool passaRegional = true;
+          bool passaDivisao = true;
+          bool passaSegmento = true;
+
+          if (usuario.regionalIds.isNotEmpty) {
+            passaRegional = newTask.regionalId != null && usuario.temAcessoRegional(newTask.regionalId);
+          }
+          if (usuario.divisaoIds.isNotEmpty) {
+            passaDivisao = newTask.divisaoId != null && usuario.temAcessoDivisao(newTask.divisaoId);
+          }
+          if (usuario.segmentoIds.isNotEmpty) {
+            passaSegmento = newTask.segmentoId != null && usuario.temAcessoSegmento(newTask.segmentoId);
+          }
+
+          shouldAdd = passaRegional && passaDivisao && passaSegmento;
+        }
+
+        // Verificar filtros de data
+        if (shouldAdd && (_startDate != null || _endDate != null)) {
+          bool hasSegmentInRange = false;
+          for (var segment in newTask.ganttSegments) {
+            final startDate = DateTime(segment.dataInicio.year, segment.dataInicio.month, segment.dataInicio.day);
+            final endDate = DateTime(segment.dataFim.year, segment.dataFim.month, segment.dataFim.day);
+            
+            if (_startDate != null && _endDate != null) {
+              if (!(startDate.isAfter(_endDate) || endDate.isBefore(_startDate))) {
+                hasSegmentInRange = true;
+                break;
+              }
+            } else if (_startDate != null) {
+              if (endDate.isAfter(_startDate) || endDate.isAtSameMomentAs(_startDate)) {
+                hasSegmentInRange = true;
+                break;
+              }
+            } else if (_endDate != null) {
+              if (startDate.isBefore(_endDate) || startDate.isAtSameMomentAs(_endDate)) {
+                hasSegmentInRange = true;
+                break;
+              }
+            }
+          }
+          if (!hasSegmentInRange && newTask.ganttSegments.isEmpty) {
+            if (_startDate != null && _endDate != null) {
+              if (newTask.dataInicio.isAfter(_endDate) || newTask.dataFim.isBefore(_startDate)) {
+                hasSegmentInRange = false;
+              } else {
+                hasSegmentInRange = true;
+              }
+            }
+          }
+          shouldAdd = hasSegmentInRange;
+        }
+
+        // Aplicar outros filtros se existirem
+        if (shouldAdd && _currentFilters.isNotEmpty) {
+          // Verificar filtros básicos
+          if (_currentFilters['status'] != null && newTask.status != _currentFilters['status']) {
+            shouldAdd = false;
+          }
+          if (shouldAdd && _currentFilters['regional'] != null && newTask.regional != _currentFilters['regional']) {
+            shouldAdd = false;
+          }
+          if (shouldAdd && _currentFilters['divisao'] != null && newTask.divisao != _currentFilters['divisao']) {
+            shouldAdd = false;
+          }
+          if (shouldAdd && _currentFilters['tipo'] != null && newTask.tipo != _currentFilters['tipo']) {
+            shouldAdd = false;
+          }
+          if (shouldAdd && _currentFilters['executor'] != null) {
+            final executorMatch = newTask.executores.any((e) => e == _currentFilters['executor']) ||
+                                 newTask.executor == _currentFilters['executor'];
+            if (!executorMatch) {
+              shouldAdd = false;
+            }
+          }
+          if (shouldAdd && _currentFilters['coordenador'] != null && newTask.coordenador != _currentFilters['coordenador']) {
+            shouldAdd = false;
+          }
+          if (shouldAdd && _currentFilters['local'] != null) {
+            final localMatch = newTask.locais.any((l) => l == _currentFilters['local']);
+            if (!localMatch) {
+              shouldAdd = false;
+            }
+          }
+          if (shouldAdd && _currentFilters['frota'] != null) {
+            final frotaMatch = newTask.frota == _currentFilters['frota'] ||
+                              (newTask.frotaIds.isNotEmpty && _currentFilters['frota'] != null);
+            if (!frotaMatch) {
+              shouldAdd = false;
+            }
+          }
+        }
+
+        if (shouldAdd) {
+          // Verificar se a tarefa já não está na lista (evitar duplicatas)
+          final index = _tasks.indexWhere((t) => t.id == taskId);
+          if (index == -1) {
+            _tasks.add(newTask);
+            _tasksVersion++; // Incrementar versão para forçar rebuild
+            print('✅ Tarefa $taskId adicionada à lista local (versão: $_tasksVersion)');
+          } else {
+            print('ℹ️ Tarefa $taskId já está na lista, atualizando...');
+            _tasks[index] = newTask;
+            _tasksVersion++;
+          }
+        } else {
+          print('ℹ️ Tarefa $taskId não passa pelos filtros atuais, não será adicionada à lista');
+        }
+      });
+    } catch (e, stackTrace) {
+      print('❌ Erro ao adicionar tarefa à lista: $e');
+      print('   Stack trace: $stackTrace');
+      // Em caso de erro, fazer reload completo como fallback
+      await _loadTasks();
+      if (_currentFilters.isNotEmpty) {
+        await _applyFilters(_currentFilters);
+      }
+    }
+  }
+
+  // Atualizar apenas uma tarefa específica na lista sem recarregar tudo
+  Future<void> _updateTaskInList(String taskId) async {
+    try {
+      // Buscar apenas a tarefa atualizada do banco
+      final updatedTask = await _taskService.getTaskById(taskId);
+      if (updatedTask == null) {
+        print('⚠️ Tarefa $taskId não encontrada após atualização');
+        return;
+      }
+
+      // Atualizar a tarefa na lista local mantendo os filtros
+      setState(() {
+        final index = _tasks.indexWhere((t) => t.id == taskId);
+        if (index != -1) {
+          // Verificar se a tarefa atualizada ainda passa pelos filtros
+          bool shouldKeep = true;
+          
+          // Aplicar filtros de perfil
+          final usuario = _authService.currentUser;
+          if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
+            bool passaRegional = true;
+            bool passaDivisao = true;
+            bool passaSegmento = true;
+
+            if (usuario.regionalIds.isNotEmpty) {
+              passaRegional = updatedTask.regionalId != null && usuario.temAcessoRegional(updatedTask.regionalId);
+            }
+            if (usuario.divisaoIds.isNotEmpty) {
+              passaDivisao = updatedTask.divisaoId != null && usuario.temAcessoDivisao(updatedTask.divisaoId);
+            }
+            if (usuario.segmentoIds.isNotEmpty) {
+              passaSegmento = updatedTask.segmentoId != null && usuario.temAcessoSegmento(updatedTask.segmentoId);
+            }
+
+            shouldKeep = passaRegional && passaDivisao && passaSegmento;
+          }
+
+          // Verificar filtros de data
+          if (shouldKeep && (_startDate != null || _endDate != null)) {
+            bool hasSegmentInRange = false;
+            for (var segment in updatedTask.ganttSegments) {
+              final startDate = DateTime(segment.dataInicio.year, segment.dataInicio.month, segment.dataInicio.day);
+              final endDate = DateTime(segment.dataFim.year, segment.dataFim.month, segment.dataFim.day);
+              
+              if (_startDate != null && _endDate != null) {
+                if (!(startDate.isAfter(_endDate) || endDate.isBefore(_startDate))) {
+                  hasSegmentInRange = true;
+                  break;
+                }
+              } else if (_startDate != null) {
+                if (endDate.isAfter(_startDate) || endDate.isAtSameMomentAs(_startDate)) {
+                  hasSegmentInRange = true;
+                  break;
+                }
+              } else if (_endDate != null) {
+                if (startDate.isBefore(_endDate) || startDate.isAtSameMomentAs(_endDate)) {
+                  hasSegmentInRange = true;
+                  break;
+                }
+              }
+            }
+            if (!hasSegmentInRange && updatedTask.ganttSegments.isEmpty) {
+              if (_startDate != null && _endDate != null) {
+                if (updatedTask.dataInicio.isAfter(_endDate) || updatedTask.dataFim.isBefore(_startDate)) {
+                  hasSegmentInRange = false;
+                } else {
+                  hasSegmentInRange = true;
+                }
+              }
+            }
+            shouldKeep = hasSegmentInRange;
+          }
+
+          // Aplicar outros filtros se existirem
+          if (shouldKeep && _currentFilters.isNotEmpty) {
+            // Verificar filtros básicos
+            if (_currentFilters['status'] != null && updatedTask.status != _currentFilters['status']) {
+              shouldKeep = false;
+            }
+            if (shouldKeep && _currentFilters['regional'] != null && updatedTask.regional != _currentFilters['regional']) {
+              shouldKeep = false;
+            }
+            if (shouldKeep && _currentFilters['divisao'] != null && updatedTask.divisao != _currentFilters['divisao']) {
+              shouldKeep = false;
+            }
+            if (shouldKeep && _currentFilters['tipo'] != null && updatedTask.tipo != _currentFilters['tipo']) {
+              shouldKeep = false;
+            }
+            if (shouldKeep && _currentFilters['executor'] != null) {
+              final executorMatch = updatedTask.executores.any((e) => e == _currentFilters['executor']) ||
+                                   updatedTask.executor == _currentFilters['executor'];
+              if (!executorMatch) {
+                shouldKeep = false;
+              }
+            }
+            if (shouldKeep && _currentFilters['coordenador'] != null && updatedTask.coordenador != _currentFilters['coordenador']) {
+              shouldKeep = false;
+            }
+            if (shouldKeep && _currentFilters['local'] != null) {
+              final localMatch = updatedTask.locais.any((l) => l == _currentFilters['local']);
+              if (!localMatch) {
+                shouldKeep = false;
+              }
+            }
+          }
+
+          if (shouldKeep) {
+            // Atualizar a tarefa na lista
+            _tasks[index] = updatedTask;
+            _tasksVersion++; // Incrementar versão para forçar rebuild
+          } else {
+            // Remover a tarefa se não passar mais pelos filtros
+            _tasks.removeAt(index);
+            _tasksVersion++;
+          }
+        } else {
+          // Tarefa não está na lista, verificar se deve ser adicionada
+          bool shouldAdd = true;
+          
+          // Aplicar mesmos filtros acima
+          final usuario = _authService.currentUser;
+          if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
+            bool passaRegional = true;
+            bool passaDivisao = true;
+            bool passaSegmento = true;
+
+            if (usuario.regionalIds.isNotEmpty) {
+              passaRegional = updatedTask.regionalId != null && usuario.temAcessoRegional(updatedTask.regionalId);
+            }
+            if (usuario.divisaoIds.isNotEmpty) {
+              passaDivisao = updatedTask.divisaoId != null && usuario.temAcessoDivisao(updatedTask.divisaoId);
+            }
+            if (usuario.segmentoIds.isNotEmpty) {
+              passaSegmento = updatedTask.segmentoId != null && usuario.temAcessoSegmento(updatedTask.segmentoId);
+            }
+
+            shouldAdd = passaRegional && passaDivisao && passaSegmento;
+          }
+
+          if (shouldAdd && (_startDate != null || _endDate != null)) {
+            bool hasSegmentInRange = false;
+            for (var segment in updatedTask.ganttSegments) {
+              final startDate = DateTime(segment.dataInicio.year, segment.dataInicio.month, segment.dataInicio.day);
+              final endDate = DateTime(segment.dataFim.year, segment.dataFim.month, segment.dataFim.day);
+              
+              if (_startDate != null && _endDate != null) {
+                if (!(startDate.isAfter(_endDate) || endDate.isBefore(_startDate))) {
+                  hasSegmentInRange = true;
+                  break;
+                }
+              }
+            }
+            shouldAdd = hasSegmentInRange;
+          }
+
+          if (shouldAdd && _currentFilters.isNotEmpty) {
+            // Aplicar mesmos filtros acima
+            if (_currentFilters['status'] != null && updatedTask.status != _currentFilters['status']) {
+              shouldAdd = false;
+            }
+            // ... outros filtros
+          }
+
+          if (shouldAdd) {
+            _tasks.add(updatedTask);
+            _tasksVersion++;
+          }
+        }
+      });
+      
+      print('✅ Tarefa $taskId atualizada na lista local (versão: $_tasksVersion)');
+    } catch (e) {
+      print('❌ Erro ao atualizar tarefa na lista: $e');
+      // Em caso de erro, fazer reload completo como fallback
+      await _loadTasks();
+      if (_currentFilters.isNotEmpty) {
+        await _applyFilters(_currentFilters);
+      }
+    }
+  }
+
   Future<void> _loadTasks() async {
     try {
-      // Tentar carregar do Supabase primeiro
-      // O TaskService já aplica os filtros de perfil automaticamente
-      final tasks = await _taskService.getAllTasks();
+      // Carregar lista base SEM filtros (somente janela de datas) para a tela de equipes
+      final baseTasks = await _taskService.filterTasks(
+        status: null,
+        regional: null,
+        divisao: null,
+        local: null,
+        tipo: null,
+        executor: null,
+        coordenador: null,
+        frota: null,
+        dataInicioMin: _startDate,
+        dataFimMax: _endDate,
+      );
+
+      // Em seguida, aplicar filtros atuais (se existirem) para as demais telas
+      List<Task> filtered;
+      if (_currentFilters.isNotEmpty) {
+        filtered = await _taskService.filterTasks(
+        status: _currentFilters['status'],
+        regional: _currentFilters['regional'],
+        divisao: _currentFilters['divisao'],
+        local: _currentFilters['local'],
+        tipo: _currentFilters['tipo'],
+        executor: _currentFilters['executor'],
+        coordenador: _currentFilters['coordenador'],
+        frota: _currentFilters['frota'],
+        dataInicioMin: _startDate,
+        dataFimMax: _endDate,
+      );
+      } else {
+        filtered = baseTasks;
+      }
+
       if (mounted) {
         setState(() {
-          _tasks = tasks;
+          _tasksSemFiltros = baseTasks;
+          _tasks = filtered;
           _tasksVersion++; // Incrementar versão para forçar rebuild dos widgets
-          print('✅ Tarefas carregadas: ${tasks.length} (versão: $_tasksVersion)');
-          
-          // Verificar perfil do usuário
-          final authService = AuthServiceSimples();
-          final usuario = authService.currentUser;
-          if (usuario != null) {
-            if (usuario.temPerfilConfigurado()) {
-              print('🔒 Usuário tem perfil configurado: ${usuario.regionais.length} regionais, ${usuario.divisoes.length} divisões, ${usuario.segmentos.length} segmentos');
-            } else {
-              print('⚠️ Usuário SEM perfil configurado - nenhuma tarefa será exibida');
-            }
-          } else {
-            print('⚠️ Usuário não autenticado - nenhuma tarefa será exibida');
-          }
-          
-          // Verificar segmentos do Gantt
-          for (var task in tasks) {
-            if (task.ganttSegments.isNotEmpty) {
-              print('📊 Tarefa ${task.id} tem ${task.ganttSegments.length} segmentos');
-            }
-          }
         });
       }
     } catch (e) {
@@ -525,8 +1152,12 @@ class _MainScreenState extends State<MainScreen> {
       if (mounted) {
         setState(() {
           // Fallback para mock (síncrono)
+          _tasksSemFiltros = [];
           _tasks = [];
         });
+
+        // Reaplicar filtros vigentes (inclui período selecionado no HeaderBar)
+        await _applyFilters(_currentFilters);
       }
     }
   }
@@ -537,10 +1168,15 @@ class _MainScreenState extends State<MainScreen> {
       final isMobile = Responsive.isMobile(context);
       final isTablet = Responsive.isTablet(context);
       final isDesktop = Responsive.isDesktop(context);
+      
+      // Detectar tablet em landscape (largura >= 1024 mas altura < 1024)
+      final screenWidth = MediaQuery.of(context).size.width;
+      final screenHeight = MediaQuery.of(context).size.height;
+      final isTabletLandscape = !isMobile && screenWidth >= 1024 && screenHeight < 1024;
 
-      print('🔵 MainScreen build - isMobile: $isMobile, isTablet: $isTablet, isDesktop: $isDesktop');
-      print('   _sidebarSelectedIndex: $_sidebarSelectedIndex');
-      print('   _tasks.length: ${_tasks.length}');
+      // debug silenciado
+      // debug silenciado
+      // debug silenciado
 
       return Scaffold(
       key: _scaffoldKey,
@@ -583,6 +1219,7 @@ class _MainScreenState extends State<MainScreen> {
                         _sidebarSelectedIndex = 14;
                       });
                     },
+                    canEditTasks: _canEditTasks,
                     onPerfilUpdated: () {
                       // Recarregar tarefas quando o perfil for atualizado
                       _applyFilters(_currentFilters);
@@ -611,28 +1248,55 @@ class _MainScreenState extends State<MainScreen> {
                     showGantt: _showGantt,
                     isAtividadesScreen: _sidebarSelectedIndex == 0,
                   ),
-                  // Filter Bar (mobile - ocultar em Configurações e Chat)
-                  if (_sidebarSelectedIndex != 14 && _sidebarSelectedIndex != 15)
+                  // Filter Bar (mobile - ocultar em Configurações, Chat, Notas, Ordens, ATs e SIs)
+                  if (_sidebarSelectedIndex != 1 &&
+                      _sidebarSelectedIndex != 2 &&
+                      _sidebarSelectedIndex != 14 && 
+                      _sidebarSelectedIndex != 15 && 
+                      _sidebarSelectedIndex != 16 && 
+                      _sidebarSelectedIndex != 17 && 
+                      _sidebarSelectedIndex != 18 && 
+                      _sidebarSelectedIndex != 19 &&
+                      _sidebarSelectedIndex != 20 &&
+                      _sidebarSelectedIndex != 21 &&
+                      _sidebarSelectedIndex != 22)
                     FilterBar(
                       onFiltersChanged: _applyFilters,
                       initialFilters: _currentFilters,
                       startDate: _startDate,
                       endDate: _endDate,
+                      visibleTasks: _tasks, // usar tarefas já carregadas para preencher filtros rapidamente
                       onSortChanged: _updateSorting,
                       currentSortColumn: _sortColumn,
                       currentSortAscending: _sortAscending,
                       isFiltering: _isFiltering,
+                      onToggleGantt: () {
+                        setState(() {
+                          final newShowGantt = !_showGantt;
+                          _showGantt = newShowGantt;
+                          // Sincronizar _selectedTab no mobile quando toggle for clicado
+                          if (isMobile) {
+                            if (newShowGantt) {
+                              _selectedTab = 1; // Mostrar Gantt
+                            } else {
+                              _selectedTab = 0; // Mostrar apenas Tabela
+                            }
+                          }
+                        });
+                      },
+                      showGantt: _showGantt,
+                      currentViewMode: _viewMode,
                     ),
                   // Main Content
                   Expanded(
                     child: _buildMainContent(isMobile, isTablet, isDesktop),
                   ),
-                  // Footbar para mobile/tablet (botões de visualização)
-                  if ((isMobile || isTablet) && _sidebarSelectedIndex == 0) ...[
+                  // Footbar para mobile (botões de visualização)
+                  if (isMobile && (_sidebarSelectedIndex == 0 || _sidebarSelectedIndex == 16 || _sidebarSelectedIndex == 20)) ...[
                     Builder(
                       builder: (context) {
-                        print('🔵 Renderizando footbar - isMobile: $isMobile, isTablet: $isTablet, _sidebarSelectedIndex: $_sidebarSelectedIndex');
-                        return _buildFootbar(isMobile);
+                        // debug silenciado
+                        return _buildFootbar(isMobile, false);
                       },
                     ),
                   ],
@@ -691,6 +1355,7 @@ class _MainScreenState extends State<MainScreen> {
                             _sidebarSelectedIndex = 14;
                           });
                         },
+                        canEditTasks: _canEditTasks,
                         onPerfilUpdated: () {
                           // Recarregar tarefas quando o perfil for atualizado
                           _applyFilters(_currentFilters);
@@ -705,6 +1370,8 @@ class _MainScreenState extends State<MainScreen> {
                               _selectedTab = 3;
                             } else if (mode == 'feed') {
                               _selectedTab = 4;
+                            } else if (mode == 'dashboard') {
+                              _selectedTab = 5;
                             } else if (mode == 'split') {
                               _selectedTab = 0; // Default para tabela
                             }
@@ -719,28 +1386,46 @@ class _MainScreenState extends State<MainScreen> {
                         showGantt: _showGantt,
                         isAtividadesScreen: _sidebarSelectedIndex == 0,
                       ),
-                      // Filter Bar (ocultar em Configurações e Chat)
-                      if (_sidebarSelectedIndex != 14 && _sidebarSelectedIndex != 15)
+                      // Filter Bar (ocultar em Configurações, Chat, Notas, Ordens, ATs e SIs)
+                      if (_sidebarSelectedIndex != 1 &&
+                          _sidebarSelectedIndex != 2 &&
+                          _sidebarSelectedIndex != 14 && 
+                          _sidebarSelectedIndex != 15 && 
+                          _sidebarSelectedIndex != 16 && 
+                          _sidebarSelectedIndex != 17 && 
+                          _sidebarSelectedIndex != 18 && 
+                          _sidebarSelectedIndex != 19 &&
+                          _sidebarSelectedIndex != 20 &&
+                          _sidebarSelectedIndex != 21 &&
+                          _sidebarSelectedIndex != 22)
                         FilterBar(
                           onFiltersChanged: _applyFilters,
                           initialFilters: _currentFilters,
                           startDate: _startDate,
                           endDate: _endDate,
+                      visibleTasks: _tasks, // usar tarefas já carregadas para preencher filtros rapidamente
                           onSortChanged: _updateSorting,
                           currentSortColumn: _sortColumn,
                           currentSortAscending: _sortAscending,
                           isFiltering: _isFiltering,
+                          onToggleGantt: () {
+                            setState(() {
+                              _showGantt = !_showGantt;
+                            });
+                          },
+                          showGantt: _showGantt,
+                          currentViewMode: _viewMode,
                         ),
                       // Main Content
                       Expanded(
                         child: _buildMainContent(isMobile, isTablet, isDesktop),
                       ),
-                      // Footbar para mobile/tablet (botões de visualização)
-                      if ((isMobile || isTablet) && _sidebarSelectedIndex == 0) ...[
+                      // Footbar para mobile (botões de visualização)
+                      if (isMobile && (_sidebarSelectedIndex == 0 || _sidebarSelectedIndex == 16 || _sidebarSelectedIndex == 20)) ...[
                         Builder(
                           builder: (context) {
-                            print('🔵 Renderizando footbar (desktop) - isMobile: $isMobile, isTablet: $isTablet, _sidebarSelectedIndex: $_sidebarSelectedIndex');
-                            return _buildFootbar(isMobile);
+                            print('🔵 Renderizando footbar (desktop) - isMobile: $isMobile, _sidebarSelectedIndex: $_sidebarSelectedIndex');
+                            return _buildFootbar(isMobile, false);
                           },
                         ),
                       ],
@@ -805,19 +1490,40 @@ class _MainScreenState extends State<MainScreen> {
         }
         return _getViewBySidebarIndex();
       } else {
-      // Desktop: Layout horizontal (original) ou views específicas
+        // Verificar se é tablet em landscape (largura >= 1024 mas altura < 1024)R
+        // IMPORTANTE: Se a largura for >= 1280px, sempre usar layout desktop (horizontal)
+        // mesmo que a altura seja menor, para evitar Gantt por cima da tabela em notebooks
+        final screenWidth = MediaQuery.of(context).size.width;
+        final screenHeight = MediaQuery.of(context).size.height;
+        final isTabletLandscape = screenWidth >= 1024 && screenWidth < 1280 && screenHeight < 1024;
+        
+        if (isTabletLandscape && _sidebarSelectedIndex == 0) {
+          // Tablet em landscape: usar layout similar ao tablet
+          print('🔵 Tablet Landscape: _selectedTab = $_selectedTab, _viewMode = $_viewMode');
+          return _buildMobileContentStack();
+        }
+        // Se largura >= 1280px, sempre usar layout desktop (horizontal) mesmo em notebooks
+        // Desktop: Layout horizontal (original) ou views específicas
       if (_sidebarSelectedIndex == 0) {
+        // Se o modo for 'dashboard', mostrar dashboard de tarefas
+        if (_viewMode == 'dashboard') {
+          return Dashboard(
+            taskService: _taskService,
+            filteredTasks: _sortedTasks,
+          );
+        }
         // Se o modo for 'planner', mostrar apenas o PlannerView
         if (_viewMode == 'planner') {
           return PlannerView(
+            key: ValueKey('planner_${_tasksVersion}_${_sortedTasks.length}'),
             tasks: _sortedTasks,
             taskService: _taskService,
             onTasksUpdated: () async {
-              print('🔄 GanttChart onTasksUpdated: Recarregando tarefas...');
+              print('🔄 PlannerView onTasksUpdated: Recarregando tarefas...');
               await _loadTasks();
               // Reaplicar filtros após recarregar para garantir que todas as views sejam atualizadas
               if (_currentFilters.isNotEmpty) {
-                print('🔄 Reaplicando filtros após atualização do GanttChart...');
+                print('🔄 Reaplicando filtros após atualização do PlannerView...');
                 await _applyFilters(_currentFilters);
               } else {
                 // Mesmo sem filtros, garantir que as tarefas sejam atualizadas
@@ -825,7 +1531,7 @@ class _MainScreenState extends State<MainScreen> {
                   _tasksVersion++;
                 });
               }
-              print('✅ Tarefas recarregadas após atualização do GanttChart');
+              print('✅ Tarefas recarregadas após atualização do PlannerView');
             },
             onTaskSelected: (task) => _showTaskDetails(task),
             onEdit: (task) => _editTaskById(task.id),
@@ -868,6 +1574,7 @@ class _MainScreenState extends State<MainScreen> {
             },
           );
         }
+        // Desktop: Sempre mostrar tabela completa primeiro e depois o Gantt (verticalmente)
         // Caso contrário, mostrar Tabela e Gantt (ou apenas Tabela se _showGantt for false)
         if (!_showGantt) {
           return TaskTable(
@@ -894,75 +1601,83 @@ class _MainScreenState extends State<MainScreen> {
             },
           );
         }
-        return Row(
-          children: [
-            Expanded(
-              flex: 1,
-              child: TaskTable(
-                key: ValueKey('task_table_$_tasksVersion'),
-                tasks: _sortedTasks,
-                scrollController: _tableScrollController,
-                taskService: _taskService,
-                allSubtasksExpanded: _allSubtasksExpanded,
-                onToggleAllSubtasks: _toggleAllSubtasks,
-                expandedTasks: _expandedTasks,
-                onTaskExpanded: _onTaskExpanded,
-                sortColumn: _sortColumn,
-                getSortValue: _getSortValue,
-                onTaskSelected: (task) {
-                  _showTaskDetails(task);
-                },
-                onEdit: (task) => _editTaskById(task.id),
-                onDelete: (task) => _deleteTaskById(task.id),
-                onDuplicate: (task) => _duplicateTask(task),
-                onCreateSubtask: (task) {
-                  if (task.isMainTask) {
-                    _createSubtask(task.id);
-                  }
-                },
-              ),
-            ),
-            Expanded(
-              flex: 1,
-              child: GanttChart(
-                key: ValueKey('gantt_chart_${_tasksVersion}_${_expandedTasks.length}_${_expandedTasks.toList()..sort()}'),
-                tasks: _sortedTasks,
-                startDate: _startDate,
-                endDate: _endDate,
-                scrollController: _ganttScrollController,
-                taskService: _taskService,
-                allSubtasksExpanded: _allSubtasksExpanded,
-                onToggleAllSubtasks: _toggleAllSubtasks,
-                expandedTasks: _expandedTasks,
-                onTaskExpanded: _onTaskExpanded,
-                sortColumn: _sortColumn,
-                getSortValue: _getSortValue,
-                onTasksUpdated: () async {
-                  print('🔄 GanttChart onTasksUpdated: Recarregando tarefas...');
-                  await _loadTasks();
-                  // Reaplicar filtros após recarregar para garantir que todas as views sejam atualizadas
-                  if (_currentFilters.isNotEmpty) {
-                    print('🔄 Reaplicando filtros após atualização do GanttChart...');
-                    await _applyFilters(_currentFilters);
-                  } else {
-                    // Mesmo sem filtros, garantir que as tarefas sejam atualizadas
-                    setState(() {
-                      _tasksVersion++;
-                    });
-                  }
-                  print('✅ Tarefas recarregadas após atualização do GanttChart');
-                },
-                onEdit: (task) => _editTaskById(task.id),
-                onDelete: (task) => _deleteTaskById(task.id),
-                onDuplicate: (task) => _duplicateTask(task),
-                onCreateSubtask: (task) {
-                  if (task.isMainTask) {
-                    _createSubtask(task.id);
-                  }
-                },
-              ),
-            ),
-          ],
+        // Desktop: Layout horizontal - tabela à esquerda, Gantt colado na lateral direita
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            // Calcular largura mínima da tabela (soma de todas as colunas)
+            // Valores baseados em task_table.dart: acoes(60) + status(70) + local(90) + tipo(100) + 
+            // tarefa(200) + executor(150) + coordenador(130) + frota(50) + chat(50) + anexos(50) + 
+            // notasSAP(50) + ordens(50) + ats(50) + sis(50) = 1270px
+            final tableMinWidth = 1300.0;
+            // Limitar a largura da tabela ao máximo de 63% da tela ou largura mínima, o que for maior
+            final screenWidth = constraints.maxWidth;
+            final tableWidth = tableMinWidth.clamp(400.0, screenWidth * 0.62);
+            
+            return Row(
+              children: [
+                // Tabela: largura fixa baseada no conteúdo necessário
+                SizedBox(
+                  width: tableWidth,
+                  child: TaskTable(
+                    key: ValueKey('task_table_$_tasksVersion'),
+                    tasks: _sortedTasks,
+                    scrollController: _tableScrollController,
+                    taskService: _taskService,
+                    allSubtasksExpanded: _allSubtasksExpanded,
+                    onToggleAllSubtasks: _toggleAllSubtasks,
+                    expandedTasks: _expandedTasks,
+                    onTaskExpanded: _onTaskExpanded,
+                    sortColumn: _sortColumn,
+                    getSortValue: _getSortValue,
+                    onTaskSelected: (task) {
+                      _showTaskDetails(task);
+                    },
+                    onEdit: (task) => _editTaskById(task.id),
+                    onDelete: (task) => _deleteTaskById(task.id),
+                    onDuplicate: (task) => _duplicateTask(task),
+                    onCreateSubtask: (task) {
+                      if (task.isMainTask) {
+                        _createSubtask(task.id);
+                      }
+                    },
+                  ),
+                ),
+                // Gantt: ocupar TODO o espaço restante até a lateral direita
+                Expanded(
+                  child: GanttChart(
+                    key: ValueKey('gantt_chart_${_tasksVersion}_${_expandedTasks.length}_${_expandedTasks.toList()..sort()}'),
+                    tasks: _sortedTasks,
+                    startDate: _startDate,
+                    endDate: _endDate,
+                    scrollController: _ganttScrollController,
+                    taskService: _taskService,
+                    allSubtasksExpanded: _allSubtasksExpanded,
+                    onToggleAllSubtasks: _toggleAllSubtasks,
+                    expandedTasks: _expandedTasks,
+                    onTaskExpanded: _onTaskExpanded,
+                    sortColumn: _sortColumn,
+                    getSortValue: _getSortValue,
+                    onTasksUpdated: () async {
+                      // Não fazer nada aqui - a atualização será feita via onTaskUpdated específico
+                      print('🔄 GanttChart onTasksUpdated: Atualização otimizada (sem reload completo)');
+                    },
+                    onTaskUpdated: (task) async {
+                      // Atualizar apenas a tarefa específica sem recarregar tudo
+                      await _updateTaskInList(task.id);
+                    },
+                    onEdit: (task) => _editTaskById(task.id),
+                    onDelete: (task) => _deleteTaskById(task.id),
+                    onDuplicate: (task) => _duplicateTask(task),
+                    onCreateSubtask: (task) {
+                      if (task.isMainTask) {
+                        _createSubtask(task.id);
+                      }
+                    },
+                  ),
+                ),
+              ],
+            );
+          },
         );
       }
       return _getViewBySidebarIndex();
@@ -1017,62 +1732,55 @@ class _MainScreenState extends State<MainScreen> {
             },
           );
         }
-        return Row(
-              children: [
-                // Tabela (50% da largura)
-                Expanded(
-                  flex: 1,
-                  child: TaskTable(
-                    key: ValueKey('task_table_$_tasksVersion'),
-                    tasks: _sortedTasks,
-                    scrollController: _tableScrollController,
-                    taskService: _taskService,
-                    allSubtasksExpanded: _allSubtasksExpanded,
-                    onToggleAllSubtasks: _toggleAllSubtasks,
-                    expandedTasks: _expandedTasks,
-                    onTaskExpanded: _onTaskExpanded,
-                    sortColumn: _sortColumn,
-                    getSortValue: _getSortValue,
-                    onTaskSelected: (task) {
-                      setState(() {
-                        _selectedTask = task;
-                      });
-                    },
-                  ),
-                ),
-                // Gantt (50% da largura)
-                Expanded(
-                  flex: 1,
-                  child: GanttChart(
-                    key: ValueKey('gantt_chart_${_tasksVersion}_${_expandedTasks.length}_${_expandedTasks.toList()..sort()}'),
-                    tasks: _sortedTasks,
-                    startDate: _startDate,
-                    endDate: _endDate,
-                    scrollController: _ganttScrollController,
-                    taskService: _taskService,
-                    allSubtasksExpanded: _allSubtasksExpanded,
-                    onToggleAllSubtasks: _toggleAllSubtasks,
-                    sortColumn: _sortColumn,
-                    getSortValue: _getSortValue,
-                    onEdit: (task) => _editTaskById(task.id),
-                    onDelete: (task) => _deleteTaskById(task.id),
-                    onDuplicate: (task) => _duplicateTask(task),
-                    onCreateSubtask: (task) {
-                      if (task.isMainTask) {
-                        _createSubtask(task.id);
-                      }
-                    },
-                  ),
-                ),
-              ],
-            );
+        return ResizablePanel(
+          initialLeftWidth: MediaQuery.of(context).size.width * 0.5,
+          minLeftWidth: 200,
+          minRightWidth: 200,
+          leftChild: TaskTable(
+            key: ValueKey('task_table_$_tasksVersion'),
+            tasks: _sortedTasks,
+            scrollController: _tableScrollController,
+            taskService: _taskService,
+            allSubtasksExpanded: _allSubtasksExpanded,
+            onToggleAllSubtasks: _toggleAllSubtasks,
+            expandedTasks: _expandedTasks,
+            onTaskExpanded: _onTaskExpanded,
+            sortColumn: _sortColumn,
+            getSortValue: _getSortValue,
+            onTaskSelected: (task) {
+              setState(() {
+                _selectedTask = task;
+              });
+            },
+          ),
+          rightChild: GanttChart(
+            key: ValueKey('gantt_chart_${_tasksVersion}_${_expandedTasks.length}_${_expandedTasks.toList()..sort()}'),
+            tasks: _sortedTasks,
+            startDate: _startDate,
+            endDate: _endDate,
+            scrollController: _ganttScrollController,
+            taskService: _taskService,
+            allSubtasksExpanded: _allSubtasksExpanded,
+            onToggleAllSubtasks: _toggleAllSubtasks,
+            sortColumn: _sortColumn,
+            getSortValue: _getSortValue,
+            onEdit: (task) => _editTaskById(task.id),
+            onDelete: (task) => _deleteTaskById(task.id),
+            onDuplicate: (task) => _duplicateTask(task),
+            onCreateSubtask: (task) {
+              if (task.isMainTask) {
+                _createSubtask(task.id);
+              }
+            },
+          ),
+        );
       case 1: // Pessoas
         return TeamScheduleView(
           taskService: _taskService,
           executorService: _executorService,
           startDate: _startDate,
           endDate: _endDate,
-          filteredTasks: _tasks, // Passar tarefas filtradas
+          filteredTasks: _tasksSemFiltros, // Equipes deve usar lista sem filtros
           onEdit: (task) => _editTaskById(task.id),
           onDelete: (task) => _deleteTaskById(task.id),
           onDuplicate: (task) => _duplicateTask(task),
@@ -1103,7 +1811,7 @@ class _MainScreenState extends State<MainScreen> {
           frotaService: _frotaService,
           startDate: _startDate,
           endDate: _endDate,
-          filteredTasks: _tasks, // Passar tarefas filtradas
+          filteredTasks: _tasksSemFiltros, // Frota deve usar lista sem filtros
           onTasksUpdated: () async {
             print('🔄 FleetScheduleView onTasksUpdated: Recarregando tarefas...');
             await _loadTasks();
@@ -1126,8 +1834,10 @@ class _MainScreenState extends State<MainScreen> {
             }
           },
         );
+      case 3: // Demandas
+        return const DemandasView();
       case 4: // Dashboard
-        return Dashboard(
+        return ComprehensiveDashboard(
           taskService: _taskService,
           filteredTasks: _tasks, // Passar tarefas filtradas
         );
@@ -1165,56 +1875,49 @@ class _MainScreenState extends State<MainScreen> {
               },
             );
           }
-          return Row(
-            children: [
-              // Tabela (50% da largura)
-              Expanded(
-                flex: 1,
-                child: TaskTable(
-                  key: ValueKey('task_table_$_tasksVersion'),
-                  tasks: _sortedTasks,
-                  scrollController: _tableScrollController,
-                  taskService: _taskService,
-                  allSubtasksExpanded: _allSubtasksExpanded,
-                  onToggleAllSubtasks: _toggleAllSubtasks,
-                  expandedTasks: _expandedTasks,
-                  onTaskExpanded: _onTaskExpanded,
-                  sortColumn: _sortColumn,
-                  getSortValue: _getSortValue,
-                  onTaskSelected: (task) {
-                    setState(() {
-                      _selectedTask = task;
-                    });
-                  },
-                ),
-              ),
-              // Gantt (50% da largura)
-              Expanded(
-                flex: 1,
-                child: GanttChart(
-                  key: ValueKey('gantt_chart_${_tasksVersion}_${_expandedTasks.length}_${_expandedTasks.toList()..sort()}'),
-                  tasks: _sortedTasks,
-                  startDate: _startDate,
-                  endDate: _endDate,
-                  scrollController: _ganttScrollController,
-                  taskService: _taskService,
-                  allSubtasksExpanded: _allSubtasksExpanded,
-                  onToggleAllSubtasks: _toggleAllSubtasks,
-                  sortColumn: _sortColumn,
-                  getSortValue: _getSortValue,
-                  onEdit: (task) => _editTaskById(task.id),
-                  onDelete: (task) => _deleteTaskById(task.id),
-                  onDuplicate: (task) => _duplicateTask(task),
-                  onCreateSubtask: (task) {
-                    if (task.isMainTask) {
-                      _createSubtask(task.id);
-                    }
-                  },
-                  expandedTasks: _expandedTasks,
-                  onTaskExpanded: _onTaskExpanded,
-                ),
-              ),
-            ],
+          return ResizablePanel(
+            initialLeftWidth: MediaQuery.of(context).size.width * 0.5,
+            minLeftWidth: 200,
+            minRightWidth: 200,
+            leftChild: TaskTable(
+              key: ValueKey('task_table_$_tasksVersion'),
+              tasks: _sortedTasks,
+              scrollController: _tableScrollController,
+              taskService: _taskService,
+              allSubtasksExpanded: _allSubtasksExpanded,
+              onToggleAllSubtasks: _toggleAllSubtasks,
+              expandedTasks: _expandedTasks,
+              onTaskExpanded: _onTaskExpanded,
+              sortColumn: _sortColumn,
+              getSortValue: _getSortValue,
+              onTaskSelected: (task) {
+                setState(() {
+                  _selectedTask = task;
+                });
+              },
+            ),
+            rightChild: GanttChart(
+              key: ValueKey('gantt_chart_${_tasksVersion}_${_expandedTasks.length}_${_expandedTasks.toList()..sort()}'),
+              tasks: _sortedTasks,
+              startDate: _startDate,
+              endDate: _endDate,
+              scrollController: _ganttScrollController,
+              taskService: _taskService,
+              allSubtasksExpanded: _allSubtasksExpanded,
+              onToggleAllSubtasks: _toggleAllSubtasks,
+              sortColumn: _sortColumn,
+              getSortValue: _getSortValue,
+              onEdit: (task) => _editTaskById(task.id),
+              onDelete: (task) => _deleteTaskById(task.id),
+              onDuplicate: (task) => _duplicateTask(task),
+              onCreateSubtask: (task) {
+                if (task.isMainTask) {
+                  _createSubtask(task.id);
+                }
+              },
+              expandedTasks: _expandedTasks,
+              onTaskExpanded: _onTaskExpanded,
+            ),
           );
         }
       case 6: // Lista
@@ -1254,7 +1957,25 @@ class _MainScreenState extends State<MainScreen> {
       case 15: // Chat
         return const ChatView();
       case 16: // Notas SAP
-        return const NotasSAPView();
+        return NotasSAPView(searchQuery: _searchQuery);
+      case 17: // Ordens
+        return const OrdemView();
+      case 18: // ATs
+        return const ATView();
+      case 19: // SIs
+        return const SIView();
+      case 20: // Horas
+        return HorasSAPView(searchQuery: _searchQuery);
+      case 21: // Linhas de Transmissão
+        if (!(_authService.currentUser?.isRoot ?? false)) {
+          return _rootOnlyPlaceholder('Linhas de Transmissão');
+        }
+        return const LinhasTransmissaoView();
+      case 22: // Supressão de Vegetação
+        if (!(_authService.currentUser?.isRoot ?? false)) {
+          return _rootOnlyPlaceholder('Supressão de Vegetação');
+        }
+        return const SupressaoVegetacaoView();
       default:
         if (!_showGantt) {
           return TaskTable(
@@ -1377,10 +2098,128 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Widget _buildMobileContentStack() {
-    print('🔵 _buildMobileContentStack: _selectedTab = $_selectedTab, tasks: ${_sortedTasks.length}');
+    print('🔵 _buildMobileContentStack: _selectedTab = $_selectedTab, _viewMode = $_viewMode, tasks: ${_sortedTasks.length}');
     
     // Renderizar conteúdo normalmente com tratamento de erro
     try {
+      // Se o modo for 'split', mostrar ambos lado a lado com scroll horizontal (ou apenas tabela se _showGantt for false)
+      if (_viewMode == 'split') {
+        final screenWidth = MediaQuery.of(context).size.width;
+        
+        // Se _showGantt for false, mostrar apenas a tabela
+        if (!_showGantt) {
+          return RepaintBoundary(
+            key: const ValueKey('table_boundary'),
+            child: TaskTable(
+              key: const ValueKey('table'),
+              tasks: _sortedTasks,
+              scrollController: _tableScrollController,
+              taskService: _taskService,
+              allSubtasksExpanded: _allSubtasksExpanded,
+              onToggleAllSubtasks: _toggleAllSubtasks,
+              expandedTasks: _expandedTasks,
+              onTaskExpanded: _onTaskExpanded,
+              sortColumn: _sortColumn,
+              getSortValue: _getSortValue,
+              onTaskSelected: (task) {
+                _showTaskDetails(task);
+              },
+              onEdit: (task) => _editTaskById(task.id),
+              onDelete: (task) => _deleteTaskById(task.id),
+              onDuplicate: (task) => _duplicateTask(task),
+              onCreateSubtask: (task) {
+                if (task.isMainTask) {
+                  _createSubtask(task.id);
+                }
+              },
+            ),
+          );
+        }
+        
+        // Se _showGantt for true, mostrar ambos lado a lado
+        final tableWidth = screenWidth * 0.6; // 60% para tabela
+        final ganttWidth = screenWidth * 0.4; // 40% para Gantt
+        
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          physics: const AlwaysScrollableScrollPhysics(),
+          child: SizedBox(
+            width: screenWidth * 1.5, // Largura total maior que a tela para permitir scroll
+            child: Row(
+              children: [
+                SizedBox(
+                  width: tableWidth,
+                  child: RepaintBoundary(
+                    key: const ValueKey('table_boundary'),
+                    child: TaskTable(
+                      key: const ValueKey('table'),
+                      tasks: _sortedTasks,
+                      scrollController: _tableScrollController,
+                      taskService: _taskService,
+                      allSubtasksExpanded: _allSubtasksExpanded,
+                      onToggleAllSubtasks: _toggleAllSubtasks,
+                      expandedTasks: _expandedTasks,
+                      onTaskExpanded: _onTaskExpanded,
+                      sortColumn: _sortColumn,
+                      getSortValue: _getSortValue,
+                      onTaskSelected: (task) {
+                        _showTaskDetails(task);
+                      },
+                      onEdit: (task) => _editTaskById(task.id),
+                      onDelete: (task) => _deleteTaskById(task.id),
+                      onDuplicate: (task) => _duplicateTask(task),
+                      onCreateSubtask: (task) {
+                        if (task.isMainTask) {
+                          _createSubtask(task.id);
+                        }
+                      },
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: ganttWidth,
+                  child: RepaintBoundary(
+                    key: const ValueKey('gantt_boundary'),
+                    child: GanttChart(
+                      key: const ValueKey('gantt'),
+                      tasks: _sortedTasks,
+                      startDate: _startDate,
+                      endDate: _endDate,
+                      scrollController: _ganttScrollController,
+                      taskService: _taskService,
+                      allSubtasksExpanded: _allSubtasksExpanded,
+                      onToggleAllSubtasks: _toggleAllSubtasks,
+                      expandedTasks: _expandedTasks,
+                      onTaskExpanded: _onTaskExpanded,
+                      sortColumn: _sortColumn,
+                      getSortValue: _getSortValue,
+                onTasksUpdated: () async {
+                  // Não fazer nada aqui - a atualização será feita via onTaskUpdated específico
+                  print('🔄 GanttChart onTasksUpdated: Atualização otimizada (sem reload completo)');
+                },
+                onTaskUpdated: (Task updatedTask) async {
+                  // Atualizar apenas a tarefa específica sem recarregar tudo
+                  print('🔄 GanttChart onTaskUpdated: Atualizando tarefa ${updatedTask.id}...');
+                  await _updateTaskInList(updatedTask.id);
+                  print('✅ Tarefa ${updatedTask.id} atualizada sem recarregar tudo');
+                },
+                      onEdit: (task) => _editTaskById(task.id),
+                      onDelete: (task) => _deleteTaskById(task.id),
+                      onDuplicate: (task) => _duplicateTask(task),
+                      onCreateSubtask: (task) {
+                        if (task.isMainTask) {
+                          _createSubtask(task.id);
+                        }
+                      },
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+      
       if (_selectedTab == 0) {
         return RepaintBoundary(
           key: const ValueKey('table_boundary'),
@@ -1451,15 +2290,15 @@ class _MainScreenState extends State<MainScreen> {
         return RepaintBoundary(
           key: const ValueKey('planner_boundary'),
           child: PlannerView(
-            key: const ValueKey('planner'),
+            key: ValueKey('planner_${_tasksVersion}_${_sortedTasks.length}'),
             tasks: _sortedTasks,
             taskService: _taskService,
             onTasksUpdated: () async {
-              print('🔄 GanttChart onTasksUpdated: Recarregando tarefas...');
+              print('🔄 PlannerView onTasksUpdated: Recarregando tarefas...');
               await _loadTasks();
               // Reaplicar filtros após recarregar para garantir que todas as views sejam atualizadas
               if (_currentFilters.isNotEmpty) {
-                print('🔄 Reaplicando filtros após atualização do GanttChart...');
+                print('🔄 Reaplicando filtros após atualização do PlannerView...');
                 await _applyFilters(_currentFilters);
               } else {
                 // Mesmo sem filtros, garantir que as tarefas sejam atualizadas
@@ -1467,7 +2306,7 @@ class _MainScreenState extends State<MainScreen> {
                   _tasksVersion++;
                 });
               }
-              print('✅ Tarefas recarregadas após atualização do GanttChart');
+              print('✅ Tarefas recarregadas após atualização do PlannerView');
             },
             onTaskSelected: (task) => _showTaskDetails(task),
             onEdit: (task) => _editTaskById(task.id),
@@ -1486,6 +2325,7 @@ class _MainScreenState extends State<MainScreen> {
           child: MaintenanceCalendarView(
             key: ValueKey('calendar_${_tasksVersion}'),
             taskService: _taskService,
+            filteredTasks: _tasks, // Passar tarefas filtradas
             onEdit: (task) => _editTaskById(task.id),
             onDelete: (task) => _deleteTaskById(task.id),
             onDuplicate: (task) => _duplicateTask(task),
@@ -1510,6 +2350,14 @@ class _MainScreenState extends State<MainScreen> {
                 _createSubtask(task.id);
               }
             },
+          ),
+        );
+      } else if (_selectedTab == 5) {
+        return RepaintBoundary(
+          key: ValueKey('dashboard_boundary_${_tasksVersion}_${_sortedTasks.length}'),
+          child: Dashboard(
+            taskService: _taskService,
+            filteredTasks: _sortedTasks,
           ),
         );
       }
@@ -1543,6 +2391,7 @@ class _MainScreenState extends State<MainScreen> {
 
   // Métodos de CRUD
   Future<void> _createTask() async {
+    if (!await _ensureCanEditTasks()) return;
     final result = await showDialog<Task>(
       context: context,
       builder: (context) => TaskFormDialog(
@@ -1552,14 +2401,22 @@ class _MainScreenState extends State<MainScreen> {
     );
 
     if (result != null) {
+      // Salvar posição do scroll antes de criar
+      _saveScrollPositions();
+      
       print('🆕 Criando tarefa com ${result.ganttSegments.length} segmentos do Gantt');
       final createdTask = await _taskService.createTask(result);
       print('✅ Tarefa criada: ${createdTask.id} com ${createdTask.ganttSegments.length} segmentos');
-      await _loadTasks();
-      // Reaplicar filtros para preservar os filtros ativos
-      if (_currentFilters.isNotEmpty) {
-        await _applyFilters(_currentFilters);
-      }
+      
+      // Verificar se há nota SAP para vincular (quando criada a partir da tela de notas SAP)
+      // Isso será feito na tela de notas SAP após receber a tarefa criada
+      
+      // Adicionar a nova tarefa à lista sem recarregar tudo (evita o "pisca")
+      await _addTaskToList(createdTask.id);
+      
+      // Restaurar posição do scroll após adicionar
+      _restoreScrollPositions();
+      
       _showSuccessMessage('Atividade criada com sucesso!');
     }
   }
@@ -1574,6 +2431,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Future<void> _createSubtask(String parentTaskId) async {
+    if (!await _ensureCanEditTasks()) return;
     final parentTask = await _taskService.getTaskById(parentTaskId);
     if (parentTask == null) {
       _showErrorMessage('Tarefa pai não encontrada');
@@ -1606,6 +2464,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Future<void> _editTaskById(String taskId) async {
+    if (!await _ensureCanEditTasks()) return;
     final task = await _taskService.getTaskById(taskId);
     if (task == null) {
       _showErrorMessage('Tarefa não encontrada');
@@ -1622,16 +2481,20 @@ class _MainScreenState extends State<MainScreen> {
     );
 
     if (result != null) {
+      // Salvar posição do scroll antes de atualizar
+      _saveScrollPositions();
+      
       final updated = await _taskService.updateTask(taskId, result);
       if (updated != null) {
-        await _loadTasks();
-        // Reaplicar filtros para preservar os filtros ativos
-        if (_currentFilters.isNotEmpty) {
-          await _applyFilters(_currentFilters);
-        }
+        // Atualizar apenas a tarefa específica sem recarregar tudo (evita o "pisca")
+        await _updateTaskInList(taskId);
         setState(() {
           _selectedTask = null;
         });
+        
+        // Restaurar posição do scroll após atualizar
+        _restoreScrollPositions();
+        
         _showSuccessMessage('Atividade atualizada com sucesso!');
       } else {
         _showErrorMessage('Erro ao atualizar atividade');
@@ -1649,6 +2512,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Future<void> _duplicateTask(Task task) async {
+    if (!await _ensureCanEditTasks()) return;
     // Normalizar as datas dos segmentos do Gantt ao duplicar
     final normalizedSegments = task.ganttSegments.map((segment) {
       return GanttSegment(
@@ -1687,7 +2551,7 @@ class _MainScreenState extends State<MainScreen> {
     );
     
     print('🔄 Duplicando tarefa: ${task.id.substring(0, 8)}...');
-    print('   Segmentos: ${normalizedSegments.length}');
+    // debug silenciado
     if (normalizedSegments.isNotEmpty) {
       print('   Primeiro segmento: ${normalizedSegments.first.dataInicio.toString().substring(0, 10)} até ${normalizedSegments.first.dataFim.toString().substring(0, 10)}');
     }
@@ -1829,9 +2693,31 @@ class _MainScreenState extends State<MainScreen> {
     
     try {
       _currentFilters = filters;
+
+      // Sempre manter lista base sem filtros (apenas janela de datas) para a tela de equipes
+      final baseTasks = await _taskService.filterTasks(
+        status: null,
+        regional: null,
+        divisao: null,
+        local: null,
+        tipo: null,
+        executor: null,
+        coordenador: null,
+        frota: null,
+        dataInicioMin: _startDate,
+        dataFimMax: _endDate,
+      );
       List<Task> filtered;
       
-      // Primeiro aplicar os filtros
+      // Detectar se há filtros (além de "minhasTarefas") para evitar chamada extra desnecessária
+      final hasFieldFilters = filters.entries.any((entry) {
+        if (entry.key == 'minhasTarefas') return false;
+        final value = entry.value;
+        return value != null && value.isNotEmpty;
+      });
+
+      if (hasFieldFilters) {
+        // Aplicar filtros específicos
       filtered = await _taskService.filterTasks(
       status: filters['status'],
       regional: filters['regional'],
@@ -1844,6 +2730,10 @@ class _MainScreenState extends State<MainScreen> {
       dataInicioMin: _startDate,
       dataFimMax: _endDate,
     );
+      } else {
+        // Sem filtros (ou apenas "Minhas Tarefas"): usar base para evitar nova consulta
+        filtered = baseTasks;
+      }
     
     // Aplicar filtro de "Minhas Tarefas" se ativo
     if (filters['minhasTarefas'] == 'true') {
@@ -1965,6 +2855,7 @@ class _MainScreenState extends State<MainScreen> {
     }
     
       setState(() {
+        _tasksSemFiltros = baseTasks;
         _tasks = filtered;
         _tasksVersion++; // Incrementar versão para forçar rebuild dos widgets
         _isFiltering = false; // Ocultar indicador de loading
@@ -2223,31 +3114,35 @@ class _MainScreenState extends State<MainScreen> {
 
   // Fazer download de arquivo (texto)
   Future<void> _downloadFile(String content, String filename, String mimeType) async {
-    if (kIsWeb) {
-      final bytes = utf8.encode(content);
-      final blob = html.Blob([bytes], mimeType);
-      final url = html.Url.createObjectUrlFromBlob(blob);
-      html.AnchorElement(href: url)
-        ..setAttribute('download', filename)
-        ..click();
-      html.Url.revokeObjectUrl(url);
-    } else {
+    if (!kIsWeb) {
       print('⚠️ Exportação para mobile/desktop ainda não implementada');
+      return;
     }
+    
+    // Código apenas para web
+    final bytes = utf8.encode(content);
+    final blob = html.Blob([bytes], mimeType);
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    html.AnchorElement(href: url)
+      ..setAttribute('download', filename)
+      ..click();
+    html.Url.revokeObjectUrl(url);
   }
 
   // Fazer download de arquivo (bytes)
   Future<void> _downloadFileBytes(Uint8List bytes, String filename, String mimeType) async {
-    if (kIsWeb) {
-      final blob = html.Blob([bytes], mimeType);
-      final url = html.Url.createObjectUrlFromBlob(blob);
-      html.AnchorElement(href: url)
-        ..setAttribute('download', filename)
-        ..click();
-      html.Url.revokeObjectUrl(url);
-    } else {
+    if (!kIsWeb) {
       print('⚠️ Exportação para mobile/desktop ainda não implementada');
+      return;
     }
+    
+    // Código apenas para web
+    final blob = html.Blob([bytes], mimeType);
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    html.AnchorElement(href: url)
+      ..setAttribute('download', filename)
+      ..click();
+    html.Url.revokeObjectUrl(url);
   }
 
   // Buscar atividades
@@ -2255,19 +3150,57 @@ class _MainScreenState extends State<MainScreen> {
     setState(() {
       _searchQuery = query;
     });
-    await _applyFilters(_currentFilters);
+    // Se estiver na tela de notas, a busca será aplicada automaticamente via didUpdateWidget
+    // Se estiver na tela de atividades, aplicar filtros normalmente
+    if (_sidebarSelectedIndex == 0) {
+      await _applyFilters(_currentFilters);
+    }
+    // Para outras telas (Notas SAP, etc), o didUpdateWidget do widget filho cuidará da busca
   }
 
-  Widget _buildFootbar(bool isMobile) {
-    print('🔵 _buildFootbar chamado - isMobile: $isMobile');
-    final footbarHeight = isMobile ? 56.0 : 60.0;
+  Widget _buildFootbar(bool isMobile, bool isTablet) {
+    print('🔵 _buildFootbar chamado - isMobile: $isMobile, isTablet: $isTablet');
+    final footbarHeight = isMobile ? 56.0 : (isTablet ? 64.0 : 60.0);
     
     final themeProvider = widget.themeProvider ?? ThemeProvider();
     final currentTheme = themeProvider.currentTheme;
-    final backgroundColor = ThemeService.getBarBackgroundColor(currentTheme);
-    final iconColor = ThemeService.getBarIconColor(currentTheme);
     
-    return Container(
+    return StreamBuilder<String>(
+      stream: ColorThemeNotifier().colorChangeStream.where((barType) => barType == 'footbar'),
+      builder: (context, streamSnapshot) {
+        return FutureBuilder<Map<String, Color>>(
+          future: Future.wait([
+            ThemeService.getBarBackgroundColor(currentTheme, barType: 'footbar'),
+            ThemeService.getBarIconColor(currentTheme, barType: 'footbar'),
+          ]).then((colors) => {
+            'background': colors[0],
+            'icon': colors[1],
+          }),
+          builder: (context, snapshot) {
+        final backgroundColor = snapshot.data?['background'] ?? ThemeService.getBarBackgroundColorSync(currentTheme);
+        final iconColor = snapshot.data?['icon'] ?? ThemeService.getBarIconColorSync(currentTheme);
+        
+        // Determinar quais botões mostrar baseado na tela atual
+        final List<Widget> buttons = [];
+        
+        if (_sidebarSelectedIndex == 0) {
+          // Tela de Atividades - mostrar botões de visualização
+          buttons.addAll([
+            _buildFootbarButton(Icons.table_chart, 'Tabela/Gantt', 'split', isMobile, isTablet, iconColor),
+            _buildFootbarButton(Icons.view_kanban, 'Planner', 'planner', isMobile, isTablet, iconColor),
+            _buildFootbarButton(Icons.calendar_month, 'Calendário', 'calendar', isMobile, isTablet, iconColor),
+            _buildFootbarButton(Icons.dynamic_feed, 'Feed', 'feed', isMobile, isTablet, iconColor),
+              _buildFootbarButton(Icons.dashboard, 'Dashboard', 'dashboard', isMobile, isTablet, iconColor),
+          ]);
+        } else if (_sidebarSelectedIndex == 16 || _sidebarSelectedIndex == 20) {
+          // Telas de Notas SAP ou Horas - mostrar ambos os botões para navegação
+          buttons.addAll([
+            _buildFootbarButton(Icons.description, 'Notas', 'notas', isMobile, isTablet, iconColor, sidebarIndex: 16),
+            _buildFootbarButton(Icons.access_time, 'Horas', 'horas', isMobile, isTablet, iconColor, sidebarIndex: 20),
+          ]);
+        }
+        
+        return Container(
       height: footbarHeight,
       decoration: BoxDecoration(
         color: backgroundColor,
@@ -2284,21 +3217,45 @@ class _MainScreenState extends State<MainScreen> {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceAround,
           crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            _buildFootbarButton(Icons.table_chart, 'Tabela/Gantt', 'split', isMobile, iconColor),
-            _buildFootbarButton(Icons.view_kanban, 'Planner', 'planner', isMobile, iconColor),
-            _buildFootbarButton(Icons.calendar_month, 'Calendário', 'calendar', isMobile, iconColor),
-            _buildFootbarButton(Icons.dynamic_feed, 'Feed', 'feed', isMobile, iconColor),
-          ],
+          children: buttons,
         ),
+      ),
+    );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _rootOnlyPlaceholder(String nomeTela) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.lock, size: 64, color: Colors.redAccent),
+          const SizedBox(height: 12),
+          Text(
+            'Acesso restrito',
+            style: Theme.of(context).textTheme.headlineSmall,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '$nomeTela disponível apenas para usuário root.',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildFootbarButton(IconData icon, String label, String mode, bool isMobile, Color iconColor) {
-    // No mobile, verificar se o _selectedTab corresponde ao modo
+  Widget _buildFootbarButton(IconData icon, String label, String mode, bool isMobile, bool isTablet, Color iconColor, {int? sidebarIndex}) {
+    // No mobile, verificar se o _selectedTab corresponde ao modo ou se é uma tela específica
     bool isSelected = false;
-    if (mode == 'split') {
+    if (sidebarIndex != null) {
+      // Para telas específicas (Notas, Horas), verificar se o índice do sidebar corresponde
+      isSelected = _sidebarSelectedIndex == sidebarIndex;
+    } else if (mode == 'split') {
       isSelected = _selectedTab == 0 || _selectedTab == 1; // Tabela ou Gantt
     } else if (mode == 'planner') {
       isSelected = _selectedTab == 2;
@@ -2306,40 +3263,51 @@ class _MainScreenState extends State<MainScreen> {
       isSelected = _selectedTab == 3;
     } else if (mode == 'feed') {
       isSelected = _selectedTab == 4;
+    } else if (mode == 'dashboard') {
+      isSelected = _selectedTab == 5;
     } else {
       isSelected = _viewMode == mode;
     }
     
-    print('🔵 _buildFootbarButton: $label, isSelected: $isSelected, icon: $icon');
+    print('🔵 _buildFootbarButton: $label, isSelected: $isSelected, icon: $icon, sidebarIndex: $sidebarIndex');
     
     return Expanded(
       child: Material(
         color: Colors.transparent,
         child: InkWell(
           onTap: () {
-            print('🔵 Footbar: Botão clicado - mode: $mode, _selectedTab atual: $_selectedTab');
+            print('🔵 Footbar: Botão clicado - mode: $mode, sidebarIndex: $sidebarIndex, _selectedTab atual: $_selectedTab');
             setState(() {
-              _viewMode = mode;
-              // Sincronizar _selectedTab com _viewMode
-              if (mode == 'planner') {
-                _selectedTab = 2;
-                print('🔵 Footbar: Planner selecionado, _selectedTab = 2');
-              } else if (mode == 'calendar') {
-                _selectedTab = 3;
-                print('🔵 Footbar: Calendário selecionado, _selectedTab = 3');
-              } else if (mode == 'feed') {
-                _selectedTab = 4;
-                print('🔵 Footbar: Feed selecionado, _selectedTab = 4');
-              } else if (mode == 'split') {
-                _selectedTab = 0; // Default para tabela quando clicar em Tabela/Gantt
-                print('🔵 Footbar: Split selecionado, _selectedTab = 0');
+              if (sidebarIndex != null) {
+                // Se for uma tela específica, apenas mudar o índice do sidebar
+                _sidebarSelectedIndex = sidebarIndex;
+                print('🔵 Footbar: Tela específica selecionada, _sidebarSelectedIndex = $sidebarIndex');
+              } else {
+                // Para modos de visualização, sincronizar _viewMode e _selectedTab
+                _viewMode = mode;
+                if (mode == 'planner') {
+                  _selectedTab = 2;
+                  print('🔵 Footbar: Planner selecionado, _selectedTab = 2');
+                } else if (mode == 'calendar') {
+                  _selectedTab = 3;
+                  print('🔵 Footbar: Calendário selecionado, _selectedTab = 3');
+                } else if (mode == 'feed') {
+                  _selectedTab = 4;
+                  print('🔵 Footbar: Feed selecionado, _selectedTab = 4');
+                } else if (mode == 'dashboard') {
+                  _selectedTab = 5;
+                  print('🔵 Footbar: Dashboard selecionado, _selectedTab = 5');
+                } else if (mode == 'split') {
+                  _selectedTab = 0; // Default para tabela quando clicar em Tabela/Gantt
+                  print('🔵 Footbar: Split selecionado, _selectedTab = 0');
+                }
               }
-              print('🔵 Footbar: Após setState - _viewMode = $_viewMode, _selectedTab = $_selectedTab');
+              print('🔵 Footbar: Após setState - _viewMode = $_viewMode, _selectedTab = $_selectedTab, _sidebarSelectedIndex = $_sidebarSelectedIndex');
             });
           },
           child: Container(
             padding: EdgeInsets.symmetric(
-              vertical: isMobile ? 4 : 6,
+              vertical: isMobile ? 4 : (isTablet ? 8 : 6),
               horizontal: 4,
             ),
             child: Column(
@@ -2349,15 +3317,15 @@ class _MainScreenState extends State<MainScreen> {
                 Icon(
                   icon,
                   color: isSelected ? iconColor : iconColor.withOpacity(0.7),
-                  size: isMobile ? 20 : 24,
+                  size: isMobile ? 20 : (isTablet ? 26 : 24),
                 ),
-                SizedBox(height: isMobile ? 2 : 4),
+                SizedBox(height: isMobile ? 2 : (isTablet ? 4 : 4)),
                 Flexible(
                   child: Text(
                     label,
                     style: TextStyle(
                       color: isSelected ? iconColor : iconColor.withOpacity(0.7),
-                      fontSize: isMobile ? 9 : 10,
+                      fontSize: isMobile ? 9 : (isTablet ? 11 : 10),
                       fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                     ),
                     textAlign: TextAlign.center,

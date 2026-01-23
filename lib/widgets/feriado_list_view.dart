@@ -94,6 +94,16 @@ class _FeriadoListViewState extends State<FeriadoListView> {
     }
   }
 
+  void _duplicateFeriado(Feriado feriado) {
+    // Criar cópia com descrição modificada
+    final duplicated = feriado.copyWith(
+      id: '',
+      descricao: '${feriado.descricao} (Cópia)',
+    );
+
+    _showFeriadoForm(feriado: duplicated);
+  }
+
   void _showFeriadoForm({Feriado? feriado}) {
     showDialog(
       context: context,
@@ -279,6 +289,16 @@ class _FeriadoListViewState extends State<FeriadoListView> {
                   ),
                 ),
                 const PopupMenuItem(
+                  value: 'duplicate',
+                  child: Row(
+                    children: [
+                      Icon(Icons.copy, size: 20, color: Colors.orange),
+                      SizedBox(width: 8),
+                      Text('Duplicar', style: TextStyle(color: Colors.orange)),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
                   value: 'delete',
                   child: Row(
                     children: [
@@ -292,6 +312,8 @@ class _FeriadoListViewState extends State<FeriadoListView> {
               onSelected: (value) {
                 if (value == 'edit') {
                   _showFeriadoForm(feriado: feriado);
+                } else if (value == 'duplicate') {
+                  _duplicateFeriado(feriado);
                 } else if (value == 'delete') {
                   _deleteFeriado(feriado);
                 }

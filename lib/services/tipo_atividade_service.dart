@@ -22,6 +22,8 @@ class TipoAtividadeService {
       'descricao': tipoAtividade.descricao,
       'ativo': tipoAtividade.ativo,
       if (tipoAtividade.cor != null) 'cor': tipoAtividade.cor,
+      'cor_segmento': tipoAtividade.corSegmento,
+      'cor_texto_segmento': tipoAtividade.corTextoSegmento,
     };
   }
 

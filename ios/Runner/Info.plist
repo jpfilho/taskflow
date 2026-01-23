@@ -59,5 +59,38 @@
 	<string>Este app precisa acessar sua localização para registrar a posição geográfica das tarefas e facilitar o gerenciamento de atividades em campo.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>Este app precisa acessar sua localização para registrar a posição geográfica das tarefas e facilitar o gerenciamento de atividades em campo.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>Este app precisa acessar sua localização em segundo plano para registrar a posição geográfica das tarefas e facilitar o gerenciamento de atividades em campo.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Este app pode usar Bluetooth para conectar a dispositivos externos e melhorar a experiência do usuário.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Este app pode usar Bluetooth para conectar a dispositivos externos e melhorar a experiência do usuário.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Este app pode acessar seu calendário para sincronizar eventos e tarefas.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>Este app pode acessar seus lembretes para sincronizar tarefas e atividades.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Este app pode acessar seus contatos para facilitar o compartilhamento e comunicação.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>Este app pode usar sensores de movimento para melhorar a experiência do usuário.</string>
+	<key>NSUserTrackingUsageDescription</key>
+	<string>Este app pode usar dados de rastreamento para personalizar sua experiência e melhorar os serviços oferecidos.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.taskflow.app</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.taskflow.app</string>
+			</array>
+		</dict>
+	</array>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>msauth</string>
+	</array>
 </dict>
 </plist>

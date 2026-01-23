@@ -158,6 +158,46 @@ class _RegionalListViewState extends State<RegionalListView> {
     }
   }
 
+  Future<void> _duplicateRegional(Regional regional) async {
+    // Criar cópia com nome modificado
+    final duplicated = regional.copyWith(
+      id: '',
+      regional: '${regional.regional} (Cópia)',
+    );
+
+    final result = await showDialog<Regional>(
+      context: context,
+      builder: (context) => RegionalFormDialog(regional: duplicated),
+    );
+
+    if (result != null) {
+      try {
+        final created = await _regionalService.createRegional(result);
+        if (created != null) {
+          await _loadRegionais();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Regional duplicada com sucesso!'),
+                backgroundColor: Colors.green,
+              ),
+            );
+          }
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(e.toString().replaceFirst('Exception: ', '')),
+              backgroundColor: Colors.red,
+              duration: const Duration(seconds: 4),
+            ),
+          );
+        }
+      }
+    }
+  }
+
 
   Future<void> _deleteRegional(Regional regional) async {
     final confirm = await showDialog<bool>(
@@ -354,6 +394,12 @@ class _RegionalListViewState extends State<RegionalListView> {
                                     tooltip: 'Editar',
                                   ),
                                   IconButton(
+                                    icon: const Icon(Icons.copy),
+                                    color: Colors.orange,
+                                    onPressed: () => _duplicateRegional(regional),
+                                    tooltip: 'Duplicar',
+                                  ),
+                                  IconButton(
                                     icon: const Icon(Icons.delete),
                                     color: Colors.red,
                                     onPressed: () => _deleteRegional(regional),
@@ -398,6 +444,13 @@ class _RegionalListViewState extends State<RegionalListView> {
                         icon: const Icon(Icons.edit, size: 20, color: Colors.blue),
                         onPressed: () => _editRegional(regional),
                         tooltip: 'Editar',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.copy, size: 20, color: Colors.orange),
+                        onPressed: () => _duplicateRegional(regional),
+                        tooltip: 'Duplicar',
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(),
                       ),

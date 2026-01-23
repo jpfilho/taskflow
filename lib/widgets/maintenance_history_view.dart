@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/task.dart';
 import '../services/task_service.dart';
 import '../utils/responsive.dart';
+import 'task_view_dialog.dart';
 
 class MaintenanceHistoryView extends StatefulWidget {
   final TaskService taskService;
@@ -330,33 +331,7 @@ class _MaintenanceHistoryViewState extends State<MaintenanceHistoryView> {
   void _showTaskDetails(BuildContext context, Task task) {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(task.tarefa),
-        content: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _buildDetailRow('Status', task.status),
-              _buildDetailRow('Tipo', task.tipo),
-              _buildDetailRow('Local', task.locais.isNotEmpty ? task.locais.join(', ') : ''),
-              _buildDetailRow('Executor', task.executor),
-              _buildDetailRow('Frota', task.frota),
-              _buildDetailRow('Coordenador', task.coordenador),
-              _buildDetailRow('Data Início', '${task.dataInicio.day}/${task.dataInicio.month}/${task.dataInicio.year}'),
-              _buildDetailRow('Data Fim', '${task.dataFim.day}/${task.dataFim.month}/${task.dataFim.year}'),
-              if (task.observacoes != null && task.observacoes!.isNotEmpty)
-                _buildDetailRow('Observações', task.observacoes!),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Fechar'),
-          ),
-        ],
-      ),
+      builder: (context) => TaskViewDialog(task: task),
     );
   }
 

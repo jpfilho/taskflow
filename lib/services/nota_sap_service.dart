@@ -1,9 +1,16 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:convert' show latin1, utf8;
 import '../models/nota_sap.dart';
+import 'auth_service_simples.dart';
+import 'centro_trabalho_service.dart';
+import 'regra_prazo_nota_service.dart';
+import 'ordem_service.dart';
 
 class NotaSAPService {
   final SupabaseClient _supabase = Supabase.instance.client;
+  final AuthServiceSimples _authService = AuthServiceSimples();
+  final CentroTrabalhoService _centroTrabalhoService = CentroTrabalhoService();
+  final RegraPrazoNotaService _regraPrazoNotaService = RegraPrazoNotaService();
 
   // Importar notas do CSV
   Future<Map<String, dynamic>> importarNotasDoCSV(String csvContent) async {
@@ -378,35 +385,195 @@ class NotaSAPService {
     }
   }
 
+  // Obter centros de trabalho do usuário baseado no perfil
+  // Retornar lista de pares (centro, gpm) para o usuário
+  Future<List<Map<String, String>>> _obterCentrosTrabalhoComGPMUsuario() async {
+    try {
+      final usuario = _authService.currentUser;
+      
+      // Se não há usuário ou é root, retornar lista vazia (sem filtro)
+      if (usuario == null || usuario.isRoot) {
+        return [];
+      }
+
+      // Se não tem perfil configurado, retornar lista vazia (sem filtro)
+      if (!usuario.temPerfilConfigurado()) {
+        return [];
+      }
+
+      // Buscar todos os centros de trabalho
+      final todosCentros = await _centroTrabalhoService.getAllCentrosTrabalho();
+      
+      // Filtrar centros de trabalho baseado no perfil do usuário
+      final centrosPermitidos = todosCentros.where((centro) {
+        // Verificar se o centro pertence a uma regional permitida
+        final temRegionalPermitida = usuario.regionalIds.isEmpty || 
+            usuario.regionalIds.contains(centro.regionalId);
+        
+        // Verificar se o centro pertence a uma divisão permitida
+        final temDivisaoPermitida = usuario.divisaoIds.isEmpty || 
+            usuario.divisaoIds.contains(centro.divisaoId);
+        
+        // Verificar se o centro pertence a um segmento permitido
+        final temSegmentoPermitido = usuario.segmentoIds.isEmpty || 
+            usuario.segmentoIds.contains(centro.segmentoId);
+        
+        return temRegionalPermitida && temDivisaoPermitida && temSegmentoPermitido;
+      }).where((centro) => centro.gpm != null).toList(); // Apenas centros com GPM
+
+      // Retornar lista de pares (centro, gpm)
+      final centrosComGPM = centrosPermitidos.map((centro) {
+        return {
+          'centro': centro.centroTrabalho.trim(),
+          'gpm': centro.gpm!.toString(),
+        };
+      }).toList();
+
+      print('🔍 DEBUG _obterCentrosTrabalhoComGPMUsuario:');
+      print('   Total de centros no banco: ${todosCentros.length}');
+      print('   Centros permitidos para o usuário: ${centrosPermitidos.length}');
+      for (final item in centrosComGPM) {
+        print('     - ${item['centro']} (GPM: ${item['gpm']})');
+      }
+
+      return centrosComGPM;
+    } catch (e) {
+      print('⚠️ Erro ao obter centros de trabalho do usuário: $e');
+      return [];
+    }
+  }
+
+  // Manter método antigo para compatibilidade (retorna apenas nomes)
+  Future<List<String>> _obterCentrosTrabalhoUsuario() async {
+    final centrosComGPM = await _obterCentrosTrabalhoComGPMUsuario();
+    return centrosComGPM.map((item) => item['centro']!).toList();
+  }
+
+
+
   // Buscar todas as notas
   Future<List<NotaSAP>> getAllNotas({
-    String? filtroStatus,
-    String? filtroLocal,
-    DateTime? dataInicio,
-    DateTime? dataFim,
+    String? filtroTipoNota, // null = todas, 'abertas' = abertas, 'concluidas' = concluídas
+    List<String>? filtroLocais,
+    List<String>? filtroSalas,
+    List<String>? filtroTipos,
+    List<String>? filtroNotas,
+    List<String>? filtroPrioridades,
+    List<String>? filtroStatusUsuario,
+    List<String>? filtroResponsaveis,
+    List<String>? filtroGPMs,
     int? limit,
     int? offset,
   }) async {
     try {
-      dynamic query = _supabase.from('notas_sap').select();
+      dynamic query = _supabase.from('notas_sap_com_prazo').select();
 
-      if (filtroStatus != null && filtroStatus.isNotEmpty) {
-        query = query.eq('status_sistema', filtroStatus);
+      // Aplicar filtros por perfil do usuário
+      final usuario = _authService.currentUser;
+      bool temFiltro = false;
+      List<String> centrosTrabalhoUsuario = [];
+
+      // Se o usuário é root, não aplicar filtros de perfil
+      if (usuario != null && usuario.isRoot) {
+        print('🔓 Usuário root - sem filtros de perfil aplicados');
+      } else {
+        // Obter centros de trabalho do usuário
+        centrosTrabalhoUsuario = await _obterCentrosTrabalhoUsuario();
+        
+        // Aplicar filtros APENAS pelo centro de trabalho
+        if (centrosTrabalhoUsuario.isNotEmpty) {
+          final centrosCompletos = centrosTrabalhoUsuario.map((c) => c.trim()).toList();
+          
+          // Usar ilike com % para buscar qualquer valor que contenha o centro
+          if (centrosCompletos.length == 1) {
+            query = query.ilike('centro_trabalho_responsavel', '%${centrosCompletos[0]}%');
+          } else {
+            final orConditions = centrosCompletos.map((centro) => 'centro_trabalho_responsavel.ilike.%$centro%').join(',');
+            query = query.or(orConditions);
+          }
+          
+          temFiltro = true;
+        }
+
+        // Se o usuário tem perfil mas não tem filtros aplicados, retornar lista vazia
+        if (!temFiltro && usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
+          print('⚠️ Usuário com perfil mas sem centros de trabalho - retornando lista vazia');
+          return [];
+        }
       }
 
-      if (filtroLocal != null && filtroLocal.isNotEmpty) {
-        query = query.ilike('local_instalacao', '%$filtroLocal%');
+      // Filtros multi-seleção
+      if (filtroLocais != null && filtroLocais.isNotEmpty) {
+        if (filtroLocais.length == 1) {
+          query = query.ilike('local', '%${filtroLocais[0]}%');
+        } else {
+          final orConditions = filtroLocais.map((local) => 'local.ilike.%$local%').join(',');
+          query = query.or(orConditions);
+        }
       }
 
-      if (dataInicio != null) {
-        query = query.gte('criado_em', dataInicio.toIso8601String().split('T')[0]);
+    if (filtroSalas != null && filtroSalas.isNotEmpty) {
+      if (filtroSalas.length == 1) {
+        query = query.ilike('sala', '%${filtroSalas[0]}%');
+      } else {
+        final orConditions = filtroSalas.map((sala) => 'sala.ilike.%$sala%').join(',');
+        query = query.or(orConditions);
+      }
+    }
+
+      if (filtroTipos != null && filtroTipos.isNotEmpty) {
+        if (filtroTipos.length == 1) {
+          query = query.eq('tipo', filtroTipos[0]);
+        } else {
+          query = query.in_('tipo', filtroTipos);
+        }
       }
 
-      if (dataFim != null) {
-        query = query.lte('criado_em', dataFim.toIso8601String().split('T')[0]);
+      if (filtroNotas != null && filtroNotas.isNotEmpty) {
+        if (filtroNotas.length == 1) {
+          query = query.eq('nota', filtroNotas[0]);
+        } else {
+          query = query.in_('nota', filtroNotas);
+        }
       }
 
-      query = query.order('criado_em', ascending: false);
+      if (filtroPrioridades != null && filtroPrioridades.isNotEmpty) {
+        if (filtroPrioridades.length == 1) {
+          query = query.eq('text_prioridade', filtroPrioridades[0]);
+        } else {
+          query = query.in_('text_prioridade', filtroPrioridades);
+        }
+      }
+
+      if (filtroStatusUsuario != null && filtroStatusUsuario.isNotEmpty) {
+        if (filtroStatusUsuario.length == 1) {
+          query = query.eq('status_usuario', filtroStatusUsuario[0]);
+        } else {
+          query = query.in_('status_usuario', filtroStatusUsuario);
+        }
+      }
+
+      if (filtroResponsaveis != null && filtroResponsaveis.isNotEmpty) {
+        if (filtroResponsaveis.length == 1) {
+          query = query.ilike('denominacao_executor', '%${filtroResponsaveis[0]}%');
+        } else {
+          final orConditions = filtroResponsaveis.map((resp) => 'denominacao_executor.ilike.%$resp%').join(',');
+          query = query.or(orConditions);
+        }
+      }
+
+      if (filtroGPMs != null && filtroGPMs.isNotEmpty) {
+        if (filtroGPMs.length == 1) {
+          query = query.eq('gpm', filtroGPMs[0]);
+        } else {
+          query = query.in_('gpm', filtroGPMs);
+        }
+      }
+
+      // Ordenar por prazo (dias_restantes) antes da paginação
+      // NULLS LAST para colocar notas sem prazo por último
+      // Ordem crescente: vencidas (negativas) primeiro, depois as que ainda não venceram (positivas)
+      query = query.order('dias_restantes', ascending: true, nullsFirst: false);
 
       if (limit != null) {
         query = query.limit(limit);
@@ -417,10 +584,139 @@ class NotaSAPService {
       }
 
       final response = await query;
-      return (response as List).map((map) => NotaSAP.fromMap(map)).toList();
-    } catch (e) {
+      var notas = (response as List).map((map) => NotaSAP.fromMap(map)).toList();
+      
+      // O prazo já vem calculado da VIEW notas_sap_com_prazo
+      
+      // Filtrar no código: sempre excluir MREL e aplicar filtro de tipo
+      notas = notas.where((nota) {
+        final status = nota.statusSistema?.toUpperCase() ?? '';
+        
+        // Sempre excluir se contém MREL
+        if (status.contains('MREL')) {
+          return false;
+        }
+        
+        // Aplicar filtro de tipo de nota
+        if (filtroTipoNota == 'abertas') {
+          // Abertas: excluir se contém MSEN
+          if (status.contains('MSEN')) {
+            return false;
+          }
+        } else if (filtroTipoNota == 'concluidas') {
+          // Concluídas: mostrar APENAS se contém MSEN no status_sistema
+          if (status.isEmpty || !status.contains('MSEN')) {
+            return false;
+          }
+        }
+        
+        return true;
+      }).toList();
+      
+      // Ordenar por prazo (diasRestantes) - nulls por último
+      notas.sort((a, b) {
+        final diasA = a.diasRestantes ?? 999999;
+        final diasB = b.diasRestantes ?? 999999;
+        return diasA.compareTo(diasB);
+      });
+
+      // Enriquecer com status da tarefa vinculada (quando existir)
+      if (notas.isNotEmpty) {
+        final notaIds = notas.map((n) => n.id).toList();
+        final statusPorNota = <String, String>{};
+        const batchSize = 80; // evita URLs gigantes que causam Failed to fetch
+        try {
+          for (var i = 0; i < notaIds.length; i += batchSize) {
+            final batch = notaIds.skip(i).take(batchSize).toList();
+          final vinculos = await _supabase
+              .from('tasks_notas_sap')
+              .select('nota_sap_id, tasks(status)')
+                .inFilter('nota_sap_id', batch);
+
+          for (var v in vinculos as List) {
+            final notaId = v['nota_sap_id'] as String?;
+            final task = v['tasks'] as Map<String, dynamic>?;
+            final status = task != null ? task['status'] as String? : null;
+            if (notaId != null && status != null) {
+              statusPorNota[notaId] = status;
+              }
+            }
+          }
+
+          notas = notas
+              .map((n) => statusPorNota.containsKey(n.id)
+                  ? n.copyWith(tarefaStatus: statusPorNota[n.id])
+                  : n)
+              .toList();
+        } catch (e) {
+          // falha silenciosa para não quebrar carregamento principal
+          print('⚠️ Erro ao enriquecer status da tarefa: $e');
+        }
+      }
+      
+      return notas;
+    } catch (e, stackTrace) {
       print('❌ Erro ao buscar notas: $e');
+      print('   Stack trace: $stackTrace');
       return [];
+    }
+  }
+
+  // Calcular prazo de uma nota (versão assíncrona)
+  Future<NotaSAP> calcularPrazoNota(NotaSAP nota, {String? segmentoId}) async {
+    try {
+      // Se não tem prioridade, não calcula prazo
+      if (nota.textPrioridade == null || nota.textPrioridade!.isEmpty) {
+        return nota.copyWith(dataVencimento: null, diasRestantes: null);
+      }
+
+      // Buscar regra ativa para esta prioridade
+      // Tentar primeiro com data de referência = 'inicio_desejado'
+      DateTime? dataReferencia;
+      String dataReferenciaTipo = 'inicio_desejado';
+      
+      if (nota.inicioDesejado != null) {
+        dataReferencia = nota.inicioDesejado;
+        dataReferenciaTipo = 'inicio_desejado';
+      } else if (nota.criadoEm != null) {
+        dataReferencia = nota.criadoEm;
+        dataReferenciaTipo = 'criacao';
+      } else {
+        // Sem data de referência, não calcula prazo
+        return nota.copyWith(dataVencimento: null, diasRestantes: null);
+      }
+
+      // Buscar regra ativa
+      final regra = await _regraPrazoNotaService.getRegraAtiva(
+        nota.textPrioridade!,
+        dataReferenciaTipo,
+        segmentoId: segmentoId,
+      );
+
+      if (regra == null) {
+        // Sem regra, não calcula prazo
+        return nota.copyWith(dataVencimento: null, diasRestantes: null);
+      }
+
+      // Calcular data de vencimento
+      final dataVencimento = _regraPrazoNotaService.calcularDataVencimento(regra, dataReferencia);
+      if (dataVencimento == null) {
+        return nota.copyWith(dataVencimento: null, diasRestantes: null);
+      }
+
+      // Calcular dias restantes
+      final hoje = DateTime.now();
+      final apenasDataHoje = DateTime(hoje.year, hoje.month, hoje.day);
+      final apenasDataVencimento = DateTime(dataVencimento.year, dataVencimento.month, dataVencimento.day);
+      final diasRestantes = apenasDataVencimento.difference(apenasDataHoje).inDays;
+
+      return nota.copyWith(
+        dataVencimento: dataVencimento,
+        diasRestantes: diasRestantes,
+      );
+    } catch (e) {
+      print('Erro ao calcular prazo da nota: $e');
+      return nota;
     }
   }
 
@@ -428,7 +724,7 @@ class NotaSAPService {
   Future<NotaSAP?> getNotaById(String id) async {
     try {
       final response = await _supabase
-          .from('notas_sap')
+          .from('notas_sap_com_prazo')
           .select()
           .eq('id', id)
           .maybeSingle();
@@ -444,7 +740,7 @@ class NotaSAPService {
   Future<NotaSAP?> getNotaPorNumero(String numeroNota) async {
     try {
       final response = await _supabase
-          .from('notas_sap')
+          .from('notas_sap_com_prazo')
           .select()
           .eq('nota', numeroNota)
           .maybeSingle();
@@ -459,26 +755,190 @@ class NotaSAPService {
   // Vincular nota a uma tarefa
   Future<void> vincularNotaATarefa(String taskId, String notaSapId) async {
     try {
+      // Vincular a nota
       await _supabase.from('tasks_notas_sap').insert({
         'task_id': taskId,
         'nota_sap_id': notaSapId,
       });
       print('✅ Nota vinculada à tarefa');
-    } catch (e) {
+      
+      // Buscar a nota para obter o número da ordem
+      print('🔍 Buscando nota $notaSapId para obter número da ordem...');
+      final notaResponse = await _supabase
+          .from('notas_sap_com_prazo')
+          .select('id, ordem, nota')
+          .eq('id', notaSapId)
+          .maybeSingle();
+      
+      print('📋 Resposta completa da nota: $notaResponse');
+      print('📋 Nota ID: ${notaResponse?['id']}');
+      print('📋 Nota número: ${notaResponse?['nota']}');
+      print('📋 Ordem na nota: ${notaResponse?['ordem']}');
+      print('📋 Tipo da ordem: ${notaResponse?['ordem']?.runtimeType}');
+      
+      if (notaResponse != null && notaResponse['ordem'] != null) {
+        final ordemNumeroRaw = notaResponse['ordem'];
+        final ordemNumero = ordemNumeroRaw?.toString().trim();
+        
+        print('🔢 Número da ordem encontrado (raw): $ordemNumeroRaw');
+        print('🔢 Número da ordem encontrado (trimmed): $ordemNumero');
+        
+        if (ordemNumero != null && ordemNumero.isNotEmpty) {
+          // Buscar a ordem correspondente pelo número
+          print('🔍 Buscando ordem com número "$ordemNumero"...');
+          try {
+            final ordemResponse = await _supabase
+                .from('ordens')
+                .select('id')
+                .eq('ordem', ordemNumero)
+                .maybeSingle();
+            
+            print('📋 Resposta da ordem: $ordemResponse');
+            
+            if (ordemResponse != null && ordemResponse['id'] != null) {
+              final ordemId = ordemResponse['id'] as String;
+              print('✅ Ordem encontrada com ID: $ordemId');
+              
+              // Vincular a ordem automaticamente usando o serviço de ordens
+              print('🔗 Vinculando ordem $ordemId à tarefa $taskId...');
+              try {
+                final ordemService = OrdemService();
+                await ordemService.vincularOrdemATarefa(taskId, ordemId);
+                print('✅ Ordem $ordemNumero vinculada automaticamente à tarefa');
+              } catch (e, stackTrace) {
+                print('❌ Erro ao vincular ordem automaticamente: $e');
+                print('❌ Stack trace: $stackTrace');
+                print('   Task ID: $taskId');
+                print('   Ordem ID: $ordemId');
+                print('   Ordem Número: $ordemNumero');
+                // Não fazer rethrow - a vinculação da nota já foi feita
+              }
+            } else {
+              print('⚠️ Ordem "$ordemNumero" não encontrada no banco de dados');
+              print('   Verificando se existe ordem com número similar...');
+              // Tentar buscar sem filtro exato para debug
+              try {
+                final todasOrdens = await _supabase
+                    .from('ordens')
+                    .select('id, ordem')
+                    .limit(5);
+                print('   Primeiras 5 ordens no banco: $todasOrdens');
+              } catch (e) {
+                print('   Erro ao buscar ordens para debug: $e');
+              }
+            }
+          } catch (e, stackTrace) {
+            print('❌ Erro ao buscar ordem no banco: $e');
+            print('❌ Stack trace: $stackTrace');
+          }
+        } else {
+          print('⚠️ Número da ordem está vazio após trim');
+        }
+      } else {
+        print('⚠️ Nota não possui número de ordem ou ordem é nula');
+        print('   Resposta completa da nota: $notaResponse');
+      }
+    } catch (e, stackTrace) {
       print('❌ Erro ao vincular nota: $e');
-      rethrow;
+      print('❌ Stack trace: $stackTrace');
+      // Não fazer rethrow para não interromper o processo
+      // A vinculação da nota principal já foi feita, apenas a automática falhou
     }
   }
 
   // Desvincular nota de uma tarefa
   Future<void> desvincularNotaDeTarefa(String taskId, String notaSapId) async {
     try {
+      // Buscar a nota para obter o número da ordem
+      final notaResponse = await _supabase
+          .from('notas_sap_com_prazo')
+          .select('ordem')
+          .eq('id', notaSapId)
+          .maybeSingle();
+      
+      String? ordemNumero;
+      if (notaResponse != null && notaResponse['ordem'] != null) {
+        ordemNumero = notaResponse['ordem'] as String;
+      }
+      
+      // Desvincular a nota
       await _supabase
           .from('tasks_notas_sap')
           .delete()
           .eq('task_id', taskId)
           .eq('nota_sap_id', notaSapId);
       print('✅ Nota desvinculada da tarefa');
+      
+      // Se havia uma ordem associada, verificar se ainda há outras notas vinculadas
+      if (ordemNumero != null) {
+        // Buscar todas as notas vinculadas a esta tarefa com o mesmo número de ordem
+        final outrasNotasResponse = await _supabase
+            .from('tasks_notas_sap')
+            .select('nota_sap_id')
+            .eq('task_id', taskId);
+        
+        if (outrasNotasResponse.isNotEmpty) {
+          final outrasNotasIds = (outrasNotasResponse as List)
+              .map((item) => item['nota_sap_id'] as String)
+              .toList();
+          
+          // Verificar se alguma das outras notas tem o mesmo número de ordem
+          bool temNotaComMesmaOrdem = false;
+          for (final notaId in outrasNotasIds) {
+            try {
+              final nota = await _supabase
+                  .from('notas_sap_com_local')
+                  .select('ordem')
+                  .eq('id', notaId)
+                  .maybeSingle();
+              if (nota != null && nota['ordem'] == ordemNumero) {
+                temNotaComMesmaOrdem = true;
+                break;
+              }
+            } catch (e) {
+              // Ignorar erros individuais
+            }
+          }
+          
+          // Se não há mais notas com este número de ordem vinculadas, desvincular a ordem
+          if (!temNotaComMesmaOrdem) {
+            final ordemResponse = await _supabase
+                .from('ordens')
+                .select('id')
+                .eq('ordem', ordemNumero)
+                .maybeSingle();
+            
+            if (ordemResponse != null) {
+              final ordemId = ordemResponse['id'] as String;
+              await _supabase
+                  .from('tasks_ordens')
+                  .delete()
+                  .eq('task_id', taskId)
+                  .eq('ordem_id', ordemId);
+              print('✅ Ordem $ordemNumero desvinculada automaticamente (nenhuma nota restante)');
+            }
+          } else {
+            print('ℹ️ Ordem $ordemNumero mantida vinculada (ainda há outras notas)');
+          }
+        } else {
+          // Não há mais notas vinculadas, desvincular a ordem se existir
+          final ordemResponse = await _supabase
+              .from('ordens')
+              .select('id')
+              .eq('ordem', ordemNumero)
+              .maybeSingle();
+          
+          if (ordemResponse != null) {
+            final ordemId = ordemResponse['id'] as String;
+            await _supabase
+                .from('tasks_ordens')
+                .delete()
+                .eq('task_id', taskId)
+                .eq('ordem_id', ordemId);
+            print('✅ Ordem $ordemNumero desvinculada automaticamente');
+          }
+        }
+      }
     } catch (e) {
       print('❌ Erro ao desvincular nota: $e');
       rethrow;
@@ -490,11 +950,11 @@ class NotaSAPService {
     try {
       final response = await _supabase
           .from('tasks_notas_sap')
-          .select('notas_sap(*)')
+          .select('notas_sap_com_prazo(*)')
           .eq('task_id', taskId);
 
       return (response as List)
-          .map((item) => NotaSAP.fromMap(item['notas_sap'] as Map<String, dynamic>))
+          .map((item) => NotaSAP.fromMap(item['notas_sap_com_prazo'] as Map<String, dynamic>))
           .toList();
     } catch (e) {
       print('❌ Erro ao buscar notas da tarefa: $e');
@@ -517,34 +977,243 @@ class NotaSAPService {
     }
   }
 
+  // Contar notas vinculadas por tarefas
+  Future<Map<String, int>> contarNotasPorTarefas(List<String> taskIds) async {
+    try {
+      if (taskIds.isEmpty) return {};
+
+      // Usar VIEW otimizada do Supabase para buscar todas as contagens de uma vez
+      // Usar .or() para múltiplos valores (já funciona no código)
+      dynamic query = _supabase
+          .from('contagens_notas_sap_tarefas')
+          .select('task_id, quantidade');
+      
+      if (taskIds.length == 1) {
+        query = query.eq('task_id', taskIds[0]);
+      } else {
+        final orConditions = taskIds.map((id) => 'task_id.eq.$id').join(',');
+        query = query.or(orConditions);
+      }
+      
+      final response = await query;
+
+      final contagens = <String, int>{};
+      for (var item in response) {
+        final taskId = item['task_id'] as String;
+        final quantidade = item['quantidade'] as int;
+        if (quantidade > 0) {
+          contagens[taskId] = quantidade;
+        }
+      }
+
+      return contagens;
+    } catch (e) {
+      print('❌ Erro ao contar notas das tarefas: $e');
+      return {};
+    }
+  }
+
+  // Buscar notas programadas (vinculadas a tarefas) com informações das tarefas
+  Future<List<Map<String, dynamic>>> getNotasProgramadas() async {
+    try {
+      dynamic query = _supabase.from('tasks_notas_sap').select('''
+            id,
+            created_at,
+            notas_sap_com_prazo(
+              *,
+              centro_trabalho_responsavel
+            ),
+            tasks(
+              id,
+              tarefa,
+              status,
+              data_inicio,
+              data_fim,
+              regional,
+              divisao,
+              local,
+              tipo,
+              ordem
+            )
+          ''');
+
+      query = query.order('created_at', ascending: false);
+      final response = await query;
+
+      // Filtrar no código por centro de trabalho
+      final centrosTrabalhoUsuario = await _obterCentrosTrabalhoUsuario();
+      final usuario = _authService.currentUser;
+      
+      List<dynamic> filteredResponse = response as List;
+      
+      if (centrosTrabalhoUsuario.isNotEmpty) {
+        filteredResponse = filteredResponse.where((item) {
+          final nota = item['notas_sap_com_prazo'] as Map<String, dynamic>?;
+          if (nota == null) return false;
+          
+          // Filtrar por centro de trabalho
+          final centroTrabalho = nota['centro_trabalho_responsavel'] as String?;
+          if (centroTrabalho == null) return false;
+          
+          final centroTrabalhoUpper = centroTrabalho.trim().toUpperCase();
+          return centrosTrabalhoUsuario.any((centro) {
+            final centroUpper = centro.trim().toUpperCase();
+            return centroTrabalhoUpper.contains(centroUpper) || centroUpper.contains(centroTrabalhoUpper);
+          });
+        }).toList();
+      } else if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
+        // Se o usuário tem perfil mas não tem centros de trabalho, retornar lista vazia
+        print('⚠️ Usuário com perfil mas sem centros de trabalho - retornando lista vazia');
+        return [];
+      }
+
+      return filteredResponse.map((item) {
+        return {
+          'vinculo_id': item['id'],
+          'vinculado_em': item['created_at'] != null 
+              ? DateTime.parse(item['created_at'])
+              : null,
+          'nota': NotaSAP.fromMap(item['notas_sap_com_prazo'] as Map<String, dynamic>),
+          'tarefa': item['tasks'] != null ? item['tasks'] : null,
+        };
+      }).toList();
+    } catch (e) {
+      print('❌ Erro ao buscar notas programadas: $e');
+      return [];
+    }
+  }
+
   // Contar notas
   Future<int> contarNotas({
-    String? filtroStatus,
-    String? filtroLocal,
-    DateTime? dataInicio,
-    DateTime? dataFim,
+    String? filtroTipoNota, // null = todas, 'abertas' = abertas, 'concluidas' = concluídas
+    List<String>? filtroLocais,
+    List<String>? filtroTipos,
+    List<String>? filtroNotas,
+    List<String>? filtroPrioridades,
+    List<String>? filtroStatusUsuario,
+    List<String>? filtroResponsaveis,
+    List<String>? filtroGPMs,
   }) async {
     try {
-      dynamic query = _supabase.from('notas_sap').select('id');
+      dynamic query = _supabase.from('notas_sap_com_prazo').select('id, centro_trabalho_responsavel');
 
-      if (filtroStatus != null && filtroStatus.isNotEmpty) {
-        query = query.eq('status_sistema', filtroStatus);
+      // Aplicar filtros por perfil do usuário
+      final usuario = _authService.currentUser;
+      bool temFiltro = false;
+      List<String> centrosTrabalhoUsuario = [];
+
+      if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
+        centrosTrabalhoUsuario = await _obterCentrosTrabalhoUsuario();
+        
+        // Aplicar filtros APENAS pelo centro de trabalho
+        if (centrosTrabalhoUsuario.isNotEmpty) {
+          final centrosCompletos = centrosTrabalhoUsuario.map((c) => c.trim()).toList();
+          
+          // Usar ilike com % para buscar qualquer valor que contenha o centro
+          if (centrosCompletos.length == 1) {
+            query = query.ilike('centro_trabalho_responsavel', '%${centrosCompletos[0]}%');
+          } else {
+            final orConditions = centrosCompletos.map((centro) => 'centro_trabalho_responsavel.ilike.%$centro%').join(',');
+            query = query.or(orConditions);
+          }
+          
+          temFiltro = true;
+        }
       }
 
-      if (filtroLocal != null && filtroLocal.isNotEmpty) {
-        query = query.ilike('local_instalacao', '%$filtroLocal%');
+      // Se o usuário tem perfil mas não tem filtros aplicados, retornar 0
+      if (!temFiltro && usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
+        return 0;
       }
 
-      if (dataInicio != null) {
-        query = query.gte('criado_em', dataInicio.toIso8601String().split('T')[0]);
+      // Filtros multi-seleção
+      if (filtroLocais != null && filtroLocais.isNotEmpty) {
+        if (filtroLocais.length == 1) {
+          query = query.ilike('local', '%${filtroLocais[0]}%');
+        } else {
+          final orConditions = filtroLocais.map((local) => 'local.ilike.%$local%').join(',');
+          query = query.or(orConditions);
+        }
       }
 
-      if (dataFim != null) {
-        query = query.lte('criado_em', dataFim.toIso8601String().split('T')[0]);
+      if (filtroTipos != null && filtroTipos.isNotEmpty) {
+        if (filtroTipos.length == 1) {
+          query = query.eq('tipo', filtroTipos[0]);
+        } else {
+          query = query.in_('tipo', filtroTipos);
+        }
+      }
+
+      if (filtroNotas != null && filtroNotas.isNotEmpty) {
+        if (filtroNotas.length == 1) {
+          query = query.eq('nota', filtroNotas[0]);
+        } else {
+          query = query.in_('nota', filtroNotas);
+        }
+      }
+
+      if (filtroPrioridades != null && filtroPrioridades.isNotEmpty) {
+        if (filtroPrioridades.length == 1) {
+          query = query.eq('text_prioridade', filtroPrioridades[0]);
+        } else {
+          query = query.in_('text_prioridade', filtroPrioridades);
+        }
+      }
+
+      if (filtroStatusUsuario != null && filtroStatusUsuario.isNotEmpty) {
+        if (filtroStatusUsuario.length == 1) {
+          query = query.eq('status_usuario', filtroStatusUsuario[0]);
+        } else {
+          query = query.in_('status_usuario', filtroStatusUsuario);
+        }
+      }
+
+      if (filtroResponsaveis != null && filtroResponsaveis.isNotEmpty) {
+        if (filtroResponsaveis.length == 1) {
+          query = query.ilike('denominacao_executor', '%${filtroResponsaveis[0]}%');
+        } else {
+          final orConditions = filtroResponsaveis.map((resp) => 'denominacao_executor.ilike.%$resp%').join(',');
+          query = query.or(orConditions);
+        }
+      }
+
+      if (filtroGPMs != null && filtroGPMs.isNotEmpty) {
+        if (filtroGPMs.length == 1) {
+          query = query.eq('gpm', filtroGPMs[0]);
+        } else {
+          query = query.in_('gpm', filtroGPMs);
+        }
       }
 
       final response = await query;
-      return (response as List).length;
+      var notas = (response as List);
+      
+      // Filtrar no código: sempre excluir MREL e aplicar filtro de tipo
+      notas = notas.where((item) {
+        final status = (item['status_sistema'] as String?)?.toUpperCase() ?? '';
+        
+        // Sempre excluir se contém MREL
+        if (status.contains('MREL')) {
+          return false;
+        }
+        
+        // Aplicar filtro de tipo de nota
+        if (filtroTipoNota == 'abertas') {
+          // Abertas: excluir se contém MSEN
+          if (status.contains('MSEN')) {
+            return false;
+          }
+        } else if (filtroTipoNota == 'concluidas') {
+          // Concluídas: mostrar APENAS se contém MSEN no status_sistema
+          if (status.isEmpty || !status.contains('MSEN')) {
+            return false;
+          }
+        }
+        
+        return true;
+      }).toList();
+      
+      return notas.length;
     } catch (e) {
       print('❌ Erro ao contar notas: $e');
       return 0;
@@ -552,29 +1221,279 @@ class NotaSAPService {
   }
 
   // Buscar valores únicos para filtros
-  Future<Map<String, List<String>>> getValoresFiltros() async {
+  Future<Map<String, List<String>>> getValoresFiltros({
+    String? filtroTipoNota,
+    List<String>? filtroLocais,
+    List<String>? filtroSalas,
+    List<String>? filtroTipos,
+    List<String>? filtroNotas,
+    List<String>? filtroPrioridades,
+    List<String>? filtroStatusUsuario,
+    List<String>? filtroResponsaveis,
+    List<String>? filtroGPMs,
+  }) async {
     try {
-      final response = await _supabase.from('notas_sap').select('status_sistema, local_instalacao');
+      dynamic query = _supabase.from('notas_sap_com_prazo').select('status_sistema, local, sala, tipo, nota, text_prioridade, status_usuario, denominacao_executor, gpm');
 
-      final statusSet = <String>{};
-      final localSet = <String>{};
+      // Aplicar filtros por perfil do usuário
+      final usuario = _authService.currentUser;
+      bool temFiltro = false;
 
-      for (var item in response) {
-        if (item['status_sistema'] != null) {
-          statusSet.add(item['status_sistema'] as String);
+      // Se o usuário é root, não aplicar filtros de perfil
+      if (usuario != null && usuario.isRoot) {
+        print('🔓 Usuário root - sem filtros de perfil aplicados');
+      } else {
+        // Obter centros de trabalho do usuário
+        final centrosTrabalhoUsuario = await _obterCentrosTrabalhoUsuario();
+        
+        // Aplicar filtros APENAS pelo centro de trabalho
+        if (centrosTrabalhoUsuario.isNotEmpty) {
+          final centrosCompletos = centrosTrabalhoUsuario.map((c) => c.trim()).toList();
+          
+          // Usar ilike com % para buscar qualquer valor que contenha o centro
+          if (centrosCompletos.length == 1) {
+            query = query.ilike('centro_trabalho_responsavel', '%${centrosCompletos[0]}%');
+          } else {
+            final orConditions = centrosCompletos.map((centro) => 'centro_trabalho_responsavel.ilike.%$centro%').join(',');
+            query = query.or(orConditions);
+          }
+          
+          temFiltro = true;
         }
-        if (item['local_instalacao'] != null) {
-          localSet.add(item['local_instalacao'] as String);
+
+        // Se o usuário tem perfil mas não tem filtros aplicados, retornar filtros vazios
+        if (!temFiltro && usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
+          return {
+            'status': [],
+            'local': [],
+            'sala': [],
+            'tipo': [],
+            'nota': [],
+            'prioridade': [],
+            'status_usuario': [],
+            'responsavel': [],
+            'gpm': [],
+          };
+        }
+      }
+
+      // Aplicar filtros de tipo de nota (abertas/concluídas)
+      // Isso será filtrado no código após buscar, mas não afeta os valores disponíveis
+
+      // Aplicar os filtros ativos para que os valores disponíveis reflitam apenas as opções válidas
+      // IMPORTANTE: Para cada campo, aplicar TODOS os outros filtros, mas NÃO aplicar o filtro do próprio campo.
+      // Isso garante que os filtros sejam interdependentes: se Local = ELM está filtrado,
+      // ao buscar Prioridade, queremos ver apenas as prioridades que existem para ELM.
+      
+      // Função auxiliar para aplicar filtros (exceto um campo específico)
+      dynamic aplicarFiltrosExceto(dynamic q, String? campoExcluir) {
+        // Aplicar filtro de locais (exceto se for o campo que estamos buscando)
+        if (campoExcluir != 'local' && filtroLocais != null && filtroLocais.isNotEmpty) {
+          if (filtroLocais.length == 1) {
+            q = q.ilike('local', '%${filtroLocais[0]}%');
+          } else {
+            final orConditions = filtroLocais.map((local) => 'local.ilike.%$local%').join(',');
+            q = q.or(orConditions);
+          }
+        }
+
+        // Aplicar filtro de salas (exceto se for o campo que estamos buscando)
+        if (campoExcluir != 'sala' && filtroSalas != null && filtroSalas.isNotEmpty) {
+          if (filtroSalas.length == 1) {
+            q = q.ilike('sala', '%${filtroSalas[0]}%');
+          } else {
+            final orConditions = filtroSalas.map((sala) => 'sala.ilike.%$sala%').join(',');
+            q = q.or(orConditions);
+          }
+        }
+        
+        // Aplicar filtro de tipos (exceto se for o campo que estamos buscando)
+        if (campoExcluir != 'tipo' && filtroTipos != null && filtroTipos.isNotEmpty) {
+          if (filtroTipos.length == 1) {
+            q = q.eq('tipo', filtroTipos[0]);
+          } else {
+            q = q.in_('tipo', filtroTipos);
+          }
+        }
+
+        // Aplicar filtro de notas (exceto se for o campo que estamos buscando)
+        if (campoExcluir != 'nota' && filtroNotas != null && filtroNotas.isNotEmpty) {
+          if (filtroNotas.length == 1) {
+            q = q.eq('nota', filtroNotas[0]);
+          } else {
+            q = q.in_('nota', filtroNotas);
+          }
+        }
+
+        // Aplicar filtro de prioridades (exceto se for o campo que estamos buscando)
+        if (campoExcluir != 'prioridade' && filtroPrioridades != null && filtroPrioridades.isNotEmpty) {
+          if (filtroPrioridades.length == 1) {
+            q = q.eq('text_prioridade', filtroPrioridades[0]);
+          } else {
+            q = q.in_('text_prioridade', filtroPrioridades);
+          }
+        }
+
+        // Aplicar filtro de status usuário (exceto se for o campo que estamos buscando)
+        if (campoExcluir != 'status_usuario' && filtroStatusUsuario != null && filtroStatusUsuario.isNotEmpty) {
+          if (filtroStatusUsuario.length == 1) {
+            q = q.eq('status_usuario', filtroStatusUsuario[0]);
+          } else {
+            q = q.in_('status_usuario', filtroStatusUsuario);
+          }
+        }
+
+        // Aplicar filtro de responsáveis (exceto se for o campo que estamos buscando)
+        if (campoExcluir != 'responsavel' && filtroResponsaveis != null && filtroResponsaveis.isNotEmpty) {
+          if (filtroResponsaveis.length == 1) {
+            q = q.ilike('denominacao_executor', '%${filtroResponsaveis[0]}%');
+          } else {
+            final orConditions = filtroResponsaveis.map((resp) => 'denominacao_executor.ilike.%$resp%').join(',');
+            q = q.or(orConditions);
+          }
+        }
+
+        // Aplicar filtro de GPMs (exceto se for o campo que estamos buscando)
+        if (campoExcluir != 'gpm' && filtroGPMs != null && filtroGPMs.isNotEmpty) {
+          if (filtroGPMs.length == 1) {
+            q = q.eq('gpm', filtroGPMs[0]);
+          } else {
+            q = q.in_('gpm', filtroGPMs);
+          }
+        }
+        
+        return q;
+      }
+      
+      // Buscar valores para cada campo separadamente, aplicando todos os filtros EXCETO o do próprio campo
+      final localSet = <String>{};
+      final salaSet = <String>{};
+      final tipoSet = <String>{};
+      final notaSet = <String>{};
+      final prioridadeSet = <String>{};
+      final statusUsuarioSet = <String>{};
+      final responsavelSet = <String>{};
+      final gpmSet = <String>{};
+      
+      // Função auxiliar para processar resposta e extrair valores
+      void processarResposta(List response, String campo) {
+        final itemsFiltrados = response.where((item) {
+          final status = (item['status_sistema'] as String? ?? '').toUpperCase();
+          
+          // Sempre excluir se contém MREL
+          if (status.contains('MREL')) {
+            return false;
+          }
+          
+          // Aplicar filtro de tipo de nota
+          if (filtroTipoNota == 'abertas') {
+            // Excluir MSEN (concluídas)
+            if (status.contains('MSEN')) {
+              return false;
+            }
+          } else if (filtroTipoNota == 'concluidas') {
+            // Apenas incluir se contém MSEN
+            if (!status.contains('MSEN')) {
+              return false;
+            }
+          }
+          
+          return true;
+        }).toList();
+        
+        for (var item in itemsFiltrados) {
+          if (campo == 'local' && item['local'] != null) {
+            localSet.add(item['local'] as String);
+          } else if (campo == 'sala' && item['sala'] != null) {
+            salaSet.add(item['sala'] as String);
+          } else if (campo == 'tipo' && item['tipo'] != null) {
+            tipoSet.add(item['tipo'] as String);
+          } else if (campo == 'nota' && item['nota'] != null) {
+            notaSet.add(item['nota'] as String);
+          } else if (campo == 'prioridade' && item['text_prioridade'] != null) {
+            prioridadeSet.add(item['text_prioridade'] as String);
+          } else if (campo == 'status_usuario' && item['status_usuario'] != null) {
+            statusUsuarioSet.add(item['status_usuario'] as String);
+          } else if (campo == 'responsavel' && item['denominacao_executor'] != null) {
+            responsavelSet.add(item['denominacao_executor'] as String);
+          } else if (campo == 'gpm' && item['gpm'] != null) {
+            gpmSet.add(item['gpm'] as String);
+          }
+        }
+      }
+      
+      // Buscar valores para cada campo separadamente
+      final campos = [
+        {'nome': 'local', 'campo': 'local'},
+        {'nome': 'sala', 'campo': 'sala'},
+        {'nome': 'tipo', 'campo': 'tipo'},
+        {'nome': 'nota', 'campo': 'nota'},
+        {'nome': 'prioridade', 'campo': 'text_prioridade'},
+        {'nome': 'status_usuario', 'campo': 'status_usuario'},
+        {'nome': 'responsavel', 'campo': 'denominacao_executor'},
+        {'nome': 'gpm', 'campo': 'gpm'},
+      ];
+      
+      for (final campoInfo in campos) {
+        final campoNome = campoInfo['nome'] as String;
+        
+        dynamic campoQuery = _supabase.from('notas_sap_com_prazo').select('status_sistema, local, sala, tipo, nota, text_prioridade, status_usuario, denominacao_executor, gpm');
+        
+        // Aplicar filtros de perfil (mesma lógica do query principal)
+        if (usuario != null && usuario.isRoot) {
+          // Sem filtros de perfil para root
+        } else {
+          final centrosTrabalhoUsuario = await _obterCentrosTrabalhoUsuario();
+          if (centrosTrabalhoUsuario.isNotEmpty) {
+            final centrosCompletos = centrosTrabalhoUsuario.map((c) => c.trim()).toList();
+            if (centrosCompletos.length == 1) {
+              campoQuery = campoQuery.ilike('centro_trabalho_responsavel', '%${centrosCompletos[0]}%');
+            } else {
+              final orConditions = centrosCompletos.map((centro) => 'centro_trabalho_responsavel.ilike.%$centro%').join(',');
+              campoQuery = campoQuery.or(orConditions);
+            }
+          } else {
+            if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
+              continue; // Pular este campo se não há filtros de perfil
+            }
+          }
+        }
+        
+        // Aplicar todos os filtros EXCETO o do próprio campo
+        campoQuery = aplicarFiltrosExceto(campoQuery, campoNome);
+        
+        try {
+          final campoResponse = await campoQuery;
+          processarResposta(campoResponse as List, campoNome);
+        } catch (e) {
+          print('⚠️ Erro ao buscar valores para campo $campoNome: $e');
         }
       }
 
       return {
-        'status': statusSet.toList()..sort(),
+        'status': [], // Status não é mais usado como filtro
         'local': localSet.toList()..sort(),
+        'sala': salaSet.toList()..sort(),
+        'tipo': tipoSet.toList()..sort(),
+        'nota': notaSet.toList()..sort(),
+        'prioridade': prioridadeSet.toList()..sort(),
+        'status_usuario': statusUsuarioSet.toList()..sort(),
+        'responsavel': responsavelSet.toList()..sort(),
+        'gpm': gpmSet.toList()..sort(),
       };
     } catch (e) {
       print('❌ Erro ao buscar valores de filtros: $e');
-      return {'status': [], 'local': []};
+      return {
+        'status': [],
+        'local': [],
+        'sala': [],
+        'tipo': [],
+        'nota': [],
+        'prioridade': [],
+        'status_usuario': [],
+        'responsavel': [],
+        'gpm': [],
+      };
     }
   }
 }

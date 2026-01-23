@@ -121,6 +121,43 @@ class _SegmentoListViewState extends State<SegmentoListView> {
     }
   }
 
+  Future<void> _duplicateSegmento(Segmento segmento) async {
+    // Criar cópia com nome modificado
+    final duplicated = segmento.copyWith(
+      id: '',
+      segmento: '${segmento.segmento} (Cópia)',
+    );
+
+    final result = await showDialog<Segmento>(
+      context: context,
+      builder: (context) => SegmentoFormDialog(segmento: duplicated),
+    );
+
+    if (result != null) {
+      final created = await _segmentoService.createSegmento(result);
+      if (created != null) {
+        await _loadSegmentos();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Segmento duplicado com sucesso!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Erro ao duplicar segmento'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    }
+  }
+
   Future<void> _editSegmento(Segmento segmento) async {
     final result = await showDialog<Segmento>(
       context: context,
@@ -315,16 +352,17 @@ class _SegmentoListViewState extends State<SegmentoListView> {
                             ),
                             child: ListTile(
                               leading: CircleAvatar(
-                                backgroundColor: Colors.purple[100],
+                                backgroundColor: segmento.backgroundColor,
                                 child: Icon(
                                   Icons.category,
-                                  color: Colors.purple[700],
+                                  color: segmento.textColor,
                                 ),
                               ),
                               title: Text(
                                 segmento.segmento,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontWeight: FontWeight.bold,
+                                  color: segmento.textColor,
                                 ),
                               ),
                               subtitle: segmento.descricao != null &&
@@ -345,6 +383,12 @@ class _SegmentoListViewState extends State<SegmentoListView> {
                                     color: Colors.blue,
                                     onPressed: () => _editSegmento(segmento),
                                     tooltip: 'Editar',
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.copy),
+                                    color: Colors.orange,
+                                    onPressed: () => _duplicateSegmento(segmento),
+                                    tooltip: 'Duplicar',
                                   ),
                                   IconButton(
                                     icon: const Icon(Icons.delete),
@@ -369,6 +413,8 @@ class _SegmentoListViewState extends State<SegmentoListView> {
           columns: const [
             DataColumn(label: Text('Segmento', style: TextStyle(fontWeight: FontWeight.bold))),
             DataColumn(label: Text('Descrição', style: TextStyle(fontWeight: FontWeight.bold))),
+            DataColumn(label: Text('Cor de Fundo', style: TextStyle(fontWeight: FontWeight.bold))),
+            DataColumn(label: Text('Cor do Texto', style: TextStyle(fontWeight: FontWeight.bold))),
             DataColumn(label: Text('Ações', style: TextStyle(fontWeight: FontWeight.bold))),
           ],
           rows: _filteredSegmentos.map((segmento) {
@@ -399,10 +445,71 @@ class _SegmentoListViewState extends State<SegmentoListView> {
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      Container(
+                        width: 20,
+                        height: 20,
+                        decoration: BoxDecoration(
+                          color: segmento.backgroundColor,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: Colors.grey[300]!,
+                            width: 1,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        segmento.cor ?? '#808080',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                DataCell(
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 20,
+                        height: 20,
+                        decoration: BoxDecoration(
+                          color: segmento.textColor,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: Colors.grey[300]!,
+                            width: 1,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        segmento.corTexto ?? '#FFFFFF',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                DataCell(
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
                       IconButton(
                         icon: const Icon(Icons.edit, size: 20, color: Colors.blue),
                         onPressed: () => _editSegmento(segmento),
                         tooltip: 'Editar',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.copy, size: 20, color: Colors.orange),
+                        onPressed: () => _duplicateSegmento(segmento),
+                        tooltip: 'Duplicar',
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(),
                       ),

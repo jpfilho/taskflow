@@ -1,6 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:flutter/foundation.dart';
 import 'dart:convert';
 
 class LocalDatabaseService {
@@ -19,6 +20,16 @@ class LocalDatabaseService {
   }
 
   Future<Database> _initDatabase() async {
+    // No web, sqflite usa IndexedDB e não há path_provider; evitar MissingPluginException
+    if (kIsWeb) {
+      return await openDatabase(
+        inMemoryDatabasePath,
+        version: _databaseVersion,
+        onCreate: _onCreate,
+        onUpgrade: _onUpgrade,
+      );
+    }
+
     final documentsDirectory = await getApplicationDocumentsDirectory();
     final path = join(documentsDirectory.path, _databaseName);
     

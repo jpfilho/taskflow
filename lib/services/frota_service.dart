@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import '../models/frota.dart';
 import '../config/supabase_config.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -114,6 +115,8 @@ class FrotaService {
   }
 
   Future<void> _saveFrotaToLocal(Frota frota) async {
+    // Em web não há suporte a path_provider/sqflite; evitar MissingPluginException
+    if (kIsWeb) return;
     try {
       final db = await _localDb.database;
       await db.insert(
@@ -347,5 +350,62 @@ class FrotaService {
   Future<List<Frota>> getFrotasAtivas() async {
     final allFrotas = await getAllFrotas();
     return allFrotas.where((f) => f.ativo).toList();
+  }
+
+  // Contar frotas vinculadas por tarefas (otimizado - usa VIEW do Supabase)
+  Future<Map<String, int>> contarFrotasPorTarefas(List<String> taskIds) async {
+    try {
+      if (taskIds.isEmpty) return {};
+
+      // Usar VIEW otimizada do Supabase para buscar todas as contagens de uma vez
+      dynamic query = _supabase
+          .from('contagens_frotas_tarefas')
+          .select('task_id, quantidade');
+      
+      if (taskIds.length == 1) {
+        query = query.eq('task_id', taskIds[0]);
+      } else {
+        final orConditions = taskIds.map((id) => 'task_id.eq.$id').join(',');
+        query = query.or(orConditions);
+      }
+      
+      final response = await query;
+
+      final contagens = <String, int>{};
+      for (var item in response) {
+        final taskId = item['task_id'] as String;
+        final quantidade = item['quantidade'] as int;
+        if (quantidade > 0) {
+          contagens[taskId] = quantidade;
+        }
+      }
+
+      return contagens;
+    } catch (e) {
+      print('❌ Erro ao contar frotas das tarefas: $e');
+      return {};
+    }
+  }
+
+  // Obter nome da frota de uma tarefa
+  Future<String?> getFrotaNomePorTarefa(String taskId) async {
+    try {
+      final response = await _supabase
+          .from('contagens_frotas_tarefas')
+          .select('frota_nome')
+          .eq('task_id', taskId)
+          .maybeSingle();
+
+      if (response == null) return null;
+
+      final frotaNome = response['frota_nome'] as String?;
+      if (frotaNome != null && frotaNome.isNotEmpty && frotaNome != '-N/A-') {
+        return frotaNome;
+      }
+      return null;
+    } catch (e) {
+      print('❌ Erro ao buscar nome da frota da tarefa: $e');
+      return null;
+    }
   }
 }

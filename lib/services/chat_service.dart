@@ -448,56 +448,32 @@ class ChatService {
     }
   }
 
-  // Contar mensagens de múltiplas tarefas (otimizado)
+  // Contar mensagens de múltiplas tarefas (otimizado - usa VIEW do Supabase)
   Future<Map<String, int>> contarMensagensPorTarefas(List<String> tarefaIds) async {
     try {
       if (tarefaIds.isEmpty) return {};
 
-      // Obter grupos das tarefas - buscar um por vez se necessário
-      final gruposResponse = <Map<String, dynamic>>[];
-      for (var tarefaId in tarefaIds) {
-        try {
-          final grupo = await _supabase
-              .from('grupos_chat')
-              .select('id, tarefa_id')
-              .eq('tarefa_id', tarefaId)
-              .maybeSingle();
-          if (grupo != null) {
-            gruposResponse.add(grupo);
-          }
-        } catch (e) {
-          // Ignorar erros individuais
-        }
+      // Usar VIEW otimizada do Supabase para buscar todas as contagens de uma vez
+      // Usar .or() para múltiplos valores (já funciona no código)
+      dynamic query = _supabase
+          .from('contagens_mensagens_tarefas')
+          .select('task_id, quantidade');
+      
+      if (tarefaIds.length == 1) {
+        query = query.eq('task_id', tarefaIds[0]);
+      } else {
+        final orConditions = tarefaIds.map((id) => 'task_id.eq.$id').join(',');
+        query = query.or(orConditions);
       }
+      
+      final response = await query;
 
-      if (gruposResponse.isEmpty) return {};
-
-      final grupoIds = gruposResponse
-          .map((g) => g['id'] as String)
-          .toList();
-      final grupoTarefaMap = <String, String>{};
-      for (var grupo in gruposResponse) {
-        grupoTarefaMap[grupo['id'] as String] = grupo['tarefa_id'] as String;
-      }
-
-      if (grupoIds.isEmpty) return {};
-
-      // Contar mensagens por grupo - buscar um por vez
       final contagens = <String, int>{};
-      for (var grupoId in grupoIds) {
-        try {
-          final mensagensResponse = await _supabase
-              .from('mensagens')
-              .select('grupo_id')
-              .eq('grupo_id', grupoId);
-          
-          final count = (mensagensResponse as List).length;
-          final tarefaId = grupoTarefaMap[grupoId];
-          if (tarefaId != null && count > 0) {
-            contagens[tarefaId] = count;
-          }
-        } catch (e) {
-          // Ignorar erros individuais
+      for (var item in response) {
+        final taskId = item['task_id'] as String;
+        final quantidade = item['quantidade'] as int;
+        if (quantidade > 0) {
+          contagens[taskId] = quantidade;
         }
       }
 

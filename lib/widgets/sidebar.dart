@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../utils/responsive.dart';
 import '../services/theme_service.dart';
 import '../providers/theme_provider.dart';
+import 'dart:async';
 
 class Sidebar extends StatefulWidget {
   final bool isExpanded;
@@ -40,11 +41,24 @@ class _SidebarState extends State<Sidebar> {
     
     final themeProvider = ThemeProvider();
     final currentTheme = themeProvider.currentTheme;
-    final backgroundColor = ThemeService.getBarBackgroundColor(currentTheme);
-    final iconColor = ThemeService.getBarIconColor(currentTheme);
     final selectedColor = ThemeService.getBarSelectedColor(currentTheme);
     
-    return AnimatedContainer(
+    return StreamBuilder<String>(
+      stream: ColorThemeNotifier().colorChangeStream.where((barType) => barType == 'sidebar'),
+      builder: (context, streamSnapshot) {
+        return FutureBuilder<Map<String, Color>>(
+          future: Future.wait([
+            ThemeService.getBarBackgroundColor(currentTheme, barType: 'sidebar'),
+            ThemeService.getBarIconColor(currentTheme, barType: 'sidebar'),
+          ]).then((colors) => {
+            'background': colors[0],
+            'icon': colors[1],
+          }),
+          builder: (context, snapshot) {
+        final backgroundColor = snapshot.data?['background'] ?? ThemeService.getBarBackgroundColorSync(currentTheme);
+        final iconColor = snapshot.data?['icon'] ?? ThemeService.getBarIconColorSync(currentTheme);
+        
+        return AnimatedContainer(
       duration: const Duration(milliseconds: 300),
       curve: Curves.easeInOut,
       width: currentWidth,
@@ -125,8 +139,19 @@ class _SidebarState extends State<Sidebar> {
                 children: [
                   // Sempre visível para todos
                   _buildSidebarIcon(Icons.grid_view, 0, 'Atividades', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
-                  _buildSidebarIcon(Icons.people, 1, 'Pessoas', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
+                  _buildSidebarIcon(Icons.people, 1, 'Equipe', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
                   _buildSidebarIcon(Icons.directions_car, 2, 'Frota', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
+                  // Divider após Frota
+                  Divider(
+                    height: isMobile ? 16 : 24,
+                    thickness: 1,
+                    indent: isMobile ? 8 : 12,
+                    endIndent: isMobile ? 8 : 12,
+                    color: iconColor.withOpacity(0.2),
+                  ),
+                  // Horas entre os dois dividers (apenas root)
+                  if (widget.isRoot)
+                  _buildSidebarIcon(Icons.access_time, 20, 'Horas', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
                   // Apenas para root
                   if (widget.isRoot) ...[
                     _buildSidebarIcon(Icons.dashboard, 4, 'Dashboard', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
@@ -137,17 +162,51 @@ class _SidebarState extends State<Sidebar> {
                     _buildSidebarIcon(Icons.notifications_active, 9, 'Alertas', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
                     _buildSidebarIcon(Icons.history, 10, 'Histórico', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
                     _buildSidebarIcon(Icons.checklist, 12, 'Checklist', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
+                    _buildSidebarIcon(Icons.attach_money, 13, 'Custos', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
                   ],
-                  // Sempre visível para todos
-                  _buildSidebarIcon(Icons.attach_money, 13, 'Custos', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
+                  // Divider antes de Notas SAP
+                  Divider(
+                    height: isMobile ? 16 : 24,
+                    thickness: 1,
+                    indent: isMobile ? 8 : 12,
+                    endIndent: isMobile ? 8 : 12,
+                    color: iconColor.withOpacity(0.2),
+                  ),
                   // Sempre visível para todos
                   _buildSidebarIcon(Icons.description, 16, 'Notas SAP', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
+                  _buildSidebarIcon(Icons.list_alt, 17, 'Ordens', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
+                  _buildSidebarIcon(Icons.assignment, 18, 'ATs', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
+                  _buildSidebarIcon(Icons.description, 19, 'SIs', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
+                  Divider(
+                    height: isMobile ? 16 : 24,
+                    thickness: 1,
+                    indent: isMobile ? 8 : 12,
+                    endIndent: isMobile ? 8 : 12,
+                    color: iconColor.withOpacity(0.2),
+                  ),
+                  if (widget.isRoot)
+                    _buildSidebarIcon(Icons.checklist_rtl, 3, 'Demandas', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
+                  if (widget.isRoot) ...[
+                    Divider(
+                      height: isMobile ? 16 : 24,
+                      thickness: 1,
+                      indent: isMobile ? 8 : 12,
+                      endIndent: isMobile ? 8 : 12,
+                      color: iconColor.withOpacity(0.2),
+                    ),
+                    _buildSidebarIcon(Icons.alt_route, 21, 'Linhas de Transmissão', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
+                    _buildSidebarIcon(Icons.eco, 22, 'Supressão de Vegetação', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
+                  ],
                 ],
               ),
             ),
           ),
         ],
       ),
+    );
+          },
+        );
+      },
     );
   }
 

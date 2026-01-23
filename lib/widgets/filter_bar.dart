@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import '../utils/responsive.dart';
-import '../services/task_service.dart';
+import '../models/task.dart';
 
 class FilterBar extends StatefulWidget {
   final Function(Map<String, String?>) onFiltersChanged;
@@ -11,6 +12,10 @@ class FilterBar extends StatefulWidget {
   final String? currentSortColumn; // Coluna de ordenação atual
   final bool? currentSortAscending; // Direção de ordenação atual
   final bool isFiltering; // Indica se os filtros estão sendo processados
+  final VoidCallback? onToggleGantt; // Callback para alternar visibilidade do Gantt
+  final bool? showGantt; // Se o Gantt está visível
+  final String? currentViewMode; // Modo de visualização atual
+  final List<Task>? visibleTasks; // Tarefas já carregadas para preencher opções localmente
 
   const FilterBar({
     super.key,
@@ -22,6 +27,10 @@ class FilterBar extends StatefulWidget {
     this.currentSortColumn,
     this.currentSortAscending,
     this.isFiltering = false,
+    this.onToggleGantt,
+    this.showGantt,
+    this.currentViewMode,
+    this.visibleTasks,
   });
 
   @override
@@ -37,6 +46,8 @@ class _FilterBarState extends State<FilterBar> {
   String? _selectedExecutor;
   String? _selectedFrota;
   String? _selectedCoordenador;
+  Map<String, String?> _lastSentFilters = {};
+  Timer? _debounceTimer;
   bool _isExpanded = false; // Para mobile: controla se os filtros estão expandidos
   bool _minhasTarefas = false; // Toggle para filtrar apenas minhas tarefas
   
@@ -71,10 +82,113 @@ class _FilterBarState extends State<FilterBar> {
   List<String> _frotasTotais = [];
   List<String> _coordenadoresTotais = [];
   
-  final TaskService _taskService = TaskService();
+  void _loadFromVisibleTasks() {
+    final tasks = widget.visibleTasks;
+
+    // Sempre recalcular (inclusive para lista vazia) para refletir exatamente a tabela atual
+    List<Task> effective = tasks ?? const [];
+
+    // Restringir às tarefas dentro do período selecionado (como na tabela)
+    if (widget.startDate != null || widget.endDate != null) {
+      final start = widget.startDate;
+      final end = widget.endDate;
+
+      bool overlaps(DateTime aStart, DateTime aEnd) {
+        if (start != null && aEnd.isBefore(DateTime(start.year, start.month, start.day))) return false;
+        if (end != null && aStart.isAfter(DateTime(end.year, end.month, end.day, 23, 59, 59))) return false;
+        return true;
+      }
+
+      effective = effective.where((t) {
+        if (t.ganttSegments.isNotEmpty) {
+          return t.ganttSegments.any((seg) => overlaps(seg.dataInicio, seg.dataFim));
+        }
+        return overlaps(t.dataInicio, t.dataFim);
+      }).toList();
+    }
+
+    _regionaisTotais = [];
+    _divisoesTotais = [];
+    _statusTotais = [];
+    _locaisTotais = [];
+    _tiposTotais = [];
+    _executoresTotais = [];
+    _frotasTotais = [];
+    _coordenadoresTotais = [];
+
+    _regionais = [];
+    _divisoes = [];
+    _status = [];
+    _locais = [];
+    _tipos = [];
+    _executores = [];
+    _frotas = [];
+    _coordenadores = [];
+
+    String _normalize(String s) => s.trim();
+    void _splitAndAdd(Set<String> target, String raw) {
+      if (raw.isEmpty) return;
+      for (final part in raw.split(',')) {
+        final v = _normalize(part);
+        if (v.isNotEmpty) target.add(v);
+      }
+    }
+    void _splitListAndAdd(Set<String> target, Iterable<String> values) {
+      for (final v in values) {
+        _splitAndAdd(target, v);
+      }
+    }
+
+    Set<String> regionais = {};
+    Set<String> divisoes = {};
+    Set<String> status = {};
+    Set<String> locais = {};
+    Set<String> tipos = {};
+    Set<String> executores = {};
+    Set<String> frotas = {};
+    Set<String> coordenadores = {};
+
+    for (final t in effective) {
+      if (t.regional.isNotEmpty) regionais.add(t.regional);
+      if (t.divisao.isNotEmpty) divisoes.add(t.divisao);
+      if (t.status.isNotEmpty) _splitAndAdd(status, t.status);
+      if (t.locais.isNotEmpty) locais.addAll(t.locais.where((e) => e.isNotEmpty));
+      if (t.tipo.isNotEmpty) _splitAndAdd(tipos, t.tipo); // tipos também podem vir concatenados
+      if (t.executor.isNotEmpty) _splitAndAdd(executores, t.executor);
+      if (t.executores.isNotEmpty) _splitListAndAdd(executores, t.executores.where((e) => e.isNotEmpty));
+      if (t.frota.isNotEmpty) frotas.add(t.frota);
+      if (t.coordenador.isNotEmpty) _splitAndAdd(coordenadores, t.coordenador);
+    }
+
+    List<String> sortSet(Set<String> s) {
+      final list = s.toList();
+      list.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+      return list;
+    }
+
+    _regionaisTotais = sortSet(regionais);
+    _divisoesTotais = sortSet(divisoes);
+    _statusTotais = sortSet(status);
+    _locaisTotais = sortSet(locais);
+    _tiposTotais = sortSet(tipos);
+    _executoresTotais = sortSet(executores);
+    _frotasTotais = sortSet(frotas);
+    _coordenadoresTotais = sortSet(coordenadores);
+
+    _regionais = _regionaisTotais;
+    _divisoes = _divisoesTotais;
+    _status = _statusTotais;
+    _locais = _locaisTotais;
+    _tipos = _tiposTotais;
+    _executores = _executoresTotais;
+    _frotas = _frotasTotais;
+    _coordenadores = _coordenadoresTotais;
+
+    if (mounted) setState(() {});
+  }
 
   void _updateFilters() {
-    widget.onFiltersChanged({
+    final current = <String, String?>{
       'regional': _selectedRegional,
       'divisao': _selectedDivisao,
       'status': _selectedStatus,
@@ -84,97 +198,36 @@ class _FilterBarState extends State<FilterBar> {
       'frota': _selectedFrota,
       'coordenador': _selectedCoordenador,
       'minhasTarefas': _minhasTarefas ? 'true' : null,
+    };
+
+    // Evitar disparar processamento se nada mudou
+    bool changed = false;
+    for (final key in current.keys) {
+      if (_lastSentFilters[key] != current[key]) {
+        changed = true;
+        break;
+      }
+    }
+    if (!changed) return;
+
+    _lastSentFilters = Map.from(current);
+    // Debounce para evitar reprocessar quando seleciona e volta rápido
+    _debounceTimer?.cancel();
+    _debounceTimer = Timer(const Duration(milliseconds: 150), () {
+      if (!mounted) return;
+      widget.onFiltersChanged(current);
     });
-    
-    // Recarregar valores filtrados após alteração (mantendo valores totais)
-    _loadFilterValues(loadTotais: false);
+  }
+
+  @override
+  void dispose() {
+    _debounceTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadFilterValues({bool loadTotais = false}) async {
-    if (widget.startDate == null || widget.endDate == null) return;
-    
-    // Não bloquear a UI - carregar em background
-    // setState(() {
-    //   _isLoading = true;
-    // });
-
-    try {
-      // Carregar valores totais (sem filtros) na primeira vez ou quando solicitado
-      if (loadTotais || _regionaisTotais.isEmpty) {
-        final totalValues = await _taskService.getFilterValues(
-          dataInicioMin: widget.startDate,
-          dataFimMax: widget.endDate,
-        );
-        
-        if (mounted) {
-          setState(() {
-            _regionaisTotais = totalValues['regionais'] ?? [];
-            _divisoesTotais = totalValues['divisoes'] ?? [];
-            _statusTotais = totalValues['status'] ?? [];
-            _locaisTotais = totalValues['locais'] ?? [];
-            _tiposTotais = totalValues['tipos'] ?? [];
-            _executoresTotais = totalValues['executores'] ?? [];
-            _frotasTotais = totalValues['frotas'] ?? [];
-            _coordenadoresTotais = totalValues['coordenadores'] ?? [];
-          });
-        }
-      }
-      
-      // Carregar valores filtrados (com filtros ativos)
-      final filterValues = await _taskService.getFilterValues(
-        dataInicioMin: widget.startDate,
-        dataFimMax: widget.endDate,
-        status: _selectedStatus,
-        regional: _selectedRegional,
-        divisao: _selectedDivisao,
-        local: _selectedLocal,
-        tipo: _selectedTipo,
-        executor: _selectedExecutor,
-        coordenador: _selectedCoordenador,
-        frota: _selectedFrota,
-      );
-
-      if (mounted) {
-        setState(() {
-          _regionais = filterValues['regionais'] ?? [];
-          _divisoes = filterValues['divisoes'] ?? [];
-          _status = filterValues['status'] ?? [];
-          _locais = filterValues['locais'] ?? [];
-          _tipos = filterValues['tipos'] ?? [];
-          _executores = filterValues['executores'] ?? [];
-          _frotas = filterValues['frotas'] ?? [];
-          _coordenadores = filterValues['coordenadores'] ?? [];
-          
-          // Limpar valores selecionados que não estão mais na lista
-          if (_selectedRegional != null && !_regionais.contains(_selectedRegional)) {
-            _selectedRegional = null;
-          }
-          if (_selectedDivisao != null && !_divisoes.contains(_selectedDivisao)) {
-            _selectedDivisao = null;
-          }
-          if (_selectedStatus != null && !_status.contains(_selectedStatus)) {
-            _selectedStatus = null;
-          }
-          if (_selectedLocal != null && !_locais.contains(_selectedLocal)) {
-            _selectedLocal = null;
-          }
-          if (_selectedTipo != null && !_tipos.contains(_selectedTipo)) {
-            _selectedTipo = null;
-          }
-          if (_selectedExecutor != null && !_executores.contains(_selectedExecutor)) {
-            _selectedExecutor = null;
-          }
-          if (_selectedFrota != null && !_frotas.contains(_selectedFrota)) {
-            _selectedFrota = null;
-          }
-          if (_selectedCoordenador != null && !_coordenadores.contains(_selectedCoordenador)) {
-            _selectedCoordenador = null;
-          }
-        });
-      }
-    } catch (e) {
-      print('Erro ao carregar valores de filtros: $e');
-    }
+    // Sempre que possível, use somente as tarefas visíveis (evita chamadas ao Supabase)
+    _loadFromVisibleTasks();
   }
 
   @override
@@ -192,14 +245,16 @@ class _FilterBarState extends State<FilterBar> {
       _selectedCoordenador = widget.initialFilters!['coordenador'];
       _minhasTarefas = widget.initialFilters!['minhasTarefas'] == 'true';
     }
-    // Sempre carregar valores totais no início
-    _loadFilterValues(loadTotais: true);
+    // Carregar valores iniciais a partir das tarefas visíveis (se houver)
+    Future.microtask(() => _loadFilterValues(loadTotais: true));
   }
 
   @override
   void didUpdateWidget(FilterBar oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // Se o período mudou, recarregar valores totais e filtrados
+    // Recalcular sempre que props mudarem (garante sincronização com tabela atual)
+    _loadFilterValues(loadTotais: true);
+    // Se o período mudou, recarregar (ainda assim apenas localmente)
     if (oldWidget.startDate != widget.startDate || oldWidget.endDate != widget.endDate) {
       _loadFilterValues(loadTotais: true);
     }
@@ -223,11 +278,12 @@ class _FilterBarState extends State<FilterBar> {
   Widget build(BuildContext context) {
     final isMobile = Responsive.isMobile(context);
     final isTablet = Responsive.isTablet(context);
+    final isCompact = isMobile || isTablet;
     
     // Sempre mostrar os filtros, mesmo durante o carregamento
     // Os dados serão atualizados em background quando chegarem
     
-    if (isMobile) {
+    if (isCompact) {
       // Contar quantos filtros estão ativos
       final activeFiltersCount = [
         _selectedRegional,
@@ -314,6 +370,11 @@ class _FilterBarState extends State<FilterBar> {
                       ),
                     // Toggle Minhas Tarefas (sempre visível no mobile)
                     _buildMinhasTarefasToggle(),
+                    // Botão para mostrar/ocultar Gantt (apenas quando o modo for 'split')
+                    if (widget.onToggleGantt != null && widget.currentViewMode == 'split') ...[
+                      const SizedBox(width: 8),
+                      _buildGanttToggle(),
+                    ],
                     const SizedBox(width: 8),
                     if (activeFiltersCount > 0)
                       TextButton(
@@ -351,9 +412,7 @@ class _FilterBarState extends State<FilterBar> {
                 padding: const EdgeInsets.all(8),
                 child: Column(
                   children: [
-                    // Toggle Minhas Tarefas
-                    _buildMinhasTarefasToggle(),
-                    const SizedBox(height: 8),
+                    // Toggle Minhas Tarefas removido daqui pois já está no cabeçalho
                     GridView.count(
                       crossAxisCount: 2,
                       mainAxisSpacing: 6,
@@ -411,108 +470,6 @@ class _FilterBarState extends State<FilterBar> {
                       });
                     }, isMobile: true),
                       ],
-                    ),
-                  ],
-                ),
-              ),
-          ],
-        ),
-      );
-    } else if (isTablet) {
-      return Container(
-        height: 110,
-        color: Colors.grey[200],
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        child: Column(
-          children: [
-            // Indicador de loading (tablet)
-            if (widget.isFiltering)
-              Container(
-                height: 3,
-                margin: const EdgeInsets.only(bottom: 4),
-                child: LinearProgressIndicator(
-                  backgroundColor: Colors.grey[300],
-                  valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
-                ),
-              ),
-            Expanded(
-              child: Column(
-                children: [
-                  // Seletor de Ordenação e Toggle Minhas Tarefas
-                  Row(
-                    children: [
-                      Expanded(child: _buildSortSelector(isMobile: false)),
-                      const SizedBox(width: 8),
-                      _buildMinhasTarefasToggle(),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Expanded(
-                    child: Row(
-                      children: [
-                        Expanded(child: _buildFilterDropdown('REGIONAL', _regionais, _selectedRegional, (value) {
-                          setState(() {
-                            _selectedRegional = value;
-                            _updateFilters();
-                          });
-                        }, totalOptions: _regionaisTotais)),
-                        const SizedBox(width: 8),
-                        Expanded(child: _buildFilterDropdown('DIVISAO', _divisoes, _selectedDivisao, (value) {
-                          setState(() {
-                            _selectedDivisao = value;
-                            _updateFilters();
-                          });
-                        }, totalOptions: _divisoesTotais)),
-                        const SizedBox(width: 8),
-                        Expanded(child: _buildFilterDropdown('STATUS', _status, _selectedStatus, (value) {
-                          setState(() {
-                            _selectedStatus = value;
-                            _updateFilters();
-                          });
-                        }, totalOptions: _statusTotais)),
-                        const SizedBox(width: 8),
-                        Expanded(child: _buildFilterDropdown('LOCAL', _locais, _selectedLocal, (value) {
-                          setState(() {
-                            _selectedLocal = value;
-                            _updateFilters();
-                          });
-                        }, totalOptions: _locaisTotais)),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Expanded(
-                    child: Row(
-                      children: [
-                        Expanded(child: _buildFilterDropdown('TIPO', _tipos, _selectedTipo, (value) {
-                          setState(() {
-                            _selectedTipo = value;
-                            _updateFilters();
-                          });
-                        }, totalOptions: _tiposTotais)),
-                        const SizedBox(width: 8),
-                        Expanded(child: _buildFilterDropdown('EXECUTOR', _executores, _selectedExecutor, (value) {
-                          setState(() {
-                            _selectedExecutor = value;
-                            _updateFilters();
-                          });
-                        }, totalOptions: _executoresTotais)),
-                        const SizedBox(width: 8),
-                        Expanded(child: _buildFilterDropdown('FROTA', _frotas, _selectedFrota, (value) {
-                          setState(() {
-                            _selectedFrota = value;
-                            _updateFilters();
-                          });
-                        }, totalOptions: _frotasTotais)),
-                        const SizedBox(width: 8),
-                        Expanded(child: _buildFilterDropdown('COORDENADOR', _coordenadores, _selectedCoordenador, (value) {
-                          setState(() {
-                            _selectedCoordenador = value;
-                            _updateFilters();
-                          });
-                        }, totalOptions: _coordenadoresTotais)),
-                      ],
-                    ),
                   ),
                 ],
               ),
@@ -856,6 +813,47 @@ class _FilterBarState extends State<FilterBar> {
                 _minhasTarefas = value;
                 _updateFilters();
               });
+            },
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGanttToggle() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: widget.showGantt == true ? Colors.blue[100] : Colors.white,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(
+          color: widget.showGantt == true ? Colors.blue : Colors.grey[300]!,
+          width: widget.showGantt == true ? 2 : 1,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            widget.showGantt == true ? Icons.timeline : Icons.timeline_outlined,
+            size: 16,
+            color: widget.showGantt == true ? Colors.blue[700] : Colors.grey[600],
+          ),
+          const SizedBox(width: 6),
+          Text(
+            widget.showGantt == true ? 'Gantt' : 'Gantt',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: widget.showGantt == true ? FontWeight.bold : FontWeight.normal,
+              color: widget.showGantt == true ? Colors.blue[700] : Colors.grey[700],
+            ),
+          ),
+          const SizedBox(width: 6),
+          Switch(
+            value: widget.showGantt ?? false,
+            onChanged: (value) {
+              widget.onToggleGantt?.call();
             },
             materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
           ),

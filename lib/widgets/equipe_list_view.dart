@@ -121,6 +121,58 @@ class _EquipeListViewState extends State<EquipeListView> {
     }
   }
 
+  Future<void> _duplicateEquipe(Equipe equipe) async {
+    // Buscar equipe atualizada do banco para garantir dados completos
+    final equipeAtualizada = await _equipeService.getEquipeById(equipe.id);
+    if (equipeAtualizada == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Erro ao carregar dados da equipe'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    }
+
+    // Criar cópia com nome modificado
+    final duplicated = equipeAtualizada.copyWith(
+      id: '',
+      nome: '${equipeAtualizada.nome} (Cópia)',
+      executores: [], // Limpar executores para não duplicar vínculos
+    );
+
+    final result = await showDialog<Equipe>(
+      context: context,
+      builder: (context) => EquipeFormDialog(equipe: duplicated),
+    );
+
+    if (result != null) {
+      final created = await _equipeService.createEquipe(result);
+      if (created != null) {
+        await _loadEquipes();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Equipe duplicada com sucesso!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Erro ao duplicar equipe'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    }
+  }
+
   Future<void> _editEquipe(Equipe equipe) async {
     // Buscar equipe atualizada do banco para garantir dados completos
     final equipeAtualizada = await _equipeService.getEquipeById(equipe.id);
@@ -349,6 +401,12 @@ class _EquipeListViewState extends State<EquipeListView> {
                   tooltip: 'Editar',
                 ),
                 IconButton(
+                  icon: const Icon(Icons.copy),
+                  color: Colors.orange,
+                  onPressed: () => _duplicateEquipe(equipe),
+                  tooltip: 'Duplicar',
+                ),
+                IconButton(
                   icon: const Icon(Icons.delete),
                   onPressed: () => _deleteEquipe(equipe),
                   tooltip: 'Excluir',
@@ -417,6 +475,13 @@ class _EquipeListViewState extends State<EquipeListView> {
                         icon: const Icon(Icons.edit, size: 20, color: Colors.blue),
                         onPressed: () => _editEquipe(equipe),
                         tooltip: 'Editar',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.copy, size: 20, color: Colors.orange),
+                        onPressed: () => _duplicateEquipe(equipe),
+                        tooltip: 'Duplicar',
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(),
                       ),

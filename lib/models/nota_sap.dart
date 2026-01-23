@@ -9,8 +9,13 @@ class NotaSAP {
   final String? ordem;
   final String? descricao;
   final String? localInstalacao;
+  final String? local; // Local da tabela locais (calculado automaticamente pela VIEW)
   final String? sala;
   final String? statusSistema; // MSPN, MSPR, MSPR ORDA, etc.
+  // Dados de tarefa vinculada (opcionais)
+  final String? tarefaId;
+  final String? tarefaNome;
+  final String? tarefaStatus;
   final DateTime? inicioDesejado;
   final DateTime? conclusaoDesejada;
   final String? horaCriacao; // TIME como string
@@ -32,6 +37,11 @@ class NotaSAP {
   final DateTime? dataImportacao;
   final DateTime? createdAt;
   final DateTime? updatedAt;
+  final String? detalhes; // Campo detalhes da tabela
+  
+  // Campos calculados para prazo
+  final DateTime? dataVencimento; // Data de vencimento calculada pela regra
+  final int? diasRestantes; // Dias restantes até o vencimento (negativo se já passou)
 
   NotaSAP({
     required this.id,
@@ -42,8 +52,12 @@ class NotaSAP {
     this.ordem,
     this.descricao,
     this.localInstalacao,
+    this.local,
     this.sala,
     this.statusSistema,
+    this.tarefaId,
+    this.tarefaNome,
+    this.tarefaStatus,
     this.inicioDesejado,
     this.conclusaoDesejada,
     this.horaCriacao,
@@ -65,6 +79,9 @@ class NotaSAP {
     this.dataImportacao,
     this.createdAt,
     this.updatedAt,
+    this.detalhes,
+    this.dataVencimento,
+    this.diasRestantes,
   });
 
   // Função auxiliar para normalizar strings com problemas de encoding
@@ -150,8 +167,12 @@ class NotaSAP {
       ordem: _normalizeString(map['ordem'] as String?),
       descricao: _normalizeString(map['descricao'] as String?),
       localInstalacao: _normalizeString(map['local_instalacao'] as String?),
+      local: _normalizeString(map['local'] as String?),
       sala: _normalizeString(map['sala'] as String?),
       statusSistema: _normalizeString(map['status_sistema'] as String?),
+      tarefaId: map['tarefa_id'] as String?,
+      tarefaNome: _normalizeString(map['tarefa_nome'] as String?),
+      tarefaStatus: _normalizeString(map['tarefa_status'] as String?),
       inicioDesejado: parseDate(map['inicio_desejado']),
       conclusaoDesejada: parseDate(map['conclusao_desejada']),
       horaCriacao: _normalizeString(map['hora_criacao'] as String?),
@@ -173,6 +194,9 @@ class NotaSAP {
       dataImportacao: parseDate(map['data_importacao']),
       createdAt: parseDate(map['created_at']),
       updatedAt: parseDate(map['updated_at']),
+      detalhes: _normalizeString(map['detalhes'] as String?),
+      dataVencimento: parseDate(map['data_vencimento']),
+      diasRestantes: map['dias_restantes'] != null ? (map['dias_restantes'] is int ? map['dias_restantes'] as int : int.tryParse(map['dias_restantes'].toString())) : null,
     );
   }
 
@@ -222,6 +246,9 @@ class NotaSAP {
       'local_instalacao': _ensureUtf8(localInstalacao),
       'sala': _ensureUtf8(sala),
       'status_sistema': _ensureUtf8(statusSistema),
+      'tarefa_id': tarefaId,
+      'tarefa_nome': _ensureUtf8(tarefaNome),
+      'tarefa_status': _ensureUtf8(tarefaStatus),
       'inicio_desejado': inicioDesejado?.toIso8601String(),
       'conclusao_desejada': conclusaoDesejada?.toIso8601String(),
       'hora_criacao': _ensureUtf8(horaCriacao),
@@ -243,6 +270,8 @@ class NotaSAP {
       'data_importacao': dataImportacao?.toIso8601String(),
       'created_at': createdAt?.toIso8601String(),
       'updated_at': updatedAt?.toIso8601String(),
+      'detalhes': _ensureUtf8(detalhes),
+      // dataVencimento e diasRestantes não são salvos no banco, são calculados
     };
   }
 
@@ -255,8 +284,12 @@ class NotaSAP {
     String? ordem,
     String? descricao,
     String? localInstalacao,
+    String? local,
     String? sala,
     String? statusSistema,
+    String? tarefaId,
+    String? tarefaNome,
+    String? tarefaStatus,
     DateTime? inicioDesejado,
     DateTime? conclusaoDesejada,
     String? horaCriacao,
@@ -278,6 +311,9 @@ class NotaSAP {
     DateTime? dataImportacao,
     DateTime? createdAt,
     DateTime? updatedAt,
+    String? detalhes,
+    DateTime? dataVencimento,
+    int? diasRestantes,
   }) {
     return NotaSAP(
       id: id ?? this.id,
@@ -288,8 +324,12 @@ class NotaSAP {
       ordem: ordem ?? this.ordem,
       descricao: descricao ?? this.descricao,
       localInstalacao: localInstalacao ?? this.localInstalacao,
+      local: local ?? this.local,
       sala: sala ?? this.sala,
       statusSistema: statusSistema ?? this.statusSistema,
+      tarefaId: tarefaId ?? this.tarefaId,
+      tarefaNome: tarefaNome ?? this.tarefaNome,
+      tarefaStatus: tarefaStatus ?? this.tarefaStatus,
       inicioDesejado: inicioDesejado ?? this.inicioDesejado,
       conclusaoDesejada: conclusaoDesejada ?? this.conclusaoDesejada,
       horaCriacao: horaCriacao ?? this.horaCriacao,
@@ -311,6 +351,9 @@ class NotaSAP {
       dataImportacao: dataImportacao ?? this.dataImportacao,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      detalhes: detalhes ?? this.detalhes,
+      dataVencimento: dataVencimento ?? this.dataVencimento,
+      diasRestantes: diasRestantes ?? this.diasRestantes,
     );
   }
 }

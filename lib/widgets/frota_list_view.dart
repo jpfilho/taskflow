@@ -143,6 +143,44 @@ class _FrotaListViewState extends State<FrotaListView> {
     }
   }
 
+  Future<void> _duplicateFrota(Frota frota) async {
+    // Criar cópia com nome e placa modificados
+    final duplicated = frota.copyWith(
+      id: '',
+      nome: '${frota.nome} (Cópia)',
+      placa: '${frota.placa}-CP', // Adicionar sufixo à placa
+    );
+
+    final result = await showDialog<Frota>(
+      context: context,
+      builder: (context) => FrotaFormDialog(frota: duplicated),
+    );
+
+    if (result != null) {
+      try {
+        await _frotaService.createFrota(result);
+        await _loadFrotas();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Frota duplicada com sucesso!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Erro ao duplicar frota: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    }
+  }
+
   Future<void> _editFrota(Frota frota) async {
     final result = await showDialog<Frota>(
       context: context,
@@ -442,6 +480,12 @@ class _FrotaListViewState extends State<FrotaListView> {
                   tooltip: 'Editar',
                 ),
                 IconButton(
+                  icon: const Icon(Icons.copy),
+                  color: Colors.orange,
+                  onPressed: () => _duplicateFrota(frota),
+                  tooltip: 'Duplicar',
+                ),
+                IconButton(
                   icon: const Icon(Icons.delete),
                   onPressed: () => _deleteFrota(frota),
                   tooltip: 'Excluir',
@@ -621,6 +665,13 @@ class _FrotaListViewState extends State<FrotaListView> {
                         icon: const Icon(Icons.edit, size: 20),
                         onPressed: () => _editFrota(frota),
                         tooltip: 'Editar',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.copy, size: 20, color: Colors.orange),
+                        onPressed: () => _duplicateFrota(frota),
+                        tooltip: 'Duplicar',
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(),
                       ),

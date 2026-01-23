@@ -7,6 +7,8 @@ import '../config/supabase_config.dart';
 class AnexoService {
   final SupabaseClient _supabase = SupabaseConfig.client;
   static const String _bucketName = 'anexos-tarefas';
+  static const Duration _uploadTimeout = Duration(seconds: 20);
+  static const int _uploadRetries = 2;
 
   // Criar bucket se não existir (deve ser feito manualmente no Supabase ou via código de inicialização)
   Future<void> _ensureBucketExists() async {
@@ -81,16 +83,11 @@ class AnexoService {
       final caminhoArquivo = '$taskId/$timestamp-$nomeArquivo';
 
       // Upload para Supabase Storage
-      await _supabase.storage
-          .from(_bucketName)
-          .uploadBinary(
-            caminhoArquivo,
-            await file.readAsBytes(),
-            fileOptions: FileOptions(
-              contentType: _getMimeType(nomeArquivo),
-              upsert: false,
-            ),
-          );
+      await _uploadWithRetry(
+        caminhoArquivo,
+        await file.readAsBytes(),
+        contentType: _getMimeType(nomeArquivo),
+      );
 
       // Salvar metadados no banco de dados (usar nome original para exibição)
       final response = await _supabase
@@ -133,16 +130,11 @@ class AnexoService {
       final caminhoArquivo = '$taskId/$timestamp-$nomeArquivoSanitizado';
 
       // Upload para Supabase Storage
-      await _supabase.storage
-          .from(_bucketName)
-          .uploadBinary(
-            caminhoArquivo,
-            bytes,
-            fileOptions: FileOptions(
-              contentType: mimeType ?? _getMimeType(nomeArquivoSanitizado),
-              upsert: false,
-            ),
-          );
+      await _uploadWithRetry(
+        caminhoArquivo,
+        bytes,
+        contentType: mimeType ?? _getMimeType(nomeArquivoSanitizado),
+      );
 
       // Salvar metadados no banco de dados (usar nome original para exibição)
       final response = await _supabase
@@ -203,27 +195,38 @@ class AnexoService {
     try {
       if (taskIds.isEmpty) return {};
 
-      // Buscar anexos de cada tarefa individualmente
+      // Usar VIEW otimizada do Supabase para buscar todas as contagens de uma vez
+      // Usar .or() para múltiplos valores (já funciona no código)
+      dynamic query = _supabase
+          .from('contagens_anexos_tarefas')
+          .select('task_id, quantidade');
+      
+      if (taskIds.length == 1) {
+        query = query.eq('task_id', taskIds[0]);
+      } else {
+        final orConditions = taskIds.map((id) => 'task_id.eq.$id').join(',');
+        query = query.or(orConditions);
+      }
+      
+      // silencioso
+      final response = await query;
+      // silencioso
+
       final contagens = <String, int>{};
-      for (var taskId in taskIds) {
-        try {
-          final response = await _supabase
-              .from('anexos')
-              .select('task_id')
-              .eq('task_id', taskId);
-          
-          final count = (response as List).length;
-          if (count > 0) {
-            contagens[taskId] = count;
-          }
-        } catch (e) {
-          // Ignorar erros individuais
+      for (var item in response) {
+        final taskId = item['task_id'] as String;
+        final quantidade = item['quantidade'] as int;
+        // debug silenciado
+        if (quantidade > 0) {
+          contagens[taskId] = quantidade;
         }
       }
 
+      // silencioso
       return contagens;
-    } catch (e) {
-      debugPrint('Erro ao contar anexos das tarefas: $e');
+    } catch (e, stackTrace) {
+      debugPrint('❌ Erro ao contar anexos das tarefas: $e');
+      debugPrint('   Stack trace: $stackTrace');
       return {};
     }
   }
@@ -233,6 +236,47 @@ class AnexoService {
     return _supabase.storage
         .from(_bucketName)
         .getPublicUrl(anexo.caminhoArquivo);
+  }
+
+  // Obter URL assinada (útil quando o bucket não é público)
+  Future<String> getSignedUrl(Anexo anexo, {Duration expiresIn = const Duration(days: 7)}) async {
+    try {
+      final url = await _supabase.storage
+          .from(_bucketName)
+          .createSignedUrl(anexo.caminhoArquivo, expiresIn.inSeconds);
+      return url;
+    } catch (e) {
+      debugPrint('Erro ao gerar URL assinada, caindo para pública: $e');
+      return getPublicUrl(anexo);
+    }
+  }
+
+  // Gerar URL assinada a partir de uma URL existente (pública ou anterior)
+  Future<String> getSignedUrlFromUrl(String url, {Duration expiresIn = const Duration(days: 7)}) async {
+    try {
+      final path = _extractPathFromUrl(url);
+      if (path == null) return url;
+      final signed = await _supabase.storage
+          .from(_bucketName)
+          .createSignedUrl(path, expiresIn.inSeconds);
+      return signed;
+    } catch (e) {
+      debugPrint('Erro ao gerar URL assinada a partir da URL existente: $e');
+      return url;
+    }
+  }
+
+  String? _extractPathFromUrl(String url) {
+    try {
+      final uri = Uri.parse(url);
+      // Procurar bucket na lista de segmentos e pegar o restante como caminho
+      final idx = uri.pathSegments.indexOf(_bucketName);
+      if (idx == -1 || idx == uri.pathSegments.length - 1) return null;
+      final pathParts = uri.pathSegments.sublist(idx + 1);
+      return pathParts.join('/');
+    } catch (_) {
+      return null;
+    }
   }
 
   // Download de arquivo
@@ -321,6 +365,37 @@ class AnexoService {
     };
     
     return mimeTypes[extensao] ?? 'application/octet-stream';
+  }
+
+  Future<void> _uploadWithRetry(
+    String caminhoArquivo,
+    Uint8List bytes, {
+    String? contentType,
+  }) async {
+    for (int attempt = 0; attempt <= _uploadRetries; attempt++) {
+      final isLast = attempt == _uploadRetries;
+      try {
+        debugPrint(
+            '[AnexoService] upload attempt=${attempt + 1}/${_uploadRetries + 1} path=$caminhoArquivo bytes=${bytes.length}');
+        await _supabase.storage
+            .from(_bucketName)
+            .uploadBinary(
+              caminhoArquivo,
+              bytes,
+              fileOptions: FileOptions(
+                contentType: contentType,
+                upsert: false,
+              ),
+            )
+            .timeout(_uploadTimeout);
+        debugPrint('[AnexoService] upload ok path=$caminhoArquivo');
+        return;
+      } catch (e) {
+        debugPrint('[AnexoService] upload fail attempt=${attempt + 1}: $e');
+        if (isLast) rethrow;
+        await Future.delayed(const Duration(milliseconds: 400));
+      }
+    }
   }
 
   // Formatar tamanho do arquivo

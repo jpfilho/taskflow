@@ -121,6 +121,43 @@ class _EmpresaListViewState extends State<EmpresaListView> {
     }
   }
 
+  Future<void> _duplicateEmpresa(Empresa empresa) async {
+    // Criar cópia com nome modificado
+    final duplicated = empresa.copyWith(
+      id: '',
+      empresa: '${empresa.empresa} (Cópia)',
+    );
+
+    final result = await showDialog<Empresa>(
+      context: context,
+      builder: (context) => EmpresaFormDialog(empresa: duplicated),
+    );
+
+    if (result != null) {
+      final created = await _empresaService.createEmpresa(result);
+      if (created != null) {
+        await _loadEmpresas();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Empresa duplicada com sucesso!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Erro ao duplicar empresa'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    }
+  }
+
   Future<void> _editEmpresa(Empresa empresa) async {
     // Buscar empresa atualizada do banco para garantir dados completos
     final fetchedEmpresa = await _empresaService.getEmpresaById(empresa.id);
@@ -292,6 +329,12 @@ class _EmpresaListViewState extends State<EmpresaListView> {
                   tooltip: 'Editar',
                 ),
                 IconButton(
+                  icon: const Icon(Icons.copy),
+                  color: Colors.orange,
+                  onPressed: () => _duplicateEmpresa(empresa),
+                  tooltip: 'Duplicar',
+                ),
+                IconButton(
                   icon: const Icon(Icons.delete),
                   onPressed: () => _deleteEmpresa(empresa),
                   tooltip: 'Excluir',
@@ -338,6 +381,13 @@ class _EmpresaListViewState extends State<EmpresaListView> {
                         icon: const Icon(Icons.edit, size: 20, color: Colors.blue),
                         onPressed: () => _editEmpresa(empresa),
                         tooltip: 'Editar',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.copy, size: 20, color: Colors.orange),
+                        onPressed: () => _duplicateEmpresa(empresa),
+                        tooltip: 'Duplicar',
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(),
                       ),

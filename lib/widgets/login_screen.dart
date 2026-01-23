@@ -1,7 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+
 import '../services/auth_service_simples.dart';
 import '../services/biometric_service.dart';
+import '../services/azure_auth_service.dart';
+import '../services/azure_auth_service_stub.dart'
+    if (dart.library.js) '../services/azure_auth_service_web.dart';
 
 class LoginScreen extends StatefulWidget {
   final VoidCallback? onLoginSuccess;
@@ -19,6 +24,11 @@ class _LoginScreenState extends State<LoginScreen> {
   final _nomeController = TextEditingController(); // Para registro
   final _authService = AuthServiceSimples();
   final _biometricService = BiometricService();
+  final _azureAuthService = AzureAuthService();
+  final _azureAuthServiceWeb = AzureAuthServiceWeb();
+  final bool _azureLoginEnabled = false; // Temporariamente desativado até aprovação admin
+  final _passwordFocusNode = FocusNode();
+  final _nomeFocusNode = FocusNode();
   
   bool _isLoading = false;
   bool _obscurePassword = true;
@@ -37,6 +47,8 @@ class _LoginScreenState extends State<LoginScreen> {
     _emailController.dispose();
     _passwordController.dispose();
     _nomeController.dispose();
+    _passwordFocusNode.dispose();
+    _nomeFocusNode.dispose();
     super.dispose();
   }
 
@@ -328,10 +340,93 @@ class _LoginScreenState extends State<LoginScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
+                            if (_azureLoginEnabled) ...[
+                              // Botão Microsoft (desativado até aprovação admin)
+                              OutlinedButton.icon(
+                                icon: const Icon(Icons.login),
+                                label: const Text('Entrar com Microsoft (Azure AD)'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: Colors.blueAccent,
+                                  side: const BorderSide(color: Colors.blueAccent),
+                                ),
+                                onPressed: _isLoading
+                                    ? null
+                                    : () async {
+                                        setState(() => _isLoading = true);
+                                        try {
+                                          final azure = kIsWeb
+                                              ? await _azureAuthServiceWeb.signInInteractive()
+                                              : await _azureAuthService.signInInteractive();
+
+                                          final sucesso = (azure as dynamic).sucesso == true;
+                                          final emailAzure = (azure as dynamic).email as String?;
+                                          final erroAzure = (azure as dynamic).erro as String?;
+
+                                          if (!sucesso || (emailAzure == null || emailAzure.isEmpty)) {
+                                            if (mounted) {
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                SnackBar(
+                                                  content: Text(erroAzure ?? 'Não foi possível obter o email do Microsoft'),
+                                                  backgroundColor: Colors.red,
+                                                ),
+                                              );
+                                            }
+                                            return;
+                                          }
+
+                                          final nome = _nomeController.text.trim().isEmpty
+                                              ? null
+                                              : _nomeController.text.trim();
+                                          final resp = await _authService.signInWithAzureEmail(
+                                            email: emailAzure,
+                                            nome: nome,
+                                          );
+                                          if (mounted) {
+                                            if (resp.sucesso) {
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                const SnackBar(
+                                                  content: Text('Login via Microsoft concluído!'),
+                                                  backgroundColor: Colors.green,
+                                                ),
+                                              );
+                                              widget.onLoginSuccess?.call();
+                                            } else {
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                SnackBar(
+                                                  content: Text(resp.erro ?? 'Erro no login Microsoft'),
+                                                  backgroundColor: Colors.red,
+                                                ),
+                                              );
+                                            }
+                                          }
+                                        } catch (e) {
+                                          if (mounted) {
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              SnackBar(
+                                                content: Text('Erro: $e'),
+                                                backgroundColor: Colors.red,
+                                              ),
+                                            );
+                                          }
+                                        } finally {
+                                          if (mounted) setState(() => _isLoading = false);
+                                        }
+                                      },
+                              ),
+                              const SizedBox(height: 16),
+                            ],
                             // Campo Email
                             TextFormField(
                               controller: _emailController,
                               keyboardType: TextInputType.emailAddress,
+                              textInputAction: _isLoginMode ? TextInputAction.next : TextInputAction.next,
+                              onFieldSubmitted: (_) {
+                                if (_isLoginMode) {
+                                  _passwordFocusNode.requestFocus();
+                                } else {
+                                  _nomeFocusNode.requestFocus();
+                                }
+                              },
                               decoration: InputDecoration(
                                 labelText: 'Email',
                                 prefixIcon: const Icon(Icons.email),
@@ -354,6 +449,11 @@ class _LoginScreenState extends State<LoginScreen> {
                               const SizedBox(height: 16),
                               TextFormField(
                                 controller: _nomeController,
+                                focusNode: _nomeFocusNode,
+                                textInputAction: TextInputAction.next,
+                                onFieldSubmitted: (_) {
+                                  _passwordFocusNode.requestFocus();
+                                },
                                 decoration: InputDecoration(
                                   labelText: 'Nome (opcional)',
                                   prefixIcon: const Icon(Icons.person),
@@ -367,7 +467,14 @@ class _LoginScreenState extends State<LoginScreen> {
                             // Campo Senha
                             TextFormField(
                               controller: _passwordController,
+                              focusNode: _passwordFocusNode,
                               obscureText: _obscurePassword,
+                              textInputAction: TextInputAction.done,
+                              onFieldSubmitted: (_) {
+                                if (!_isLoading) {
+                                  _handleSubmit();
+                                }
+                              },
                               decoration: InputDecoration(
                                 labelText: 'Senha',
                                 prefixIcon: const Icon(Icons.lock),

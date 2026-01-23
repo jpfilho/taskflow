@@ -191,7 +191,7 @@ class _AnexosSectionState extends State<AnexosSection> {
 
   Future<void> _visualizarAnexo(Anexo anexo) async {
     try {
-      final url = _anexoService.getPublicUrl(anexo);
+      final url = await _anexoService.getSignedUrl(anexo);
       final uri = Uri.parse(url);
       
       if (await canLaunchUrl(uri)) {
@@ -223,7 +223,7 @@ class _AnexosSectionState extends State<AnexosSection> {
 
   Future<void> _downloadAnexo(Anexo anexo) async {
     try {
-      final url = _anexoService.getPublicUrl(anexo);
+      final url = await _anexoService.getSignedUrl(anexo);
       final uri = Uri.parse(url);
       
       // Em web, abrir URL diretamente para download
@@ -372,144 +372,67 @@ class _AnexosSectionState extends State<AnexosSection> {
                     ),
                   );
                 } else if (anexo.tipoArquivo == 'video') {
-                  return Container(
-                    margin: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(8),
-                      color: Colors.black87,
-                    ),
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        // Preview do vídeo (pode ser uma thumbnail ou cor sólida)
-                        Container(
-                          width: double.infinity,
-                          height: double.infinity,
-                          decoration: BoxDecoration(
-                            color: Colors.black,
+                  // vídeo usa url abaixo
+                } else if (anexo.tipoArquivo == 'audio') {
+                  return const SizedBox.shrink();
+                } else {
+                  return const SizedBox.shrink();
+                }
+
+                // Fallback para vídeo (usa url)
+                return Container(
+                  margin: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(8),
+                    color: Colors.black87,
+                  ),
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      Container(
+                        width: double.infinity,
+                        height: double.infinity,
+                        decoration: BoxDecoration(
+                          color: Colors.black,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(
+                          Icons.videocam,
+                          size: 64,
+                          color: Colors.white.withOpacity(0.7),
+                        ),
+                      ),
+                      Positioned(
+                        bottom: 12,
+                        left: 12,
+                        right: 12,
+                        child: Text(
+                          anexo.nomeArquivo,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          textAlign: TextAlign.center,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      Positioned.fill(
+                        child: Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: () => _visualizarAnexo(anexo),
                             borderRadius: BorderRadius.circular(8),
                           ),
-                          child: Icon(
-                            Icons.videocam,
-                            size: 64,
-                            color: Colors.white.withOpacity(0.7),
-                          ),
                         ),
-                        // Botão de play
-                        GestureDetector(
-                          onTap: () => _visualizarAnexo(anexo),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.9),
-                              shape: BoxShape.circle,
-                            ),
-                            padding: const EdgeInsets.all(16),
-                            child: const Icon(
-                              Icons.play_arrow,
-                              size: 48,
-                              color: Color(0xFF075E54),
-                            ),
-                          ),
-                        ),
-                        // Nome do arquivo no canto inferior
-                        Positioned(
-                          bottom: 8,
-                          left: 8,
-                          right: 8,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.6),
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text(
-                              anexo.nomeArquivo,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 12,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }
-                return const SizedBox.shrink();
+                      ),
+                    ],
+                  ),
+                );
               },
             ),
           ),
-          // Indicadores e controles
-          if (anexosVisuais.length > 1) ...[
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: List.generate(
-                anexosVisuais.length,
-                (index) => GestureDetector(
-                  onTap: () {
-                    _carouselController.animateToPage(
-                      index,
-                      duration: const Duration(milliseconds: 300),
-                      curve: Curves.easeInOut,
-                    );
-                  },
-                  child: Container(
-                    width: 8,
-                    height: 8,
-                    margin: const EdgeInsets.symmetric(horizontal: 4),
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: _currentCarouselIndex == index
-                          ? const Color(0xFF075E54)
-                          : Colors.grey[400],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.chevron_left),
-                  onPressed: _currentCarouselIndex > 0
-                      ? () {
-                          _carouselController.previousPage(
-                            duration: const Duration(milliseconds: 300),
-                            curve: Curves.easeInOut,
-                          );
-                        }
-                      : null,
-                ),
-                Text(
-                  '${_currentCarouselIndex + 1} / ${anexosVisuais.length}',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey[700],
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.chevron_right),
-                  onPressed: _currentCarouselIndex < anexosVisuais.length - 1
-                      ? () {
-                          _carouselController.nextPage(
-                            duration: const Duration(milliseconds: 300),
-                            curve: Curves.easeInOut,
-                          );
-                        }
-                      : null,
-                ),
-              ],
-            ),
-          ],
         ],
       ),
     );

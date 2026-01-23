@@ -121,6 +121,43 @@ class _LocalListViewState extends State<LocalListView> {
     }
   }
 
+  Future<void> _duplicateLocal(Local local) async {
+    // Criar cópia com nome modificado
+    final duplicated = local.copyWith(
+      id: '',
+      local: '${local.local} (Cópia)',
+    );
+
+    final result = await showDialog<Local>(
+      context: context,
+      builder: (context) => LocalFormDialog(local: duplicated),
+    );
+
+    if (result != null) {
+      final created = await _localService.createLocal(result);
+      if (created != null) {
+        await _loadLocais();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Local duplicado com sucesso!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Erro ao duplicar local'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    }
+  }
+
   Future<void> _editLocal(Local local) async {
     final result = await showDialog<Local>(
       context: context,
@@ -375,6 +412,12 @@ class _LocalListViewState extends State<LocalListView> {
                                     tooltip: 'Editar',
                                   ),
                                   IconButton(
+                                    icon: const Icon(Icons.copy),
+                                    color: Colors.orange,
+                                    onPressed: () => _duplicateLocal(local),
+                                    tooltip: 'Duplicar',
+                                  ),
+                                  IconButton(
                                     icon: const Icon(Icons.delete),
                                     color: Colors.red,
                                     onPressed: () => _deleteLocal(local),
@@ -397,6 +440,7 @@ class _LocalListViewState extends State<LocalListView> {
           columns: const [
             DataColumn(label: Text('Local', style: TextStyle(fontWeight: FontWeight.bold))),
             DataColumn(label: Text('Descrição', style: TextStyle(fontWeight: FontWeight.bold))),
+            DataColumn(label: Text('Local Instalação SAP', style: TextStyle(fontWeight: FontWeight.bold))),
             DataColumn(label: Text('Regional', style: TextStyle(fontWeight: FontWeight.bold))),
             DataColumn(label: Text('Divisão', style: TextStyle(fontWeight: FontWeight.bold))),
             DataColumn(label: Text('Segmento', style: TextStyle(fontWeight: FontWeight.bold))),
@@ -418,6 +462,13 @@ class _LocalListViewState extends State<LocalListView> {
                         : '-',
                   ),
                 ),
+                DataCell(
+                  Text(
+                    local.localInstalacaoSap != null && local.localInstalacaoSap!.isNotEmpty
+                        ? local.localInstalacaoSap!
+                        : '-',
+                  ),
+                ),
                 DataCell(Text(local.regional.isNotEmpty ? local.regional : '-')),
                 DataCell(Text(local.divisao.isNotEmpty ? local.divisao : '-')),
                 DataCell(Text(local.segmento.isNotEmpty ? local.segmento : '-')),
@@ -429,6 +480,13 @@ class _LocalListViewState extends State<LocalListView> {
                         icon: const Icon(Icons.edit, size: 20, color: Colors.blue),
                         onPressed: () => _editLocal(local),
                         tooltip: 'Editar',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.copy, size: 20, color: Colors.orange),
+                        onPressed: () => _duplicateLocal(local),
+                        tooltip: 'Duplicar',
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(),
                       ),

@@ -1,6 +1,7 @@
 import '../models/status.dart';
 import '../config/supabase_config.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'dart:async';
 
 class StatusService {
   static final StatusService _instance = StatusService._internal();
@@ -8,16 +9,36 @@ class StatusService {
   StatusService._internal();
 
   final SupabaseClient _supabase = SupabaseConfig.client;
+  
+  // StreamController para notificar mudanças nos status
+  final _statusChangeController = StreamController<String>.broadcast();
+  
+  Stream<String> get statusChangeStream => _statusChangeController.stream;
+  
+  void notifyStatusChanged(String statusId) {
+    _statusChangeController.add(statusId);
+  }
+  
+  void notifyAllStatusChanged() {
+    _statusChangeController.add('all');
+  }
+  
+  void dispose() {
+    _statusChangeController.close();
+  }
 
   // Converter Map do Supabase para Status
   Status _statusFromMap(Map<String, dynamic> map) {
     final cor = map['cor'] as String?;
-    print('📥 Carregando status ${map['codigo']} com cor: $cor');
+    final corSegmento = map['cor_segmento'] as String?;
+    final corTextoSegmento = map['cor_texto_segmento'] as String?;
     return Status(
       id: map['id'] as String,
       codigo: map['codigo'] as String,
       status: map['status'] as String,
       cor: cor ?? '#2196F3',
+      corSegmento: corSegmento,
+      corTextoSegmento: corTextoSegmento,
       createdAt: map['created_at'] != null
           ? DateTime.parse(map['created_at'] as String)
           : null,
@@ -33,6 +54,8 @@ class StatusService {
       'codigo': status.codigo,
       'status': status.status,
       'cor': status.cor,
+      'cor_segmento': status.corSegmento,
+      'cor_texto_segmento': status.corTextoSegmento,
     };
   }
 
@@ -60,7 +83,7 @@ class StatusService {
       
       // Log para debug
       for (var status in statuses) {
-        print('📋 Status carregado: ${status.codigo} - Cor: ${status.cor}');
+        // debug silenciado
       }
       
       return statuses;
@@ -132,7 +155,9 @@ class StatusService {
           .select()
           .single();
 
-      return _statusFromMap(response);
+      final createdStatus = _statusFromMap(response);
+      notifyAllStatusChanged(); // Notificar mudança
+      return createdStatus;
     } catch (e) {
       print('Erro ao criar status: $e');
       return null;
@@ -154,6 +179,8 @@ class StatusService {
 
       final updatedStatus = _statusFromMap(response);
       print('✅ Status atualizado. Cor retornada: ${updatedStatus.cor}');
+      notifyStatusChanged(id); // Notificar mudança específica
+      notifyAllStatusChanged(); // Notificar mudança geral também
       return updatedStatus;
     } catch (e) {
       print('❌ Erro ao atualizar status: $e');
@@ -165,6 +192,7 @@ class StatusService {
   Future<bool> deleteStatus(String id) async {
     try {
       await _supabase.from('status').delete().eq('id', id);
+      notifyAllStatusChanged(); // Notificar mudança
       return true;
     } catch (e) {
       print('Erro ao deletar status: $e');

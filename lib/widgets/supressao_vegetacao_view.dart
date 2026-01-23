@@ -1,0 +1,1600 @@
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+
+import '../services/supressao_vegetacao_service.dart';
+
+class SupressaoVegetacaoView extends StatefulWidget {
+  const SupressaoVegetacaoView({super.key});
+
+  @override
+  State<SupressaoVegetacaoView> createState() => _SupressaoVegetacaoViewState();
+}
+
+class _SupressaoVegetacaoViewState extends State<SupressaoVegetacaoView> {
+  final _formKey = GlobalKey<FormState>();
+  final _linhaController = TextEditingController();
+  final _tensaoController = TextEditingController();
+  final _ufController = TextEditingController();
+  final _concessionariaController = TextEditingController();
+  String _selectedLinhaId = '';
+  String? _selectedLinhaNome;
+
+  final _service = SupressaoVegetacaoService();
+  bool _isImporting = false;
+  String? _lastResult;
+  List<String> _avisos = [];
+  List<String> _erros = [];
+  bool _isLoadingTabela = false;
+  List<Map<String, dynamic>> _vaos = [];
+  List<Map<String, dynamic>> _linhas = [];
+  List<String> _ltEstruturas = [];
+  bool _loadingLinhas = true;
+  int _selectedSection = 0; // 0 = Importar, 1 = Tabela
+  String _selectedLinhaNomeTabela = '';
+  int _currentPage = 0;
+  final int _pageSize = 20;
+  final ScrollController _tableVController = ScrollController();
+
+  @override
+  void dispose() {
+    _tableVController.dispose();
+    _linhaController.dispose();
+    _tensaoController.dispose();
+    _ufController.dispose();
+    _concessionariaController.dispose();
+    super.dispose();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _carregarLinhas();
+  }
+
+  Future<void> _carregarLinhas() async {
+    try {
+      final linhas = await _service.listarLinhasTransmissao();
+      final lts = await _service.listarLtEstruturasDistinct();
+      setState(() {
+        _linhas = linhas;
+        _ltEstruturas = lts;
+        _selectedLinhaId = '';
+        _loadingLinhas = false;
+      });
+    } catch (e) {
+      setState(() {
+        _loadingLinhas = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erro ao carregar linhas: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _carregarVaos() async {
+    setState(() {
+      _isLoadingTabela = true;
+    });
+    try {
+      final dados = await _service.listarMapeamentoCompleto(
+        ltNome: _selectedLinhaNomeTabela,
+        limit: null, // sem limite para trazer todos da LT
+      );
+      setState(() {
+        _vaos = dados;
+        _isLoadingTabela = false;
+        _currentPage = 0;
+      });
+    } catch (e) {
+      setState(() {
+        _isLoadingTabela = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erro ao carregar vãos: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  String? _nomeDaLinhaPorId(String? id) {
+    if (id == null || id.isEmpty) return null;
+    final match = _linhas.where((l) => l['id'] == id);
+    if (match.isEmpty) return null;
+    return match.first['nome'] as String?;
+  }
+
+  Future<void> _importar() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    try {
+      setState(() {
+        _isImporting = true;
+        _lastResult = null;
+        _avisos = [];
+        _erros = [];
+      });
+
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['xlsx'],
+      );
+
+      if (result == null || result.files.isEmpty) {
+        setState(() {
+          _isImporting = false;
+        });
+        return;
+      }
+
+      final file = result.files.single;
+      Uint8List? bytes;
+      if (kIsWeb) {
+        bytes = file.bytes;
+      } else {
+        if (file.path == null) {
+          throw Exception('Caminho do arquivo não disponível.');
+        }
+        bytes = await File(file.path!).readAsBytes();
+      }
+
+      if (bytes == null || bytes.isEmpty) {
+        throw Exception('Arquivo vazio ou não foi possível ler.');
+      }
+
+      final res = await _service.importarXlsx(
+        bytes: bytes,
+        filename: file.name,
+        linhaNome: _selectedLinhaNome ?? _linhaController.text.trim(),
+        tensaoKv: _tensaoController.text.trim().isEmpty ? null : _tensaoController.text.trim(),
+        uf: _ufController.text.trim().isEmpty ? null : _ufController.text.trim(),
+        concessionaria: _concessionariaController.text.trim().isEmpty ? null : _concessionariaController.text.trim(),
+      );
+
+      setState(() {
+        _isImporting = false;
+        _lastResult =
+            'Processadas: ${res.linhasProcessadas}, Upsertadas: ${res.registrosUpsertados}';
+        _avisos = res.avisos;
+        _erros = res.erros;
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_lastResult ?? 'Importação finalizada.'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() {
+        _isImporting = false;
+        _erros = [e.toString()];
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erro na importação: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Supressão de Vegetação')),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16.0),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  ChoiceChip(
+                    label: const Text('Importar'),
+                    selected: _selectedSection == 0,
+                    onSelected: (_) => setState(() => _selectedSection = 0),
+                  ),
+                  ChoiceChip(
+                    label: const Text('Tabela'),
+                    selected: _selectedSection == 1,
+                    onSelected: (_) => setState(() => _selectedSection = 1),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              if (_selectedSection == 0)
+                Card(
+                  elevation: 2,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: const [
+                            Icon(Icons.upload_file, size: 20),
+                            SizedBox(width: 8),
+                            Text('Importar mapeamento (XLSX)',
+                                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        _loadingLinhas
+                            ? const LinearProgressIndicator()
+                            : DropdownButtonFormField<String>(
+                                value: _selectedLinhaId.isEmpty ? null : _selectedLinhaId,
+                                decoration: const InputDecoration(
+                                  labelText: 'Linha de Transmissão *',
+                                  border: OutlineInputBorder(),
+                                ),
+                                items: _linhas
+                                    .map((linha) => DropdownMenuItem<String>(
+                                          value: linha['id'] as String,
+                                          child: Text(linha['nome'] as String? ?? ''),
+                                        ))
+                                    .toList(),
+                                onChanged: (val) {
+                                  setState(() {
+                                    _selectedLinhaId = val ?? '';
+                                    _selectedLinhaNome = _nomeDaLinhaPorId(val);
+                                  });
+                                },
+                                validator: (v) {
+                                  if ((_selectedLinhaId.isEmpty) &&
+                                      (_linhaController.text.trim().isEmpty)) {
+                                    return 'Selecione ou informe o nome da linha';
+                                  }
+                                  return null;
+                                },
+                              ),
+                        const SizedBox(height: 8),
+                        TextFormField(
+                          controller: _linhaController,
+                          decoration: const InputDecoration(
+                            labelText: 'Nome da Linha (customizar, opcional)',
+                            border: OutlineInputBorder(),
+                          ),
+                          validator: (_) {
+                            if ((_selectedLinhaId.isEmpty) &&
+                                (_linhaController.text.trim().isEmpty)) {
+                              return 'Selecione ou informe o nome da linha';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextFormField(
+                                controller: _tensaoController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Tensão (kV) opcional',
+                                  border: OutlineInputBorder(),
+                                ),
+                                keyboardType: TextInputType.number,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: TextFormField(
+                                controller: _ufController,
+                                decoration: const InputDecoration(
+                                  labelText: 'UF (opcional)',
+                                  border: OutlineInputBorder(),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: TextFormField(
+                                controller: _concessionariaController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Concessionária (opcional)',
+                                  border: OutlineInputBorder(),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                        FilledButton.icon(
+                          onPressed: _isImporting ? null : _importar,
+                          icon: const Icon(Icons.cloud_upload),
+                          label: Text(_isImporting ? 'Importando...' : 'Selecionar e importar XLSX'),
+                        ),
+                        const SizedBox(height: 12),
+                        if (_lastResult != null) ...[
+                          Text(
+                            _lastResult!,
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                        if (_avisos.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          const Text('Avisos:', style: TextStyle(fontWeight: FontWeight.bold)),
+                          ..._avisos.map((a) => Text('- $a')),
+                        ],
+                        if (_erros.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          const Text('Erros:', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red)),
+                          ..._erros.map((e) => Text('- $e', style: const TextStyle(color: Colors.red))),
+                        ],
+                      ],
+                    ),
+                  ),
+                )
+              else
+                Card(
+                  elevation: 2,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  child: Padding(
+                    padding: const EdgeInsets.all(12.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Row(
+                              children: const [
+                                Icon(Icons.table_chart, size: 20),
+                                SizedBox(width: 8),
+                                Text(
+                                  'Vãos importados (todos da linha)',
+                                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                ),
+                              ],
+                            ),
+                        FilledButton.icon(
+                          onPressed: _isLoadingTabela ? null : _carregarVaos,
+                          icon: const Icon(Icons.refresh),
+                          label: Text(_isLoadingTabela ? 'Carregando...' : 'Atualizar'),
+                        ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        _loadingLinhas
+                            ? const LinearProgressIndicator()
+                            : Builder(builder: (context) {
+                                final Set<String> opts = {
+                                  '',
+                                  ..._linhas.map((l) => (l['nome'] as String?)?.trim() ?? ''),
+                                  ..._ltEstruturas.map((lt) => lt.trim()),
+                                };
+                                final linhaOptions = opts.where((e) => e.isNotEmpty || e == '').toList()..sort();
+                                final dropdownValue = linhaOptions.contains(_selectedLinhaNomeTabela)
+                                    ? _selectedLinhaNomeTabela
+                                    : '';
+                                return DropdownButtonFormField<String>(
+                                  value: dropdownValue,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Filtrar por linha',
+                                    border: OutlineInputBorder(),
+                                    isDense: true,
+                                  ),
+                                  items: linhaOptions
+                                      .map((opt) => DropdownMenuItem<String>(
+                                            value: opt,
+                                            child: Text(opt.isEmpty ? 'Todas as linhas' : opt),
+                                          ))
+                                      .toList(),
+                                  onChanged: (val) {
+                                    setState(() {
+                                      _selectedLinhaNomeTabela = val ?? '';
+                                    });
+                                    _carregarVaos();
+                                  },
+                                );
+                              }),
+                        const SizedBox(height: 12),
+                        if (_isLoadingTabela)
+                          const Center(child: Padding(
+                            padding: EdgeInsets.all(16.0),
+                            child: CircularProgressIndicator(),
+                          ))
+                        else
+                          _VaosTable(
+                            vaos: _vaos,
+                            pageSize: _pageSize,
+                            currentPage: _currentPage,
+                            onPageChanged: (p) => setState(() => _currentPage = p),
+                            vController: _tableVController,
+                            onEdit: (vao) async {
+                              final updated = await showDialog<Map<String, dynamic>>(
+                                context: context,
+                                builder: (context) => _EditarVaoDialog(vao: vao),
+                              );
+                              if (updated != null && updated.isNotEmpty) {
+                                try {
+                                  final vaoId = vao['vao_id'] as String?;
+                                  if (vaoId != null) {
+                                    await _service.atualizarVao(vaoId, updated);
+                                  } else {
+                                    final ltNome = ((vao['lt'] as String?) ?? _selectedLinhaNomeTabela).trim();
+                                    final est = (((updated['est_codigo'] as String?) ?? (vao['est_codigo'] as String?) ?? '')).trim();
+                                    if (ltNome.isEmpty || est.isEmpty) {
+                                      throw Exception('Não foi possível localizar linha ou est_codigo para criar o mapeamento.');
+                                    }
+                                    final linhaId = await _service.obterOuCriarLinhaPorNome(nome: ltNome);
+                                    await _service.upsertVaoComLinha(
+                                      linhaId: linhaId,
+                                      estCodigo: est,
+                                      dados: updated,
+                                    );
+                                  }
+                                  await _carregarVaos();
+                                  if (mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text('Vão atualizado com sucesso'),
+                                        backgroundColor: Colors.green,
+                                      ),
+                                    );
+                                  }
+                                } catch (e) {
+                                  if (mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text('Erro ao salvar: $e'),
+                                        backgroundColor: Colors.red,
+                                      ),
+                                    );
+                                  }
+                                }
+                              }
+                            },
+                            onQuickEdit: (vao, field, value) async {
+                              final vaoId = vao['vao_id'] as String?;
+                              final ltNome = ((vao['linhas_transmissao']?['nome'] as String?) ??
+                                      (vao['lt'] as String?) ??
+                                      _selectedLinhaNomeTabela)
+                                  .trim();
+                              final est = (vao['est_codigo'] as String?)?.trim() ?? '';
+                              if (ltNome.isEmpty || est.isEmpty) return;
+                              try {
+                                if (vaoId != null) {
+                                  await _service.atualizarVao(vaoId, {field: value});
+                                } else {
+                                  final linhaId = await _service.obterOuCriarLinhaPorNome(nome: ltNome);
+                                  await _service.upsertVaoComLinha(
+                                    linhaId: linhaId,
+                                    estCodigo: est,
+                                    dados: {field: value},
+                                  );
+                                }
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('Campo atualizado'),
+                                      backgroundColor: Colors.green,
+                                    ),
+                                  );
+                                }
+                              } catch (e) {
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text('Erro ao atualizar: $e'),
+                                      backgroundColor: Colors.red,
+                                    ),
+                                  );
+                                }
+                              }
+                            },
+                            onView: (vao) {
+                              showDialog(
+                                context: context,
+                                builder: (context) => _VerVaoDialog(vao: vao),
+                              );
+                            },
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _VaosTable extends StatefulWidget {
+  final List<Map<String, dynamic>> vaos;
+  final int pageSize;
+  final int currentPage;
+  final void Function(int page) onPageChanged;
+  final ScrollController vController;
+  final Future<void> Function(Map<String, dynamic> vao) onEdit;
+  final void Function(Map<String, dynamic> vao) onView;
+  final Future<void> Function(Map<String, dynamic> vao, String field, dynamic value)? onQuickEdit;
+  const _VaosTable({
+    required this.vaos,
+    required this.pageSize,
+    required this.currentPage,
+    required this.onPageChanged,
+    required this.vController,
+    required this.onEdit,
+    required this.onView,
+    this.onQuickEdit,
+  });
+
+  @override
+  State<_VaosTable> createState() => _VaosTableState();
+}
+
+class _VaosTableState extends State<_VaosTable> {
+  final ScrollController _leftV = ScrollController();
+  final ScrollController _rightV = ScrollController();
+  final TextEditingController _inlineController = TextEditingController();
+  final Set<String> _editableKeys = {
+    'est_codigo',
+    'vao_frente_m',
+    'vao_largura_m',
+    'map_mec_extensao_m',
+    'map_mec_largura_m',
+    'map_man_extensao_m',
+    'map_man_largura_m',
+    'exec_mec_extensao_m',
+    'exec_mec_largura_m',
+    'exec_mec_data',
+    'exec_man_extensao_m',
+    'exec_man_largura_m',
+    'exec_man_data',
+    'vao_data_conclusao',
+    'numeracao_ggt',
+    'mapeamento_ggt',
+    'codigo_ggt_execucao',
+    'descricao_servicos',
+    'prioridade',
+    'conferencia_vao',
+    'pend_manual',
+    'pend_mecanizado',
+    'pend_seletivo',
+    'pend_manual_extra',
+    'pend_mecanizado_extra',
+    'pend_seletivo_extra',
+    'pendencias_execucao',
+  };
+  String? _editingRowKey;
+  String? _editingField;
+
+  String _rowKey(Map<String, dynamic> row) {
+    final id = row['vao_id']?.toString();
+    if (id != null && id.isNotEmpty) return id;
+    final lt = (row['linhas_transmissao']?['nome'] ?? row['lt'] ?? '').toString();
+    final est = (row['est_codigo'] ?? '').toString();
+    return '$lt::$est';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _leftV.addListener(_syncRight);
+    _rightV.addListener(_syncLeft);
+  }
+
+  void _syncRight() {
+    if (_rightV.hasClients && _rightV.offset != _leftV.offset) {
+      _rightV.jumpTo(_leftV.offset);
+    }
+  }
+
+  void _syncLeft() {
+    if (_leftV.hasClients && _leftV.offset != _rightV.offset) {
+      _leftV.jumpTo(_rightV.offset);
+    }
+  }
+
+  @override
+  void dispose() {
+    _leftV.removeListener(_syncRight);
+    _rightV.removeListener(_syncLeft);
+    _leftV.dispose();
+    _rightV.dispose();
+    _inlineController.dispose();
+    super.dispose();
+  }
+
+  void _startInlineEdit(Map<String, dynamic> row, String key, String displayValue) {
+    if (widget.onQuickEdit == null) return;
+    setState(() {
+      _editingRowKey = _rowKey(row);
+      _editingField = key;
+      _inlineController.text = displayValue;
+    });
+  }
+
+  Future<void> _submitInlineEdit(Map<String, dynamic> row, String key) async {
+    if (widget.onQuickEdit == null) return;
+    final original = row[key];
+    var input = _inlineController.text.trim();
+    dynamic newValue = input;
+    if (original is num) {
+      final parsed = double.tryParse(input.replaceAll(',', '.'));
+      if (parsed != null) newValue = parsed;
+    }
+    try {
+      row[key] = newValue;
+      await widget.onQuickEdit!(row, key, newValue);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _editingRowKey = null;
+          _editingField = null;
+          _inlineController.clear();
+        });
+      }
+    }
+  }
+
+  String _fmt(dynamic v) => v == null ? '' : v.toString();
+  String _fmtNum(dynamic v) {
+    if (v == null) return '';
+    if (v is num) return v.toStringAsFixed(2);
+    return v.toString();
+  }
+
+  String _fmtDate(dynamic v) {
+    if (v == null) return '';
+    final dt = v is DateTime ? v : DateTime.tryParse(v.toString());
+    if (dt == null) return '';
+    return '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year}';
+  }
+
+  Widget _cell(
+    String text,
+    double width, {
+    FontWeight? fontWeight,
+    bool isHeader = false,
+    Color? background,
+    double? height,
+  }) {
+    final bg = background ??
+        (isHeader ? Colors.grey.shade100 : Colors.white);
+    return Container(
+      alignment: Alignment.centerLeft,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        color: bg,
+        border: Border.all(color: Colors.grey.shade300, width: 1),
+      ),
+      child: Text(
+        text,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(fontWeight: fontWeight),
+      ),
+    );
+  }
+
+  Widget _editableCell({
+    required Map<String, dynamic> row,
+    required String key,
+    required String label,
+    required double width,
+    bool isNumber = false,
+    bool isDate = false,
+  }) {
+    final rowKey = _rowKey(row);
+    final isEditing = _editingRowKey == rowKey && _editingField == key;
+    final displayText = isDate
+        ? _fmtDate(row[key])
+        : isNumber
+            ? _fmtNum(row[key])
+            : _fmt(row[key]);
+
+    if (!isEditing) {
+      return GestureDetector(
+        onTap: (widget.onQuickEdit != null && _editableKeys.contains(key))
+            ? () => _startInlineEdit(row, key, displayText)
+            : null,
+        child: _cell(displayText, width),
+      );
+    }
+
+    return Container(
+      width: width,
+      height: 52,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: Colors.blue.shade200, width: 1.5),
+      ),
+      alignment: Alignment.centerLeft,
+      child: TextField(
+        controller: _inlineController,
+        autofocus: true,
+        onSubmitted: (_) => _submitInlineEdit(row, key),
+        onEditingComplete: () => _submitInlineEdit(row, key),
+        decoration: InputDecoration(
+          isDense: true,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(6),
+          ),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const double headerGroupHeight = 36;
+    const double headerCellHeight = 44;
+    if (widget.vaos.isEmpty) {
+      return const Text('Nenhum vão encontrado.');
+    }
+    final start = widget.currentPage * widget.pageSize;
+    final end = (start + widget.pageSize) > widget.vaos.length ? widget.vaos.length : (start + widget.pageSize);
+    final pageItems = widget.vaos.sublist(start, end);
+    const double rowHeight = 52;
+    final double bodyHeight = pageItems.length * rowHeight;
+
+    final fixedCols = <Map<String, dynamic>>[
+      {'key': '__actions__', 'label': 'Ações', 'width': 110.0},
+      {'key': 'linhas_transmissao.nome', 'label': 'Linha', 'width': 140.0},
+      {'key': 'est_codigo', 'label': 'EST.', 'width': 80.0},
+      {'key': 'vao_frente_m', 'label': 'Vão Frente (m)', 'width': 130.0},
+      {'key': 'vao_largura_m', 'label': 'Largura (m)', 'width': 120.0},
+    ];
+    final cols = <Map<String, String>>[
+      {'key': 'linhas_transmissao.nome', 'label': 'Linha'},
+      {'key': 'est_codigo', 'label': 'EST.'},
+      {'key': 'vao_frente_m', 'label': 'Vão Frente (m)'},
+      {'key': 'vao_largura_m', 'label': 'Largura (m)'},
+      {'key': 'map_mec_extensao_m', 'label': 'Extensão'},
+      {'key': 'map_mec_largura_m', 'label': 'Largura'},
+      {'key': 'map_man_extensao_m', 'label': 'Extensão'},
+      {'key': 'map_man_largura_m', 'label': 'Largura'},
+      {'key': 'exec_mec_extensao_m', 'label': 'Exec. Mec Ext (m)'},
+      {'key': 'exec_mec_largura_m', 'label': 'Exec. Mec Larg (m)'},
+      {'key': 'exec_mec_data', 'label': 'Exec. Mec Data'},
+      {'key': 'exec_man_extensao_m', 'label': 'Exec. Man Ext (m)'},
+      {'key': 'exec_man_largura_m', 'label': 'Exec. Man Larg (m)'},
+      {'key': 'exec_man_data', 'label': 'Exec. Man Data'},
+      {'key': 'vao_data_conclusao', 'label': 'Conclusão Vão'},
+      {'key': 'roco_concluido', 'label': 'Roço Concluído'},
+      {'key': 'numeracao_ggt', 'label': 'Numeração GGT'},
+      {'key': 'mapeamento_ggt', 'label': 'Mapeamento GGT'},
+      {'key': 'codigo_ggt_execucao', 'label': 'Código GGT Execução'},
+      {'key': 'descricao_servicos', 'label': 'Descrição Serviços'},
+      {'key': 'prioridade', 'label': 'Prioridade'},
+      {'key': 'conferencia_vao', 'label': 'Conf. Vão'},
+      {'key': 'pend_manual', 'label': 'Pend. Manual'},
+      {'key': 'pend_mecanizado', 'label': 'Pend. Mecanizado'},
+      {'key': 'pend_seletivo', 'label': 'Pend. Seletivo'},
+      {'key': 'pend_manual_extra', 'label': 'Pend. Manual Extra'},
+      {'key': 'pend_mecanizado_extra', 'label': 'Pend. Mecanizado Extra'},
+      {'key': 'pend_seletivo_extra', 'label': 'Pend. Seletivo Extra'},
+      {'key': 'pendencias_execucao', 'label': 'Pendências Execução'},
+    ];
+
+    final dynamicCols =
+        cols.where((c) => !['linhas_transmissao.nome', 'est_codigo', 'vao_frente_m', 'vao_largura_m'].contains(c['key'])).toList();
+
+    Widget buildFixedHeader() {
+      final totalWidth =
+          fixedCols.fold<double>(0, (sum, c) => sum + (c['width'] as double));
+      final rowLabels = Row(
+        children: fixedCols
+            .map((c) => _cell(
+                  c['label'] as String,
+                  c['width'] as double,
+                  fontWeight: FontWeight.bold,
+                  isHeader: true,
+                  height: headerCellHeight,
+                ))
+            .toList(),
+      );
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: totalWidth,
+            alignment: Alignment.center,
+            height: headerGroupHeight,
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade200,
+              border: Border.all(color: Colors.grey.shade300, width: 1),
+            ),
+            child: const Text(
+              'VÃO',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          rowLabels,
+        ],
+      );
+    }
+
+    Widget buildRightHeader() {
+      // Mesclar cabeçalhos:
+      // - Mapeamento Mecanizado (2 colunas)
+      // - Mapeamento Manual (2 colunas)
+      // - Execução Mecanizado (3 colunas)
+      // - Execução Manual (3 colunas)
+      final mapMecKeys = ['map_mec_extensao_m', 'map_mec_largura_m'];
+      final mapManKeys = ['map_man_extensao_m', 'map_man_largura_m'];
+      final execMecKeys = ['exec_mec_extensao_m', 'exec_mec_largura_m', 'exec_mec_data'];
+      final execManKeys = ['exec_man_extensao_m', 'exec_man_largura_m', 'exec_man_data'];
+
+      final headerRow1 = <Widget>[];
+      final headerRow2 = <Widget>[];
+
+      for (final c in dynamicCols) {
+        final key = c['key']!;
+        if (mapMecKeys.contains(key)) {
+          if (!headerRow1.any((w) => (w.key as ValueKey?)?.value == 'map-mec-span')) {
+            headerRow1.add(Container(
+              key: const ValueKey('map-mec-span'),
+              width: 150.0 * mapMecKeys.length,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                border: Border.all(color: Colors.grey.shade300, width: 1),
+              ),
+              alignment: Alignment.center,
+              height: headerGroupHeight,
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: const Text(
+                'Mapeamento Mecanizado',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ));
+          }
+          headerRow2.add(_cell(
+            c['label']!,
+            150,
+            fontWeight: FontWeight.bold,
+            isHeader: true,
+            height: headerCellHeight,
+          ));
+        } else if (mapManKeys.contains(key)) {
+          if (!headerRow1.any((w) => (w.key as ValueKey?)?.value == 'map-man-span')) {
+            headerRow1.add(Container(
+              key: const ValueKey('map-man-span'),
+              width: 150.0 * mapManKeys.length,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                border: Border.all(color: Colors.grey.shade300, width: 1),
+              ),
+              alignment: Alignment.center,
+              height: headerGroupHeight,
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: const Text(
+                'Mapeamento Manual',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ));
+          }
+          headerRow2.add(_cell(
+            c['label']!,
+            150,
+            fontWeight: FontWeight.bold,
+            isHeader: true,
+            height: headerCellHeight,
+          ));
+        } else if (execMecKeys.contains(key)) {
+          if (!headerRow1.any((w) => (w.key as ValueKey?)?.value == 'exec-mec-span')) {
+            headerRow1.add(Container(
+              key: const ValueKey('exec-mec-span'),
+              width: 150.0 * execMecKeys.length,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                border: Border.all(color: Colors.grey.shade300, width: 1),
+              ),
+              alignment: Alignment.center,
+              height: headerGroupHeight,
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: const Text(
+                'Execução Mecanizado',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ));
+          }
+          headerRow2.add(_cell(
+            c['label']!,
+            150,
+            fontWeight: FontWeight.bold,
+            isHeader: true,
+            height: headerCellHeight,
+          ));
+        } else if (execManKeys.contains(key)) {
+          if (!headerRow1.any((w) => (w.key as ValueKey?)?.value == 'exec-man-span')) {
+            headerRow1.add(Container(
+              key: const ValueKey('exec-man-span'),
+              width: 150.0 * execManKeys.length,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                border: Border.all(color: Colors.grey.shade300, width: 1),
+              ),
+              alignment: Alignment.center,
+              height: headerGroupHeight,
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: const Text(
+                'Execução Manual',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ));
+          }
+          headerRow2.add(_cell(
+            c['label']!,
+            150,
+            fontWeight: FontWeight.bold,
+            isHeader: true,
+            height: headerCellHeight,
+          ));
+        } else {
+          headerRow1.add(_cell(
+            '',
+            150,
+            isHeader: true,
+            height: headerGroupHeight,
+          ));
+          headerRow2.add(_cell(
+            c['label']!,
+            150,
+            fontWeight: FontWeight.bold,
+            isHeader: true,
+            height: headerCellHeight,
+          ));
+        }
+      }
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: headerRow1),
+          Row(children: headerRow2),
+        ],
+      );
+    }
+
+    List<Widget> buildFixedRows() {
+      return pageItems.map((row) {
+        final linhaNome = row['linhas_transmissao']?['nome'] ?? row['lt'] ?? '';
+        return Row(
+          children: [
+            Container(
+              width: fixedCols.first['width'] as double,
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                border: Border.all(color: Colors.grey.shade300, width: 1),
+              ),
+              child: Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.visibility),
+                    tooltip: 'Visualizar',
+                    onPressed: () => widget.onView(row),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.edit),
+                    onPressed: () => widget.onEdit(row),
+                    tooltip: 'Editar / Mapear',
+                  ),
+                ],
+              ),
+            ),
+            _cell(linhaNome.toString(), fixedCols[1]['width'] as double),
+            _editableCell(
+              row: row,
+              key: 'est_codigo',
+              label: 'EST.',
+              width: fixedCols[2]['width'] as double,
+            ),
+            _editableCell(
+              row: row,
+              key: 'vao_frente_m',
+              label: 'Vão Frente (m)',
+              width: fixedCols[3]['width'] as double,
+              isNumber: true,
+            ),
+            _editableCell(
+              row: row,
+              key: 'vao_largura_m',
+              label: 'Largura (m)',
+              width: fixedCols[4]['width'] as double,
+              isNumber: true,
+            ),
+          ],
+        );
+      }).toList();
+    }
+
+    List<Widget> buildRightRows() {
+      return pageItems.map((row) {
+        final linhaNome = row['linhas_transmissao']?['nome'] ?? row['lt'] ?? '';
+        return Row(
+          children: dynamicCols.map((c) {
+            final key = c['key']!;
+            dynamic val;
+            if (key == 'linhas_transmissao.nome') {
+              val = linhaNome;
+            } else {
+              val = row[key];
+            }
+            final label = c['label'] ?? key;
+            final isDate = key.contains('_data') || key.contains('conclusao');
+            final isNumber = key.contains('_m');
+            if (key == 'roco_concluido') {
+              return _cell(val == true ? 'Sim' : 'Não', 150);
+            }
+            if (widget.onQuickEdit != null && _editableKeys.contains(key)) {
+              return _editableCell(
+                row: row,
+                key: key,
+                label: label,
+                width: 150,
+                isNumber: isNumber,
+                isDate: isDate,
+              );
+            }
+            if (isDate) return _cell(_fmtDate(val), 150);
+            if (isNumber) return _cell(_fmtNum(val), 150);
+            return _cell(_fmt(val), 150);
+          }).toList(),
+        );
+      }).toList();
+    }
+
+    final totalPages = (widget.vaos.length / widget.pageSize).ceil();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                buildFixedHeader(),
+                SizedBox(
+                  height: bodyHeight,
+                  child: Scrollbar(
+                    controller: _leftV,
+                    thumbVisibility: true,
+                    child: SingleChildScrollView(
+                      controller: _leftV,
+                      scrollDirection: Axis.vertical,
+                      child: Column(children: buildFixedRows()),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                buildRightHeader(),
+                    SizedBox(
+                      height: bodyHeight,
+                      child: Scrollbar(
+                        controller: _rightV,
+                        thumbVisibility: true,
+                        child: SingleChildScrollView(
+                          controller: _rightV,
+                          scrollDirection: Axis.vertical,
+                          child: Column(children: buildRightRows()),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Text('Página ${widget.currentPage + 1} de $totalPages'),
+            const SizedBox(width: 12),
+            IconButton(
+              icon: const Icon(Icons.chevron_left),
+              onPressed: widget.currentPage > 0 ? () => widget.onPageChanged(widget.currentPage - 1) : null,
+            ),
+            IconButton(
+              icon: const Icon(Icons.chevron_right),
+              onPressed: (widget.currentPage + 1) < totalPages ? () => widget.onPageChanged(widget.currentPage + 1) : null,
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _EditarVaoDialog extends StatefulWidget {
+  final Map<String, dynamic> vao;
+  const _EditarVaoDialog({required this.vao});
+
+  @override
+  State<_EditarVaoDialog> createState() => _EditarVaoDialogState();
+}
+
+class _EditarVaoDialogState extends State<_EditarVaoDialog> {
+  late TextEditingController _prioridadeController;
+  late TextEditingController _pendenciasController;
+  late TextEditingController _estController;
+  late TextEditingController _vaoFrenteController;
+  late TextEditingController _vaoLarguraController;
+  late TextEditingController _mapMecExtController;
+  late TextEditingController _mapMecLargController;
+  late TextEditingController _mapManExtController;
+  late TextEditingController _mapManLargController;
+  late TextEditingController _execMecExtController;
+  late TextEditingController _execMecLargController;
+  late TextEditingController _execManExtController;
+  late TextEditingController _execManLargController;
+  late TextEditingController _numeracaoGgtController;
+  late TextEditingController _mapeamentoGgtController;
+  late TextEditingController _codigoGgtController;
+  late TextEditingController _descricaoServicosController;
+  late TextEditingController _conferenciaController;
+  late TextEditingController _pendManualController;
+  late TextEditingController _pendMecanizadoController;
+  late TextEditingController _pendSeletivoController;
+  late TextEditingController _pendManualExtraController;
+  late TextEditingController _pendMecanizadoExtraController;
+  late TextEditingController _pendSeletivoExtraController;
+  DateTime? _execMecData;
+  DateTime? _execManData;
+  DateTime? _vaoConclusao;
+  bool _rocoConcluido = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _prioridadeController =
+        TextEditingController(text: widget.vao['prioridade']?.toString() ?? '');
+    _pendenciasController = TextEditingController(
+        text: widget.vao['pendencias_execucao']?.toString() ?? '');
+    _estController = TextEditingController(text: widget.vao['est_codigo']?.toString() ?? '');
+    _vaoFrenteController = TextEditingController(text: _numStr(widget.vao['vao_frente_m']));
+    _vaoLarguraController = TextEditingController(text: _numStr(widget.vao['vao_largura_m']));
+    _mapMecExtController = TextEditingController(text: _numStr(widget.vao['map_mec_extensao_m']));
+    _mapMecLargController = TextEditingController(text: _numStr(widget.vao['map_mec_largura_m']));
+    _mapManExtController = TextEditingController(text: _numStr(widget.vao['map_man_extensao_m']));
+    _mapManLargController = TextEditingController(text: _numStr(widget.vao['map_man_largura_m']));
+    _execMecExtController = TextEditingController(text: _numStr(widget.vao['exec_mec_extensao_m']));
+    _execMecLargController = TextEditingController(text: _numStr(widget.vao['exec_mec_largura_m']));
+    _execManExtController = TextEditingController(text: _numStr(widget.vao['exec_man_extensao_m']));
+    _execManLargController = TextEditingController(text: _numStr(widget.vao['exec_man_largura_m']));
+    _numeracaoGgtController =
+        TextEditingController(text: widget.vao['numeracao_ggt']?.toString() ?? '');
+    _mapeamentoGgtController =
+        TextEditingController(text: widget.vao['mapeamento_ggt']?.toString() ?? '');
+    _codigoGgtController =
+        TextEditingController(text: widget.vao['codigo_ggt_execucao']?.toString() ?? '');
+    _descricaoServicosController =
+        TextEditingController(text: widget.vao['descricao_servicos']?.toString() ?? '');
+    _conferenciaController =
+        TextEditingController(text: widget.vao['conferencia_vao']?.toString() ?? '');
+    _pendManualController =
+        TextEditingController(text: widget.vao['pend_manual']?.toString() ?? '');
+    _pendMecanizadoController =
+        TextEditingController(text: widget.vao['pend_mecanizado']?.toString() ?? '');
+    _pendSeletivoController =
+        TextEditingController(text: widget.vao['pend_seletivo']?.toString() ?? '');
+    _pendManualExtraController =
+        TextEditingController(text: widget.vao['pend_manual_extra']?.toString() ?? '');
+    _pendMecanizadoExtraController =
+        TextEditingController(text: widget.vao['pend_mecanizado_extra']?.toString() ?? '');
+    _pendSeletivoExtraController =
+        TextEditingController(text: widget.vao['pend_seletivo_extra']?.toString() ?? '');
+    _rocoConcluido = (widget.vao['roco_concluido'] == true);
+    _execMecData = _parseDate(widget.vao['exec_mec_data']);
+    _execManData = _parseDate(widget.vao['exec_man_data']);
+    _vaoConclusao = _parseDate(widget.vao['vao_data_conclusao']);
+  }
+
+  String _numStr(dynamic v) {
+    if (v == null) return '';
+    if (v is num) return v.toString();
+    return v.toString();
+  }
+
+  DateTime? _parseDate(dynamic v) {
+    if (v == null) return null;
+    if (v is DateTime) return v;
+    return DateTime.tryParse(v.toString());
+  }
+
+  Future<void> _pickDate(DateTime? current, void Function(DateTime?) setVal) async {
+    final now = DateTime.now();
+    final first = DateTime(now.year - 5);
+    final last = DateTime(now.year + 5);
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: current ?? now,
+      firstDate: first,
+      lastDate: last,
+    );
+    if (picked != null) {
+      setState(() => setVal(picked));
+    }
+  }
+
+  @override
+  void dispose() {
+    _prioridadeController.dispose();
+    _pendenciasController.dispose();
+    _estController.dispose();
+    _vaoFrenteController.dispose();
+    _vaoLarguraController.dispose();
+    _mapMecExtController.dispose();
+    _mapMecLargController.dispose();
+    _mapManExtController.dispose();
+    _mapManLargController.dispose();
+    _execMecExtController.dispose();
+    _execMecLargController.dispose();
+    _execManExtController.dispose();
+    _execManLargController.dispose();
+    _numeracaoGgtController.dispose();
+    _mapeamentoGgtController.dispose();
+    _codigoGgtController.dispose();
+    _descricaoServicosController.dispose();
+    _conferenciaController.dispose();
+    _pendManualController.dispose();
+    _pendMecanizadoController.dispose();
+    _pendSeletivoController.dispose();
+    _pendManualExtraController.dispose();
+    _pendMecanizadoExtraController.dispose();
+    _pendSeletivoExtraController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Editar Vão'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SwitchListTile(
+              title: const Text('Roço concluído'),
+              value: _rocoConcluido,
+              onChanged: (v) => setState(() => _rocoConcluido = v),
+            ),
+            _txt(_estController, 'EST.'),
+            _txt(_vaoFrenteController, 'Vão Frente (m)', isNumber: true),
+            _txt(_vaoLarguraController, 'Largura (m)', isNumber: true),
+            _txt(_mapMecExtController, 'Map. Mec Extensão (m)', isNumber: true),
+            _txt(_mapMecLargController, 'Map. Mec Largura (m)', isNumber: true),
+            _txt(_mapManExtController, 'Map. Man Extensão (m)', isNumber: true),
+            _txt(_mapManLargController, 'Map. Man Largura (m)', isNumber: true),
+            _txt(_execMecExtController, 'Exec. Mec Extensão (m)', isNumber: true),
+            _txt(_execMecLargController, 'Exec. Mec Largura (m)', isNumber: true),
+            _txt(_execManExtController, 'Exec. Man Extensão (m)', isNumber: true),
+            _txt(_execManLargController, 'Exec. Man Largura (m)', isNumber: true),
+            _DateField(
+              label: 'Execução Mecânica',
+              value: _execMecData,
+              onPick: () => _pickDate(_execMecData, (v) => _execMecData = v),
+            ),
+            _DateField(
+              label: 'Execução Manual',
+              value: _execManData,
+              onPick: () => _pickDate(_execManData, (v) => _execManData = v),
+            ),
+            _DateField(
+              label: 'Conclusão do Vão',
+              value: _vaoConclusao,
+              onPick: () => _pickDate(_vaoConclusao, (v) => _vaoConclusao = v),
+            ),
+            _txt(_numeracaoGgtController, 'Numeração GGT'),
+            _txt(_mapeamentoGgtController, 'Mapeamento GGT'),
+            _txt(_codigoGgtController, 'Código GGT Execução'),
+            _txt(_descricaoServicosController, 'Descrição dos Serviços', maxLines: 2),
+            _txt(_prioridadeController, 'Prioridade'),
+            _txt(_conferenciaController, 'Conferência do Vão'),
+            _txt(_pendManualController, 'Pend. Manual'),
+            _txt(_pendMecanizadoController, 'Pend. Mecanizado'),
+            _txt(_pendSeletivoController, 'Pend. Seletivo'),
+            _txt(_pendManualExtraController, 'Pend. Manual Extra'),
+            _txt(_pendMecanizadoExtraController, 'Pend. Mecanizado Extra'),
+            _txt(_pendSeletivoExtraController, 'Pend. Seletivo Extra'),
+            _txt(_pendenciasController, 'Pendências na execução', maxLines: 3),
+          ].map((w) => Padding(padding: const EdgeInsets.only(bottom: 8), child: w)).toList(),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancelar'),
+        ),
+        ElevatedButton(
+          onPressed: () {
+            final payload = <String, dynamic>{
+              'est_codigo': _estController.text.trim(),
+              'vao_frente_m': _toDouble(_vaoFrenteController.text),
+              'vao_largura_m': _toDouble(_vaoLarguraController.text),
+              'map_mec_extensao_m': _toDouble(_mapMecExtController.text),
+              'map_mec_largura_m': _toDouble(_mapMecLargController.text),
+              'map_man_extensao_m': _toDouble(_mapManExtController.text),
+              'map_man_largura_m': _toDouble(_mapManLargController.text),
+              'exec_mec_extensao_m': _toDouble(_execMecExtController.text),
+              'exec_mec_largura_m': _toDouble(_execMecLargController.text),
+              'exec_man_extensao_m': _toDouble(_execManExtController.text),
+              'exec_man_largura_m': _toDouble(_execManLargController.text),
+              'roco_concluido': _rocoConcluido,
+              'prioridade': _prioridadeController.text.trim(),
+              'pendencias_execucao': _pendenciasController.text.trim(),
+              'numeracao_ggt': _numeracaoGgtController.text.trim(),
+              'mapeamento_ggt': _mapeamentoGgtController.text.trim(),
+              'codigo_ggt_execucao': _codigoGgtController.text.trim(),
+              'descricao_servicos': _descricaoServicosController.text.trim(),
+              'conferencia_vao': _conferenciaController.text.trim(),
+              'pend_manual': _pendManualController.text.trim(),
+              'pend_mecanizado': _pendMecanizadoController.text.trim(),
+              'pend_seletivo': _pendSeletivoController.text.trim(),
+              'pend_manual_extra': _pendManualExtraController.text.trim(),
+              'pend_mecanizado_extra': _pendMecanizadoExtraController.text.trim(),
+              'pend_seletivo_extra': _pendSeletivoExtraController.text.trim(),
+              'exec_mec_data':
+                  _execMecData != null ? _execMecData!.toIso8601String() : null,
+              'exec_man_data':
+                  _execManData != null ? _execManData!.toIso8601String() : null,
+              'vao_data_conclusao':
+                  _vaoConclusao != null ? _vaoConclusao!.toIso8601String() : null,
+            };
+            Navigator.of(context).pop(payload);
+          },
+          child: const Text('Salvar'),
+        ),
+      ],
+    );
+  }
+
+  Widget _txt(TextEditingController c, String label,
+      {bool isNumber = false, int maxLines = 1}) {
+    return TextField(
+      controller: c,
+      keyboardType: isNumber ? TextInputType.number : TextInputType.text,
+      decoration: InputDecoration(
+        labelText: label,
+        border: const OutlineInputBorder(),
+      ),
+      maxLines: maxLines,
+    );
+  }
+
+  double? _toDouble(String s) {
+    final t = s.trim();
+    if (t.isEmpty) return null;
+    return double.tryParse(t.replaceAll(',', '.'));
+  }
+}
+
+class _DateField extends StatelessWidget {
+  final String label;
+  final DateTime? value;
+  final VoidCallback onPick;
+  const _DateField({required this.label, required this.value, required this.onPick});
+
+  @override
+  Widget build(BuildContext context) {
+    final text = value == null
+        ? 'Selecione'
+        : '${value!.day.toString().padLeft(2, '0')}/${value!.month.toString().padLeft(2, '0')}/${value!.year}';
+    return Row(
+      children: [
+        Expanded(child: Text(label)),
+        TextButton(onPressed: onPick, child: Text(text)),
+      ],
+    );
+  }
+}
+
+class _VerVaoDialog extends StatelessWidget {
+  final Map<String, dynamic> vao;
+  const _VerVaoDialog({required this.vao});
+
+  String _fmt(dynamic v) => v == null ? '' : v.toString();
+  String _fmtNum(dynamic v) {
+    if (v == null) return '';
+    if (v is num) return v.toStringAsFixed(2);
+    return v.toString();
+  }
+
+  String _fmtDate(dynamic v) {
+    if (v == null) return '';
+    final dt = v is DateTime ? v : DateTime.tryParse(v.toString());
+    if (dt == null) return '';
+    return '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final linhaNome = vao['linhas_transmissao']?['nome'] ?? _fmt(vao['lt']);
+    final est = _fmt(vao['est_codigo']);
+
+    Map<String, String> labels = {
+      'lt': 'LT',
+      'est_codigo': 'Estrutura',
+      'familia': 'Família',
+      'tipo': 'Tipo',
+      'progressiva': 'Progressiva',
+      'vao_m': 'Vão (m)',
+      'altura_util_m': 'Altura útil (m)',
+      'deflexao': 'Deflexão',
+      'equipe': 'Equipe',
+      'geo_lat': 'Geo Lat',
+      'geo_lon': 'Geo Lon',
+      'numeracao_antiga': 'Numeração antiga',
+      'vao_frente_m': 'Vão frente (m)',
+      'vao_largura_m': 'Largura (m)',
+      'map_mec_extensao_m': 'Map. Mec Ext (m)',
+      'map_mec_largura_m': 'Map. Mec Larg (m)',
+      'map_man_extensao_m': 'Map. Man Ext (m)',
+      'map_man_largura_m': 'Map. Man Larg (m)',
+      'exec_mec_extensao_m': 'Exec. Mec Ext (m)',
+      'exec_mec_largura_m': 'Exec. Mec Larg (m)',
+      'exec_mec_data': 'Exec. Mec Data',
+      'exec_man_extensao_m': 'Exec. Man Ext (m)',
+      'exec_man_largura_m': 'Exec. Man Larg (m)',
+      'exec_man_data': 'Exec. Man Data',
+      'vao_data_conclusao': 'Conclusão do Vão',
+      'roco_concluido': 'Roço concluído',
+      'numeracao_ggt': 'Numeração GGT',
+      'mapeamento_ggt': 'Mapeamento GGT',
+      'codigo_ggt_execucao': 'Código GGT Execução',
+      'descricao_servicos': 'Descrição Serviços',
+      'prioridade': 'Prioridade',
+      'conferencia_vao': 'Conf. Vão',
+      'pend_manual': 'Pend. Manual',
+      'pend_mecanizado': 'Pend. Mecanizado',
+      'pend_seletivo': 'Pend. Seletivo',
+      'pend_manual_extra': 'Pend. Manual Extra',
+      'pend_mecanizado_extra': 'Pend. Mecanizado Extra',
+      'pend_seletivo_extra': 'Pend. Seletivo Extra',
+      'pendencias_execucao': 'Pendências Execução',
+    };
+
+    List<Widget> buildSection(String title, List<String> keys) {
+      final rows = <Widget>[];
+      for (final k in keys) {
+        final val = vao[k];
+        if (val == null || val.toString().trim().isEmpty) continue;
+        String display;
+        if (k.contains('_m')) {
+          display = _fmtNum(val);
+        } else if (k.contains('data')) {
+          display = _fmtDate(val);
+        } else if (k == 'roco_concluido') {
+          display = val == true ? 'Sim' : 'Não';
+        } else {
+          display = _fmt(val);
+        }
+        rows.add(Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 160,
+                child: Text(
+                  labels[k] ?? k,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+              Expanded(child: Text(display)),
+            ],
+          ),
+        ));
+      }
+      if (rows.isEmpty) return [];
+      return [
+        Padding(
+          padding: const EdgeInsets.only(top: 8, bottom: 4),
+          child: Text(
+            title,
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+          ),
+        ),
+        ...rows,
+      ];
+    }
+
+    return AlertDialog(
+      title: Text('Vão $est'),
+      content: SizedBox(
+        width: 520,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (linhaNome.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text('Linha: $linhaNome', style: const TextStyle(fontWeight: FontWeight.w600)),
+                ),
+              ...buildSection('Estrutura', [
+                'lt',
+                'est_codigo',
+                'familia',
+                'tipo',
+                'progressiva',
+                'vao_m',
+                'altura_util_m',
+                'deflexao',
+                'equipe',
+                'geo_lat',
+                'geo_lon',
+                'numeracao_antiga',
+              ]),
+              ...buildSection('Mapeamento', [
+                'vao_frente_m',
+                'vao_largura_m',
+                'map_mec_extensao_m',
+                'map_mec_largura_m',
+                'map_man_extensao_m',
+                'map_man_largura_m',
+                'exec_mec_extensao_m',
+                'exec_mec_largura_m',
+                'exec_mec_data',
+                'exec_man_extensao_m',
+                'exec_man_largura_m',
+                'exec_man_data',
+                'vao_data_conclusao',
+                'roco_concluido',
+                'numeracao_ggt',
+                'mapeamento_ggt',
+                'codigo_ggt_execucao',
+                'descricao_servicos',
+                'prioridade',
+                'conferencia_vao',
+                'pend_manual',
+                'pend_mecanizado',
+                'pend_seletivo',
+                'pend_manual_extra',
+                'pend_mecanizado_extra',
+                'pend_seletivo_extra',
+                'pendencias_execucao',
+              ]),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Fechar'),
+        )
+      ],
+    );
+  }
+}

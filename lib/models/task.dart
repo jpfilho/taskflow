@@ -94,6 +94,50 @@ class ExecutorPeriod {
   }
 }
 
+// Classe para representar períodos específicos de uma frota
+class FrotaPeriod {
+  final String frotaId;
+  final String frotaNome;
+  final List<GanttSegment> periods;
+
+  FrotaPeriod({
+    required this.frotaId,
+    required this.frotaNome,
+    this.periods = const [],
+  });
+
+  FrotaPeriod copyWith({
+    String? frotaId,
+    String? frotaNome,
+    List<GanttSegment>? periods,
+  }) {
+    return FrotaPeriod(
+      frotaId: frotaId ?? this.frotaId,
+      frotaNome: frotaNome ?? this.frotaNome,
+      periods: periods ?? this.periods,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'frotaId': frotaId,
+      'frotaNome': frotaNome,
+      'periods': periods.map((p) => p.toMap()).toList(),
+    };
+  }
+
+  factory FrotaPeriod.fromMap(Map<String, dynamic> map) {
+    return FrotaPeriod(
+      frotaId: map['frotaId'] as String,
+      frotaNome: map['frotaNome'] as String,
+      periods: (map['periods'] as List<dynamic>?)
+              ?.map((p) => GanttSegment.fromMap(p as Map<String, dynamic>))
+              .toList() ??
+          [],
+    );
+  }
+}
+
 // Classe para informações de executores de equipe
 class EquipeExecutorInfo {
   final String executorNome;
@@ -117,6 +161,7 @@ class Task {
   final List<String> localIds;
   final List<String> executorIds;
   final List<String> equipeIds;
+  final List<String> frotaIds;
   
   // Campos antigos (deprecated, para compatibilidade)
   final String? localId;
@@ -153,6 +198,8 @@ class Task {
   
   // Períodos específicos por executor (permite que cada executor tenha períodos diferentes)
   final List<ExecutorPeriod> executorPeriods;
+  // Períodos específicos por frota (quando houver mais de uma frota na tarefa)
+  final List<FrotaPeriod> frotaPeriods;
   
   // Campos adicionais
   final String? observacoes;
@@ -160,6 +207,8 @@ class Task {
   final double? horasExecutadas;
   final String? prioridade;
   final String? parentId;
+  final bool precisaSi;
+  final bool hasConflict;
 
   Task({
     required this.id,
@@ -170,6 +219,7 @@ class Task {
     this.localIds = const [],
     this.executorIds = const [],
     this.equipeIds = const [],
+    this.frotaIds = const [],
     this.localId,
     this.equipeId,
     required this.status,
@@ -194,11 +244,14 @@ class Task {
     this.dataAtualizacao,
     this.ganttSegments = const [],
     this.executorPeriods = const [],
+    this.frotaPeriods = const [],
     this.observacoes,
     this.horasPrevistas,
     this.horasExecutadas,
     this.prioridade,
     this.parentId,
+    this.precisaSi = false,
+    this.hasConflict = false,
   });
 
   // Getter para verificar se é uma tarefa principal (não subtarefa)
@@ -214,6 +267,7 @@ class Task {
     List<String>? localIds,
     List<String>? executorIds,
     List<String>? equipeIds,
+    List<String>? frotaIds,
     String? localId,
     String? equipeId,
     String? status,
@@ -238,11 +292,14 @@ class Task {
     DateTime? dataAtualizacao,
     List<GanttSegment>? ganttSegments,
     List<ExecutorPeriod>? executorPeriods,
+    List<FrotaPeriod>? frotaPeriods,
     String? observacoes,
     double? horasPrevistas,
     double? horasExecutadas,
     String? prioridade,
     String? parentId,
+    bool? precisaSi,
+    bool? hasConflict,
   }) {
     return Task(
       id: id ?? this.id,
@@ -253,6 +310,7 @@ class Task {
       localIds: localIds ?? this.localIds,
       executorIds: executorIds ?? this.executorIds,
       equipeIds: equipeIds ?? this.equipeIds,
+      frotaIds: frotaIds ?? this.frotaIds,
       localId: localId ?? this.localId,
       equipeId: equipeId ?? this.equipeId,
       status: status ?? this.status,
@@ -277,11 +335,14 @@ class Task {
       dataAtualizacao: dataAtualizacao ?? this.dataAtualizacao,
       ganttSegments: ganttSegments ?? this.ganttSegments,
       executorPeriods: executorPeriods ?? this.executorPeriods,
+      frotaPeriods: frotaPeriods ?? this.frotaPeriods,
       observacoes: observacoes ?? this.observacoes,
       horasPrevistas: horasPrevistas ?? this.horasPrevistas,
       horasExecutadas: horasExecutadas ?? this.horasExecutadas,
       prioridade: prioridade ?? this.prioridade,
       parentId: parentId ?? this.parentId,
+      precisaSi: precisaSi ?? this.precisaSi,
+      hasConflict: hasConflict ?? this.hasConflict,
     );
   }
 

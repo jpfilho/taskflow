@@ -2,6 +2,7 @@ class Local {
   final String id;
   final String local;
   final String? descricao;
+  final String? localInstalacaoSap;
   final bool paraTodaRegional;
   final bool paraTodaDivisao;
   final String? regionalId;
@@ -18,6 +19,7 @@ class Local {
     required this.id,
     required this.local,
     this.descricao,
+    this.localInstalacaoSap,
     this.paraTodaRegional = false,
     this.paraTodaDivisao = false,
     this.regionalId,
@@ -35,6 +37,7 @@ class Local {
     String? id,
     String? local,
     String? descricao,
+    String? localInstalacaoSap,
     bool? paraTodaRegional,
     bool? paraTodaDivisao,
     String? regionalId,
@@ -50,6 +53,7 @@ class Local {
       id: id ?? this.id,
       local: local ?? this.local,
       descricao: descricao ?? this.descricao,
+      localInstalacaoSap: localInstalacaoSap ?? this.localInstalacaoSap,
       paraTodaRegional: paraTodaRegional ?? this.paraTodaRegional,
       paraTodaDivisao: paraTodaDivisao ?? this.paraTodaDivisao,
       regionalId: regionalId ?? this.regionalId,
@@ -69,6 +73,7 @@ class Local {
       'id': id,
       'local': local,
       'descricao': descricao,
+      'local_instalacao_sap': localInstalacaoSap,
       'para_toda_regional': paraTodaRegional,
       'para_toda_divisao': paraTodaDivisao,
       'regional_id': regionalId,
@@ -85,6 +90,7 @@ class Local {
       id: map['id'] as String,
       local: map['local'] as String,
       descricao: map['descricao'] as String?,
+      localInstalacaoSap: map['local_instalacao_sap'] as String?,
       paraTodaRegional: map['para_toda_regional'] as bool? ?? false,
       paraTodaDivisao: map['para_toda_divisao'] as bool? ?? false,
       regionalId: map['regional_id'] as String?,

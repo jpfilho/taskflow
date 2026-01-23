@@ -39,6 +39,11 @@ android {
     }
 }
 
+dependencies {
+    // Disponibiliza annotations do FindBugs em tempo de compilação (não empacota)
+    compileOnly("com.google.code.findbugs:annotations:3.0.1")
+}
+
 flutter {
     source = "../.."
 }

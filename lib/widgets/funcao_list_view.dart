@@ -121,6 +121,43 @@ class _FuncaoListViewState extends State<FuncaoListView> {
     }
   }
 
+  Future<void> _duplicateFuncao(Funcao funcao) async {
+    // Criar cópia com nome modificado
+    final duplicated = funcao.copyWith(
+      id: '',
+      funcao: '${funcao.funcao} (Cópia)',
+    );
+
+    final result = await showDialog<Funcao>(
+      context: context,
+      builder: (context) => FuncaoFormDialog(funcao: duplicated),
+    );
+
+    if (result != null) {
+      final created = await _funcaoService.createFuncao(result);
+      if (created != null) {
+        await _loadFuncoes();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Função duplicada com sucesso!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Erro ao duplicar função'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    }
+  }
+
   Future<void> _editFuncao(Funcao funcao) async {
     final result = await showDialog<Funcao>(
       context: context,
@@ -276,6 +313,12 @@ class _FuncaoListViewState extends State<FuncaoListView> {
                   tooltip: 'Editar',
                 ),
                 IconButton(
+                  icon: const Icon(Icons.copy),
+                  color: Colors.orange,
+                  onPressed: () => _duplicateFuncao(funcao),
+                  tooltip: 'Duplicar',
+                ),
+                IconButton(
                   icon: const Icon(Icons.delete),
                   onPressed: () => _deleteFuncao(funcao),
                   tooltip: 'Excluir',
@@ -342,6 +385,13 @@ class _FuncaoListViewState extends State<FuncaoListView> {
                         icon: const Icon(Icons.edit, size: 20, color: Colors.blue),
                         onPressed: () => _editFuncao(funcao),
                         tooltip: 'Editar',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.copy, size: 20, color: Colors.orange),
+                        onPressed: () => _duplicateFuncao(funcao),
+                        tooltip: 'Duplicar',
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(),
                       ),

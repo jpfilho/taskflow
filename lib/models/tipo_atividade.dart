@@ -1,9 +1,13 @@
+import 'package:flutter/material.dart';
+
 class TipoAtividade {
   final String id;
   final String codigo;
   final String descricao;
   final bool ativo;
   final String? cor; // Cor hexadecimal opcional (formato: #RRGGBB)
+  final String? corSegmento; // Cor de fundo do segmento em formato hexadecimal (ex: #FF5733)
+  final String? corTextoSegmento; // Cor do texto do segmento em formato hexadecimal (ex: #FFFFFF)
   final List<String> segmentoIds; // IDs dos segmentos (many-to-many)
   final List<String> segmentos; // Nomes dos segmentos (carregado via join)
   final DateTime? createdAt;
@@ -15,11 +19,43 @@ class TipoAtividade {
     required this.descricao,
     this.ativo = true,
     this.cor,
+    this.corSegmento,
+    this.corTextoSegmento,
     this.segmentoIds = const [],
     this.segmentos = const [],
     this.createdAt,
     this.updatedAt,
   });
+
+  // Método auxiliar para obter Color do segmento a partir da string hexadecimal
+  Color get segmentBackgroundColor {
+    if (corSegmento == null || corSegmento!.isEmpty) {
+      // Se não houver cor de segmento, usar a cor principal
+      if (cor != null && cor!.isNotEmpty) {
+        try {
+          return Color(int.parse(cor!.replaceFirst('#', '0xFF')));
+        } catch (e) {
+          return Colors.grey;
+        }
+      }
+      return Colors.grey;
+    }
+    try {
+      return Color(int.parse(corSegmento!.replaceFirst('#', '0xFF')));
+    } catch (e) {
+      return Colors.grey; // Cor padrão em caso de erro
+    }
+  }
+
+  // Método auxiliar para obter Color do texto do segmento a partir da string hexadecimal
+  Color get segmentTextColor {
+    if (corTextoSegmento == null || corTextoSegmento!.isEmpty) return Colors.white;
+    try {
+      return Color(int.parse(corTextoSegmento!.replaceFirst('#', '0xFF')));
+    } catch (e) {
+      return Colors.white; // Cor padrão em caso de erro
+    }
+  }
 
   // Método para criar cópia com alterações
   TipoAtividade copyWith({
@@ -28,6 +64,8 @@ class TipoAtividade {
     String? descricao,
     bool? ativo,
     String? cor,
+    String? corSegmento,
+    String? corTextoSegmento,
     List<String>? segmentoIds,
     List<String>? segmentos,
     DateTime? createdAt,
@@ -39,6 +77,8 @@ class TipoAtividade {
       descricao: descricao ?? this.descricao,
       ativo: ativo ?? this.ativo,
       cor: cor ?? this.cor,
+      corSegmento: corSegmento ?? this.corSegmento,
+      corTextoSegmento: corTextoSegmento ?? this.corTextoSegmento,
       segmentoIds: segmentoIds ?? this.segmentoIds,
       segmentos: segmentos ?? this.segmentos,
       createdAt: createdAt ?? this.createdAt,
@@ -54,6 +94,8 @@ class TipoAtividade {
       'descricao': descricao,
       'ativo': ativo,
       if (cor != null) 'cor': cor,
+      'cor_segmento': corSegmento,
+      'cor_texto_segmento': corTextoSegmento,
       if (createdAt != null) 'created_at': createdAt!.toIso8601String(),
       if (updatedAt != null) 'updated_at': updatedAt!.toIso8601String(),
     };
@@ -108,6 +150,8 @@ class TipoAtividade {
       descricao: map['descricao'] as String,
       ativo: map['ativo'] as bool? ?? true,
       cor: map['cor'] as String?,
+      corSegmento: map['cor_segmento'] as String?,
+      corTextoSegmento: map['cor_texto_segmento'] as String?,
       segmentoIds: segmentoIdsList,
       segmentos: segmentosNomesList,
       createdAt: map['created_at'] != null

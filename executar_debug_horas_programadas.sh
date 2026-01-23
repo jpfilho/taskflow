@@ -1,0 +1,30 @@
+#!/bin/bash
+
+# Script para executar o debug de horas programadas no Supabase
+# Execute este script para ver os resultados das consultas SQL
+
+echo "=========================================="
+echo "DEBUG: Horas Programadas - Janeiro 2026"
+echo "=========================================="
+echo ""
+echo "Este script executa consultas SQL no Supabase para debugar"
+echo "por que as horas programadas não estão sendo calculadas."
+echo ""
+echo "Para executar, você precisa:"
+echo "1. Acessar o Supabase Dashboard"
+echo "2. Ir em SQL Editor"
+echo "3. Copiar e colar o conteúdo de debug_horas_programadas_janeiro_2026.sql"
+echo "4. Executar cada consulta separadamente"
+echo ""
+echo "Ou execute via psql:"
+echo "psql -h srv750497.hstgr.cloud -U postgres -d postgres -f debug_horas_programadas_janeiro_2026.sql"
+echo ""
+echo "=========================================="
+echo "Consultas disponíveis:"
+echo "=========================================="
+echo ""
+echo "1. Lista todos os períodos de executor em janeiro de 2026"
+echo "2. Agrupa por executor e calcula total de horas programadas"
+echo "3. Detalhamento por tarefa e executor"
+echo ""
+echo "=========================================="

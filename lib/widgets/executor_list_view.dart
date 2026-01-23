@@ -119,6 +119,43 @@ class _ExecutorListViewState extends State<ExecutorListView> {
     }
   }
 
+  Future<void> _duplicateExecutor(Executor executor) async {
+    // Criar cópia com nome modificado
+    final duplicated = executor.copyWith(
+      id: '',
+      nome: '${executor.nome} (Cópia)',
+    );
+
+    final result = await showDialog<Executor>(
+      context: context,
+      builder: (context) => ExecutorFormDialog(executor: duplicated),
+    );
+
+    if (result != null) {
+      try {
+        await _executorService.createExecutor(result);
+        await _loadExecutores();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Executor duplicado com sucesso!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Erro ao duplicar executor: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    }
+  }
+
   Future<void> _editExecutor(Executor executor) async {
     // Buscar executor atualizado do banco para garantir dados completos
     final executorAtualizado = await _executorService.getExecutorById(executor.id);
@@ -395,6 +432,12 @@ class _ExecutorListViewState extends State<ExecutorListView> {
                                     tooltip: 'Editar',
                                   ),
                                   IconButton(
+                                    icon: const Icon(Icons.copy),
+                                    color: Colors.orange,
+                                    onPressed: () => _duplicateExecutor(executor),
+                                    tooltip: 'Duplicar',
+                                  ),
+                                  IconButton(
                                     icon: const Icon(Icons.delete),
                                     onPressed: () => _deleteExecutor(executor),
                                     tooltip: 'Excluir',
@@ -545,6 +588,13 @@ class _ExecutorListViewState extends State<ExecutorListView> {
                         icon: const Icon(Icons.edit, size: 20),
                         onPressed: () => _editExecutor(executor),
                         tooltip: 'Editar',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.copy, size: 20, color: Colors.orange),
+                        onPressed: () => _duplicateExecutor(executor),
+                        tooltip: 'Duplicar',
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(),
                       ),

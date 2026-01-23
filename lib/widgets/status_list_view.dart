@@ -3,6 +3,7 @@ import '../models/status.dart';
 import '../services/status_service.dart';
 import 'status_form_dialog.dart';
 import '../utils/responsive.dart';
+import 'dart:async';
 
 class StatusListView extends StatefulWidget {
   const StatusListView({super.key});
@@ -19,11 +20,17 @@ class _StatusListViewState extends State<StatusListView> {
   final TextEditingController _searchController = TextEditingController();
   bool _isTableView = false; // false = lista (cards), true = tabela
 
+  StreamSubscription<String>? _statusChangeSubscription;
+
   @override
   void initState() {
     super.initState();
     _loadStatus();
     _searchController.addListener(_onSearchChanged);
+    // Escutar mudanças nos status
+    _statusChangeSubscription = _statusService.statusChangeStream.listen((_) {
+      _loadStatus(); // Recarregar quando houver mudança
+    });
     // No desktop, tabela é o padrão
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && Responsive.isDesktop(context)) {
@@ -36,6 +43,7 @@ class _StatusListViewState extends State<StatusListView> {
 
   @override
   void dispose() {
+    _statusChangeSubscription?.cancel();
     _searchController.dispose();
     super.dispose();
   }
@@ -147,6 +155,44 @@ class _StatusListViewState extends State<StatusListView> {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text('Erro ao atualizar status'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  Future<void> _duplicateStatus(Status status) async {
+    // Criar cópia com código e nome modificados
+    final duplicated = status.copyWith(
+      id: '',
+      codigo: '${status.codigo}CP', // Adicionar sufixo ao código
+      status: '${status.status} (Cópia)',
+    );
+
+    final result = await showDialog<Status>(
+      context: context,
+      builder: (context) => StatusFormDialog(status: duplicated),
+    );
+
+    if (result != null) {
+      final created = await _statusService.createStatus(result);
+      if (created != null) {
+        await _loadStatus();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Status duplicado com sucesso!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Erro ao duplicar status'),
               backgroundColor: Colors.red,
             ),
           );
@@ -371,6 +417,12 @@ class _StatusListViewState extends State<StatusListView> {
                   tooltip: 'Editar',
                 ),
                 IconButton(
+                  icon: const Icon(Icons.copy),
+                  color: Colors.orange,
+                  onPressed: () => _duplicateStatus(status),
+                  tooltip: 'Duplicar',
+                ),
+                IconButton(
                   icon: const Icon(Icons.delete),
                   color: Colors.red,
                   onPressed: () => _deleteStatus(status),
@@ -457,6 +509,13 @@ class _StatusListViewState extends State<StatusListView> {
                         icon: const Icon(Icons.edit, size: 20, color: Colors.blue),
                         onPressed: () => _editStatus(status),
                         tooltip: 'Editar',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.copy, size: 20, color: Colors.orange),
+                        onPressed: () => _duplicateStatus(status),
+                        tooltip: 'Duplicar',
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(),
                       ),

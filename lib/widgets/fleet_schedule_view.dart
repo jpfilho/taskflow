@@ -64,7 +64,8 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
   final ScrollController _ganttHorizontalScrollController = ScrollController();
   final double _rowHeight = 28.0;
   bool _isScrolling = false;
-  bool _showSegmentTexts = false; // Controla se os textos dos segmentos são exibidos (padrão: oculto)
+  bool _showSegmentTexts = true; // agora exibe por padrão
+  bool _showOnlyLocalText = true; // mostra apenas o local por padrão
   
   // Variáveis para tipos de atividade e cores
   final TipoAtividadeService _tipoAtividadeService = TipoAtividadeService();
@@ -146,14 +147,14 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
       for (var status in statuses) {
         _statusMap[status.codigo] = status;
       }
-      print('✅ Status carregados: ${_statusMap.length}');
+      // debug silenciado
       
       // Carregar feriados
       await _loadFeriados();
       
       // Carregar tarefas
       final tasks = widget.filteredTasks ?? await widget.taskService.getAllTasks();
-      print('✅ Tarefas carregadas: ${tasks.length}');
+      // debug silenciado
       
       // Carregar frotas
       final frotas = await widget.frotaService.getAllFrotas();
@@ -405,6 +406,9 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
     final screenHeight = MediaQuery.of(context).size.height;
     final minDayWidth = 30.0;
     final calculatedHeight = (screenHeight * 0.6).clamp(200.0, screenHeight * 0.9);
+    // Largura da tabela: REGIONAL(100) + DIVISÃO(100) + TIPO(100) + PLACA(100) + TAREFAS(80) + NOME(150) = 630px
+    // Adicionar margem para garantir que todas as colunas sejam visíveis
+    final tableWidth = 650.0;
     
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -412,12 +416,12 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
           scrollDirection: Axis.horizontal,
           physics: const AlwaysScrollableScrollPhysics(),
           child: SizedBox(
-            width: 400 + (days.length * minDayWidth),
+            width: tableWidth + (days.length * minDayWidth),
             height: calculatedHeight,
             child: Row(
               children: [
                 SizedBox(
-                  width: 400,
+                  width: tableWidth,
                   child: _buildFleetTable(),
                 ),
                 SizedBox(
@@ -659,12 +663,36 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
                             ),
                           ),
                         ),
-                        // Botão para mostrar/ocultar textos dos segmentos
+                        // Botões para mostrar/ocultar textos e alternar local/tarefa
                         Positioned(
                           right: 8,
                           top: 0,
                           bottom: 0,
-                          child: Tooltip(
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Tooltip(
+                                message: _showOnlyLocalText ? 'Mostrar local e tarefa' : 'Mostrar só local',
+                                child: IconButton(
+                                  icon: Icon(
+                                    _showOnlyLocalText ? Icons.location_on : Icons.location_on_outlined,
+                                    size: 18,
+                                    color: Colors.grey[700],
+                                  ),
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(
+                                    minWidth: 32,
+                                    minHeight: 24,
+                                  ),
+                                  onPressed: () {
+                                    setState(() {
+                                      _showOnlyLocalText = !_showOnlyLocalText;
+                                    });
+                                  },
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Tooltip(
                             message: _showSegmentTexts ? 'Ocultar textos' : 'Mostrar textos',
                             child: IconButton(
                               icon: Icon(
@@ -683,6 +711,8 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
                                 });
                               },
                             ),
+                              ),
+                            ],
                           ),
                         ),
                       ],
@@ -1052,26 +1082,41 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
       );
     }
     
-    // Para EXECUCAO: mostrar texto se houver espaço
-    if (barWidth > 60) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 3.0, vertical: 1.0),
-        child: Center(
+    // Para EXECUCAO: mostrar texto (local e tarefa) seguindo a lógica da tela de equipes
+    final textColor = Colors.white;
+    final fontSize = 9.0;
+    final availableHeight = _rowHeight - 4;
+    final localText = task.locais.isNotEmpty ? task.locais.join(', ') : '-';
+    final taskText = task.tarefa.isNotEmpty ? task.tarefa : (segment.label.isNotEmpty ? segment.label : '-');
+
+    Widget _line(String text) => SizedBox(
+          width: barWidth - 6,
           child: Text(
-            segment.label.isNotEmpty ? segment.label : task.tarefa,
-            style: const TextStyle(
-              fontSize: 9,
-              color: Colors.white,
-              fontWeight: FontWeight.w500,
+            text,
+            style: TextStyle(
+              fontSize: fontSize,
+              color: textColor,
+              fontWeight: FontWeight.w600,
             ),
             overflow: TextOverflow.ellipsis,
             maxLines: 1,
-          ),
+            textAlign: TextAlign.center,
         ),
       );
+
+    if (availableHeight < 20 || _showOnlyLocalText) {
+      return Center(child: _line(localText));
     }
     
-    return const SizedBox.shrink();
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _line(localText),
+        if (taskText.isNotEmpty) _line(taskText),
+      ],
+    );
   }
 
   Color _getSegmentColor(GanttSegment segment, Task task) {
@@ -1082,24 +1127,35 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
       case 'DESLOCAMENTO':
         return Colors.blue[400]!;
       case 'EXECUCAO':
-        // Continuar para verificar tipo de atividade
+        // Continuar para verificar cor do tipo de atividade
         break;
       default:
         break;
     }
     
-    // PRIORIDADE 2: Verificar tipo de atividade
-    final tipoAtividade = _tipoAtividadeMap[task.tipo];
-    if (tipoAtividade != null && tipoAtividade.cor != null && tipoAtividade.cor!.isNotEmpty) {
-      try {
-        final corStr = tipoAtividade.cor!.replaceFirst('#', '0xFF');
-        return Color(int.parse(corStr));
-      } catch (e) {
-        print('⚠️ Erro ao parsear cor do tipo de atividade: $e');
+    // PRIORIDADE 2: Verificar se o tipo de atividade tem cor de segmento definida
+    if (task.tipo.isNotEmpty) {
+      final tipoAtividade = _tipoAtividadeMap[task.tipo];
+      if (tipoAtividade != null && tipoAtividade.corSegmento != null && tipoAtividade.corSegmento!.isNotEmpty) {
+        try {
+          final color = tipoAtividade.segmentBackgroundColor;
+          return color;
+        } catch (e) {
+          print('⚠️ Erro ao converter cor de segmento do tipo de atividade "${tipoAtividade.corSegmento}": $e');
+        }
+      }
+      // PRIORIDADE 3: Se não houver cor de segmento, usar cor principal do tipo de atividade
+      if (tipoAtividade != null && tipoAtividade.cor != null && tipoAtividade.cor!.isNotEmpty) {
+        try {
+          final corStr = tipoAtividade.cor!.replaceFirst('#', '0xFF');
+          return Color(int.parse(corStr));
+        } catch (e) {
+          print('⚠️ Erro ao parsear cor do tipo de atividade: $e');
+        }
       }
     }
     
-    // PRIORIDADE 3: Cores padrão baseadas no tipo
+    // PRIORIDADE 4: Cores padrão baseadas no tipo
     switch (task.tipo.toUpperCase()) {
       case 'COMP':
         return Colors.brown[400]!;
@@ -1879,7 +1935,7 @@ class _FleetDetailsModal extends StatelessWidget {
 }
 
 // Modal para mostrar tarefas da frota
-class _FleetTasksModal extends StatelessWidget {
+class _FleetTasksModal extends StatefulWidget {
   final Frota frota;
   final List<Task> tasks;
   final DateTime startDate;
@@ -1905,10 +1961,31 @@ class _FleetTasksModal extends StatelessWidget {
   });
 
   @override
+  State<_FleetTasksModal> createState() => _FleetTasksModalState();
+}
+
+class _FleetTasksModalState extends State<_FleetTasksModal> {
+  late final PageController _pageController;
+  int _currentIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _pageController = PageController();
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final isMobile = Responsive.isMobile(context);
     final screenHeight = MediaQuery.of(context).size.height;
-    
+    final tasks = widget.tasks;
+
     return Container(
       constraints: BoxConstraints(
         maxHeight: screenHeight * 0.9,
@@ -1922,7 +1999,7 @@ class _FleetTasksModal extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  'Atividades de ${frota.nome}',
+                  'Atividades de ${widget.frota.nome}',
                   style: TextStyle(
                     fontSize: isMobile ? 18 : 20,
                     fontWeight: FontWeight.bold,
@@ -1943,31 +2020,70 @@ class _FleetTasksModal extends StatelessWidget {
               color: Colors.grey[600],
             ),
           ),
+          if (tasks.length > 1) ...[
+            const SizedBox(height: 4),
+            Text(
+              '${_currentIndex + 1} de ${tasks.length}',
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+            ),
+          ],
           SizedBox(height: isMobile ? 12 : 16),
           Expanded(
-            child: PageView.builder(
-              itemCount: tasks.length,
-              itemBuilder: (context, index) {
-                return buildTaskCard(tasks[index]);
-              },
-            ),
+            child: tasks.length > 1
+                ? PageView.builder(
+                    controller: _pageController,
+                    itemCount: tasks.length,
+                    onPageChanged: (index) {
+                      setState(() {
+                        _currentIndex = index;
+                      });
+                    },
+                    itemBuilder: (context, index) {
+                      return SingleChildScrollView(
+                        child: widget.buildTaskCard(tasks[index]),
+                      );
+                    },
+                  )
+                : SingleChildScrollView(
+                    child: widget.buildTaskCard(tasks.first),
+                  ),
           ),
           if (tasks.length > 1) ...[
             SizedBox(height: isMobile ? 12 : 16),
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
-              children: List.generate(
-                tasks.length,
-                (index) => Container(
-                  width: 8,
-                  height: 8,
-                  margin: const EdgeInsets.symmetric(horizontal: 4),
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: index == 0 ? Colors.blue[600] : Colors.grey[300],
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.chevron_left),
+                  onPressed: _currentIndex > 0
+                      ? () => _pageController.previousPage(
+                            duration: const Duration(milliseconds: 300),
+                            curve: Curves.easeInOut,
+                          )
+                      : null,
+                ),
+                ...List.generate(
+                  tasks.length,
+                  (index) => Container(
+                    width: 8,
+                    height: 8,
+                    margin: const EdgeInsets.symmetric(horizontal: 4),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: index == _currentIndex ? Colors.blue[600] : Colors.grey[300],
+                    ),
                   ),
                 ),
-              ),
+                IconButton(
+                  icon: const Icon(Icons.chevron_right),
+                  onPressed: _currentIndex < tasks.length - 1
+                      ? () => _pageController.nextPage(
+                            duration: const Duration(milliseconds: 300),
+                            curve: Curves.easeInOut,
+                          )
+                      : null,
+                ),
+              ],
             ),
           ],
         ],

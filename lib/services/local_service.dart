@@ -21,6 +21,7 @@ class LocalService {
       id: map['id'] as String,
       local: map['local'] as String,
       descricao: map['descricao'] as String?,
+      localInstalacaoSap: map['local_instalacao_sap'] as String?,
       paraTodaRegional: map['para_toda_regional'] as bool? ?? false,
       paraTodaDivisao: map['para_toda_divisao'] as bool? ?? false,
       regionalId: map['regional_id'] as String?,
@@ -49,6 +50,7 @@ class LocalService {
     return {
       'local': local.local,
       'descricao': local.descricao,
+      'local_instalacao_sap': local.localInstalacaoSap,
       'para_toda_regional': local.paraTodaRegional,
       'para_toda_divisao': local.paraTodaDivisao,
       // Permitir especificar regional/divisão mesmo quando os checkboxes estão marcados
@@ -259,6 +261,155 @@ class LocalService {
           .toList();
     } catch (e) {
       print('Erro ao filtrar locais: $e');
+      return [];
+    }
+  }
+
+  // Buscar locais filtrados por regional, divisão e segmento
+  // Lógica especial: locais podem ser "para toda a regional" ou "para toda a divisão"
+  Future<List<Local>> getLocaisFiltrados({
+    String? regionalId,
+    String? divisaoId,
+    String? segmentoId,
+  }) async {
+    try {
+      print('🔍 DEBUG LocalService.getLocaisFiltrados:');
+      print('   regionalId: $regionalId');
+      print('   divisaoId: $divisaoId');
+      print('   segmentoId: $segmentoId');
+      
+      // Buscar TODOS os locais primeiro (precisamos verificar os flags paraTodaRegional/paraTodaDivisao)
+      final todosLocais = await getAllLocais();
+      print('   Total de locais no banco: ${todosLocais.length}');
+      
+      // Filtrar locais baseado nos critérios
+      final locaisFiltrados = todosLocais.where((local) {
+        // 1. Se o local é "para toda a regional" e temos regionalId, incluir se a regional corresponder
+        if (local.paraTodaRegional && local.regionalId != null) {
+          if (regionalId != null && regionalId.isNotEmpty) {
+            if (local.regionalId == regionalId) {
+              print('     ✅ Local "${local.local}" incluído: para toda a regional ${local.regionalId}');
+              return true;
+            }
+          }
+        }
+        
+        // 2. Se o local é "para toda a divisão" e temos divisaoId, incluir se a divisão corresponder
+        if (local.paraTodaDivisao && local.divisaoId != null) {
+          if (divisaoId != null && divisaoId.isNotEmpty) {
+            if (local.divisaoId == divisaoId) {
+              print('     ✅ Local "${local.local}" incluído: para toda a divisão ${local.divisaoId}');
+              return true;
+            }
+          }
+        }
+        
+        // 3. Se temos segmentoId, incluir locais desse segmento específico
+        if (segmentoId != null && segmentoId.isNotEmpty) {
+          if (local.segmentoId != null && local.segmentoId == segmentoId) {
+            print('     ✅ Local "${local.local}" incluído: segmento específico ${local.segmentoId}');
+            return true;
+          }
+        }
+        
+        // 4. Se temos divisaoId (sem segmento), incluir locais dessa divisão específica
+        if (divisaoId != null && divisaoId.isNotEmpty && (segmentoId == null || segmentoId.isEmpty)) {
+          if (local.divisaoId != null && local.divisaoId == divisaoId) {
+            print('     ✅ Local "${local.local}" incluído: divisão específica ${local.divisaoId}');
+            return true;
+          }
+        }
+        
+        // 5. Se temos regionalId (sem divisão/segmento), incluir locais dessa regional específica
+        if (regionalId != null && regionalId.isNotEmpty && 
+            (divisaoId == null || divisaoId.isEmpty) && 
+            (segmentoId == null || segmentoId.isEmpty)) {
+          if (local.regionalId != null && local.regionalId == regionalId) {
+            print('     ✅ Local "${local.local}" incluído: regional específica ${local.regionalId}');
+            return true;
+          }
+        }
+        
+        // 6. Se temos regionalId e divisaoId, verificar se a divisão pertence à regional
+        if (regionalId != null && regionalId.isNotEmpty && divisaoId != null && divisaoId.isNotEmpty) {
+          // Se o local tem divisão que corresponde e a divisão pertence à regional
+          if (local.divisaoId != null && local.divisaoId == divisaoId) {
+            // Verificar se a divisão pertence à regional (será verificado depois)
+            print('     ⚠️ Local "${local.local}" com divisão ${local.divisaoId} - precisa verificar se divisão pertence à regional');
+            return true; // Incluir por enquanto, será filtrado depois se necessário
+          }
+        }
+        
+        return false;
+      }).toList();
+      
+      // Se temos regionalId, verificar se as divisões dos locais pertencem à regional
+      if (regionalId != null && regionalId.isNotEmpty) {
+        final divisoesDaRegional = await _supabase
+            .from('divisoes')
+            .select('id')
+            .eq('regional_id', regionalId);
+        
+        final divisaoIdsDaRegional = (divisoesDaRegional as List)
+            .map((d) => d['id'] as String)
+            .toList();
+        
+        print('   Divisões da regional $regionalId: $divisaoIdsDaRegional');
+        
+        // Filtrar novamente para garantir que locais com divisão específica pertencem à regional
+        final locaisFinais = locaisFiltrados.where((local) {
+          // Se é para toda a regional e corresponde, incluir
+          if (local.paraTodaRegional && local.regionalId == regionalId) {
+            return true;
+          }
+          
+          // Se é para toda a divisão e a divisão pertence à regional, incluir
+          if (local.paraTodaDivisao && local.divisaoId != null) {
+            if (divisaoIdsDaRegional.contains(local.divisaoId)) {
+              return true;
+            }
+          }
+          
+          // Se tem divisão específica, verificar se pertence à regional
+          if (local.divisaoId != null) {
+            if (divisaoIdsDaRegional.contains(local.divisaoId)) {
+              return true;
+            }
+          }
+          
+          // Se tem regional específica e corresponde, incluir
+          if (local.regionalId == regionalId) {
+            return true;
+          }
+          
+          return false;
+        }).toList();
+        
+        print('✅ DEBUG LocalService.getLocaisFiltrados: Retornando ${locaisFinais.length} locais após filtro de regional');
+        if (locaisFinais.isNotEmpty) {
+          print('   Primeiros 3 locais:');
+          for (var i = 0; i < locaisFinais.length && i < 3; i++) {
+            final local = locaisFinais[i];
+            print('     - ${local.local} (paraTodaRegional: ${local.paraTodaRegional}, paraTodaDivisao: ${local.paraTodaDivisao}, regional: ${local.regionalId}, divisao: ${local.divisaoId}, segmento: ${local.segmentoId})');
+          }
+        }
+        
+        return locaisFinais;
+      }
+      
+      print('✅ DEBUG LocalService.getLocaisFiltrados: Retornando ${locaisFiltrados.length} locais');
+      if (locaisFiltrados.isNotEmpty) {
+        print('   Primeiros 3 locais:');
+        for (var i = 0; i < locaisFiltrados.length && i < 3; i++) {
+          final local = locaisFiltrados[i];
+          print('     - ${local.local} (paraTodaRegional: ${local.paraTodaRegional}, paraTodaDivisao: ${local.paraTodaDivisao}, regional: ${local.regionalId}, divisao: ${local.divisaoId}, segmento: ${local.segmentoId})');
+        }
+      }
+      
+      return locaisFiltrados;
+    } catch (e, stackTrace) {
+      print('❌ Erro ao buscar locais filtrados: $e');
+      print('   Stack trace: $stackTrace');
       return [];
     }
   }

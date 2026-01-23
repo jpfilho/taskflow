@@ -121,6 +121,58 @@ class _TipoAtividadeListViewState extends State<TipoAtividadeListView> {
     }
   }
 
+  Future<void> _duplicateTipoAtividade(TipoAtividade tipoAtividade) async {
+    // Buscar tipo atualizado do banco para garantir dados completos
+    final tipoAtualizado = await _tipoAtividadeService.getTipoAtividadeById(tipoAtividade.id);
+    if (tipoAtualizado == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Erro ao carregar dados do tipo de atividade'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    }
+
+    // Criar cópia com código e descrição modificados
+    final duplicated = tipoAtualizado.copyWith(
+      id: '',
+      codigo: '${tipoAtualizado.codigo}CP', // Adicionar sufixo ao código
+      descricao: '${tipoAtualizado.descricao} (Cópia)',
+    );
+
+    final result = await showDialog<TipoAtividade>(
+      context: context,
+      builder: (context) => TipoAtividadeFormDialog(tipoAtividade: duplicated),
+    );
+
+    if (result != null) {
+      final created = await _tipoAtividadeService.createTipoAtividade(result);
+      if (created != null) {
+        await _loadTiposAtividade();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Tipo de atividade duplicado com sucesso!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Erro ao duplicar tipo de atividade'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    }
+  }
+
   Future<void> _editTipoAtividade(TipoAtividade tipoAtividade) async {
     // Buscar tipo atualizado do banco para garantir dados completos
     final tipoAtualizado = await _tipoAtividadeService.getTipoAtividadeById(tipoAtividade.id);
@@ -290,6 +342,12 @@ class _TipoAtividadeListViewState extends State<TipoAtividadeListView> {
                   tooltip: 'Editar',
                 ),
                 IconButton(
+                  icon: const Icon(Icons.copy),
+                  color: Colors.orange,
+                  onPressed: () => _duplicateTipoAtividade(tipo),
+                  tooltip: 'Duplicar',
+                ),
+                IconButton(
                   icon: const Icon(Icons.delete),
                   onPressed: () => _deleteTipoAtividade(tipo),
                   tooltip: 'Excluir',
@@ -358,6 +416,13 @@ class _TipoAtividadeListViewState extends State<TipoAtividadeListView> {
                         icon: const Icon(Icons.edit, size: 20, color: Colors.blue),
                         onPressed: () => _editTipoAtividade(tipo),
                         tooltip: 'Editar',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.copy, size: 20, color: Colors.orange),
+                        onPressed: () => _duplicateTipoAtividade(tipo),
+                        tooltip: 'Duplicar',
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(),
                       ),
