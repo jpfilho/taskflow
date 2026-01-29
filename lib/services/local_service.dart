@@ -70,7 +70,6 @@ class LocalService {
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar locais');
               return <Map<String, dynamic>>[];
             },
           );
@@ -149,7 +148,6 @@ class LocalService {
           .timeout(
             const Duration(seconds: 10),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar local por ID');
               return <String, dynamic>{};
             },
           );
@@ -248,7 +246,6 @@ class LocalService {
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
-              print('⚠️ Timeout ao filtrar locais');
               return <Map<String, dynamic>>[];
             },
           );
@@ -431,7 +428,6 @@ class LocalService {
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar locais');
               return <Map<String, dynamic>>[];
             },
           );

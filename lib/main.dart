@@ -53,9 +53,11 @@ import 'utils/responsive.dart';
 import 'services/local_database_service.dart';
 import 'services/sync_service.dart';
 import 'services/connectivity_service.dart';
+import 'services/version_check_service.dart';
 import 'providers/theme_provider.dart';
 import 'services/theme_service.dart';
 import 'dart:async';
+import 'features/media_albums/presentation/pages/gallery_page.dart';
 // sqflite FFI para desktop
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -64,8 +66,22 @@ void main() async {
 
   // Inicializar FFI do sqflite para plataformas desktop (não-web)
   if (!kIsWeb) {
-    sqfliteFfiInit();
-    databaseFactory = databaseFactoryFfi;
+    try {
+      sqfliteFfiInit();
+      databaseFactory = databaseFactoryFfi;
+      print('✅ SQLite FFI inicializado!');
+    } catch (e) {
+      print('⚠️ Erro ao inicializar SQLite FFI: $e');
+    }
+  }
+  
+  // Inicializar Supabase ANTES do banco local
+  try {
+    await SupabaseConfig.initialize();
+    print('✅ Supabase inicializado com sucesso!');
+  } catch (e) {
+    print('⚠️ Erro ao inicializar Supabase: $e');
+    print('📝 O app continuará funcionando offline');
   }
   
   // Inicializar banco de dados local
@@ -74,6 +90,7 @@ void main() async {
     print('✅ Banco de dados local inicializado!');
   } catch (e) {
     print('⚠️ Erro ao inicializar banco local: $e');
+    print('📝 Continuando sem banco local...');
   }
 
   // Inicializar serviço de conectividade
@@ -84,15 +101,6 @@ void main() async {
     print('⚠️ Erro ao inicializar conectividade: $e');
   }
   
-  // Inicializar Supabase
-  try {
-    await SupabaseConfig.initialize();
-    print('✅ Supabase inicializado com sucesso!');
-  } catch (e) {
-    print('⚠️ Erro ao inicializar Supabase: $e');
-    print('📝 O app continuará funcionando offline');
-  }
-  
   // Inicializar serviço de sincronização
   try {
     await SyncService().initialize();
@@ -100,7 +108,12 @@ void main() async {
   } catch (e) {
     print('⚠️ Erro ao inicializar sincronização: $e');
   }
-  
+
+  // Verificação de nova versão (web: consulta version.txt; outras plataformas: no-op)
+  if (kIsWeb) {
+    VersionCheckService.instance.start();
+  }
+
   runApp(const MyApp());
 }
 
@@ -192,7 +205,53 @@ class _MyAppState extends State<MyApp> {
             ),
           );
         };
-        return child!;
+        // Banner de nova versão (web): avisa quando há deploy e permite atualizar sem Ctrl+F5
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            child!,
+            ValueListenableBuilder<bool>(
+              valueListenable: VersionCheckService.instance.hasNewVersion,
+              builder: (context, showBanner, _) {
+                if (!showBanner) return const SizedBox.shrink();
+                return Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  child: SafeArea(
+                    bottom: false,
+                    child: Material(
+                      elevation: 4,
+                      color: Colors.blue.shade700,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.system_update, color: Colors.white, size: 24),
+                            const SizedBox(width: 12),
+                            const Expanded(
+                              child: Text(
+                                'Nova versão disponível. Atualize para carregar as últimas alterações.',
+                                style: TextStyle(color: Colors.white, fontSize: 14),
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () => VersionCheckService.instance.reloadApp(),
+                              child: const Text(
+                                'Atualizar agora',
+                                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
+        );
       },
         );
       },
@@ -1123,17 +1182,17 @@ class _MainScreenState extends State<MainScreen> {
       List<Task> filtered;
       if (_currentFilters.isNotEmpty) {
         filtered = await _taskService.filterTasks(
-        status: _currentFilters['status'],
-        regional: _currentFilters['regional'],
-        divisao: _currentFilters['divisao'],
-        local: _currentFilters['local'],
-        tipo: _currentFilters['tipo'],
-        executor: _currentFilters['executor'],
-        coordenador: _currentFilters['coordenador'],
-        frota: _currentFilters['frota'],
-        dataInicioMin: _startDate,
-        dataFimMax: _endDate,
-      );
+          status: _parseFilterList(_currentFilters['status']),
+          regional: _parseFilterList(_currentFilters['regional']),
+          divisao: _parseFilterList(_currentFilters['divisao']),
+          local: _parseFilterList(_currentFilters['local']),
+          tipo: _parseFilterList(_currentFilters['tipo']),
+          executor: _parseFilterList(_currentFilters['executor']),
+          coordenador: _parseFilterList(_currentFilters['coordenador']),
+          frota: _parseFilterList(_currentFilters['frota']),
+          dataInicioMin: _startDate,
+          dataFimMax: _endDate,
+        );
       } else {
         filtered = baseTasks;
       }
@@ -1248,7 +1307,7 @@ class _MainScreenState extends State<MainScreen> {
                     showGantt: _showGantt,
                     isAtividadesScreen: _sidebarSelectedIndex == 0,
                   ),
-                  // Filter Bar (mobile - ocultar em Configurações, Chat, Notas, Ordens, ATs e SIs)
+                  // Filter Bar (mobile - ocultar em Configurações, Chat, Notas, Ordens, ATs, SIs e Álbuns)
                   if (_sidebarSelectedIndex != 1 &&
                       _sidebarSelectedIndex != 2 &&
                       _sidebarSelectedIndex != 14 && 
@@ -1259,7 +1318,8 @@ class _MainScreenState extends State<MainScreen> {
                       _sidebarSelectedIndex != 19 &&
                       _sidebarSelectedIndex != 20 &&
                       _sidebarSelectedIndex != 21 &&
-                      _sidebarSelectedIndex != 22)
+                      _sidebarSelectedIndex != 22 &&
+                      _sidebarSelectedIndex != 23)
                     FilterBar(
                       onFiltersChanged: _applyFilters,
                       initialFilters: _currentFilters,
@@ -1386,7 +1446,7 @@ class _MainScreenState extends State<MainScreen> {
                         showGantt: _showGantt,
                         isAtividadesScreen: _sidebarSelectedIndex == 0,
                       ),
-                      // Filter Bar (ocultar em Configurações, Chat, Notas, Ordens, ATs e SIs)
+                      // Filter Bar (ocultar em Configurações, Chat, Notas, Ordens, ATs, SIs e Álbuns)
                       if (_sidebarSelectedIndex != 1 &&
                           _sidebarSelectedIndex != 2 &&
                           _sidebarSelectedIndex != 14 && 
@@ -1397,7 +1457,8 @@ class _MainScreenState extends State<MainScreen> {
                           _sidebarSelectedIndex != 19 &&
                           _sidebarSelectedIndex != 20 &&
                           _sidebarSelectedIndex != 21 &&
-                          _sidebarSelectedIndex != 22)
+                          _sidebarSelectedIndex != 22 &&
+                          _sidebarSelectedIndex != 23)
                         FilterBar(
                           onFiltersChanged: _applyFilters,
                           initialFilters: _currentFilters,
@@ -1959,7 +2020,7 @@ class _MainScreenState extends State<MainScreen> {
       case 16: // Notas SAP
         return NotasSAPView(searchQuery: _searchQuery);
       case 17: // Ordens
-        return const OrdemView();
+        return OrdemView(searchQuery: _searchQuery);
       case 18: // ATs
         return const ATView();
       case 19: // SIs
@@ -1976,6 +2037,8 @@ class _MainScreenState extends State<MainScreen> {
           return _rootOnlyPlaceholder('Supressão de Vegetação');
         }
         return const SupressaoVegetacaoView();
+      case 23: // Álbuns de Imagens
+        return const MediaAlbumsGalleryPage();
       default:
         if (!_showGantt) {
           return TaskTable(
@@ -2684,6 +2747,13 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
+  /// Converte valor de filtro (string única ou vírgula-separada) para lista para filterTasks.
+  List<String>? _parseFilterList(String? value) {
+    if (value == null || value.trim().isEmpty) return null;
+    final list = value.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+    return list.isEmpty ? null : list;
+  }
+
   // Aplicar filtros
   Future<void> _applyFilters(Map<String, String?> filters) async {
     // Mostrar indicador de loading
@@ -2717,19 +2787,19 @@ class _MainScreenState extends State<MainScreen> {
       });
 
       if (hasFieldFilters) {
-        // Aplicar filtros específicos
-      filtered = await _taskService.filterTasks(
-      status: filters['status'],
-      regional: filters['regional'],
-      divisao: filters['divisao'],
-      local: filters['local'],
-      tipo: filters['tipo'],
-      executor: filters['executor'],
-      coordenador: filters['coordenador'],
-      frota: filters['frota'],
-      dataInicioMin: _startDate,
-      dataFimMax: _endDate,
-    );
+        // Aplicar filtros específicos (multiseleção: valores em lista)
+        filtered = await _taskService.filterTasks(
+          status: _parseFilterList(filters['status']),
+          regional: _parseFilterList(filters['regional']),
+          divisao: _parseFilterList(filters['divisao']),
+          local: _parseFilterList(filters['local']),
+          tipo: _parseFilterList(filters['tipo']),
+          executor: _parseFilterList(filters['executor']),
+          coordenador: _parseFilterList(filters['coordenador']),
+          frota: _parseFilterList(filters['frota']),
+          dataInicioMin: _startDate,
+          dataFimMax: _endDate,
+        );
       } else {
         // Sem filtros (ou apenas "Minhas Tarefas"): usar base para evitar nova consulta
         filtered = baseTasks;

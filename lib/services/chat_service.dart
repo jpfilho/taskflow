@@ -5,6 +5,7 @@ import '../config/supabase_config.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'auth_service_simples.dart';
 import 'task_service.dart';
+import 'telegram_service.dart';
 
 class ChatService {
   static final ChatService _instance = ChatService._internal();
@@ -13,6 +14,7 @@ class ChatService {
 
   final SupabaseClient _supabase = SupabaseConfig.client;
   final TaskService _taskService = TaskService();
+  final TelegramService _telegramService = TelegramService();
 
   // Obter ID do usuário atual
   String? get currentUserId {
@@ -30,18 +32,21 @@ class ChatService {
 
   // ========== COMUNIDADES ==========
 
-  // Criar ou obter comunidade para uma divisão + segmento
+  // Criar ou obter comunidade para uma regional + divisão + segmento
   Future<Comunidade> criarOuObterComunidade(
+    String regionalId,
+    String regionalNome,
     String divisaoId,
     String divisaoNome,
     String segmentoId,
     String segmentoNome,
   ) async {
     try {
-      // Verificar se já existe
+      // Verificar se já existe (considerando regional + divisão + segmento)
       final existing = await _supabase
           .from('comunidades')
           .select()
+          .eq('regional_id', regionalId)
           .eq('divisao_id', divisaoId)
           .eq('segmento_id', segmentoId)
           .maybeSingle();
@@ -54,6 +59,8 @@ class ChatService {
       final response = await _supabase
           .from('comunidades')
           .insert({
+            'regional_id': regionalId,
+            'regional_nome': regionalNome,
             'divisao_id': divisaoId,
             'divisao_nome': divisaoNome,
             'segmento_id': segmentoId,
@@ -202,8 +209,9 @@ class ChatService {
     }
   }
 
-  // Obter comunidade por divisão e segmento (verificando acesso do usuário)
+  // Obter comunidade por regional, divisão e segmento (verificando acesso do usuário)
   Future<Comunidade?> obterComunidadePorDivisaoSegmento(
+    String regionalId,
     String divisaoId,
     String segmentoId,
   ) async {
@@ -211,6 +219,7 @@ class ChatService {
       final response = await _supabase
           .from('comunidades')
           .select()
+          .eq('regional_id', regionalId)
           .eq('divisao_id', divisaoId)
           .eq('segmento_id', segmentoId)
           .maybeSingle();
@@ -496,6 +505,10 @@ class ChatService {
     String? mensagemRespondidaId,
     List<String>? usuariosMencionados,
     Map<String, dynamic>? localizacao,
+    // Campos para tags Nota/Ordem
+    String? refType,  // 'GERAL' | 'NOTA' | 'ORDEM'
+    String? refId,    // UUID da nota_sap ou ordem
+    String? refLabel, // Label para exibição (ex: "NOTA 12345")
   }) async {
     try {
       final userId = currentUserId ?? 'anonymous';
@@ -508,6 +521,7 @@ class ChatService {
         'tipo': tipo ?? 'texto',
         'arquivo_url': arquivoUrl,
         'lida': false,
+        'source': 'app', // Marcar como mensagem do app (evita loop no Telegram)
       };
       
       if (mensagemRespondidaId != null) {
@@ -523,6 +537,20 @@ class ChatService {
         data['localizacao'] = localizacao;
       }
       
+      // Adicionar tags se fornecidas
+      if (refType != null) {
+        data['ref_type'] = refType;
+        if (refId != null) {
+          data['ref_id'] = refId;
+        }
+        if (refLabel != null) {
+          data['ref_label'] = refLabel;
+        }
+      } else {
+        // Se não fornecido, usar 'GERAL' como padrão (compatibilidade)
+        data['ref_type'] = 'GERAL';
+      }
+      
       final response = await _supabase
           .from('mensagens')
           .insert(data)
@@ -535,9 +563,65 @@ class ChatService {
           .update({'updated_at': DateTime.now().toIso8601String()})
           .eq('id', grupoId);
 
-      return Mensagem.fromMap(response);
+      final mensagemEnviada = Mensagem.fromMap(response);
+
+      // Enviar para Telegram (se houver subscription ativa)
+      // Não aguardar para não bloquear o envio da mensagem
+      _enviarParaTelegramAsync(
+        mensagemEnviada.id!, 
+        grupoId,
+        refType: refType,
+        refId: refId,
+        refLabel: refLabel,
+      );
+
+      return mensagemEnviada;
     } catch (e) {
       throw Exception('Erro ao enviar mensagem: $e');
+    }
+  }
+
+  // Atualizar tags de uma mensagem existente
+  Future<Mensagem> atualizarTagsMensagem(
+    String mensagemId, {
+    String? refType,
+    String? refId,
+    String? refLabel,
+  }) async {
+    try {
+      final updateData = <String, dynamic>{
+        'updated_at': DateTime.now().toIso8601String(),
+      };
+      
+      if (refType != null) {
+        updateData['ref_type'] = refType;
+        if (refId != null) {
+          updateData['ref_id'] = refId;
+        } else {
+          updateData['ref_id'] = null;
+        }
+        if (refLabel != null) {
+          updateData['ref_label'] = refLabel;
+        } else {
+          updateData['ref_label'] = null;
+        }
+      } else {
+        // Se refType é null, resetar para GERAL
+        updateData['ref_type'] = 'GERAL';
+        updateData['ref_id'] = null;
+        updateData['ref_label'] = null;
+      }
+      
+      final response = await _supabase
+          .from('mensagens')
+          .update(updateData)
+          .eq('id', mensagemId)
+          .select()
+          .single();
+      
+      return Mensagem.fromMap(response);
+    } catch (e) {
+      throw Exception('Erro ao atualizar tags da mensagem: $e');
     }
   }
 
@@ -592,10 +676,52 @@ class ChatService {
         throw Exception('Você não tem permissão para excluir esta mensagem');
       }
 
-      await _supabase
-          .from('mensagens')
-          .delete()
-          .eq('id', mensagemId);
+      // 1. Deletar mensagem do Telegram primeiro (se foi enviada)
+      // Isso também fará soft delete no Supabase via Node.js
+      try {
+        await _telegramService.deleteMessageFromTelegram(mensagemId);
+        print('✅ [Chat] Mensagem deletada via Node.js (Telegram + Supabase soft delete)');
+        
+        // Aguardar um pouco para garantir que o soft delete foi aplicado
+        await Future.delayed(const Duration(milliseconds: 500));
+        
+        // Verificar se o soft delete foi aplicado
+        final mensagemVerificada = await _supabase
+            .from('mensagens')
+            .select('deleted_at')
+            .eq('id', mensagemId)
+            .maybeSingle();
+        
+        if (mensagemVerificada != null && mensagemVerificada['deleted_at'] == null) {
+          print('⚠️ [Chat] Soft delete não foi aplicado pelo Node.js, fazendo fallback...');
+          // Fallback: fazer soft delete local se o Node.js não aplicou
+          await _supabase
+              .from('mensagens')
+              .update({
+                'deleted_at': DateTime.now().toIso8601String(),
+                'deleted_by': 'flutter',
+              })
+              .eq('id', mensagemId);
+          print('✅ [Chat] Soft delete local concluído (fallback)');
+        } else {
+          print('✅ [Chat] Soft delete confirmado no banco');
+        }
+        
+        // A mensagem será removida da UI via Realtime quando deleted_at for atualizado
+        return;
+      } catch (e) {
+        print('⚠️ [Chat] Erro ao deletar mensagem do Telegram: $e');
+        print('⚠️ [Chat] Fazendo soft delete local como fallback...');
+        // Fallback: fazer soft delete local se o Node.js falhar
+        await _supabase
+            .from('mensagens')
+            .update({
+              'deleted_at': DateTime.now().toIso8601String(),
+              'deleted_by': 'flutter',
+            })
+            .eq('id', mensagemId);
+        print('✅ [Chat] Soft delete local concluído');
+      }
     } catch (e) {
       throw Exception('Erro ao excluir mensagem: $e');
     }
@@ -696,8 +822,52 @@ class ChatService {
         .eq('grupo_id', grupoId)
         .order('created_at', ascending: true)
         .map((data) => (data as List)
+            .where((map) {
+              // Filtrar mensagens deletadas (deleted_at é null)
+              final deletedAt = (map as Map<String, dynamic>)['deleted_at'];
+              return deletedAt == null;
+            })
             .map((map) => Mensagem.fromMap(map as Map<String, dynamic>))
             .toList());
+  }
+
+  // ========== INTEGRAÇÃO TELEGRAM ==========
+
+  /// Envia mensagem para Telegram de forma assíncrona (não bloqueia)
+  /// Com a arquitetura generalizada, o sistema cria tópicos automaticamente
+  /// baseado na comunidade da tarefa, não precisa mais de subscription
+  void _enviarParaTelegramAsync(
+    String mensagemId, 
+    String grupoId, {
+    String? refType,
+    String? refId,
+    String? refLabel,
+  }) {
+    print('🚀 [Telegram] Iniciando envio assíncrono: mensagemId=$mensagemId, grupoId=$grupoId, refType=$refType');
+    
+    // Executar em background
+    Future(() async {
+      try {
+        // Com a arquitetura generalizada, sempre tentar enviar
+        // O servidor vai verificar se a comunidade tem supergrupo e criar o tópico se necessário
+        print('📤 [Telegram] Enviando mensagem $mensagemId para Telegram...');
+        await _telegramService.sendMessageToTelegram(
+          mensagemId: mensagemId,
+          threadType: 'TASK',
+          threadId: grupoId,
+          refType: refType,
+          refId: refId,
+          refLabel: refLabel,
+        );
+        print('✅ [Telegram] Processamento da mensagem $mensagemId concluído (pode ter falhado, verifique logs acima)');
+      } catch (e, stackTrace) {
+        print('❌ [Telegram] Erro ao enviar mensagem para Telegram: $e');
+        print('   Stack trace: $stackTrace');
+        // Não propagar erro para não afetar o chat
+      }
+    }).catchError((error) {
+      print('❌ [Telegram] Erro não capturado no Future: $error');
+    });
   }
 
 }

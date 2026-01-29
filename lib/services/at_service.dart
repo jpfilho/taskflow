@@ -334,11 +334,11 @@ class ATService {
     }
   }
 
-  // Buscar todas as ATs com filtros e paginação
+  // Buscar todas as ATs com filtros e paginação (filtros aceitam múltiplos valores)
   Future<List<AT>> getAllATs({
-    String? filtroStatus,
-    String? filtroLocal,
-    String? filtroStatusUsuario,
+    List<String>? filtroStatus,
+    List<String>? filtroLocal,
+    List<String>? filtroStatusUsuario,
     DateTime? dataInicio,
     DateTime? dataFim,
     int? limit,
@@ -372,16 +372,28 @@ class ATService {
       }
 
       if (filtroStatus != null && filtroStatus.isNotEmpty) {
-        query = query.eq('status_sistema', filtroStatus);
+        if (filtroStatus.length == 1) {
+          query = query.eq('status_sistema', filtroStatus.first);
+        } else {
+          query = query.inFilter('status_sistema', filtroStatus);
+        }
       }
 
       if (filtroLocal != null && filtroLocal.isNotEmpty) {
-        // Priorizar coluna 'local' da view; se não houver, ainda casa local_instalacao
-        query = query.or('local.ilike.%$filtroLocal%,local_instalacao.ilike.%$filtroLocal%');
+        if (filtroLocal.length == 1) {
+          query = query.or('local.ilike.%${filtroLocal.first}%,local_instalacao.ilike.%${filtroLocal.first}%');
+        } else {
+          final orParts = filtroLocal.map((v) => 'local.ilike.%$v%,local_instalacao.ilike.%$v%').toList();
+          query = query.or(orParts.join(','));
+        }
       }
 
       if (filtroStatusUsuario != null && filtroStatusUsuario.isNotEmpty) {
-        query = query.eq('status_usuario', filtroStatusUsuario);
+        if (filtroStatusUsuario.length == 1) {
+          query = query.eq('status_usuario', filtroStatusUsuario.first);
+        } else {
+          query = query.inFilter('status_usuario', filtroStatusUsuario);
+        }
       }
 
       if (dataInicio != null) {
@@ -424,11 +436,11 @@ class ATService {
     }
   }
 
-  // Contar ATs com filtros
+  // Contar ATs com filtros (filtros aceitam múltiplos valores)
   Future<int> contarATs({
-    String? filtroStatus,
-    String? filtroLocal,
-    String? filtroStatusUsuario,
+    List<String>? filtroStatus,
+    List<String>? filtroLocal,
+    List<String>? filtroStatusUsuario,
     DateTime? dataInicio,
     DateTime? dataFim,
   }) async {
@@ -456,15 +468,28 @@ class ATService {
       }
 
       if (filtroStatus != null && filtroStatus.isNotEmpty) {
-        query = query.eq('status_sistema', filtroStatus);
+        if (filtroStatus.length == 1) {
+          query = query.eq('status_sistema', filtroStatus.first);
+        } else {
+          query = query.inFilter('status_sistema', filtroStatus);
+        }
       }
 
       if (filtroLocal != null && filtroLocal.isNotEmpty) {
-        query = query.ilike('local_instalacao', '%$filtroLocal%');
+        if (filtroLocal.length == 1) {
+          query = query.ilike('local_instalacao', '%${filtroLocal.first}%');
+        } else {
+          final orParts = filtroLocal.map((v) => 'local_instalacao.ilike.%$v%').toList();
+          query = query.or(orParts.join(','));
+        }
       }
 
       if (filtroStatusUsuario != null && filtroStatusUsuario.isNotEmpty) {
-        query = query.eq('status_usuario', filtroStatusUsuario);
+        if (filtroStatusUsuario.length == 1) {
+          query = query.eq('status_usuario', filtroStatusUsuario.first);
+        } else {
+          query = query.inFilter('status_usuario', filtroStatusUsuario);
+        }
       }
 
       if (dataInicio != null) {

@@ -35,6 +35,8 @@ class _NotasSAPViewState extends State<NotasSAPView> {
   Map<String, List<Map<String, dynamic>>> _notasProgramadasInfo = {}; // Lista de vinculações por nota
   Map<String, Status> _statusMap = {}; // Mapa de status (codigo -> Status)
   bool _isLoading = false;
+  Set<String> _notasVinculando = {}; // IDs das notas que estão sendo vinculadas
+  Set<String> _notasSelecionadas = {}; // IDs das notas selecionadas para vinculação múltipla
   String? _filtroTipoNota = 'abertas'; // null = todas, 'abertas' = abertas, 'concluidas' = concluídas
   String? _filtroProgramacao; // null = todas, 'programadas' = programadas, 'nao_programadas' = não programadas
   Set<String> _filtroLocais = {}; // Multi-seleção para LOCAL
@@ -61,12 +63,17 @@ class _NotasSAPViewState extends State<NotasSAPView> {
   List<String> _statusTarefaDisponiveis = [];
   bool _visualizacaoTabela = false; // false = cards, true = tabela
   String _modoVisualizacao = 'tabela'; // 'tabela', 'cards', 'calendario', 'dashboard'
+  String? _tipoFiltro = null; // null = todos, 'vegetacao', 'trator', 'manutencao'
+  int _contadorVegetacao = 0;
+  int _contadorTrator = 0;
+  int _contadorManutencao = 0;
   String _searchQuery = ''; // Termo de busca do HeaderBar
   List<NotaSAP> _todasNotasOrdenadas = []; // Todas as notas ordenadas (para paginação)
   bool _ordenacaoAscendente = true; // Direção da ordenação por prazo
   bool _canEditTasks = false; // Permissão para criar/editar tarefas
   bool _canEditTasksChecked = false; // Indica se a permissão já foi verificada
   bool _isCheckingTaskPermission = false; // Evita múltiplas verificações simultâneas
+  bool _temSegmentoLinhasTransmissao = false; // Indica se o usuário tem o segmento "Linhas de Transmissão"
   final AuthServiceSimples _authService = AuthServiceSimples();
   final ExecutorService _executorService = ExecutorService();
 
@@ -80,6 +87,45 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         _filtroResponsaveis.length +
         _filtroGPMs.length +
         _filtroStatusTarefa.length;
+  }
+
+  /// Retorna true se todas as listas de opções dos filtros estão vazias.
+  /// Usado para recarregar filtros ao expandir o painel no mobile.
+  bool _opcoesFiltrosEstaoVazias() {
+    return _locaisDisponiveis.isEmpty &&
+        _salasDisponiveis.isEmpty &&
+        _tiposDisponiveis.isEmpty &&
+        _notasDisponiveis.isEmpty &&
+        _prioridadesDisponiveis.isEmpty &&
+        _statusUsuarioDisponiveis.isEmpty &&
+        _responsaveisDisponiveis.isEmpty &&
+        _gpmsDisponiveis.isEmpty &&
+        _statusTarefaDisponiveis.isEmpty;
+  }
+
+  List<String> _getOpcoesParaFiltro(String label) {
+    switch (label) {
+      case 'Local':
+        return _locaisDisponiveis;
+      case 'Sala':
+        return _salasDisponiveis;
+      case 'Tipo':
+        return _tiposDisponiveis;
+      case 'Nota':
+        return _notasDisponiveis;
+      case 'Prioridade':
+        return _prioridadesDisponiveis;
+      case 'Status Usuário':
+        return _statusUsuarioDisponiveis;
+      case 'Responsável':
+        return _responsaveisDisponiveis;
+      case 'GPM':
+        return _gpmsDisponiveis;
+      case 'Status (Tarefa)':
+        return _statusTarefaDisponiveis;
+      default:
+        return [];
+    }
   }
 
   void _atualizarStatusTarefaDisponiveis() {
@@ -107,11 +153,34 @@ class _NotasSAPViewState extends State<NotasSAPView> {
     });
   }
 
+  Future<void> _copiarNota(String notaNumero) async {
+    try {
+      await Clipboard.setData(ClipboardData(text: notaNumero));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Nota copiada!'),
+          duration: Duration(seconds: 1),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Não foi possível copiar a nota: ${e.toString()}'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     _searchQuery = widget.searchQuery ?? '';
     _loadTaskEditPermission();
+    _verificarSegmentoLinhasTransmissao();
     _loadStatus();
     _loadFiltros();
     _loadNotas();
@@ -130,6 +199,47 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         });
       }
     });
+  }
+
+  Future<void> _verificarSegmentoLinhasTransmissao() async {
+    try {
+      final usuario = _authService.currentUser;
+      if (usuario == null) {
+        setState(() {
+          _temSegmentoLinhasTransmissao = false;
+        });
+        return;
+      }
+
+      // Verificar se o usuário tem o segmento "Linhas de Transmissão"
+      // Normalizar para comparação (remover acentos e converter para minúsculas)
+      final temSegmento = usuario.segmentos.any((segmento) {
+        final segmentoNormalizado = segmento
+            .toLowerCase()
+            .replaceAll('ã', 'a')
+            .replaceAll('á', 'a')
+            .replaceAll('à', 'a')
+            .replaceAll('â', 'a')
+            .replaceAll('é', 'e')
+            .replaceAll('ê', 'e')
+            .replaceAll('í', 'i')
+            .replaceAll('ó', 'o')
+            .replaceAll('ô', 'o')
+            .replaceAll('ú', 'u')
+            .replaceAll('ç', 'c');
+        return segmentoNormalizado.contains('linhas') &&
+            segmentoNormalizado.contains('transmissao');
+      });
+
+      setState(() {
+        _temSegmentoLinhasTransmissao = temSegmento;
+      });
+    } catch (e) {
+      print('❌ Erro ao verificar segmento Linhas de Transmissão: $e');
+      setState(() {
+        _temSegmentoLinhasTransmissao = false;
+      });
+    }
   }
 
   Future<void> _loadTaskEditPermission() async {
@@ -368,40 +478,59 @@ class _NotasSAPViewState extends State<NotasSAPView> {
       });
     } else {
       // Se não temos notas carregadas, buscar do serviço
-      final valores = await _service.getValoresFiltros(
-        filtroTipoNota: _filtroTipoNota,
-        filtroLocais: _filtroLocais.isNotEmpty ? _filtroLocais.toList() : null,
-        filtroSalas: _filtroSalas.isNotEmpty ? _filtroSalas.toList() : null,
-        filtroTipos: _filtroTipos.isNotEmpty ? _filtroTipos.toList() : null,
-        filtroNotas: _filtroNotas.isNotEmpty ? _filtroNotas.toList() : null,
-        filtroPrioridades: _filtroPrioridades.isNotEmpty ? _filtroPrioridades.toList() : null,
-        filtroStatusUsuario: _filtroStatusUsuario.isNotEmpty ? _filtroStatusUsuario.toList() : null,
-        filtroResponsaveis: _filtroResponsaveis.isNotEmpty ? _filtroResponsaveis.toList() : null,
-        filtroGPMs: _filtroGPMs.isNotEmpty ? _filtroGPMs.toList() : null,
-      );
-      setState(() {
-        _locaisDisponiveis = valores['local'] ?? [];
-        _salasDisponiveis = valores['sala'] ?? [];
-        _tiposDisponiveis = valores['tipo'] ?? [];
-        _notasDisponiveis = valores['nota'] ?? [];
-        _prioridadesDisponiveis = valores['prioridade'] ?? [];
-        _statusUsuarioDisponiveis = valores['status_usuario'] ?? [];
-        _responsaveisDisponiveis = valores['responsavel'] ?? [];
-        _gpmsDisponiveis = valores['gpm'] ?? [];
-      });
+      try {
+        final valores = await _service.getValoresFiltros(
+          filtroTipoNota: _filtroTipoNota,
+          filtroLocais: _filtroLocais.isNotEmpty ? _filtroLocais.toList() : null,
+          filtroSalas: _filtroSalas.isNotEmpty ? _filtroSalas.toList() : null,
+          filtroTipos: _filtroTipos.isNotEmpty ? _filtroTipos.toList() : null,
+          filtroNotas: _filtroNotas.isNotEmpty ? _filtroNotas.toList() : null,
+          filtroPrioridades: _filtroPrioridades.isNotEmpty ? _filtroPrioridades.toList() : null,
+          filtroStatusUsuario: _filtroStatusUsuario.isNotEmpty ? _filtroStatusUsuario.toList() : null,
+          filtroResponsaveis: _filtroResponsaveis.isNotEmpty ? _filtroResponsaveis.toList() : null,
+          filtroGPMs: _filtroGPMs.isNotEmpty ? _filtroGPMs.toList() : null,
+        );
+        if (!mounted) return;
+        setState(() {
+          _locaisDisponiveis = valores['local'] ?? [];
+          _salasDisponiveis = valores['sala'] ?? [];
+          _tiposDisponiveis = valores['tipo'] ?? [];
+          _notasDisponiveis = valores['nota'] ?? [];
+          _prioridadesDisponiveis = valores['prioridade'] ?? [];
+          _statusUsuarioDisponiveis = valores['status_usuario'] ?? [];
+          _responsaveisDisponiveis = valores['responsavel'] ?? [];
+          _gpmsDisponiveis = valores['gpm'] ?? [];
+          _statusTarefaDisponiveis = valores['status_tarefa'] ?? [];
+        });
+      } catch (e, st) {
+        debugPrint('❌ [NotasSAPView] Erro ao carregar opções dos filtros: $e');
+        debugPrint('   Stack: $st');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Não foi possível carregar as opções dos filtros. Toque em Filtros novamente para tentar.'),
+              backgroundColor: Colors.orange,
+              action: SnackBarAction(
+                label: 'Tentar',
+                onPressed: () => _loadFiltros(),
+              ),
+            ),
+          );
+        }
+      }
     }
   }
 
   Future<void> _loadNotas() async {
-    print('📋 DEBUG _loadNotas: Iniciando carregamento');
-    print('   paginaAtual: $_paginaAtual');
-    print('   itensPorPagina: $_itensPorPagina');
+    final totalSw = Stopwatch()..start();
+    print('⏱ [NotasSAPView] _loadNotas iniciado | pagina=$_paginaAtual | itensPorPagina=$_itensPorPagina');
     
     setState(() {
       _isLoading = true;
     });
 
     try {
+      final querySw = Stopwatch()..start();
       // Carregar TODAS as notas (sem paginação) para ordenar corretamente
       var todasNotas = await _service.getAllNotas(
         filtroTipoNota: _filtroTipoNota,
@@ -417,8 +546,10 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         offset: null, // Sem offset
       );
 
-      print('📋 DEBUG _loadNotas: ${todasNotas.length} notas carregadas (todas)');
+      querySw.stop();
+      print('⏱ [NotasSAPView] Query getAllNotas concluída em ${querySw.elapsedMilliseconds}ms | notas=${todasNotas.length}');
 
+      final filterSw = Stopwatch()..start();
       // Aplicar filtro de programação (programadas/não programadas)
       if (_filtroProgramacao != null) {
         todasNotas = todasNotas.where((nota) {
@@ -429,6 +560,23 @@ class _NotasSAPViewState extends State<NotasSAPView> {
             return !isProgramada;
           }
           return true;
+        }).toList();
+      }
+
+      // Aplicar filtro por tipo (vegetação, trator, manutenção) baseado na descrição
+      if (_tipoFiltro != null) {
+        todasNotas = todasNotas.where((nota) {
+          final descricao = nota.descricao?.toUpperCase() ?? '';
+          switch (_tipoFiltro) {
+            case 'vegetacao':
+              return descricao.startsWith('PD');
+            case 'trator':
+              return descricao.startsWith('TR');
+            case 'manutencao':
+              return descricao.startsWith('MT');
+            default:
+              return true;
+          }
         }).toList();
       }
 
@@ -454,6 +602,10 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         }).toList();
       }
 
+      filterSw.stop();
+      print('⏱ [NotasSAPView] Filtros aplicados em ${filterSw.elapsedMilliseconds}ms | notas=${todasNotas.length}');
+
+      final sortSw = Stopwatch()..start();
       // Ordenar TODAS as notas por prazo: pelos dias restantes em ordem crescente
       // Isso coloca automaticamente:
       // 1. Vencidas (negativas) primeiro: -219, -145, -114, -51 (do mais negativo para o menos negativo)
@@ -476,31 +628,55 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         // compareTo já faz: negativos vêm antes de positivos, e ordena corretamente dentro de cada grupo
         return diasA.compareTo(diasB);
       });
+      sortSw.stop();
+      print('⏱ [NotasSAPView] Ordenação concluída em ${sortSw.elapsedMilliseconds}ms');
 
       // Calcular total após busca e ordenação
       final total = todasNotas.length;
-      print('📋 DEBUG _loadNotas: Total de notas após busca: $total');
+
+      final countSw = Stopwatch()..start();
+      // Calcular contadores por tipo (baseado nas notas filtradas que estão sendo exibidas)
+      _contadorVegetacao = todasNotas.where((nota) {
+        final descricao = nota.descricao?.toUpperCase() ?? '';
+        return descricao.startsWith('PD');
+      }).length;
+      
+      _contadorTrator = todasNotas.where((nota) {
+        final descricao = nota.descricao?.toUpperCase() ?? '';
+        return descricao.startsWith('TR');
+      }).length;
+      
+      _contadorManutencao = todasNotas.where((nota) {
+        final descricao = nota.descricao?.toUpperCase() ?? '';
+        return descricao.startsWith('MT');
+      }).length;
 
       // Salvar todas as notas ordenadas para paginação
       _todasNotasOrdenadas = todasNotas;
+      countSw.stop();
+      print('⏱ [NotasSAPView] Contadores calculados em ${countSw.elapsedMilliseconds}ms');
 
       // Popular opções de status da tarefa
       _atualizarStatusTarefaDisponiveis();
 
+      final paginationSw = Stopwatch()..start();
       // Aplicar paginação manualmente após ordenação
       final inicio = _paginaAtual * _itensPorPagina;
       final fim = (inicio + _itensPorPagina).clamp(0, todasNotas.length);
       final notas = todasNotas.sublist(inicio, fim);
+      paginationSw.stop();
+      print('⏱ [NotasSAPView] Paginação aplicada em ${paginationSw.elapsedMilliseconds}ms | página $_paginaAtual: notas ${inicio + 1} a $fim de $total');
 
-      print('📋 DEBUG _loadNotas: Página $_paginaAtual: notas ${inicio + 1} a $fim de $total');
-
+      final setStateSw = Stopwatch()..start();
       setState(() {
         _notas = notas;
         _totalNotas = total;
         _isLoading = false;
       });
-      
-      print('📋 DEBUG _loadNotas: Estado atualizado - _notas.length: ${_notas.length}, _totalNotas: $_totalNotas');
+      setStateSw.stop();
+      totalSw.stop();
+      print('⏱ [NotasSAPView] setState concluído em ${setStateSw.elapsedMilliseconds}ms');
+      print('⏱ [NotasSAPView] _loadNotas TOTAL: ${totalSw.elapsedMilliseconds}ms | notas=${notas.length} de $total');
       
       // Recarregar filtros DEPOIS de atualizar _todasNotasOrdenadas
       // Isso garante que os valores disponíveis reflitam apenas as opções válidas
@@ -563,31 +739,42 @@ class _NotasSAPViewState extends State<NotasSAPView> {
 
   Future<void> _loadTodasNotasParaEstatisticas() async {
     try {
-      // Carregar todas as notas sem paginação para calcular estatísticas, usando os mesmos filtros
-      var todasNotas = await _service.getAllNotas(
-        filtroTipoNota: _filtroTipoNota,
-        filtroLocais: _filtroLocais.isNotEmpty ? _filtroLocais.toList() : null,
-        filtroTipos: _filtroTipos.isNotEmpty ? _filtroTipos.toList() : null,
-        filtroNotas: _filtroNotas.isNotEmpty ? _filtroNotas.toList() : null,
-        filtroPrioridades: _filtroPrioridades.isNotEmpty ? _filtroPrioridades.toList() : null,
-        filtroStatusUsuario: _filtroStatusUsuario.isNotEmpty ? _filtroStatusUsuario.toList() : null,
-        filtroResponsaveis: _filtroResponsaveis.isNotEmpty ? _filtroResponsaveis.toList() : null,
-        filtroGPMs: _filtroGPMs.isNotEmpty ? _filtroGPMs.toList() : null,
-        limit: null, // Sem limite
-        offset: null,
-      );
+      // OTIMIZAÇÃO: Reutilizar notas já carregadas em _loadNotas() se disponíveis
+      // Isso evita uma segunda chamada ao getAllNotas que estava duplicando o tempo de carregamento
+      List<NotaSAP> todasNotas;
+      
+      if (_todasNotasOrdenadas.isNotEmpty) {
+        // Reutilizar notas já carregadas e filtradas
+        todasNotas = List.from(_todasNotasOrdenadas);
+        print('⏱ [NotasSAPView] _loadTodasNotasParaEstatisticas: Reutilizando ${todasNotas.length} notas já carregadas');
+      } else {
+        // Se não há notas carregadas, carregar agora (caso raro)
+        print('⏱ [NotasSAPView] _loadTodasNotasParaEstatisticas: Carregando notas (cache vazio)');
+        todasNotas = await _service.getAllNotas(
+          filtroTipoNota: _filtroTipoNota,
+          filtroLocais: _filtroLocais.isNotEmpty ? _filtroLocais.toList() : null,
+          filtroTipos: _filtroTipos.isNotEmpty ? _filtroTipos.toList() : null,
+          filtroNotas: _filtroNotas.isNotEmpty ? _filtroNotas.toList() : null,
+          filtroPrioridades: _filtroPrioridades.isNotEmpty ? _filtroPrioridades.toList() : null,
+          filtroStatusUsuario: _filtroStatusUsuario.isNotEmpty ? _filtroStatusUsuario.toList() : null,
+          filtroResponsaveis: _filtroResponsaveis.isNotEmpty ? _filtroResponsaveis.toList() : null,
+          filtroGPMs: _filtroGPMs.isNotEmpty ? _filtroGPMs.toList() : null,
+          limit: null,
+          offset: null,
+        );
 
-      // Aplicar filtro de programação (programadas/não programadas)
-      if (_filtroProgramacao != null) {
-        todasNotas = todasNotas.where((nota) {
-          final isProgramada = _notasProgramadasIds.contains(nota.id);
-          if (_filtroProgramacao == 'programadas') {
-            return isProgramada;
-          } else if (_filtroProgramacao == 'nao_programadas') {
-            return !isProgramada;
-          }
-          return true;
-        }).toList();
+        // Aplicar filtro de programação (programadas/não programadas)
+        if (_filtroProgramacao != null) {
+          todasNotas = todasNotas.where((nota) {
+            final isProgramada = _notasProgramadasIds.contains(nota.id);
+            if (_filtroProgramacao == 'programadas') {
+              return isProgramada;
+            } else if (_filtroProgramacao == 'nao_programadas') {
+              return !isProgramada;
+            }
+            return true;
+          }).toList();
+        }
       }
 
       // Filtro de status da tarefa vinculada
@@ -683,6 +870,16 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                     _loadTodasNotasParaEstatisticas();
                     // _loadFiltros() será chamado automaticamente no final de _loadNotas()
                   },
+                  style: SegmentedButton.styleFrom(
+                    backgroundColor: Colors.grey[200],
+                    selectedBackgroundColor: Colors.blue[600],
+                    selectedForegroundColor: Colors.white,
+                    foregroundColor: Colors.grey[700],
+                    side: BorderSide(color: Colors.grey[300]!, width: 1),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
                 ),
                 const SizedBox(width: 16),
                 // Filtro Programação
@@ -698,6 +895,16 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                     _loadTodasNotasParaEstatisticas();
                     // _loadFiltros() será chamado automaticamente no final de _loadNotas()
                   },
+                  style: SegmentedButton.styleFrom(
+                    backgroundColor: Colors.grey[200],
+                    selectedBackgroundColor: Colors.blue[600],
+                    selectedForegroundColor: Colors.white,
+                    foregroundColor: Colors.grey[700],
+                    side: BorderSide(color: Colors.grey[300]!, width: 1),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
                 ),
                 const Spacer(),
                 // Opções de visualização
@@ -740,32 +947,46 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                 else
                   Row(
                     children: [
-                      _buildViewButton(
-                        'Tabela',
-                        Icons.table_chart,
-                        'tabela',
-                        _modoVisualizacao == 'tabela',
-                      ),
-                      const SizedBox(width: 8),
-                      _buildViewButton(
-                        'Cards',
-                        Icons.view_module,
-                        'cards',
-                        _modoVisualizacao == 'cards',
-                      ),
-                      const SizedBox(width: 8),
-                      _buildViewButton(
-                        'Calendário',
-                        Icons.calendar_today,
-                        'calendario',
-                        _modoVisualizacao == 'calendario',
-                      ),
-                      const SizedBox(width: 8),
-                      _buildViewButton(
-                        'Dashboard',
-                        Icons.dashboard,
-                        'dashboard',
-                        _modoVisualizacao == 'dashboard',
+                      // Toggle switch com 3 ícones (vegetação, trator, manutenção)
+                      // Só aparece se o usuário tiver o segmento "Linhas de Transmissão"
+                      _buildTipoToggle(),
+                      // Espaçamento só se o toggle estiver visível
+                      if (_temSegmentoLinhasTransmissao) const SizedBox(width: 16),
+                      // Container para os botões de visualização (estilo SegmentedButton)
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Colors.grey[200],
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _buildViewButton(
+                              'Tabela',
+                              Icons.table_chart,
+                              'tabela',
+                              _modoVisualizacao == 'tabela',
+                            ),
+                            _buildViewButton(
+                              'Cards',
+                              Icons.view_module,
+                              'cards',
+                              _modoVisualizacao == 'cards',
+                            ),
+                            _buildViewButton(
+                              'Calendário',
+                              Icons.calendar_today,
+                              'calendario',
+                              _modoVisualizacao == 'calendario',
+                            ),
+                            _buildViewButton(
+                              'Dashboard',
+                              Icons.dashboard,
+                              'dashboard',
+                              _modoVisualizacao == 'dashboard',
+                            ),
+                          ],
+                        ),
                       ),
                     ],
                   ),
@@ -821,9 +1042,14 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                     ),
                   ),
                   onPressed: () {
+                    final willExpand = !_filtrosExpandidos;
                     setState(() {
-                      _filtrosExpandidos = !_filtrosExpandidos;
+                      _filtrosExpandidos = willExpand;
                     });
+                    // No mobile, recarregar opções dos filtros ao expandir se ainda estiverem vazias
+                    if (willExpand && _opcoesFiltrosEstaoVazias()) {
+                      _loadFiltros();
+                    }
                   },
                 ),
                 const SizedBox(width: 8),
@@ -1043,13 +1269,51 @@ class _NotasSAPViewState extends State<NotasSAPView> {
               color: Colors.blue[50],
               child: Row(
                 children: [
-                  Text(
-                    'Total: $_totalNotas notas (${_notas.length} nesta página)',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: Colors.blue,
+                  Row(
+                      children: [
+                        Text(
+                          'Total: $_totalNotas notas (${_notas.length} nesta página)',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.blue,
+                          ),
+                        ),
+                        if (_notasSelecionadas.isNotEmpty) ...[
+                          const SizedBox(width: 16),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.blue[100],
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: Colors.blue[300]!),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.check_circle, size: 16, color: Colors.blue[700]),
+                                const SizedBox(width: 6),
+                                Text(
+                                  '${_notasSelecionadas.length} selecionada${_notasSelecionadas.length > 1 ? 's' : ''}',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.blue[700],
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                InkWell(
+                                  onTap: () {
+                                    setState(() {
+                                      _notasSelecionadas.clear();
+                                    });
+                                  },
+                                  child: Icon(Icons.close, size: 16, color: Colors.blue[700]),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
-                  ),
                   const Spacer(),
                   Text(
                     'Página ${_paginaAtual + 1} de ${(_totalNotas / _itensPorPagina).ceil()}',
@@ -1252,40 +1516,54 @@ class _NotasSAPViewState extends State<NotasSAPView> {
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: nota.nota));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Nota copiada!'),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
-              },
+              onPressed: () => _copiarNota(nota.nota),
               tooltip: 'Copiar nota',
             ),
-            if (isProgramada && tarefaStatus != null && statusColor != null)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: statusColor,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.task, color: Colors.white, size: 14),
-                    const SizedBox(width: 4),
-                    Text(
-                      tarefaStatus,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                      ),
+            isProgramada && tarefaStatus != null && statusColor != null
+                ? Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: statusColor,
+                      borderRadius: BorderRadius.circular(12),
                     ),
-                  ],
-                ),
-              ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.task, color: Colors.white, size: 14),
+                        const SizedBox(width: 4),
+                        Text(
+                          tarefaStatus,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[200],
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.cancel_outlined, color: Colors.grey[600], size: 14),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Não Programada',
+                          style: TextStyle(
+                            color: Colors.grey[700],
+                            fontSize: 10,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
           ],
         ),
         subtitle: Column(
@@ -1517,8 +1795,16 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                     ),
                     const SizedBox(width: 8),
                     OutlinedButton.icon(
-                      onPressed: () => _vincularNotaATarefaExistente(nota),
-                      icon: const Icon(Icons.link, size: 18),
+                      onPressed: _notasVinculando.contains(nota.id) 
+                          ? null 
+                          : () => _vincularNotasSelecionadas(nota),
+                      icon: _notasVinculando.contains(nota.id)
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.link, size: 18),
                       label: const Text('Vincular a Tarefa'),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: Colors.blue,
@@ -1560,22 +1846,144 @@ class _NotasSAPViewState extends State<NotasSAPView> {
     );
   }
 
+  // Toggle switch com 3 ícones (vegetação, trator, manutenção)
+  // Só aparece se o usuário tiver o segmento "Linhas de Transmissão"
+  Widget _buildTipoToggle() {
+    // Só mostrar se o usuário tiver o segmento "Linhas de Transmissão"
+    if (!_temSegmentoLinhasTransmissao) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.grey[200],
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildTipoToggleButton(
+            icon: Icons.eco, // Vegetação
+            value: 'vegetacao',
+            tooltip: 'Vegetação (PD)',
+            contador: _contadorVegetacao,
+          ),
+          _buildTipoToggleButton(
+            icon: Icons.agriculture, // Trator
+            value: 'trator',
+            tooltip: 'Trator (TR)',
+            contador: _contadorTrator,
+          ),
+          _buildTipoToggleButton(
+            icon: Icons.build, // Manutenção
+            value: 'manutencao',
+            tooltip: 'Manutenção (MT)',
+            contador: _contadorManutencao,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTipoToggleButton({
+    required IconData icon,
+    required String value,
+    required String tooltip,
+    required int contador,
+  }) {
+    final isSelected = _tipoFiltro == value;
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: () {
+          setState(() {
+            // Se clicar no mesmo, deseleciona (mostra todos)
+            _tipoFiltro = _tipoFiltro == value ? null : value;
+          });
+          // Recarregar notas com o novo filtro
+          _loadNotas();
+        },
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: isSelected ? Colors.blue[600] : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Ícone
+              Icon(
+                icon,
+                size: 20,
+                color: isSelected ? Colors.white : Colors.grey[700],
+              ),
+              // Badge abaixo do ícone
+              if (contador > 0)
+                Container(
+                  margin: const EdgeInsets.only(top: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.red,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  constraints: const BoxConstraints(
+                    minWidth: 20,
+                    minHeight: 16,
+                  ),
+                  child: Text(
+                    contador > 99 ? '99+' : contador.toString(),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                )
+              else
+                const SizedBox(height: 20), // Espaço para manter alinhamento
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildViewButton(String label, IconData icon, String value, bool isSelected) {
-    return ElevatedButton.icon(
-      onPressed: () {
+    return InkWell(
+      onTap: () {
         setState(() {
           _modoVisualizacao = value;
           _visualizacaoTabela = value == 'tabela';
         });
       },
-      icon: Icon(icon, size: 18),
-      label: Text(label),
-      style: ElevatedButton.styleFrom(
-        backgroundColor: isSelected ? Colors.blue : Colors.grey[200],
-        foregroundColor: isSelected ? Colors.white : Colors.grey[800],
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? Colors.blue[600] : Colors.transparent,
           borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 16,
+              color: isSelected ? Colors.white : Colors.grey[700],
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                color: isSelected ? Colors.white : Colors.grey[700],
+                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                fontSize: 13,
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -1725,10 +2133,16 @@ class _NotasSAPViewState extends State<NotasSAPView> {
     }
     
     return InkWell(
-      onTap: () {
+      onTap: () async {
         // Calcular opções disponíveis dinamicamente no momento de abrir o diálogo
-        final opcoesAtualizadas = _calcularOpcoesDisponiveis(label);
-        
+        var opcoesAtualizadas = _calcularOpcoesDisponiveis(label);
+        // No mobile, se opções vazias e notas ainda não carregadas, forçar carregamento dos filtros
+        if (opcoesAtualizadas.isEmpty && _todasNotasOrdenadas.isEmpty) {
+          await _loadFiltros();
+          if (!mounted) return;
+          opcoesAtualizadas = _getOpcoesParaFiltro(label);
+        }
+        if (!mounted) return;
         showDialog(
           context: context,
           builder: (context) => MultiSelectFilterDialog(
@@ -1941,6 +2355,20 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         child: DataTable(
           headingRowColor: MaterialStateProperty.all(Colors.blue[50]),
           columns: [
+            DataColumn(
+              label: Checkbox(
+                value: _notasSelecionadas.length == _notas.length && _notas.isNotEmpty,
+                onChanged: (value) {
+                  setState(() {
+                    if (value == true) {
+                      _notasSelecionadas = _notas.map((n) => n.id).toSet();
+                    } else {
+                      _notasSelecionadas.clear();
+                    }
+                  });
+                },
+              ),
+            ),
             DataColumn(label: Text('Ações', style: TextStyle(fontWeight: FontWeight.bold))),
             DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold))),
             DataColumn(label: Text('Tarefa Vinculada', style: TextStyle(fontWeight: FontWeight.bold))),
@@ -1981,11 +2409,28 @@ class _NotasSAPViewState extends State<NotasSAPView> {
             final statusColor = tarefaStatus != null ? _getTaskStatusColor(tarefaStatus) : null;
             final totalVinculacoes = programadasList?.length ?? 0;
             
+            final isSelected = _notasSelecionadas.contains(nota.id);
             return DataRow(
+              selected: isSelected,
               color: isProgramada && statusColor != null
                   ? MaterialStateProperty.all(statusColor.withOpacity(0.1))
                   : null,
               cells: [
+                // 0. CHECKBOX DE SELEÇÃO
+                DataCell(
+                  Checkbox(
+                    value: isSelected,
+                    onChanged: (value) {
+                      setState(() {
+                        if (value == true) {
+                          _notasSelecionadas.add(nota.id);
+                        } else {
+                          _notasSelecionadas.remove(nota.id);
+                        }
+                      });
+                    },
+                  ),
+                ),
                 // 1. AÇÕES
                 DataCell(
                   Row(
@@ -2036,16 +2481,30 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                         child: Material(
                           color: Colors.transparent,
                           child: InkWell(
-                            onTap: () => _vincularNotaATarefaExistente(nota),
+                            onTap: _notasVinculando.contains(nota.id)
+                                ? null
+                                : () => _vincularNotasSelecionadas(nota),
                             borderRadius: BorderRadius.circular(4),
                             child: Container(
                               padding: const EdgeInsets.all(8),
                               decoration: BoxDecoration(
-                                color: Colors.blue[50],
+                                color: _notasVinculando.contains(nota.id)
+                                    ? Colors.grey[200]
+                                    : Colors.blue[50],
                                 borderRadius: BorderRadius.circular(4),
-                                border: Border.all(color: Colors.blue[300]!),
+                                border: Border.all(
+                                  color: _notasVinculando.contains(nota.id)
+                                      ? Colors.grey[300]!
+                                      : Colors.blue[300]!,
+                                ),
                               ),
-                              child: const Icon(Icons.link, size: 20, color: Colors.blue),
+                              child: _notasVinculando.contains(nota.id)
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(strokeWidth: 2),
+                                    )
+                                  : const Icon(Icons.link, size: 20, color: Colors.blue),
                             ),
                           ),
                         ),
@@ -2096,7 +2555,28 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                             ],
                           ),
                         )
-                      : const Text('-', style: TextStyle(color: Colors.grey)),
+                      : Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.grey[200],
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.cancel_outlined, color: Colors.grey[600], size: 14),
+                              const SizedBox(width: 4),
+                              Text(
+                                'Não Programada',
+                                style: TextStyle(
+                                  color: Colors.grey[700],
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                 ),
                 // 3. TAREFA VINCULADA
                 DataCell(
@@ -2231,15 +2711,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                       ),
                       const SizedBox(width: 8),
                       InkWell(
-                        onTap: () {
-                          Clipboard.setData(ClipboardData(text: nota.nota));
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Nota copiada!'),
-                              duration: Duration(seconds: 1),
-                            ),
-                          );
-                        },
+                        onTap: () => _copiarNota(nota.nota),
                         child: const Icon(Icons.copy, size: 16, color: Colors.blue),
                       ),
                     ],
@@ -2468,15 +2940,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: nota.nota));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Nota copiada!'),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
-              },
+              onPressed: () => _copiarNota(nota.nota),
               tooltip: 'Copiar nota',
             ),
           ],
@@ -2530,47 +2994,192 @@ class _NotasSAPViewState extends State<NotasSAPView> {
     );
   }
 
-  // Criar tarefa a partir de uma nota SAP
+  // Criar tarefa a partir de uma nota SAP (ou múltiplas notas selecionadas)
   Future<void> _criarTarefaDaNota(NotaSAP nota) async {
     try {
       if (!await _ensureCanEditTasks()) return;
-      // Calcular datas padrão
-      final dataInicio = nota.inicioDesejado ?? DateTime.now();
-      final dataFim = nota.conclusaoDesejada ?? dataInicio.add(const Duration(days: 1));
       
-      // Mostrar formulário de criação de tarefa pré-preenchido com dados da nota
+      // Verificar se há notas selecionadas
+      final notasParaVincular = _notasSelecionadas.isNotEmpty 
+          ? _notas.where((n) => _notasSelecionadas.contains(n.id)).toList()
+          : [nota];
+      
+      // Se há múltiplas notas selecionadas, usar a primeira para pré-preencher o formulário
+      final notaPrincipal = notasParaVincular.first;
+      
+      // Calcular datas padrão baseado na primeira nota
+      final dataInicio = notaPrincipal.inicioDesejado ?? DateTime.now();
+      final dataFim = notaPrincipal.conclusaoDesejada ?? dataInicio.add(const Duration(days: 1));
+      
+      // Mostrar formulário de criação de tarefa pré-preenchido com dados da nota principal
       final taskCriada = await showDialog<Task>(
         context: context,
         builder: (context) => TaskFormDialog(
           startDate: dataInicio,
           endDate: dataFim,
-          notaSAP: nota, // Passar a nota SAP para pré-preencher o formulário
+          notaSAP: notaPrincipal, // Passar a nota SAP principal para pré-preencher o formulário
         ),
       );
       
       if (taskCriada != null) {
+        // Mostrar diálogo de progresso se houver múltiplas notas
+        final progressDialogContext = context;
+        StateSetter? setDialogState;
+        int notasProcessadas = 0;
+        String statusAtual = 'Criando tarefa...';
+        
+        if (notasParaVincular.length > 1) {
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) {
+              return StatefulBuilder(
+                builder: (context, setState) {
+                  setDialogState = setState;
+                  return AlertDialog(
+                    content: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const CircularProgressIndicator(),
+                        const SizedBox(height: 20),
+                        Text(
+                          'Criando tarefa e vinculando ${notasParaVincular.length} notas...',
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          'Tarefa: ${taskCriada.tarefa}',
+                          style: const TextStyle(
+                            fontSize: 14,
+                            color: Colors.grey,
+                          ),
+                          textAlign: TextAlign.center,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 20),
+                        LinearProgressIndicator(
+                          value: notasParaVincular.length > 0 
+                              ? notasProcessadas / (notasParaVincular.length + 1) // +1 para a criação da tarefa
+                              : 0.0,
+                          backgroundColor: Colors.grey[300],
+                          valueColor: const AlwaysStoppedAnimation<Color>(Colors.blue),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          statusAtual,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              );
+            },
+          );
+        }
+        
         // A tarefa retornada ainda não tem ID real (é um ID temporário)
         // Precisamos criar a tarefa primeiro e depois vincular
         final taskService = TaskService();
         try {
-          final createdTask = await taskService.createTask(taskCriada);
+          // Atualizar progresso: criando tarefa
+          if (notasParaVincular.length > 1 && setDialogState != null) {
+            statusAtual = 'Criando tarefa...';
+            setDialogState!(() {});
+          }
           
-          // Vincular a nota SAP à tarefa criada
-          await _service.vincularNotaATarefa(createdTask.id, nota.id);
+          final createdTask = await taskService.createTask(taskCriada);
+          notasProcessadas++;
+          
+          // Atualizar progresso: tarefa criada, iniciando vinculação
+          if (notasParaVincular.length > 1 && setDialogState != null) {
+            statusAtual = 'Vinculando notas...';
+            setDialogState!(() {});
+          }
+          
+          // Vincular todas as notas selecionadas (ou apenas a nota clicada)
+          int vinculadasComSucesso = 0;
+          int vinculadasComErro = 0;
+          
+          for (final notaParaVincular in notasParaVincular) {
+            try {
+              await _service.vincularNotaATarefa(createdTask.id, notaParaVincular.id);
+              vinculadasComSucesso++;
+              notasProcessadas++;
+              
+              // Atualizar progresso no diálogo
+              if (notasParaVincular.length > 1 && setDialogState != null) {
+                statusAtual = 'Vinculando notas... ($notasProcessadas/${notasParaVincular.length + 1})';
+                setDialogState!(() {});
+              }
+            } catch (e) {
+              print('❌ Erro ao vincular nota ${notaParaVincular.nota}: $e');
+              vinculadasComErro++;
+              notasProcessadas++;
+              
+              // Atualizar progresso mesmo em caso de erro
+              if (notasParaVincular.length > 1 && setDialogState != null) {
+                statusAtual = 'Vinculando notas... ($notasProcessadas/${notasParaVincular.length + 1})';
+                setDialogState!(() {});
+              }
+            }
+          }
+          
+          // Fechar diálogo de progresso se foi aberto
+          if (notasParaVincular.length > 1 && mounted) {
+            Navigator.of(progressDialogContext, rootNavigator: true).pop();
+          }
           
           // Recarregar notas programadas para atualizar a visualização
           await _loadNotasProgramadas();
           
+          // Limpar seleção
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Tarefa criada e vinculada à nota ${nota.nota} com sucesso!'),
-                backgroundColor: Colors.green,
-                duration: const Duration(seconds: 3),
-              ),
-            );
+            setState(() {
+              _notasSelecionadas.clear();
+            });
+          }
+          
+          if (mounted) {
+            final scaffoldMessenger = ScaffoldMessenger.of(context);
+            if (vinculadasComErro == 0) {
+              scaffoldMessenger.showSnackBar(
+                SnackBar(
+                  content: Text(
+                    vinculadasComSucesso == 1
+                        ? 'Tarefa criada e vinculada à nota ${notaPrincipal.nota} com sucesso!'
+                        : 'Tarefa criada e ${vinculadasComSucesso} notas vinculadas com sucesso!',
+                  ),
+                  backgroundColor: Colors.green,
+                  duration: const Duration(seconds: 3),
+                ),
+              );
+            } else {
+              scaffoldMessenger.showSnackBar(
+                SnackBar(
+                  content: Text(
+                    'Tarefa criada. $vinculadasComSucesso nota(s) vinculada(s) com sucesso. $vinculadasComErro erro(s).',
+                  ),
+                  backgroundColor: Colors.orange,
+                  duration: const Duration(seconds: 3),
+                ),
+              );
+            }
           }
         } catch (e) {
+          // Fechar diálogo de progresso se foi aberto
+          if (notasParaVincular.length > 1 && mounted) {
+            Navigator.of(progressDialogContext, rootNavigator: true).pop();
+          }
+          
           print('⚠️ Erro ao criar/vincular tarefa: $e');
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -2596,15 +3205,312 @@ class _NotasSAPViewState extends State<NotasSAPView> {
     }
   }
 
-  // Vincular nota a uma tarefa existente
-  Future<void> _vincularNotaATarefaExistente(NotaSAP nota) async {
+  // Vincular notas selecionadas (ou apenas a nota clicada se nenhuma estiver selecionada)
+  Future<void> _vincularNotasSelecionadas(NotaSAP nota) async {
+    // Se há notas selecionadas, vincular todas elas
+    if (_notasSelecionadas.isNotEmpty) {
+      await _vincularMultiplasNotas(_notasSelecionadas.toList());
+    } else {
+      // Se não há seleção, vincular apenas a nota clicada
+      await _vincularNotaATarefaExistente(nota);
+    }
+  }
+
+  // Vincular múltiplas notas a uma tarefa
+  Future<void> _vincularMultiplasNotas(List<String> notaIds) async {
+    if (!mounted || notaIds.isEmpty) {
+      return;
+    }
+
+    // Verificar se alguma nota já está sendo vinculada
+    final notasEmProcessamento = notaIds.where((id) => _notasVinculando.contains(id)).toList();
+    if (notasEmProcessamento.isNotEmpty) {
+      return;
+    }
+
+    // Marcar todas como processando
+    setState(() {
+      for (final id in notaIds) {
+        _notasVinculando.add(id);
+      }
+    });
+
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+
     try {
+      // Buscar as notas selecionadas
+      final notasSelecionadas = _notas.where((n) => notaIds.contains(n.id)).toList();
+      if (notasSelecionadas.isEmpty) {
+        if (mounted) {
+          scaffoldMessenger.showSnackBar(
+            const SnackBar(
+              content: Text('Nenhuma nota selecionada encontrada'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+
+      // Usar o local da primeira nota para filtrar tarefas (ou todas se não houver local)
+      final localComum = notasSelecionadas.first.local;
+      
+      // Buscar tarefas disponíveis
       final taskService = TaskService();
       final todasTarefas = await taskService.getAllTasks();
+
+      if (todasTarefas.isEmpty) {
+        if (mounted) {
+          scaffoldMessenger.showSnackBar(
+            const SnackBar(
+              content: Text('Não há tarefas disponíveis para vincular'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+
+      // Filtrar tarefas já vinculadas a qualquer uma das notas selecionadas
+      final tarefasVinculadasSet = <String>{};
+      for (final nota in notasSelecionadas) {
+        final tarefasVinculadas = await _service.getTarefasPorNota(nota.id);
+        tarefasVinculadasSet.addAll(tarefasVinculadas);
+      }
+
+      var tarefasDisponiveis = todasTarefas
+          .where((t) => !tarefasVinculadasSet.contains(t.id))
+          .toList();
+
+      // Filtrar tarefas do mesmo local (se houver local comum)
+      if (localComum != null && localComum.isNotEmpty) {
+        tarefasDisponiveis = tarefasDisponiveis
+            .where((t) => t.locais.contains(localComum))
+            .toList();
+      }
+
+      if (tarefasDisponiveis.isEmpty) {
+        if (mounted) {
+          scaffoldMessenger.showSnackBar(
+            SnackBar(
+              content: Text(
+                localComum != null && localComum.isNotEmpty
+                    ? 'Não há tarefas disponíveis do mesmo local ($localComum) para vincular'
+                    : 'Todas as tarefas já estão vinculadas às notas selecionadas',
+              ),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+
+      // Remover do conjunto de processamento antes de abrir o diálogo
+      if (mounted) {
+        setState(() {
+          for (final id in notaIds) {
+            _notasVinculando.remove(id);
+          }
+        });
+      }
+
+      if (!mounted) {
+        return;
+      }
+
+      // Mostrar diálogo de seleção de tarefa
+      final tarefaSelecionada = await showDialog<Task>(
+        context: context,
+        barrierDismissible: true,
+        builder: (context) => TaskSelectionDialog(
+          tasks: tarefasDisponiveis,
+          title: 'Vincular ${notaIds.length} Nota${notaIds.length > 1 ? 's' : ''} a Tarefa',
+          notaSapNumero: notasSelecionadas.length == 1 ? notasSelecionadas.first.nota : null,
+        ),
+      );
+
+      if (tarefaSelecionada != null && mounted) {
+        // Mostrar diálogo de progresso com StatefulBuilder para atualização dinâmica
+        int notasProcessadas = 0;
+        final progressDialogContext = context;
+        StateSetter? setDialogState;
+        
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) {
+            return StatefulBuilder(
+              builder: (context, setState) {
+                setDialogState = setState;
+                return AlertDialog(
+                  content: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const CircularProgressIndicator(),
+                      const SizedBox(height: 20),
+                      Text(
+                        'Vinculando ${notasSelecionadas.length} nota${notasSelecionadas.length > 1 ? 's' : ''}...',
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        'Tarefa: ${tarefaSelecionada.tarefa}',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey,
+                        ),
+                        textAlign: TextAlign.center,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 20),
+                      LinearProgressIndicator(
+                        value: notasSelecionadas.length > 0 ? notasProcessadas / notasSelecionadas.length : 0.0,
+                        backgroundColor: Colors.grey[300],
+                        valueColor: const AlwaysStoppedAnimation<Color>(Colors.blue),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        '$notasProcessadas de ${notasSelecionadas.length} vinculada${notasSelecionadas.length > 1 ? 's' : ''}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            );
+          },
+        );
+
+        // Vincular todas as notas selecionadas
+        int vinculadasComSucesso = 0;
+        int vinculadasComErro = 0;
+
+        for (int i = 0; i < notasSelecionadas.length; i++) {
+          final nota = notasSelecionadas[i];
+          try {
+            await _service.vincularNotaATarefa(tarefaSelecionada.id, nota.id);
+            vinculadasComSucesso++;
+            notasProcessadas++;
+            
+            // Atualizar progresso no diálogo
+            if (mounted && setDialogState != null) {
+              setDialogState!(() {});
+            }
+          } catch (e) {
+            print('❌ Erro ao vincular nota ${nota.nota}: $e');
+            vinculadasComErro++;
+            notasProcessadas++;
+            
+            // Atualizar progresso mesmo em caso de erro
+            if (mounted && setDialogState != null) {
+              setDialogState!(() {});
+            }
+          }
+        }
+
+        // Fechar diálogo de progresso
+        if (mounted) {
+          Navigator.of(progressDialogContext, rootNavigator: true).pop();
+        }
+
+        // Recarregar notas programadas
+        await _loadNotasProgramadas();
+
+        // Limpar seleção
+        setState(() {
+          _notasSelecionadas.clear();
+        });
+
+        if (mounted) {
+          if (vinculadasComErro == 0) {
+            scaffoldMessenger.showSnackBar(
+              SnackBar(
+                content: Text(
+                  vinculadasComSucesso == 1
+                      ? 'Nota vinculada à tarefa "${tarefaSelecionada.tarefa}" com sucesso!'
+                      : '$vinculadasComSucesso notas vinculadas à tarefa "${tarefaSelecionada.tarefa}" com sucesso!',
+                ),
+                backgroundColor: Colors.green,
+                duration: const Duration(seconds: 3),
+              ),
+            );
+          } else {
+            scaffoldMessenger.showSnackBar(
+              SnackBar(
+                content: Text(
+                  '$vinculadasComSucesso nota(s) vinculada(s) com sucesso. $vinculadasComErro erro(s).',
+                ),
+                backgroundColor: Colors.orange,
+                duration: const Duration(seconds: 3),
+              ),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        scaffoldMessenger.showSnackBar(
+          SnackBar(
+            content: Text('Erro ao buscar tarefas: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } finally {
+      // Remover do conjunto de processamento
+      if (mounted) {
+        setState(() {
+          for (final id in notaIds) {
+            _notasVinculando.remove(id);
+          }
+        });
+      }
+    }
+  }
+
+  // Vincular nota a uma tarefa existente
+  Future<void> _vincularNotaATarefaExistente(NotaSAP nota) async {
+    if (!mounted || _notasVinculando.contains(nota.id)) {
+      return;
+    }
+    
+    // CAPTURAR O ID E NÚMERO DA NOTA ANTES DE QUALQUER OPERAÇÃO ASSÍNCRONA
+    // Isso garante que mesmo se houver múltiplas chamadas, cada uma usa a nota correta
+    final notaIdParaVincular = nota.id;
+    final notaNumeroParaVincular = nota.nota;
+    final notaLocalParaFiltro = nota.local;
+    
+    // Marcar como processando
+    setState(() {
+      _notasVinculando.add(notaIdParaVincular);
+    });
+    
+    // Capturar o contexto antes de operações assíncronas
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    
+    try {
+      // Executar operações em paralelo para ser mais rápido
+      final taskService = TaskService();
+      final results = await Future.wait([
+        taskService.getAllTasks(),
+        _service.getTarefasPorNota(notaIdParaVincular),
+      ]);
+      
+      final todasTarefas = results[0] as List<Task>;
+      final tarefasVinculadas = results[1] as List<String>;
       
       if (todasTarefas.isEmpty) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
+          scaffoldMessenger.showSnackBar(
             const SnackBar(
               content: Text('Não há tarefas disponíveis para vincular'),
               backgroundColor: Colors.orange,
@@ -2614,19 +3520,27 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         return;
       }
       
-      // Buscar tarefas já vinculadas a esta nota
-      final tarefasVinculadas = await _service.getTarefasPorNota(nota.id);
-      
       // Filtrar tarefas já vinculadas
-      final tarefasDisponiveis = todasTarefas
+      var tarefasDisponiveis = todasTarefas
           .where((t) => !tarefasVinculadas.contains(t.id))
           .toList();
       
+      // Filtrar tarefas do mesmo local da nota (se a nota tiver local)
+      if (notaLocalParaFiltro != null && notaLocalParaFiltro.isNotEmpty) {
+        tarefasDisponiveis = tarefasDisponiveis
+            .where((t) => t.locais.contains(notaLocalParaFiltro))
+            .toList();
+      }
+      
       if (tarefasDisponiveis.isEmpty) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Todas as tarefas já estão vinculadas a esta nota'),
+          scaffoldMessenger.showSnackBar(
+            SnackBar(
+              content: Text(
+                notaLocalParaFiltro != null && notaLocalParaFiltro.isNotEmpty
+                    ? 'Não há tarefas disponíveis do mesmo local ($notaLocalParaFiltro) para vincular'
+                    : 'Todas as tarefas já estão vinculadas a esta nota',
+              ),
               backgroundColor: Colors.orange,
             ),
           );
@@ -2634,25 +3548,92 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         return;
       }
       
-      // Mostrar diálogo melhorado para selecionar tarefa
+      // Remover do conjunto de processamento antes de abrir o diálogo
+      if (mounted) {
+        setState(() {
+          _notasVinculando.remove(notaIdParaVincular);
+        });
+      }
+      
+      // Mostrar diálogo imediatamente
+      if (!mounted) {
+        return;
+      }
+      
       final tarefaSelecionada = await showDialog<Task>(
         context: context,
+        barrierDismissible: true,
         builder: (context) => TaskSelectionDialog(
           tasks: tarefasDisponiveis,
           title: 'Vincular Nota a Tarefa',
-          notaSapNumero: nota.nota,
+          notaSapNumero: notaNumeroParaVincular,
         ),
       );
       
-      if (tarefaSelecionada != null) {
+      if (tarefaSelecionada != null && mounted) {
         try {
-          await _service.vincularNotaATarefa(tarefaSelecionada.id, nota.id);
+          // Mostrar diálogo de progresso
+          final progressDialogContext = context;
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (dialogContext) => AlertDialog(
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const CircularProgressIndicator(),
+                  const SizedBox(height: 20),
+                  const Text(
+                    'Vinculando nota...',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    'Tarefa: ${tarefaSelecionada.tarefa}',
+                    style: const TextStyle(
+                      fontSize: 14,
+                      color: Colors.grey,
+                    ),
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    'Nota: $notaNumeroParaVincular',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
+          );
+
+          // IMPORTANTE: Usar APENAS o ID da nota específica que foi clicada
+          // Não usar sala, local ou qualquer outro critério - apenas o ID único da nota
+          print('🔗 Vinculando nota específica: ID=$notaIdParaVincular, Número=$notaNumeroParaVincular');
+          print('🔗 Tarefa selecionada: ID=${tarefaSelecionada.id}, Nome=${tarefaSelecionada.tarefa}');
+          
+          await _service.vincularNotaATarefa(tarefaSelecionada.id, notaIdParaVincular);
+          
+          // Fechar diálogo de progresso
+          if (mounted) {
+            Navigator.of(progressDialogContext, rootNavigator: true).pop();
+          }
+          
           // Recarregar notas programadas para atualizar a visualização
           await _loadNotasProgramadas();
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
+            scaffoldMessenger.showSnackBar(
               SnackBar(
-                content: Text('Nota ${nota.nota} vinculada à tarefa "${tarefaSelecionada.tarefa}" com sucesso!'),
+                content: Text('Nota $notaNumeroParaVincular vinculada à tarefa "${tarefaSelecionada.tarefa}" com sucesso!'),
                 backgroundColor: Colors.green,
                 duration: const Duration(seconds: 3),
               ),
@@ -2660,7 +3641,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
           }
         } catch (e) {
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
+            scaffoldMessenger.showSnackBar(
               SnackBar(
                 content: Text('Erro ao vincular nota: $e'),
                 backgroundColor: Colors.red,
@@ -2672,13 +3653,20 @@ class _NotasSAPViewState extends State<NotasSAPView> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        scaffoldMessenger.showSnackBar(
           SnackBar(
             content: Text('Erro ao buscar tarefas: $e'),
             backgroundColor: Colors.red,
             duration: const Duration(seconds: 3),
           ),
         );
+      }
+    } finally {
+      // Remover do conjunto de processamento usando o ID capturado
+      if (mounted) {
+        setState(() {
+          _notasVinculando.remove(notaIdParaVincular);
+        });
       }
     }
   }

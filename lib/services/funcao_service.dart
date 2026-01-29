@@ -34,7 +34,6 @@ class FuncaoService {
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar funções');
               return <Map<String, dynamic>>[];
             },
           );

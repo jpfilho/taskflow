@@ -116,14 +116,129 @@ class _HorasMetasViewState extends State<HorasMetasView> {
     return Colors.red[50]!;
   }
 
+  // Calcular estatísticas gerais
+  Map<String, dynamic> _calcularEstatisticas() {
+    if (_dadosFiltrados.isEmpty) {
+      return {
+        'totalColaboradores': 0,
+        'horasTotais': 0.0,
+        'metasAtingidas': 0,
+        'metasPendentes': 0,
+        'percentualAtingido': 0.0,
+      };
+    }
+
+    final colaboradoresUnicos = <String>{};
+    double horasTotais = 0;
+    int metasAtingidas = 0;
+    int total = 0;
+
+    for (var dado in _dadosFiltrados) {
+      colaboradoresUnicos.add(dado.matricula);
+      horasTotais += dado.horasApontadas;
+      total++;
+      if (dado.horasApontadas >= dado.metaMensal) {
+        metasAtingidas++;
+      }
+    }
+
+    return {
+      'totalColaboradores': colaboradoresUnicos.length,
+      'horasTotais': horasTotais,
+      'metasAtingidas': metasAtingidas,
+      'metasPendentes': total - metasAtingidas,
+      'percentualAtingido': total > 0 ? (metasAtingidas / total * 100) : 0.0,
+    };
+  }
+
   @override
   Widget build(BuildContext context) {
     final isMobile = MediaQuery.of(context).size.width < 600;
+    final stats = _calcularEstatisticas();
 
     return Scaffold(
       backgroundColor: Colors.grey[50],
       body: Column(
         children: [
+          // Dashboard Cards no topo
+          Container(
+            padding: const EdgeInsets.all(16),
+            color: Colors.white,
+            child: Column(
+              children: [
+                // Título
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Dashboard de Horas',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    Row(
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.table_chart, color: Colors.blue),
+                          onPressed: () {},
+                          tooltip: 'Tabela',
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.show_chart),
+                          onPressed: () {},
+                          tooltip: 'Metas',
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.refresh),
+                          onPressed: _carregarDados,
+                          tooltip: 'Atualizar',
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                // 3 Cards de estatísticas
+                Row(
+                  children: [
+                    // Card 1: Total de Colaboradores
+                    Expanded(
+                      child: _buildStatCard(
+                        title: 'Total de Colaboradores',
+                        value: stats['totalColaboradores'].toString(),
+                        subtitle: '+3 desde mês',
+                        icon: Icons.people,
+                        iconColor: Colors.blue[600]!,
+                        backgroundColor: Colors.blue[50]!,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    // Card 2: Horas Totais Registradas
+                    Expanded(
+                      child: _buildStatCard(
+                        title: 'Horas Totais Registradas',
+                        value: stats['horasTotais'].toStringAsFixed(0),
+                        subtitle: 'Metas atingida/colaborador',
+                        icon: Icons.access_time,
+                        iconColor: Colors.orange[600]!,
+                        backgroundColor: Colors.orange[50]!,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    // Card 3: Status das Metas (com gráfico)
+                    Expanded(
+                      child: _buildMetasCard(
+                        metasAtingidas: stats['metasAtingidas'],
+                        metasPendentes: stats['metasPendentes'],
+                        percentual: stats['percentualAtingido'],
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
           // Filtros (estilo Notas)
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -636,6 +751,198 @@ class _HorasMetasViewState extends State<HorasMetasView> {
             );
           }).toList(),
         ),
+      ),
+    );
+  }
+
+  // Widget para Card de Estatística
+  Widget _buildStatCard({
+    required String title,
+    required String value,
+    required String subtitle,
+    required IconData icon,
+    required Color iconColor,
+    required Color backgroundColor,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey[300]!),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                title,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey[600],
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: backgroundColor,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(icon, color: iconColor, size: 20),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 28,
+              fontWeight: FontWeight.bold,
+              color: Colors.black87,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            subtitle,
+            style: TextStyle(
+              fontSize: 11,
+              color: Colors.grey[600],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Widget para Card de Metas com gráfico circular
+  Widget _buildMetasCard({
+    required int metasAtingidas,
+    required int metasPendentes,
+    required double percentual,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey[300]!),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Status das Metas',
+            style: TextStyle(
+              fontSize: 12,
+              color: Colors.grey[600],
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              // Gráfico circular
+              SizedBox(
+                width: 80,
+                height: 80,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    SizedBox(
+                      width: 80,
+                      height: 80,
+                      child: CircularProgressIndicator(
+                        value: percentual / 100,
+                        strokeWidth: 8,
+                        backgroundColor: Colors.grey[200],
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          percentual >= 80
+                              ? Colors.green[600]!
+                              : percentual >= 50
+                                  ? Colors.orange[600]!
+                                  : Colors.red[600]!,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      '${percentual.toStringAsFixed(0)}%',
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 16),
+              // Legenda
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 12,
+                          height: 12,
+                          decoration: BoxDecoration(
+                            color: Colors.green[600],
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Atingido ($metasAtingidas)',
+                            style: const TextStyle(fontSize: 11),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Container(
+                          width: 12,
+                          height: 12,
+                          decoration: BoxDecoration(
+                            color: Colors.red[600],
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Pendente ($metasPendentes)',
+                            style: const TextStyle(fontSize: 11),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

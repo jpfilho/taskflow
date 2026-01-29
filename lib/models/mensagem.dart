@@ -14,6 +14,11 @@ class Mensagem {
   final Mensagem? mensagemRespondida; // Mensagem completa que está sendo respondida (para exibição)
   final List<String>? usuariosMencionados; // IDs dos usuários mencionados (@mention)
   final Map<String, dynamic>? localizacao; // Dados de localização {lat, lng, endereco}
+  
+  // Campos para tags Nota/Ordem
+  final String? refType; // 'GERAL' | 'NOTA' | 'ORDEM'
+  final String? refId; // UUID da nota_sap ou ordem
+  final String? refLabel; // Label para exibição (ex: "NOTA 12345", "ORDEM 67890")
 
   Mensagem({
     this.id,
@@ -28,9 +33,12 @@ class Mensagem {
     this.lida,
     this.usuariosLidos,
     this.mensagemRespondidaId,
-    this.mensagemRespondida,
-    this.usuariosMencionados,
-    this.localizacao,
+      this.mensagemRespondida,
+      this.usuariosMencionados,
+      this.localizacao,
+      this.refType,
+      this.refId,
+      this.refLabel,
   });
 
   factory Mensagem.fromMap(Map<String, dynamic> map) {
@@ -84,6 +92,9 @@ class Mensagem {
           ? List<String>.from(map['usuarios_mencionados'] as List)
           : null,
       localizacao: localizacao,
+      refType: map['ref_type'] as String?,
+      refId: map['ref_id'] as String?,
+      refLabel: map['ref_label'] as String?,
     );
   }
 
@@ -107,6 +118,9 @@ class Mensagem {
         'lng': localizacao!['lng'],
         'endereco': localizacao!['endereco'],
       } : null,
+      'ref_type': refType,
+      'ref_id': refId,
+      'ref_label': refLabel,
     };
   }
 
@@ -126,6 +140,9 @@ class Mensagem {
     Mensagem? mensagemRespondida,
     List<String>? usuariosMencionados,
     Map<String, dynamic>? localizacao,
+    String? refType,
+    String? refId,
+    String? refLabel,
   }) {
     return Mensagem(
       id: id ?? this.id,
@@ -143,6 +160,9 @@ class Mensagem {
       mensagemRespondida: mensagemRespondida ?? this.mensagemRespondida,
       usuariosMencionados: usuariosMencionados ?? this.usuariosMencionados,
       localizacao: localizacao ?? this.localizacao,
+      refType: refType ?? this.refType,
+      refId: refId ?? this.refId,
+      refLabel: refLabel ?? this.refLabel,
     );
   }
 }

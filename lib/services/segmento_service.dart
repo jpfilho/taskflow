@@ -47,7 +47,6 @@ class SegmentoService {
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar segmentos');
               throw Exception('Timeout ao buscar segmentos após 30 segundos');
             },
           );
@@ -93,7 +92,6 @@ class SegmentoService {
         .timeout(
           const Duration(seconds: 10),
           onTimeout: () {
-            print('⚠️ Timeout ao buscar segmento por ID');
             return <String, dynamic>{};
           },
         );
@@ -129,7 +127,6 @@ class SegmentoService {
         .timeout(
           const Duration(seconds: 30),
           onTimeout: () {
-            print('⚠️ Timeout ao buscar segmentos por divisão');
             return <Map<String, dynamic>>[];
           },
         );
@@ -231,7 +228,6 @@ class SegmentoService {
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
-              print('⚠️ Timeout ao filtrar segmentos');
               return <Map<String, dynamic>>[];
             },
           );
@@ -265,7 +261,6 @@ class SegmentoService {
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar segmentos');
               return <Map<String, dynamic>>[];
             },
           );

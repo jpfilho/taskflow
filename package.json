@@ -1,0 +1,21 @@
+{
+  "name": "taskflow-telegram-webhook",
+  "version": "1.0.0",
+  "description": "Servidor webhook para integração Telegram + TaskFlow",
+  "main": "telegram-webhook-server.js",
+  "scripts": {
+    "start": "node telegram-webhook-server.js",
+    "dev": "nodemon telegram-webhook-server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "@supabase/supabase-js": "^2.39.0",
+    "pg": "^8.11.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

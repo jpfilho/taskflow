@@ -1,6 +1,9 @@
+import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/task.dart';
 import '../models/executor.dart';
 import '../models/tipo_atividade.dart';
@@ -18,6 +21,7 @@ import '../services/nota_sap_service.dart';
 import '../services/ordem_service.dart';
 import '../services/at_service.dart';
 import '../services/si_service.dart';
+import '../services/tab_sync_service.dart';
 import '../utils/responsive.dart';
 
 class TeamScheduleView extends StatefulWidget {
@@ -84,6 +88,12 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
   
   // Serviço de autenticação para obter perfil do usuário
   final AuthServiceSimples _authService = AuthServiceSimples();
+  
+  // Serviço de sincronização entre abas
+  StreamSubscription<Map<String, dynamic>>? _tabSyncSubscription;
+  
+  // Subscription do Supabase Realtime
+  RealtimeChannel? _realtimeChannel;
   // Normalização simples para comparações de nomes/logins (sem acentos e caixa-baixa)
   String _normalizeText(String input) {
     var normalized = input.toLowerCase().trim();
@@ -112,6 +122,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
   Map<String, int> _ordensCount = {};
   Map<String, int> _atsCount = {};
   Map<String, int> _sisCount = {};
+  bool _isRefreshing = false; // Indicador de atualização manual
 
   @override
   void initState() {
@@ -134,6 +145,63 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
         _isScrolling = false;
       }
     });
+    
+    // Inicializar sincronização entre abas (apenas no web)
+    if (kIsWeb) {
+      try {
+        TabSyncService().initialize();
+        _tabSyncSubscription = TabSyncService().events.listen((event) {
+          final type = event['type']?.toString() ?? 'null';
+          print('📡 TeamScheduleView: Evento recebido via BroadcastChannel: $type');
+          
+          if (type == 'task_created' || type == 'task_updated' || type == 'task_deleted' || type == 'tasks_reload') {
+            // Forçar atualização da view materializada e recarregar dados
+            print('🔄 TeamScheduleView: Recarregando dados devido a evento de outra aba: $type');
+            if (mounted) {
+              _reloadWithViewRefresh(showLoading: false);
+              // Notificar o callback se existir
+              if (widget.onTasksUpdated != null) {
+                widget.onTasksUpdated!();
+              }
+            }
+          }
+        });
+        print('✅ TeamScheduleView: Sincronização entre abas inicializada');
+      } catch (e) {
+        print('⚠️ Erro ao inicializar sincronização entre abas: $e');
+      }
+    }
+    
+    // Inicializar Supabase Realtime para escutar mudanças na tabela tasks
+    try {
+      _realtimeChannel = widget.taskService.subscribeToTasks(
+        onUpsert: (task) {
+          print('📡 TeamScheduleView: Tarefa criada/atualizada via Supabase Realtime: ${task.id}');
+          // Forçar atualização da view materializada e recarregar dados
+          if (mounted) {
+            _reloadWithViewRefresh(showLoading: false);
+            // Notificar o callback se existir
+            if (widget.onTasksUpdated != null) {
+              widget.onTasksUpdated!();
+            }
+          }
+        },
+        onDelete: (taskId) {
+          print('📡 TeamScheduleView: Tarefa deletada via Supabase Realtime: $taskId');
+          // Forçar atualização da view materializada e recarregar dados
+          if (mounted) {
+            _reloadWithViewRefresh(showLoading: false);
+            // Notificar o callback se existir
+            if (widget.onTasksUpdated != null) {
+              widget.onTasksUpdated!();
+            }
+          }
+        },
+      );
+      print('✅ TeamScheduleView: Subscription Supabase Realtime ativada');
+    } catch (e) {
+      print('⚠️ Erro ao inicializar Supabase Realtime: $e');
+    }
     
     _loadData();
     _loadSAPCounts();
@@ -182,6 +250,8 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
 
   @override
   void dispose() {
+    _tabSyncSubscription?.cancel();
+    _realtimeChannel?.unsubscribe();
     _tableVerticalScrollController.dispose();
     _ganttVerticalScrollController.dispose();
     _ganttHorizontalScrollController.dispose();
@@ -275,12 +345,15 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
           }
         }
         
-        // Mantém empregado se tiver divisão compatível E pelo menos um segmento do perfil
-        // OU se estiver explicitamente referenciado em alguma tarefa (id ou nome/login/matrícula)
+        // Filtrar executores APENAS pelo perfil do usuário (regional/divisão/segmento)
+        // Não incluir executores apenas por estarem referenciados em tarefas
         executoresFiltrados = executoresAtivos.where((executor) {
+          // Verificar divisão: deve estar nas divisões permitidas (do usuário ou das regionais do usuário)
           final temDivisaoPermitida = divisaoIdsPermitidas.isEmpty ||
               (executor.divisaoId != null && divisaoIdsPermitidas.contains(executor.divisaoId));
 
+          // Verificar segmento: deve ter pelo menos um segmento em comum com o perfil do usuário
+          // Se o usuário não tem segmentos configurados, aceitar qualquer executor
           final temSegmentoPermitido = usuario.segmentoIds.isEmpty ||
               executor.segmentoIds.any((segmentoId) => usuario.segmentoIds.contains(segmentoId));
 
@@ -298,12 +371,15 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
       setState(() {
         _tasks = tasks;
         _executores = executoresFiltrados;
-        _isLoading = false;
       });
-      
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _buildExecutorRows();
-      });
+      // Manter loading até as linhas (view) estarem prontas, para não mostrar
+      // "Nenhum executor encontrado" antes de terminar o carregamento.
+      await _buildExecutorRowsFromView();
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     } catch (e, stackTrace) {
       print('❌ Erro ao carregar dados: $e');
       print('📚 StackTrace: $stackTrace');
@@ -333,17 +409,88 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
     }
   }
 
+  /// Recarrega dados
+  /// Se estiver usando view normal (v_execucoes_dia_completa), não precisa de refresh - atualiza automaticamente
+  /// Se estiver usando view materializada, força o refresh primeiro
+  Future<void> _reloadWithViewRefresh({bool showLoading = false}) async {
+    if (showLoading && mounted) {
+      setState(() {
+        _isRefreshing = true;
+      });
+    }
+    
+    print('🔄 TeamScheduleView: Recarregando dados...');
+    try {
+      // Tentar atualizar view materializada (se existir)
+      // Se estiver usando view normal, isso não faz nada e a view já está atualizada automaticamente
+      try {
+        await widget.taskService.refreshMvExecucoesDia();
+        // Aguardar um pouco apenas se for view materializada (view normal não precisa)
+        await Future.delayed(const Duration(milliseconds: 200));
+      } catch (e) {
+        // Se falhar, pode ser porque está usando view normal (que não precisa de refresh)
+        print('ℹ️ View materializada não encontrada ou erro (pode ser normal se estiver usando view normal): $e');
+      }
+      
+      // Recarregar todos os dados (view normal já está atualizada automaticamente)
+      await _loadData();
+      
+      // Recarregar contagens SAP também
+      await _loadSAPCounts();
+      
+      print('✅ TeamScheduleView: Dados recarregados com sucesso');
+    } catch (e, stackTrace) {
+      print('❌ TeamScheduleView: Erro ao recarregar dados: $e');
+      print('   Stack trace: $stackTrace');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erro ao atualizar dados: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } finally {
+      if (showLoading && mounted) {
+        setState(() {
+          _isRefreshing = false;
+        });
+      }
+    }
+  }
+
+  /// Atualização manual via botão
+  Future<void> _manualRefresh() async {
+    await _reloadWithViewRefresh(showLoading: true);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Dados atualizados'),
+          backgroundColor: Colors.green,
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
 
 
   Future<void> _buildExecutorRowsFromView() async {
-    print('🔄 Carregando execuções via mv_execucoes_dia');
+    final totalSw = Stopwatch()..start();
+    print('⏱ [TeamScheduleView] _buildExecutorRowsFromView iniciado');
     try {
       final executorIds = _executores.map((e) => e.id).toList();
+      print('⏱ [TeamScheduleView] Buscando execuções | executores=${executorIds.length} | período=${widget.startDate.toString().substring(0, 10)} até ${widget.endDate.toString().substring(0, 10)}');
+      
+      final querySw = Stopwatch()..start();
       final rows = await widget.taskService.getExecucoesDia(
         executorIds: executorIds,
         startDate: widget.startDate,
         endDate: widget.endDate,
       );
+      querySw.stop();
+      print('⏱ [TeamScheduleView] Query getExecucoesDia concluída em ${querySw.elapsedMilliseconds}ms | registros=${rows.length}');
 
       final byExecutor = <String, List<Map<String, dynamic>>>{};
       final conflictDaysByExecutor = <String, Set<DateTime>>{};
@@ -400,66 +547,87 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
       }
 
       List<GanttSegment> nonExecSegmentsForExecutor(Task task, Executor executor) {
-        // Prioriza períodos específicos do executor
-        List<GanttSegment> pickSegments() {
-          bool foundExecutorPeriod = false;
-          for (final ep in task.executorPeriods) {
-            if (matchesExecutor(executor, executorId: ep.executorId, executorNome: ep.executorNome)) {
-              foundExecutorPeriod = true;
-              final segs = ep.periods
-                  .where((p) => p.tipoPeriodo.toUpperCase() != 'EXECUCAO')
-                  .toList();
-              if (segs.isNotEmpty) return segs;
+        // IMPORTANTE: Buscar em AMBOS os lugares:
+        // 1. executorPeriods (períodos específicos do executor)
+        // 2. ganttSegments (períodos gerais da tarefa)
+        // Combinar ambos para garantir que todos os períodos sejam incluídos
+        
+        final List<GanttSegment> allNonExecSegments = [];
+        final Set<String> segmentosJaIncluidos = {};
+        
+        // 1. Buscar em executorPeriods (períodos específicos do executor)
+        print('   🔍 Buscando em executorPeriods (${task.executorPeriods.length} períodos por executor)...');
+        for (final ep in task.executorPeriods) {
+          if (matchesExecutor(executor, executorId: ep.executorId, executorNome: ep.executorNome)) {
+            print('     ✅ Período encontrado para executor ${executor.nome}');
+            for (final seg in ep.periods) {
+              final tipo = (seg.tipoPeriodo ?? '').toUpperCase();
+              if (tipo != 'EXECUCAO' && tipo.isNotEmpty) {
+                final key = '${tipo}_${seg.dataInicio}_${seg.dataFim}';
+                if (!segmentosJaIncluidos.contains(key)) {
+                  allNonExecSegments.add(seg);
+                  segmentosJaIncluidos.add(key);
+                  print('       ✅ Segmento $tipo: ${seg.dataInicio} até ${seg.dataFim}');
+                }
+              }
             }
           }
-          // Se não encontrou não-execução no executor_periods, ou não havia períodos específicos,
-          // usar segmentos gerais da tarefa
-          if (!foundExecutorPeriod || task.ganttSegments.isNotEmpty) {
-            final segs = task.ganttSegments
-                .where((p) => p.tipoPeriodo.toUpperCase() != 'EXECUCAO')
-                .toList();
-            if (segs.isNotEmpty) return segs;
-          }
-          return task.ganttSegments
-              .where((p) => p.tipoPeriodo.toUpperCase() != 'EXECUCAO')
-              .toList();
         }
-
-        // Normaliza deslocamento: apenas dia de ida (início) e dia de volta (fim)
-        List<GanttSegment> normalize(List<GanttSegment> segs) {
-          final List<GanttSegment> out = [];
-          for (final s in segs) {
-            final tipoPeriodo = s.tipoPeriodo.toUpperCase();
-            if (tipoPeriodo == 'DESLOCAMENTO') {
-              final startDay = DateTime(s.dataInicio.year, s.dataInicio.month, s.dataInicio.day);
-              final endDay = DateTime(s.dataFim.year, s.dataFim.month, s.dataFim.day);
-              out.add(GanttSegment(
-                dataInicio: startDay,
-                dataFim: startDay,
+        
+        // 2. Buscar em ganttSegments (períodos gerais da tarefa)
+        // SEMPRE incluir segmentos gerais, mesmo que já existam períodos específicos
+        print('   🔍 Buscando em ganttSegments (total: ${task.ganttSegments.length})...');
+        for (final seg in task.ganttSegments) {
+          final tipo = (seg.tipoPeriodo ?? '').toUpperCase();
+          if (tipo != 'EXECUCAO' && tipo.isNotEmpty) {
+            final key = '${tipo}_${seg.dataInicio}_${seg.dataFim}';
+            if (!segmentosJaIncluidos.contains(key)) {
+              allNonExecSegments.add(seg);
+              segmentosJaIncluidos.add(key);
+              print('     ✅ Segmento $tipo: ${seg.dataInicio} até ${seg.dataFim}');
+            }
+          }
+        }
+        
+        if (allNonExecSegments.isEmpty) {
+          print('   ⚠️ Nenhum segmento não-EXECUÇÃO encontrado');
+          return [];
+        } else {
+          print('   ✅ Total de ${allNonExecSegments.length} segmentos não-EXECUÇÃO encontrados');
+        }
+        
+        // Normalizar deslocamento: apenas dia de ida (início) e dia de volta (fim)
+        final List<GanttSegment> normalized = [];
+        for (final s in allNonExecSegments) {
+          final tipoPeriodo = (s.tipoPeriodo ?? '').toUpperCase();
+          if (tipoPeriodo == 'DESLOCAMENTO') {
+            final startDay = DateTime(s.dataInicio.year, s.dataInicio.month, s.dataInicio.day);
+            final endDay = DateTime(s.dataFim.year, s.dataFim.month, s.dataFim.day);
+            normalized.add(GanttSegment(
+              dataInicio: startDay,
+              dataFim: startDay,
+              label: s.label,
+              tipo: s.tipo,
+              tipoPeriodo: s.tipoPeriodo,
+            ));
+            if (endDay.isAfter(startDay)) {
+              normalized.add(GanttSegment(
+                dataInicio: endDay,
+                dataFim: endDay,
                 label: s.label,
                 tipo: s.tipo,
                 tipoPeriodo: s.tipoPeriodo,
               ));
-              if (endDay.isAfter(startDay)) {
-                out.add(GanttSegment(
-                  dataInicio: endDay,
-                  dataFim: endDay,
-                  label: s.label,
-                  tipo: s.tipo,
-                  tipoPeriodo: s.tipoPeriodo,
-                ));
-              }
-            } else {
-              out.add(s);
             }
+          } else {
+            normalized.add(s);
           }
-          return out;
         }
-
-        final picked = pickSegments();
-        return picked.isEmpty ? picked : normalize(picked);
+        
+        return normalized;
       }
 
+      final groupSw = Stopwatch()..start();
       for (final r in rows) {
         final execId = r['executor_id']?.toString() ?? '';
         if (execId.isEmpty) continue;
@@ -471,21 +639,34 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
           conflictDaysByExecutor.putIfAbsent(execId, () => <DateTime>{}).add(dayKey);
         }
       }
+      groupSw.stop();
+      print('⏱ [TeamScheduleView] Agrupamento por executor concluído em ${groupSw.elapsedMilliseconds}ms | registros=${rows.length} | executores=${byExecutor.length}');
 
       final executorRows = <ExecutorTaskRow>[];
       final sortedExecutores = _getSortedExecutores();
+      print('⏱ [TeamScheduleView] Processando ${sortedExecutores.length} executores...');
 
+      final processSw = Stopwatch()..start();
+      int executorCount = 0;
+      int totalTasksProcessed = 0;
       for (final executor in sortedExecutores) {
+        executorCount++;
+        final executorSw = Stopwatch()..start();
         final list = byExecutor[executor.id] ?? [];
         final tasksById = <String, Task>{};
-        final taskDays = <String, List<DateTime>>{};
+        // Agrupar dias por task_id e tipo_periodo
+        final taskDaysByTipo = <String, Map<String, List<DateTime>>>{};
 
+        final parseSw = Stopwatch()..start();
         for (final r in list) {
           final taskId = r['task_id']?.toString() ?? '';
           if (taskId.isEmpty) continue;
           final dayStr = r['day']?.toString();
           if (dayStr == null) continue;
           final day = DateTime.parse(dayStr);
+          // Obter tipo_periodo da view (se disponível)
+          final tipoPeriodo = (r['tipo_periodo']?.toString() ?? 'EXECUCAO').toUpperCase();
+          
           // Preferir nome do local (quando enviado pela view), caindo para local do próprio tasks/local_id
           final locName = (r['local_nome'] ?? r['local'] ?? r['loc'] ?? '').toString();
           final locKey = (r['loc_key'] ?? '').toString();
@@ -496,7 +677,9 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
           final taskLabel = (r['task_tarefa'] ?? r['task_tipo'] ?? '').toString();
           final hasConflict = (r['has_conflict'] == true);
 
-          taskDays.putIfAbsent(taskId, () => []).add(day);
+          // Agrupar por tipo_periodo
+          taskDaysByTipo.putIfAbsent(taskId, () => {});
+          taskDaysByTipo[taskId]!.putIfAbsent(tipoPeriodo, () => []).add(day);
 
           tasksById.putIfAbsent(
             taskId,
@@ -530,87 +713,144 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
             ),
           );
         }
+        parseSw.stop();
+        totalTasksProcessed += tasksById.length;
+        if (executorCount % 10 == 0 || executorCount == sortedExecutores.length) {
+          print('⏱ [TeamScheduleView] Executor $executorCount/${sortedExecutores.length} (${executor.nome}): parse=${parseSw.elapsedMilliseconds}ms | tarefas=${tasksById.length}');
+        }
 
-        // Montar segmentos do Gantt a partir das datas
+        // Montar segmentos do Gantt a partir das datas, agrupados por tipo_periodo
+        final segmentSw = Stopwatch()..start();
         for (final entry in tasksById.entries.toList()) {
-          final days = taskDays[entry.key] ?? [];
-          if (days.isEmpty) continue;
-          days.sort();
+          final taskId = entry.key;
+          final task = entry.value;
+          final daysByTipo = taskDaysByTipo[taskId] ?? {};
+          
+          if (daysByTipo.isEmpty) continue;
+          
           final segments = <GanttSegment>[];
-          DateTime? segStart;
-          DateTime? segEnd;
-          for (final d in days) {
-            final dDate = DateTime(d.year, d.month, d.day);
-            if (segStart == null) {
-              segStart = dDate;
-              segEnd = dDate;
-              continue;
+          DateTime? minStart;
+          DateTime? maxEnd;
+          
+          // Processar cada tipo de período separadamente
+          for (final tipoPeriodoEntry in daysByTipo.entries) {
+            final tipoPeriodo = tipoPeriodoEntry.key;
+            final days = tipoPeriodoEntry.value;
+            if (days.isEmpty) continue;
+            
+            days.sort();
+            DateTime? segStart;
+            DateTime? segEnd;
+            
+            for (final d in days) {
+              final dDate = DateTime(d.year, d.month, d.day);
+              if (segStart == null) {
+                segStart = dDate;
+                segEnd = dDate;
+                continue;
+              }
+              if (dDate.difference(segEnd!).inDays <= 1) {
+                segEnd = dDate;
+              } else {
+                segments.add(GanttSegment(
+                  dataInicio: segStart,
+                  dataFim: segEnd,
+                  label: '',
+                  tipo: 'ADM',
+                  tipoPeriodo: tipoPeriodo,
+                ));
+                if (minStart == null || segStart.isBefore(minStart)) minStart = segStart;
+                if (maxEnd == null || segEnd.isAfter(maxEnd)) maxEnd = segEnd;
+                segStart = dDate;
+                segEnd = dDate;
+              }
             }
-            if (dDate.difference(segEnd!).inDays <= 1) {
-              segEnd = dDate;
-            } else {
+            
+            if (segStart != null) {
               segments.add(GanttSegment(
                 dataInicio: segStart,
-                dataFim: segEnd,
+                dataFim: segEnd!,
                 label: '',
                 tipo: 'ADM',
+                tipoPeriodo: tipoPeriodo,
               ));
-              segStart = dDate;
-              segEnd = dDate;
+              if (minStart == null || segStart.isBefore(minStart)) minStart = segStart;
+              if (maxEnd == null || segEnd.isAfter(maxEnd)) maxEnd = segEnd;
             }
           }
-          if (segStart != null) {
-            segments.add(GanttSegment(
-              dataInicio: segStart,
-              dataFim: segEnd!,
-              label: '',
-              tipo: 'ADM',
-            ));
-          }
 
-          if (segments.isNotEmpty) {
-            tasksById[entry.key] = entry.value.copyWith(
+          if (segments.isNotEmpty && minStart != null && maxEnd != null) {
+            tasksById[taskId] = task.copyWith(
               ganttSegments: segments,
-              dataInicio: segments.first.dataInicio,
-              dataFim: segments.last.dataFim,
+              dataInicio: minStart,
+              dataFim: maxEnd,
             );
           }
         }
+        segmentSw.stop();
 
-        // Complementar com segmentos de PLANEJAMENTO/DESLOCAMENTO (não contam conflito)
-        for (final task in _tasks) {
-          if (task.status.toUpperCase() == 'CANC') continue;
-          if (!isTaskAssignedToExecutor(task, executor)) continue;
+        // A view mv_execucoes_dia_completa já inclui todos os tipos de períodos
+        // Se a view não tiver o campo tipo_periodo, complementar com dados das tarefas originais
+        final hasTipoPeriodoInView = list.isNotEmpty && list.first.containsKey('tipo_periodo');
+        
+        final complementSw = Stopwatch()..start();
+        if (!hasTipoPeriodoInView) {
+          // Fallback: buscar segmentos de planejamento/deslocamento das tarefas originais
+          // (caso esteja usando a view antiga que não tem tipo_periodo)
+          print('⚠️ View antiga detectada, complementando com dados das tarefas originais...');
+          for (final task in _tasks) {
+            if (task.status.toUpperCase() == 'CANC') continue;
+            if (!isTaskAssignedToExecutor(task, executor)) continue;
 
-          final nonExecSegments = nonExecSegmentsForExecutor(task, executor);
-          if (nonExecSegments.isEmpty) continue;
+            final nonExecSegments = nonExecSegmentsForExecutor(task, executor);
+            if (nonExecSegments.isEmpty) continue;
 
-          final existing = tasksById[task.id];
-          final mergedSegments = <GanttSegment>[
-            if (existing != null) ...existing.ganttSegments,
-            ...nonExecSegments,
-          ];
-          if (mergedSegments.isEmpty) continue;
+            final existing = tasksById[task.id];
+            if (existing == null) continue;
+            
+            // Adicionar segmentos não-EXECUÇÃO às tarefas existentes
+            final mergedSegments = <GanttSegment>[];
+            final Set<String> segmentosJaIncluidos = {};
+            
+            // Adicionar segmentos existentes
+            for (final seg in existing.ganttSegments) {
+              mergedSegments.add(seg);
+              final key = '${seg.tipoPeriodo}_${seg.dataInicio}_${seg.dataFim}';
+              segmentosJaIncluidos.add(key);
+            }
+            
+            // Adicionar segmentos não-EXECUÇÃO
+            for (final seg in nonExecSegments) {
+              final key = '${seg.tipoPeriodo}_${seg.dataInicio}_${seg.dataFim}';
+              if (!segmentosJaIncluidos.contains(key)) {
+                mergedSegments.add(seg);
+                segmentosJaIncluidos.add(key);
+              }
+            }
+            
+            if (mergedSegments.isEmpty) continue;
 
-          DateTime minStart = mergedSegments.first.dataInicio;
-          DateTime maxEnd = mergedSegments.first.dataFim;
-          for (final seg in mergedSegments.skip(1)) {
-            if (seg.dataInicio.isBefore(minStart)) minStart = seg.dataInicio;
-            if (seg.dataFim.isAfter(maxEnd)) maxEnd = seg.dataFim;
+            DateTime minStart = mergedSegments.first.dataInicio;
+            DateTime maxEnd = mergedSegments.first.dataFim;
+            for (final seg in mergedSegments.skip(1)) {
+              if (seg.dataInicio.isBefore(minStart)) minStart = seg.dataInicio;
+              if (seg.dataFim.isAfter(maxEnd)) maxEnd = seg.dataFim;
+            }
+
+            tasksById[task.id] = existing.copyWith(
+              ganttSegments: mergedSegments,
+              dataInicio: minStart,
+              dataFim: maxEnd,
+            );
           }
-
-          final baseTask = existing ?? task;
-          tasksById[task.id] = baseTask.copyWith(
-            ganttSegments: mergedSegments,
-            dataInicio: minStart,
-            dataFim: maxEnd,
-            locais: task.locais.isNotEmpty ? task.locais : baseTask.locais,
-            localIds: task.localIds.isNotEmpty ? task.localIds : baseTask.localIds,
-            tarefa: task.tarefa.isNotEmpty ? task.tarefa : baseTask.tarefa,
-            tipo: task.tipo.isNotEmpty ? task.tipo : baseTask.tipo,
-            status: task.status.isNotEmpty ? task.status : baseTask.status,
-            hasConflict: existing?.hasConflict ?? false,
-          );
+        } else {
+          // print('✅ Usando view completa com tipo_periodo - todos os períodos já incluídos');
+        }
+        complementSw.stop();
+        
+        executorSw.stop();
+        if (executorCount % 10 == 0 || executorCount == sortedExecutores.length) {
+          print('⏱ [TeamScheduleView] Executor $executorCount/${sortedExecutores.length} (${executor.nome}): total=${executorSw.elapsedMilliseconds}ms | segmentos=${segmentSw.elapsedMilliseconds}ms | complemento=${complementSw.elapsedMilliseconds}ms');
         }
 
         executorRows.add(ExecutorTaskRow(
@@ -618,11 +858,20 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
           tasks: tasksById.values.toList(),
         ));
       }
+      processSw.stop();
+      print('⏱ [TeamScheduleView] Processamento de executores concluído em ${processSw.elapsedMilliseconds}ms | executores=${executorCount} | tarefas=${totalTasksProcessed}');
 
+      final setStateSw = Stopwatch()..start();
       setState(() {
         _executorRows = executorRows;
         _conflictDaysByExecutor = conflictDaysByExecutor;
       });
+      setStateSw.stop();
+      totalSw.stop();
+      print('⏱ [TeamScheduleView] setState concluído em ${setStateSw.elapsedMilliseconds}ms');
+      print('⏱ [TeamScheduleView] _buildExecutorRowsFromView TOTAL: ${totalSw.elapsedMilliseconds}ms | linhas=${executorRows.length}');
+      print('⏱ [TeamScheduleView] setState concluído em ${setStateSw.elapsedMilliseconds}ms');
+      print('⏱ [TeamScheduleView] _buildExecutorRowsFromView TOTAL: ${totalSw.elapsedMilliseconds}ms | linhas=${executorRows.length}');
       print('✅ Dados via view: ${executorRows.length} executores');
     } catch (e, st) {
       print('❌ Erro ao construir executor rows via view: $e');
@@ -1214,6 +1463,30 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
+                              // Botão de atualizar (antes dos outros ícones)
+                              Tooltip(
+                                message: 'Atualizar dados',
+                                child: _isRefreshing
+                                    ? const SizedBox(
+                                        width: 20,
+                                        height: 20,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          valueColor: AlwaysStoppedAnimation<Color>(Colors.grey),
+                                        ),
+                                      )
+                                    : IconButton(
+                                        icon: const Icon(Icons.refresh, size: 18),
+                                        color: Colors.grey[700],
+                                        padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints(
+                                          minWidth: 32,
+                                          minHeight: 24,
+                                        ),
+                                        onPressed: _isRefreshing ? null : _manualRefresh,
+                                      ),
+                              ),
+                              const SizedBox(width: 6),
                               Tooltip(
                                 message: _showOnlyLocalText ? 'Mostrar local e tarefa' : 'Mostrar só local',
                                 child: IconButton(
@@ -1478,23 +1751,47 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                     }
                     
                     // Usar períodos do executor se disponível, senão usar segmentos gerais
-                    // e garantir inclusão de PLANEJAMENTO/DESLOCAMENTO mesmo com executorPeriod.
+                    // SEMPRE garantir inclusão de PLANEJAMENTO/DESLOCAMENTO dos ganttSegments
                     final List<GanttSegment> segmentsToUse = [];
+                    final Set<String> segmentosJaIncluidos = {};
+                    
+                    // Primeiro, adicionar períodos específicos do executor (se houver)
                     if (executorPeriod != null && executorPeriod.periods.isNotEmpty) {
-                      // Sempre incluir períodos específicos do executor
-                      segmentsToUse.addAll(executorPeriod.periods);
-                      // Adicionar trechos não-EXEC dos ganttSegments (planejamento/deslocamento)
-                      for (final seg in task.ganttSegments) {
-                        if (seg.tipoPeriodo.toUpperCase() != 'EXECUCAO') {
+                      for (final period in executorPeriod.periods) {
+                        segmentsToUse.add(period);
+                        final key = '${period.tipoPeriodo.toUpperCase()}_${period.dataInicio}_${period.dataFim}';
+                        segmentosJaIncluidos.add(key);
+                      }
+                    }
+                    
+                    // SEMPRE adicionar segmentos de PLANEJAMENTO e DESLOCAMENTO dos ganttSegments
+                    // (mesmo que já existam no executorPeriod, para garantir que apareçam)
+                    for (final seg in task.ganttSegments) {
+                      final tipoPeriodo = (seg.tipoPeriodo ?? '').toUpperCase();
+                      if (tipoPeriodo == 'PLANEJAMENTO' || tipoPeriodo == 'DESLOCAMENTO') {
+                        final key = '${tipoPeriodo}_${seg.dataInicio}_${seg.dataFim}';
+                        // Adicionar apenas se não estiver duplicado
+                        if (!segmentosJaIncluidos.contains(key)) {
                           segmentsToUse.add(seg);
+                          segmentosJaIncluidos.add(key);
                         }
                       }
-                    } else {
-                      segmentsToUse.addAll(task.ganttSegments);
                     }
-                    // Segments não-EXEC (planejamento/deslocamento) já foram anexados em ganttSegments
-                    // quando construímos tasksById. Aqui apenas garantimos que, se o executorPeriod
-                    // existir, os não-EXEC dos ganttSegments sejam adicionados junto.
+                    
+                    // Se não há períodos específicos do executor, adicionar todos os segmentos gerais
+                    if (executorPeriod == null || executorPeriod.periods.isEmpty) {
+                      // Adicionar segmentos de EXECUÇÃO que não foram incluídos
+                      for (final seg in task.ganttSegments) {
+                        final tipoPeriodo = (seg.tipoPeriodo ?? '').toUpperCase();
+                        if (tipoPeriodo == 'EXECUCAO' || tipoPeriodo.isEmpty) {
+                          final key = '${tipoPeriodo}_${seg.dataInicio}_${seg.dataFim}';
+                          if (!segmentosJaIncluidos.contains(key)) {
+                            segmentsToUse.add(seg);
+                            segmentosJaIncluidos.add(key);
+                          }
+                        }
+                      }
+                    }
                     
                     return segmentsToUse.map((segment) {
                       // Normalizar datas do segmento
@@ -3733,7 +4030,7 @@ class _ExecutorDetailsModal extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(left: 8),
               child: InkWell(
-                onTap: () => _copyToClipboard(context, value, label),
+                onTap: () async { await _copyToClipboard(context, value, label); },
                 borderRadius: BorderRadius.circular(4),
                 child: Padding(
                   padding: const EdgeInsets.all(4),
@@ -3750,16 +4047,29 @@ class _ExecutorDetailsModal extends StatelessWidget {
     );
   }
 
-  void _copyToClipboard(BuildContext context, String text, String label) {
-    Clipboard.setData(ClipboardData(text: text));
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('$label copiado para a área de transferência'),
-        duration: const Duration(seconds: 2),
-        backgroundColor: Colors.green[600],
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
+  Future<void> _copyToClipboard(BuildContext context, String text, String label) async {
+    try {
+      await Clipboard.setData(ClipboardData(text: text));
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$label copiado para a área de transferência'),
+          duration: const Duration(seconds: 2),
+          backgroundColor: Colors.green[600],
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Não foi possível copiar: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   void _shareExecutorInfo(BuildContext context) {

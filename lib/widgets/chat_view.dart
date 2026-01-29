@@ -34,14 +34,16 @@ class _ChatViewState extends State<ChatView> {
       // Carregar todas as tarefas para obter combinações únicas de divisão + segmento
       final todasTarefas = await _taskService.getAllTasks();
       
-      // Criar um mapa de combinações únicas de divisão + segmento
+      // Criar um mapa de combinações únicas de regional + divisão + segmento
       final combinacoes = <String, Map<String, String>>{};
       
       for (var tarefa in todasTarefas) {
-        if (tarefa.divisaoId != null && tarefa.segmentoId != null) {
-          final key = '${tarefa.divisaoId}_${tarefa.segmentoId}';
+        if (tarefa.regionalId != null && tarefa.divisaoId != null && tarefa.segmentoId != null) {
+          final key = '${tarefa.regionalId}_${tarefa.divisaoId}_${tarefa.segmentoId}';
           if (!combinacoes.containsKey(key)) {
             combinacoes[key] = {
+              'regionalId': tarefa.regionalId!,
+              'regionalNome': tarefa.regional,
               'divisaoId': tarefa.divisaoId!,
               'divisaoNome': tarefa.divisao,
               'segmentoId': tarefa.segmentoId!,
@@ -55,13 +57,15 @@ class _ChatViewState extends State<ChatView> {
       for (var combinacao in combinacoes.values) {
         try {
           await _chatService.criarOuObterComunidade(
+            combinacao['regionalId']!,
+            combinacao['regionalNome']!,
             combinacao['divisaoId']!,
             combinacao['divisaoNome']!,
             combinacao['segmentoId']!,
             combinacao['segmentoNome']!,
           );
         } catch (e) {
-          print('Erro ao criar comunidade para ${combinacao['divisaoNome']} - ${combinacao['segmentoNome']}: $e');
+          print('Erro ao criar comunidade para ${combinacao['regionalNome']} - ${combinacao['divisaoNome']} - ${combinacao['segmentoNome']}: $e');
         }
       }
 

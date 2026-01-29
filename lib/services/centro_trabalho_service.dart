@@ -43,7 +43,6 @@ class CentroTrabalhoService {
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar centros de trabalho');
               return <Map<String, dynamic>>[];
             },
           );
@@ -122,7 +121,6 @@ class CentroTrabalhoService {
           .timeout(
             const Duration(seconds: 10),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar centro de trabalho por ID');
               throw Exception('Timeout ao buscar centro de trabalho');
             },
           );

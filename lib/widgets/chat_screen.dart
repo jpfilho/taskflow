@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models/mensagem.dart';
 import '../models/grupo_chat.dart';
 import '../services/chat_service.dart';
@@ -19,6 +20,10 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
+import 'telegram_config_dialog.dart';
+import 'tag_selector_dialog.dart';
+import '../config/supabase_config.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class ChatScreen extends StatefulWidget {
   final String grupoId;
@@ -47,6 +52,7 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _mensagemEditandoId; // ID da mensagem sendo editada
   final TextEditingController _editController = TextEditingController();
   
+  
   // Para resposta de mensagens
   Mensagem? _mensagemRespondendo;
   
@@ -62,12 +68,26 @@ class _ChatScreenState extends State<ChatScreen> {
   
   // Para emoji picker
   bool _mostrarEmojiPicker = false;
+  
+  // Para tags Nota/Ordem
+  String? _selectedRefType;  // 'GERAL' | 'NOTA' | 'ORDEM'
+  String? _selectedRefId;     // UUID da nota ou ordem
+  String? _selectedRefLabel;  // Label para exibição (ex: "NOTA 12345")
+  
+  // Listas de opções
+  List<Map<String, dynamic>> _notasDisponiveis = [];
+  List<Map<String, dynamic>> _ordensDisponiveis = [];
+  bool _carregandoNotasOrdens = false;
+  String? _taskId;  // ID da tarefa (obtido do grupo)
+  
+  final SupabaseClient _supabase = SupabaseConfig.client;
 
   @override
   void initState() {
     super.initState();
     _loadMensagens();
     _setupRealtimeSubscription();
+    _carregarNotasEOrdens();
   }
 
   @override
@@ -151,6 +171,165 @@ class _ChatScreenState extends State<ChatScreen> {
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeOut,
       );
+    }
+  }
+
+  // ========== CARREGAR NOTAS E ORDENS ==========
+  
+  Future<void> _carregarNotasEOrdens() async {
+    try {
+      setState(() {
+        _carregandoNotasOrdens = true;
+      });
+      
+      // 1. Obter grupo para pegar tarefa_id
+      final grupoResponse = await _supabase
+          .from('grupos_chat')
+          .select('tarefa_id')
+          .eq('id', widget.grupoId)
+          .maybeSingle();
+      
+      if (grupoResponse == null || grupoResponse['tarefa_id'] == null) {
+        print('⚠️ [Chat] Grupo sem tarefa_id, não é possível carregar notas/ordens');
+        return;
+      }
+      
+      _taskId = grupoResponse['tarefa_id'] as String;
+      
+      // 2. Carregar notas da tarefa
+      try {
+        final notasResponse = await _supabase
+            .from('tasks_notas_sap')
+            .select('nota_sap_id, notas_sap(id, nota, descricao)')
+            .eq('task_id', _taskId!);
+        
+        _notasDisponiveis = (notasResponse as List).map((item) {
+          final nota = item['notas_sap'] as Map<String, dynamic>?;
+          if (nota == null) return null;
+          return {
+            'id': item['nota_sap_id'],
+            'nota': nota['nota'],
+            'label': 'NOTA ${nota['nota']}',
+            'descricao': nota['descricao'],
+          };
+        }).whereType<Map<String, dynamic>>().toList();
+        
+        print('✅ [Chat] Carregadas ${_notasDisponiveis.length} notas');
+      } catch (e) {
+        print('⚠️ [Chat] Erro ao carregar notas: $e');
+        _notasDisponiveis = [];
+      }
+      
+      // 3. Carregar ordens da tarefa
+      try {
+        final ordensResponse = await _supabase
+            .from('tasks_ordens')
+            .select('ordem_id, ordens(id, ordem, texto_breve)')
+            .eq('task_id', _taskId!);
+        
+        _ordensDisponiveis = (ordensResponse as List).map((item) {
+          final ordem = item['ordens'] as Map<String, dynamic>?;
+          if (ordem == null) return null;
+          return {
+            'id': item['ordem_id'],
+            'ordem': ordem['ordem'],
+            'label': 'ORDEM ${ordem['ordem']}',
+            'descricao': ordem['texto_breve'],
+          };
+        }).whereType<Map<String, dynamic>>().toList();
+        
+        print('✅ [Chat] Carregadas ${_ordensDisponiveis.length} ordens');
+      } catch (e) {
+        print('⚠️ [Chat] Erro ao carregar ordens: $e');
+        _ordensDisponiveis = [];
+      }
+      
+    } catch (e) {
+      print('❌ [Chat] Erro ao carregar notas/ordens: $e');
+    } finally {
+      setState(() {
+        _carregandoNotasOrdens = false;
+      });
+    }
+  }
+  
+  // ========== WIDGETS DE TAG ==========
+  
+  Widget _buildTagSelector() {
+    // Se não tem task_id, não mostrar seletor
+    if (_taskId == null) {
+      return SizedBox.shrink();
+    }
+    
+    return GestureDetector(
+      onTap: () => _mostrarSeletorTag(),
+      child: Container(
+        margin: EdgeInsets.only(bottom: 8, left: 8, right: 8),
+        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: _getTagColor(),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(_getTagIcon(), size: 16, color: Colors.white),
+            SizedBox(width: 6),
+            Text(
+              _selectedRefLabel ?? 'GERAL',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            SizedBox(width: 4),
+            Icon(Icons.arrow_drop_down, size: 16, color: Colors.white),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Color _getTagColor() {
+    switch (_selectedRefType) {
+      case 'NOTA':
+        return Colors.blue;
+      case 'ORDEM':
+        return Colors.green;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  IconData _getTagIcon() {
+    switch (_selectedRefType) {
+      case 'NOTA':
+        return Icons.push_pin;
+      case 'ORDEM':
+        return Icons.receipt;
+      default:
+        return Icons.chat_bubble_outline;
+    }
+  }
+  
+  Future<void> _mostrarSeletorTag() async {
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (context) => TagSelectorDialog(
+        notasDisponiveis: _notasDisponiveis,
+        ordensDisponiveis: _ordensDisponiveis,
+        refTypeAtual: _selectedRefType,
+        refIdAtual: _selectedRefId,
+      ),
+    );
+    
+    if (result != null) {
+      setState(() {
+        _selectedRefType = result['ref_type'];
+        _selectedRefId = result['ref_id'];
+        _selectedRefLabel = result['ref_label'];
+      });
     }
   }
 
@@ -622,6 +801,10 @@ class _ChatScreenState extends State<ChatScreen> {
         usuarioNome: nomeUsuario,
         mensagemRespondidaId: mensagemRespondidaId,
         usuariosMencionados: usuariosMencionados.isNotEmpty ? usuariosMencionados : null,
+        // Adicionar tags se selecionadas
+        refType: _selectedRefType,
+        refId: _selectedRefId,
+        refLabel: _selectedRefLabel,
       );
 
       // Atualizar a mensagem temporária com os dados reais do servidor
@@ -1248,8 +1431,34 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Widget _buildAnexoWidget(Mensagem mensagem) {
     final tipo = mensagem.tipo ?? 'arquivo';
-    final url = mensagem.arquivoUrl ?? '';
+    final urlOriginal = mensagem.arquivoUrl ?? '';
     final nomeArquivo = mensagem.conteudo;
+    
+    // Se a URL for do Supabase Storage e não for assinada, gerar URL assinada
+    if (urlOriginal.isNotEmpty && urlOriginal.contains('supabase') && !urlOriginal.contains('token=')) {
+      return FutureBuilder<String>(
+        future: _getSignedUrlFromMessage(urlOriginal),
+        builder: (context, snapshot) {
+          final url = snapshot.data ?? urlOriginal;
+          return _buildAnexoWidgetWithUrl(mensagem, url, tipo, nomeArquivo);
+        },
+      );
+    }
+    
+    return _buildAnexoWidgetWithUrl(mensagem, urlOriginal, tipo, nomeArquivo);
+  }
+  
+  Future<String> _getSignedUrlFromMessage(String url) async {
+    try {
+      final anexoService = AnexoService();
+      return await anexoService.getSignedUrlFromUrl(url);
+    } catch (e) {
+      debugPrint('⚠️ Erro ao gerar URL assinada, usando URL original: $e');
+      return url;
+    }
+  }
+  
+  Widget _buildAnexoWidgetWithUrl(Mensagem mensagem, String url, String tipo, String nomeArquivo) {
 
     // Para imagens: exibir diretamente
     if (tipo == 'imagem' && url.isNotEmpty) {
@@ -1727,6 +1936,39 @@ class _ChatScreenState extends State<ChatScreen> {
                   _responderMensagem(mensagem);
                 },
               ),
+              // Opção para vincular mensagem a Nota/Ordem
+              ListTile(
+                leading: Icon(
+                  mensagem.refType != null && mensagem.refType != 'GERAL'
+                      ? Icons.label
+                      : Icons.label_outline,
+                  color: mensagem.refType == 'NOTA' 
+                      ? Colors.blue 
+                      : mensagem.refType == 'ORDEM' 
+                          ? Colors.green 
+                          : Colors.grey,
+                ),
+                title: Text(
+                  mensagem.refType != null && mensagem.refType != 'GERAL'
+                      ? 'Alterar vínculo'
+                      : 'Vincular a Nota/Ordem',
+                ),
+                subtitle: mensagem.refType != null && mensagem.refType != 'GERAL'
+                    ? Text(
+                        mensagem.refLabel ?? mensagem.refType!,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: mensagem.refType == 'NOTA' 
+                              ? Colors.blue 
+                              : Colors.green,
+                        ),
+                      )
+                    : null,
+                onTap: () {
+                  Navigator.pop(context);
+                  _vincularMensagem(mensagem);
+                },
+              ),
               if (isMinhaMensagem && mensagem.tipo == 'texto')
                 ListTile(
                   leading: const Icon(Icons.edit),
@@ -1793,6 +2035,53 @@ class _ChatScreenState extends State<ChatScreen> {
             backgroundColor: Colors.red,
           ),
         );
+      }
+    }
+  }
+
+  Future<void> _vincularMensagem(Mensagem mensagem) async {
+    // Abrir dialog de seleção de tags
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (context) => TagSelectorDialog(
+        notasDisponiveis: _notasDisponiveis,
+        ordensDisponiveis: _ordensDisponiveis,
+        refTypeAtual: mensagem.refType,
+        refIdAtual: mensagem.refId,
+      ),
+    );
+    
+    if (result != null) {
+      try {
+        // Atualizar tags da mensagem
+        await _chatService.atualizarTagsMensagem(
+          mensagem.id!,
+          refType: result['ref_type'],
+          refId: result['ref_id'],
+          refLabel: result['ref_label'],
+        );
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                result['ref_type'] == 'GERAL'
+                    ? 'Vínculo removido'
+                    : 'Mensagem vinculada a ${result['ref_label'] ?? result['ref_type']}',
+              ),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Erro ao vincular mensagem: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
       }
     }
   }
@@ -1936,11 +2225,13 @@ class _ChatScreenState extends State<ChatScreen> {
 
     if (confirmar == true) {
       try {
-        await _chatService.excluirMensagem(mensagem.id!);
-
+        // Remover da UI primeiro para feedback imediato
         setState(() {
           _mensagens.removeWhere((m) => m.id == mensagem.id);
         });
+
+        // Deletar no backend (Node.js fará soft delete no Supabase)
+        await _chatService.excluirMensagem(mensagem.id!);
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -1951,7 +2242,13 @@ class _ChatScreenState extends State<ChatScreen> {
           );
         }
       } catch (e) {
+        // Se falhar, adicionar de volta à lista
         if (mounted) {
+          setState(() {
+            // Recarregar mensagens do servidor para garantir sincronização
+            _setupRealtimeSubscription();
+          });
+          
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('Erro ao excluir mensagem: $e'),
@@ -2044,6 +2341,19 @@ class _ChatScreenState extends State<ChatScreen> {
           onPressed: widget.onBack,
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.telegram),
+            tooltip: 'Configurar Telegram',
+            onPressed: () {
+              showDialog(
+                context: context,
+                builder: (context) => TelegramConfigDialog(
+                  grupoId: widget.grupoId,
+                  grupoNome: _grupoNome ?? 'Grupo',
+                ),
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.more_vert),
             onPressed: () {
@@ -2165,6 +2475,26 @@ class _ChatScreenState extends State<ChatScreen> {
                                                 fontSize: 12,
                                                 fontWeight: FontWeight.bold,
                                                 color: Colors.blue[700],
+                                              ),
+                                            ),
+                                          ),
+                                        // Exibir badge de tag se houver
+                                        if (mensagem.refType != null && mensagem.refType != 'GERAL')
+                                          Padding(
+                                            padding: const EdgeInsets.only(bottom: 4),
+                                            child: Container(
+                                              padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                              decoration: BoxDecoration(
+                                                color: mensagem.refType == 'NOTA' ? Colors.blue : Colors.green,
+                                                borderRadius: BorderRadius.circular(12),
+                                              ),
+                                              child: Text(
+                                                mensagem.refLabel ?? mensagem.refType!,
+                                                style: TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 10,
+                                                  fontWeight: FontWeight.w500,
+                                                ),
                                               ),
                                             ),
                                           ),
@@ -2295,6 +2625,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    // Seletor de tag (badge)
+                    _buildTagSelector(),
                     Row(
                       children: [
                         IconButton(
@@ -2302,35 +2634,52 @@ class _ChatScreenState extends State<ChatScreen> {
                           onPressed: _mostrarOpcoesAnexo,
                         ),
                         Expanded(
-                          child: TextField(
-                            controller: _messageController,
-                            focusNode: _focusNode,
-                            onTap: () {
-                              // Fechar emoji picker quando focar no campo de texto
-                              if (_mostrarEmojiPicker) {
-                                setState(() {
-                                  _mostrarEmojiPicker = false;
-                                });
+                          child: Focus(
+                            onKeyEvent: (node, event) {
+                              // Detectar Enter pressionado sem Shift
+                              if (event is KeyDownEvent &&
+                                  event.logicalKey == LogicalKeyboardKey.enter) {
+                                // Verificar se Shift não está pressionado
+                                final isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
+                                if (!isShiftPressed && _messageController.text.trim().isNotEmpty) {
+                                  // Enviar mensagem
+                                  _enviarMensagem();
+                                  return KeyEventResult.handled;
+                                }
                               }
+                              return KeyEventResult.ignored;
                             },
-                            decoration: InputDecoration(
-                              hintText: _mensagemRespondendo != null 
-                                  ? 'Digite sua resposta...'
-                                  : 'Digite uma mensagem...',
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(24),
-                                borderSide: BorderSide.none,
+                            child: TextField(
+                              controller: _messageController,
+                              focusNode: _focusNode,
+                              onTap: () {
+                                // Fechar emoji picker quando focar no campo de texto
+                                if (_mostrarEmojiPicker) {
+                                  setState(() {
+                                    _mostrarEmojiPicker = false;
+                                  });
+                                }
+                              },
+                              decoration: InputDecoration(
+                                hintText: _mensagemRespondendo != null 
+                                    ? 'Digite sua resposta...'
+                                    : 'Digite uma mensagem...',
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(24),
+                                  borderSide: BorderSide.none,
+                                ),
+                                filled: true,
+                                fillColor: Colors.grey[200],
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 10,
+                                ),
                               ),
-                              filled: true,
-                              fillColor: Colors.grey[200],
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 10,
-                              ),
+                              maxLines: null,
+                              minLines: 1,
+                              textCapitalization: TextCapitalization.sentences,
+                              textInputAction: TextInputAction.newline,
                             ),
-                            maxLines: null,
-                            textCapitalization: TextCapitalization.sentences,
-                            onSubmitted: (_) => _enviarMensagem(),
                           ),
                         ),
                         IconButton(

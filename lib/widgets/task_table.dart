@@ -2041,6 +2041,25 @@ class _TaskTableState extends State<TaskTable> {
     );
   }
 
+  Future<void> _copiarParaAreaTransferencia(String texto, String mensagemSucesso) async {
+    try {
+      await Clipboard.setData(ClipboardData(text: texto));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(mensagemSucesso), duration: const Duration(seconds: 1)),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Não foi possível copiar: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
   Widget _buildNotaSAPCard(NotaSAP nota, int index) {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -2056,73 +2075,320 @@ class _TaskTableState extends State<TaskTable> {
         ],
         border: Border.all(color: Colors.blue.withOpacity(0.2)),
       ),
-      child: ExpansionTile(
-        leading: Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: Colors.blue.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: const Icon(Icons.description, color: Colors.blue, size: 20),
-        ),
-        title: Row(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(
+            // Avatar com cor baseada no status de usuário
+            CircleAvatar(
+              backgroundColor: _getStatusUsuarioColor(nota.statusUsuario),
+              radius: 20,
               child: Text(
-                'Nota: ${nota.nota}',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                nota.tipo ?? '?',
+                style: TextStyle(
+                  color: _getStatusUsuarioTextColor(nota.statusUsuario),
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
-            IconButton(
-              icon: const Icon(Icons.visibility, size: 18, color: Colors.purple),
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(),
-              onPressed: () => _mostrarDetalhesNotaCompleta(nota),
-              tooltip: 'Visualizar detalhes',
-            ),
-            IconButton(
-              icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: nota.nota));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Nota copiada!'),
-                    duration: Duration(seconds: 1),
+            const SizedBox(width: 12),
+            // Informações principais
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Número da nota, descrição e ações
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Nota: ${nota.nota}',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                                color: Color(0xFF1E3A5F),
+                              ),
+                            ),
+                            if (nota.descricao != null && nota.descricao!.isNotEmpty) ...[
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  nota.descricao!,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: Colors.grey[700],
+                                  ),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.visibility, size: 18, color: Colors.purple),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                        onPressed: () => _mostrarDetalhesNotaCompleta(nota),
+                        tooltip: 'Visualizar detalhes',
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                        onPressed: () => _copiarParaAreaTransferencia(nota.nota, 'Nota copiada!'),
+                        tooltip: 'Copiar nota',
+                      ),
+                    ],
                   ),
-                );
-              },
-              tooltip: 'Copiar nota',
+                  const SizedBox(height: 8),
+                  // Status do usuário, Sala e Prazo na mesma linha (desktop) ou separados (mobile)
+                  if (Responsive.isDesktop(context))
+                    Row(
+                      children: [
+                        // Status do usuário
+                        if (nota.statusUsuario != null && nota.statusUsuario!.isNotEmpty)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: _getStatusUsuarioColor(nota.statusUsuario),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              nota.statusUsuario!,
+                              style: TextStyle(
+                                color: _getStatusUsuarioTextColor(nota.statusUsuario),
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        // Sala
+                        if (nota.sala != null && nota.sala!.isNotEmpty) ...[
+                          if (nota.statusUsuario != null && nota.statusUsuario!.isNotEmpty)
+                            const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.grey[200],
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.room, size: 14, color: Colors.grey[700]),
+                                const SizedBox(width: 4),
+                                Text(
+                                  'Sala: ${nota.sala}',
+                                  style: TextStyle(
+                                    color: Colors.grey[700],
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                        // Prazo
+                        if (nota.dataVencimento != null && nota.diasRestantes != null) ...[
+                          if ((nota.statusUsuario != null && nota.statusUsuario!.isNotEmpty) ||
+                              (nota.sala != null && nota.sala!.isNotEmpty))
+                            const SizedBox(width: 8),
+                          _buildPrazoBadgeNota(nota),
+                        ],
+                      ],
+                    )
+                  else
+                    // Mobile: Status, Sala e Prazo em linhas separadas
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Status do usuário
+                        if (nota.statusUsuario != null && nota.statusUsuario!.isNotEmpty)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: _getStatusUsuarioColor(nota.statusUsuario),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              nota.statusUsuario!,
+                              style: TextStyle(
+                                color: _getStatusUsuarioTextColor(nota.statusUsuario),
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        // Sala
+                        if (nota.sala != null && nota.sala!.isNotEmpty) ...[
+                          if (nota.statusUsuario != null && nota.statusUsuario!.isNotEmpty)
+                            const SizedBox(height: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.grey[200],
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.room, size: 14, color: Colors.grey[700]),
+                                const SizedBox(width: 4),
+                                Text(
+                                  'Sala: ${nota.sala}',
+                                  style: TextStyle(
+                                    color: Colors.grey[700],
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                        // Prazo
+                        if (nota.dataVencimento != null && nota.diasRestantes != null) ...[
+                          if ((nota.statusUsuario != null && nota.statusUsuario!.isNotEmpty) ||
+                              (nota.sala != null && nota.sala!.isNotEmpty))
+                            const SizedBox(height: 6),
+                          _buildPrazoBadgeNota(nota),
+                        ],
+                      ],
+                    ),
+                ],
+              ),
             ),
           ],
         ),
-        subtitle: nota.tipo != null ? Text('Tipo: ${nota.tipo}') : null,
+      ),
+    );
+  }
+
+  // Construir badge de prazo (mesmo padrão da tabela)
+  Widget _buildPrazoBadgeNota(NotaSAP nota) {
+    if (nota.dataVencimento == null || nota.diasRestantes == null) {
+      return const SizedBox.shrink();
+    }
+
+    final diasRestantes = nota.diasRestantes!;
+    final dataVencimento = nota.dataVencimento!;
+    
+    // Determinar cor baseado nos dias restantes
+    Color badgeColor;
+    Color textColor;
+    
+    if (diasRestantes <= 0) {
+      // Preto: já passou da data ou vence hoje
+      badgeColor = Colors.black;
+      textColor = Colors.white;
+    } else if (diasRestantes <= 30) {
+      // Vermelho: vence em até 30 dias
+      badgeColor = Colors.red;
+      textColor = Colors.white;
+    } else if (diasRestantes <= 90) {
+      // Amarelo: vence em até 90 dias
+      badgeColor = Colors.yellow[700] ?? Colors.amber;
+      textColor = Colors.black;
+    } else {
+      // Azul: mais de 90 dias
+      badgeColor = Colors.blue;
+      textColor = Colors.white;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: badgeColor,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildInfoRowModern('Tipo', nota.tipo),
-                _buildInfoRowModern('Status Sistema', nota.statusSistema),
-                _buildInfoRowModern('Status Usuário', nota.statusUsuario),
-                _buildInfoRowModern('Descrição', nota.descricao),
-                _buildInfoRowModern('Detalhes', nota.detalhes),
-                _buildInfoRowModern('Local Instalação', nota.localInstalacao),
-                _buildInfoRowModern('Ordem', nota.ordem),
-                _buildInfoRowModern('GPM', nota.gpm),
-                _buildInfoRowModern('Centro Trabalho', nota.centroTrabalhoResponsavel),
-                if (nota.inicioDesejado != null)
-                  _buildInfoRowModern('Início Desejado', _formatDate(nota.inicioDesejado!)),
-                if (nota.conclusaoDesejada != null)
-                  _buildInfoRowModern('Conclusão Desejada', _formatDate(nota.conclusaoDesejada!)),
-              ],
+          Icon(
+            Icons.calendar_today,
+            size: 14,
+            color: textColor,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            _formatDateNota(dataVencimento),
+            style: TextStyle(
+              color: textColor,
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(width: 6),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              diasRestantes < 0
+                  ? '${diasRestantes} dias' // Mostrar valor negativo quando vencido
+                  : diasRestantes == 0
+                      ? 'Vence hoje'
+                      : diasRestantes == 1
+                          ? '1 dia'
+                          : '$diasRestantes dias',
+              style: const TextStyle(
+                color: Colors.black,
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+              ),
             ),
           ),
         ],
       ),
     );
+  }
+
+  // Funções auxiliares para cores baseadas no status de usuário
+  Color _getStatusUsuarioColor(String? statusUsuario) {
+    if (statusUsuario == null || statusUsuario.isEmpty) return Colors.grey;
+    
+    final status = statusUsuario.toUpperCase();
+    
+    // CONC - Verde
+    if (status.contains('CONC')) return Colors.green;
+    
+    // CADU ou CAIM - Cinza
+    if (status.contains('CADU') || status.contains('CAIM')) return Colors.grey;
+    
+    // REGI - Laranja
+    if (status.contains('REGI')) return Colors.orange;
+    
+    // EMAM - Amarelo
+    if (status.contains('EMAM')) return Colors.yellow[700] ?? Colors.amber;
+    
+    // ANLS - Azul
+    if (status.contains('ANLS')) return Colors.blue;
+    
+    // Padrão - Cinza
+    return Colors.grey;
+  }
+
+  Color _getStatusUsuarioTextColor(String? statusUsuario) {
+    if (statusUsuario == null || statusUsuario.isEmpty) return Colors.white;
+    
+    final status = statusUsuario.toUpperCase();
+    
+    // Para EMAM (amarelo), usar texto preto para melhor contraste
+    if (status.contains('EMAM')) return Colors.black;
+    
+    // Para os outros, usar texto branco
+    return Colors.white;
   }
 
   void _mostrarDialogOrdens(List<Ordem> ordens, Task task) {
@@ -2242,15 +2508,7 @@ class _TaskTableState extends State<TaskTable> {
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: ordem.ordem));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Ordem copiada!'),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
-              },
+              onPressed: () => _copiarParaAreaTransferencia(ordem.ordem, 'Ordem copiada!'),
               tooltip: 'Copiar ordem',
             ),
           ],
@@ -2400,15 +2658,7 @@ class _TaskTableState extends State<TaskTable> {
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: at.autorzTrab));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('AT copiada!'),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
-              },
+              onPressed: () => _copiarParaAreaTransferencia(at.autorzTrab, 'AT copiada!'),
               tooltip: 'Copiar AT',
             ),
           ],
@@ -2557,15 +2807,7 @@ class _TaskTableState extends State<TaskTable> {
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: si.solicitacao));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('SI copiada!'),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
-              },
+              onPressed: () => _copiarParaAreaTransferencia(si.solicitacao, 'SI copiada!'),
               tooltip: 'Copiar SI',
             ),
           ],
@@ -2702,15 +2944,7 @@ class _TaskTableState extends State<TaskTable> {
                     ),
                     IconButton(
                       icon: const Icon(Icons.copy, color: Colors.white, size: 20),
-                      onPressed: () {
-                        Clipboard.setData(ClipboardData(text: nota.nota));
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Nota copiada!'),
-                            duration: Duration(seconds: 1),
-                          ),
-                        );
-                      },
+                      onPressed: () => _copiarParaAreaTransferencia(nota.nota, 'Nota copiada!'),
                       tooltip: 'Copiar nota',
                     ),
                     IconButton(
@@ -2865,6 +3099,8 @@ class _TaskTableState extends State<TaskTable> {
               : 'Segmento';
           
           final comunidade = await _chatService.criarOuObterComunidade(
+            task.regionalId ?? '',
+            task.regional,
             task.divisaoId!,
             divisaoNome,
             task.segmentoId!,

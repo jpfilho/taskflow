@@ -205,31 +205,55 @@ class Dashboard extends StatelessWidget {
       );
     }
 
-    // Se filteredTasks foi fornecido, calcular estatísticas a partir delas
-    if (filteredTasks != null) {
-      final stats = _calculateStatsFromTasks(filteredTasks!);
-      return _buildWithColors(stats);
+    // IMPORTANTE: Sempre usar filteredTasks quando disponível para evitar crash
+    // Se filteredTasks não foi fornecido, usar lista vazia em vez de buscar todas as tarefas
+    final tasksToUse = filteredTasks ?? [];
+    
+    if (tasksToUse.isEmpty && filteredTasks == null) {
+      // Se não há tarefas filtradas e não foram fornecidas, mostrar mensagem
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.info_outline, size: 48, color: Colors.grey[400]),
+            const SizedBox(height: 16),
+            Text(
+              'Nenhuma tarefa disponível',
+              style: TextStyle(color: Colors.grey[600], fontSize: 16),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Aplique filtros para ver as estatísticas',
+              style: TextStyle(color: Colors.grey[500], fontSize: 14),
+            ),
+          ],
+        ),
+      );
     }
-
-    return FutureBuilder<Map<String, dynamic>>(
-      future: taskService.getStatistics(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        if (snapshot.hasError) {
-          return Center(child: Text('Erro: ${snapshot.error}'));
-        }
-        final stats = snapshot.data ?? {};
-        return _buildWithColors(stats);
-      },
-    );
+    
+    // Calcular estatísticas a partir das tarefas filtradas
+    final stats = _calculateStatsFromTasks(tasksToUse);
+    return _buildWithColors(stats);
   }
 
   Widget _buildSummaryCards(BuildContext context, Map<String, dynamic> stats, bool isMobile, Map<String, Color> statusColors) {
     Color resolve(String code, Color fallback) => statusColors[code.toUpperCase()] ?? fallback;
 
-    List<Task> _asTaskList(dynamic v) => v is List<Task> ? v : <Task>[];
+    // Função auxiliar para converter dinamicamente para List<Task> com proteção
+    List<Task> _asTaskList(dynamic v) {
+      if (v == null) return <Task>[];
+      if (v is List<Task>) return v;
+      if (v is List) {
+        try {
+          return v.whereType<Task>().toList();
+        } catch (e) {
+          print('⚠️ Erro ao converter lista de tarefas: $e');
+          return <Task>[];
+        }
+      }
+      return <Task>[];
+    }
+    
     final listaTotal = _asTaskList(stats['listaTotal']);
     final listaEmAndamento = _asTaskList(stats['listaEmAndamento']);
     final listaConcluidas = _asTaskList(stats['listaConcluidas']);
@@ -391,7 +415,22 @@ class Dashboard extends StatelessWidget {
     final semLocal = _asInt(stats['semLocal']);
     final semCoordenador = _asInt(stats['semCoordenador']);
     final mediaDuracao = stats['mediaDuracaoDias'] is num ? (stats['mediaDuracaoDias'] as num).toDouble() : 0.0;
-    List<Task> _asTaskList(dynamic v) => v is List<Task> ? v : <Task>[];
+    
+    // Função auxiliar para converter dinamicamente para List<Task> com proteção
+    List<Task> _asTaskList(dynamic v) {
+      if (v == null) return <Task>[];
+      if (v is List<Task>) return v;
+      if (v is List) {
+        try {
+          return v.whereType<Task>().toList();
+        } catch (e) {
+          print('⚠️ Erro ao converter lista de tarefas: $e');
+          return <Task>[];
+        }
+      }
+      return <Task>[];
+    }
+    
     final listaAtrasadas = _asTaskList(stats['listaAtrasadas']);
     final listaVenceHoje = _asTaskList(stats['listaVenceHoje']);
     final listaSemExecutor = _asTaskList(stats['listaSemExecutor']);
@@ -529,6 +568,11 @@ class Dashboard extends StatelessWidget {
   }
 
   void _showTaskList(BuildContext context, String title, List<Task> tasks) {
+    // Proteção: limitar número de tarefas exibidas para evitar crash
+    final maxTasks = 500; // Limite razoável para evitar problemas de performance
+    final tasksToShow = tasks.length > maxTasks ? tasks.take(maxTasks).toList() : tasks;
+    final hasMore = tasks.length > maxTasks;
+    
     showDialog(
       context: context,
       builder: (context) {
@@ -554,14 +598,27 @@ class Dashboard extends StatelessWidget {
 
             return AlertDialog(
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-              title: Text(
-                title,
-                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 18),
+              title: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 18),
+                  ),
+                  if (hasMore)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        'Mostrando $maxTasks de ${tasks.length} tarefas',
+                        style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                      ),
+                    ),
+                ],
               ),
               content: SizedBox(
                 width: 560,
                 height: 440,
-                child: tasks.isEmpty
+                child: tasksToShow.isEmpty
                     ? Center(
                         child: Text(
                           'Nenhuma tarefa encontrada.',
@@ -569,10 +626,10 @@ class Dashboard extends StatelessWidget {
                         ),
                       )
                     : ListView.separated(
-                        itemCount: tasks.length,
+                        itemCount: tasksToShow.length,
                         separatorBuilder: (_, __) => const SizedBox(height: 10),
                         itemBuilder: (context, index) {
-                          final t = tasks[index];
+                          final t = tasksToShow[index];
                           final status = t.status.isNotEmpty ? t.status : '—';
                           final statusColor = resolveStatusColor(status);
 
@@ -615,15 +672,13 @@ class Dashboard extends StatelessWidget {
                                         runSpacing: 6,
                                         children: [
                                           _buildTag('Status', status, statusColor),
-                                          Flexible(
-                                            child: _buildTag(
-                                              'Executor',
-                                              t.executores.isNotEmpty
-                                                  ? t.executores.join(', ')
-                                                  : (t.executor.isNotEmpty ? t.executor : '—'),
-                                              Colors.indigo,
-                                              wrap: true,
-                                            ),
+                                          _buildTag(
+                                            'Executor',
+                                            t.executores.isNotEmpty
+                                                ? t.executores.join(', ')
+                                                : (t.executor.isNotEmpty ? t.executor : '—'),
+                                            Colors.indigo,
+                                            wrap: true,
                                           ),
                                           _buildTag(
                                             'Início',
@@ -660,12 +715,16 @@ class Dashboard extends StatelessWidget {
     );
   }
 
-  Color _hexToColor(String hex) {
-    final buffer = StringBuffer();
-    if (hex.startsWith('#')) hex = hex.substring(1);
-    if (hex.length == 6) buffer.write('ff');
-    buffer.write(hex);
-    return Color(int.parse(buffer.toString(), radix: 16));
+  Color _hexToColor(String? hex) {
+    if (hex == null || hex.isEmpty) return Colors.blueGrey;
+    try {
+      String value = hex.trim();
+      if (value.startsWith('#')) value = value.substring(1);
+      if (value.length == 6) value = 'ff$value';
+      return Color(int.parse(value, radix: 16));
+    } catch (e) {
+      return Colors.blueGrey;
+    }
   }
 
   Widget _buildProductivityIndicators(Map<String, dynamic> stats, bool isMobile) {

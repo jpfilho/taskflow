@@ -630,6 +630,8 @@ class _MaintenanceCalendarViewState extends State<MaintenanceCalendarView> {
               : 'Segmento';
           
           final comunidade = await chatService.criarOuObterComunidade(
+            task.regionalId ?? '',
+            task.regional,
             task.divisaoId!,
             divisao.divisao,
             task.segmentoId!,
@@ -637,9 +639,9 @@ class _MaintenanceCalendarViewState extends State<MaintenanceCalendarView> {
           );
           
           grupoChat = await chatService.criarOuObterGrupo(
-            comunidade.id!,
             task.id,
             task.tarefa,
+            comunidade.id!,
           );
         } else {
           // Se não tiver divisão/segmento, mostrar mensagem
@@ -657,7 +659,7 @@ class _MaintenanceCalendarViewState extends State<MaintenanceCalendarView> {
       
       // Abrir tela de chat em uma nova rota
       if (mounted) {
-        final grupoId = grupoChat?.id;
+        final grupoId = grupoChat.id;
         if (grupoId != null && grupoId.isNotEmpty) {
           Navigator.of(context).push(
             MaterialPageRoute(
@@ -1062,6 +1064,25 @@ class _MaintenanceCalendarViewState extends State<MaintenanceCalendarView> {
     );
   }
 
+  Future<void> _copiarParaAreaTransferencia(String texto, String mensagemSucesso) async {
+    try {
+      await Clipboard.setData(ClipboardData(text: texto));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(mensagemSucesso), duration: const Duration(seconds: 1)),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Não foi possível copiar: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
   Widget _buildNotaSAPCard(NotaSAP nota, int index) {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -1098,15 +1119,7 @@ class _MaintenanceCalendarViewState extends State<MaintenanceCalendarView> {
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: nota.nota));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Nota copiada!'),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
-              },
+              onPressed: () => _copiarParaAreaTransferencia(nota.nota, 'Nota copiada!'),
               tooltip: 'Copiar nota',
             ),
           ],
@@ -1255,15 +1268,7 @@ class _MaintenanceCalendarViewState extends State<MaintenanceCalendarView> {
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: ordem.ordem));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Ordem copiada!'),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
-              },
+              onPressed: () => _copiarParaAreaTransferencia(ordem.ordem, 'Ordem copiada!'),
               tooltip: 'Copiar ordem',
             ),
           ],
@@ -1413,15 +1418,7 @@ class _MaintenanceCalendarViewState extends State<MaintenanceCalendarView> {
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: at.autorzTrab));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('AT copiada!'),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
-              },
+              onPressed: () => _copiarParaAreaTransferencia(at.autorzTrab, 'AT copiada!'),
               tooltip: 'Copiar AT',
             ),
           ],
@@ -1570,15 +1567,7 @@ class _MaintenanceCalendarViewState extends State<MaintenanceCalendarView> {
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: si.solicitacao));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('SI copiada!'),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
-              },
+              onPressed: () => _copiarParaAreaTransferencia(si.solicitacao, 'SI copiada!'),
               tooltip: 'Copiar SI',
             ),
           ],

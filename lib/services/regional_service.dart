@@ -47,7 +47,6 @@ class RegionalService {
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar regionais');
               throw Exception('Timeout ao buscar regionais após 30 segundos');
             },
           );
@@ -93,7 +92,6 @@ class RegionalService {
           .timeout(
             const Duration(seconds: 10),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar regional por ID');
               return <String, dynamic>{};
             },
           );
@@ -216,7 +214,6 @@ class RegionalService {
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
-              print('⚠️ Timeout ao filtrar regionais');
               return <Map<String, dynamic>>[];
             },
           );
@@ -252,7 +249,6 @@ class RegionalService {
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar regionais');
               return <Map<String, dynamic>>[];
             },
           );

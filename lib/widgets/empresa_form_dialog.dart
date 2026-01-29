@@ -4,6 +4,7 @@ import '../models/regional.dart';
 import '../models/divisao.dart';
 import '../services/regional_service.dart';
 import '../services/divisao_service.dart';
+import 'form_dialog_helpers.dart';
 
 class EmpresaFormDialog extends StatefulWidget {
   final Empresa? empresa;
@@ -57,13 +58,11 @@ class _EmpresaFormDialogState extends State<EmpresaFormDialog> {
         _regionais = regionais;
         _isLoadingRegionais = false;
 
-        // Selecionar a regional se estiver editando
         if (widget.empresa != null && widget.empresa!.regionalId.isNotEmpty) {
           _selectedRegional = regionais.firstWhere(
             (r) => r.id == widget.empresa!.regionalId,
             orElse: () => regionais.isNotEmpty ? regionais.first : regionais.first,
           );
-          // Carregar divisões da regional selecionada
           _loadDivisoes();
         } else if (regionais.isNotEmpty) {
           _selectedRegional = regionais.first;
@@ -87,7 +86,6 @@ class _EmpresaFormDialogState extends State<EmpresaFormDialog> {
 
     try {
       final divisoes = await _divisaoService.getAllDivisoes();
-      // Filtrar divisões da regional selecionada
       final divisoesFiltradas = divisoes
           .where((d) => d.regionalId == _selectedRegional!.id)
           .toList();
@@ -96,7 +94,6 @@ class _EmpresaFormDialogState extends State<EmpresaFormDialog> {
         _divisoes = divisoesFiltradas;
         _isLoadingDivisoes = false;
 
-        // Selecionar a divisão se estiver editando
         if (widget.empresa != null && widget.empresa!.divisaoId.isNotEmpty) {
           _selectedDivisao = divisoesFiltradas.firstWhere(
             (d) => d.id == widget.empresa!.divisaoId,
@@ -121,7 +118,7 @@ class _EmpresaFormDialogState extends State<EmpresaFormDialog> {
   void _onRegionalChanged(Regional? regional) {
     setState(() {
       _selectedRegional = regional;
-      _selectedDivisao = null; // Reset divisão quando mudar regional
+      _selectedDivisao = null;
     });
     _loadDivisoes();
   }
@@ -160,48 +157,88 @@ class _EmpresaFormDialogState extends State<EmpresaFormDialog> {
     }
   }
 
+  String _getRegionalDisplayText(Regional regional) {
+    return '${regional.regional} - ${regional.divisao} - ${regional.empresa}';
+  }
+
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(widget.empresa == null ? 'Nova Empresa' : 'Editar Empresa'),
-      content: SizedBox(
-        width: double.maxFinite,
-        child: Form(
-          key: _formKey,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextFormField(
-                  controller: _empresaController,
-                  decoration: const InputDecoration(
-                    labelText: 'Nome da Empresa',
-                    border: OutlineInputBorder(),
+    final isEditing = widget.empresa != null;
+    final brightness = Theme.of(context).brightness;
+    final isDark = brightness == Brightness.dark;
+
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.all(16),
+      elevation: 0,
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 512),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF1e293b) : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
+            width: 1,
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Header
+            Padding(
+              padding: const EdgeInsets.fromLTRB(32, 32, 32, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    isEditing ? 'Editar Empresa' : 'Nova Empresa',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w600,
+                      color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
+                    ),
                   ),
-                  validator: (value) {
-                    if (value == null || value.trim().isEmpty) {
-                      return 'Campo obrigatório';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
-                // Dropdown de Regional
-                _isLoadingRegionais
-                    ? const CircularProgressIndicator()
-                    : DropdownButtonFormField<Regional>(
+                  const SizedBox(height: 4),
+                  Text(
+                    'Atualize as informações da empresa.',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // Content
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                child: Form(
+                  key: _formKey,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      FloatingLabelTextField(
+                        label: 'Nome da Empresa *',
+                        controller: _empresaController,
+                        isDark: isDark,
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'Campo obrigatório';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 24),
+                      FloatingLabelDropdown<Regional>(
+                        label: 'Regional *',
                         value: _selectedRegional,
-                        decoration: const InputDecoration(
-                          labelText: 'Regional',
-                          border: OutlineInputBorder(),
-                        ),
-                        items: _regionais.map((regional) {
-                          return DropdownMenuItem<Regional>(
-                            value: regional,
-                            child: Text(regional.regional),
-                          );
-                        }).toList(),
+                        items: _regionais,
+                        isLoading: _isLoadingRegionais,
+                        displayText: (regional) => _getRegionalDisplayText(regional),
                         onChanged: _onRegionalChanged,
+                        isDark: isDark,
                         validator: (value) {
                           if (value == null) {
                             return 'Selecione uma regional';
@@ -209,27 +246,19 @@ class _EmpresaFormDialogState extends State<EmpresaFormDialog> {
                           return null;
                         },
                       ),
-                const SizedBox(height: 16),
-                // Dropdown de Divisão
-                _isLoadingDivisoes
-                    ? const CircularProgressIndicator()
-                    : DropdownButtonFormField<Divisao>(
+                      const SizedBox(height: 24),
+                      FloatingLabelDropdown<Divisao>(
+                        label: 'Divisão *',
                         value: _selectedDivisao,
-                        decoration: const InputDecoration(
-                          labelText: 'Divisão',
-                          border: OutlineInputBorder(),
-                        ),
-                        items: _divisoes.map((divisao) {
-                          return DropdownMenuItem<Divisao>(
-                            value: divisao,
-                            child: Text(divisao.divisao),
-                          );
-                        }).toList(),
+                        items: _divisoes,
+                        isLoading: _isLoadingDivisoes,
+                        displayText: (divisao) => divisao.divisao,
                         onChanged: (divisao) {
                           setState(() {
                             _selectedDivisao = divisao;
                           });
                         },
+                        isDark: isDark,
                         validator: (value) {
                           if (value == null) {
                             return 'Selecione uma divisão';
@@ -237,52 +266,81 @@ class _EmpresaFormDialogState extends State<EmpresaFormDialog> {
                           return null;
                         },
                       ),
-                const SizedBox(height: 16),
-                // Dropdown de Tipo
-                DropdownButtonFormField<String>(
-                  value: _selectedTipo,
-                  decoration: const InputDecoration(
-                    labelText: 'Tipo',
-                    border: OutlineInputBorder(),
+                      const SizedBox(height: 24),
+                      FloatingLabelDropdown<String>(
+                        label: 'Tipo *',
+                        value: _selectedTipo,
+                        items: const ['PROPRIA', 'TERCEIRA'],
+                        isLoading: false,
+                        displayText: (tipo) => tipo == 'PROPRIA' ? 'Própria' : 'Terceira',
+                        onChanged: (tipo) {
+                          setState(() {
+                            _selectedTipo = tipo!;
+                          });
+                        },
+                        isDark: isDark,
+                      ),
+                    ],
                   ),
-                  items: const [
-                    DropdownMenuItem<String>(
-                      value: 'PROPRIA',
-                      child: Text('Própria'),
-                    ),
-                    DropdownMenuItem<String>(
-                      value: 'TERCEIRA',
-                      child: Text('Terceira'),
-                    ),
-                  ],
-                  onChanged: (tipo) {
-                    setState(() {
-                      _selectedTipo = tipo!;
-                    });
-                  },
                 ),
-              ],
+              ),
             ),
-          ),
+
+            // Footer com botões
+            Container(
+              padding: const EdgeInsets.all(32),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF0f172a).withOpacity(0.5) : const Color(0xFFf8fafc),
+                border: Border(
+                  top: BorderSide(
+                    color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
+                    width: 1,
+                  ),
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
+                    ),
+                    child: Text(
+                      'Cancelar',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF475569),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  ElevatedButton(
+                    onPressed: _save,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF3b82f6),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 10),
+                      elevation: 2,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    child: Text(
+                      isEditing ? 'Salvar Alterações' : 'Criar Empresa',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancelar'),
-        ),
-        ElevatedButton(
-          onPressed: _save,
-          child: const Text('Salvar'),
-        ),
-      ],
     );
   }
 }
-
-
-
-
-
-
-

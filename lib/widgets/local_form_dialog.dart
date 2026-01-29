@@ -6,6 +6,7 @@ import '../models/segmento.dart';
 import '../services/regional_service.dart';
 import '../services/divisao_service.dart';
 import '../services/segmento_service.dart';
+import 'form_dialog_helpers.dart';
 
 class LocalFormDialog extends StatefulWidget {
   final Local? local;
@@ -57,7 +58,6 @@ class _LocalFormDialogState extends State<LocalFormDialog> {
       text: widget.local?.localInstalacaoSap ?? '',
     );
     
-    // Inicializar valores se estiver editando
     if (widget.local != null) {
       _paraTodaRegional = widget.local!.paraTodaRegional;
       _paraTodaDivisao = widget.local!.paraTodaDivisao;
@@ -92,7 +92,6 @@ class _LocalFormDialogState extends State<LocalFormDialog> {
         _segmentos = futures[2] as List<Segmento>;
         _isLoading = false;
 
-        // Selecionar valores se estiver editando
         if (widget.local != null) {
           if (widget.local!.regionalId != null && widget.local!.regionalId!.isNotEmpty) {
             _selectedRegional = _regionais.firstWhere(
@@ -124,7 +123,6 @@ class _LocalFormDialogState extends State<LocalFormDialog> {
 
   void _save() {
     if (_formKey.currentState!.validate()) {
-      // Validar que pelo menos uma associação foi selecionada
       if (!_paraTodaRegional && 
           !_paraTodaDivisao && 
           _selectedRegional == null && 
@@ -161,211 +159,288 @@ class _LocalFormDialogState extends State<LocalFormDialog> {
     }
   }
 
+  String _getRegionalDisplayText(Regional regional) {
+    return '${regional.regional} - ${regional.divisao} - ${regional.empresa}';
+  }
+
   @override
   Widget build(BuildContext context) {
     final isEditing = widget.local != null;
+    final brightness = Theme.of(context).brightness;
+    final isDark = brightness == Brightness.dark;
 
-    return AlertDialog(
-      title: Text(isEditing ? 'Editar Local' : 'Novo Local'),
-      content: Form(
-        key: _formKey,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              TextFormField(
-                controller: _localController,
-                decoration: const InputDecoration(
-                  labelText: 'Local *',
-                  border: OutlineInputBorder(),
-                  hintText: 'Digite o nome do local',
-                ),
-                textCapitalization: TextCapitalization.words,
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'Campo obrigatório';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _descricaoController,
-                decoration: const InputDecoration(
-                  labelText: 'Descrição',
-                  border: OutlineInputBorder(),
-                  hintText: 'Digite uma descrição (opcional)',
-                ),
-                textCapitalization: TextCapitalization.sentences,
-                maxLines: 2,
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _localInstalacaoSapController,
-                decoration: const InputDecoration(
-                  labelText: 'Local da Instalação SAP',
-                  border: OutlineInputBorder(),
-                  hintText: 'H-S-SAAA',
-                  helperText: 'Campo opcional',
-                ),
-                textCapitalization: TextCapitalization.characters,
-              ),
-              const SizedBox(height: 24),
-              const Text(
-                'Associações:',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 12),
-              // Checkbox para Toda Regional
-              CheckboxListTile(
-                title: const Text('Para Toda Regional'),
-                subtitle: const Text('Aplica-se a todas as regionais'),
-                value: _paraTodaRegional,
-                onChanged: (value) {
-                  setState(() {
-                    _paraTodaRegional = value ?? false;
-                    if (_paraTodaRegional) {
-                      _selectedRegional = null;
-                    }
-                  });
-                },
-                controlAffinity: ListTileControlAffinity.leading,
-              ),
-              // Checkbox para Toda Divisão
-              CheckboxListTile(
-                title: const Text('Para Toda Divisão'),
-                subtitle: const Text('Aplica-se a todas as divisões'),
-                value: _paraTodaDivisao,
-                onChanged: (value) {
-                  setState(() {
-                    _paraTodaDivisao = value ?? false;
-                    if (_paraTodaDivisao) {
-                      _selectedDivisao = null;
-                    }
-                  });
-                },
-                controlAffinity: ListTileControlAffinity.leading,
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                'Associações Específicas:',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 8),
-              // Dropdown de Regional (sempre disponível)
-              _isLoading
-                  ? const CircularProgressIndicator()
-                  : DropdownButtonFormField<Regional>(
-                      value: _selectedRegional,
-                      decoration: InputDecoration(
-                        labelText: 'Regional Específica',
-                        border: const OutlineInputBorder(),
-                        hintText: 'Selecione uma regional (opcional)',
-                        helperText: _paraTodaRegional 
-                            ? 'Nota: "Para Toda Regional" está marcado, mas você pode especificar uma regional específica também'
-                            : null,
-                      ),
-                      items: [
-                        const DropdownMenuItem<Regional>(
-                          value: null,
-                          child: Text('Nenhuma'),
-                        ),
-                        ..._regionais.map((regional) {
-                          return DropdownMenuItem<Regional>(
-                            value: regional,
-                            child: Text('${regional.regional} - ${regional.divisao} - ${regional.empresa}'),
-                          );
-                        }).toList(),
-                      ],
-                      onChanged: (Regional? value) {
-                        setState(() {
-                          _selectedRegional = value;
-                        });
-                      },
-                    ),
-              const SizedBox(height: 12),
-              // Dropdown de Divisão (sempre disponível)
-              _isLoading
-                  ? const SizedBox.shrink()
-                  : DropdownButtonFormField<Divisao>(
-                      value: _selectedDivisao,
-                      decoration: InputDecoration(
-                        labelText: 'Divisão Específica',
-                        border: const OutlineInputBorder(),
-                        hintText: 'Selecione uma divisão (opcional)',
-                        helperText: _paraTodaDivisao 
-                            ? 'Nota: "Para Toda Divisão" está marcado, mas você pode especificar uma divisão específica também'
-                            : null,
-                      ),
-                      items: [
-                        const DropdownMenuItem<Divisao>(
-                          value: null,
-                          child: Text('Nenhuma'),
-                        ),
-                        ..._divisoes.map((divisao) {
-                          return DropdownMenuItem<Divisao>(
-                            value: divisao,
-                            child: Text('${divisao.divisao} - ${divisao.regional}'),
-                          );
-                        }).toList(),
-                      ],
-                      onChanged: (Divisao? value) {
-                        setState(() {
-                          _selectedDivisao = value;
-                        });
-                      },
-                    ),
-              const SizedBox(height: 12),
-              // Dropdown de Segmento
-              _isLoading
-                  ? const SizedBox.shrink()
-                  : DropdownButtonFormField<Segmento>(
-                      value: _selectedSegmento,
-                      decoration: const InputDecoration(
-                        labelText: 'Segmento Específico',
-                        border: OutlineInputBorder(),
-                        hintText: 'Selecione um segmento (opcional)',
-                      ),
-                      items: [
-                        const DropdownMenuItem<Segmento>(
-                          value: null,
-                          child: Text('Nenhum'),
-                        ),
-                        ..._segmentos.map((segmento) {
-                          return DropdownMenuItem<Segmento>(
-                            value: segmento,
-                            child: Text(segmento.segmento),
-                          );
-                        }).toList(),
-                      ],
-                      onChanged: (Segmento? value) {
-                        setState(() {
-                          _selectedSegmento = value;
-                        });
-                      },
-                    ),
-            ],
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.all(16),
+      elevation: 0,
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 512),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF1e293b) : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
+            width: 1,
           ),
         ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Header
+            Padding(
+              padding: const EdgeInsets.fromLTRB(32, 32, 32, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    isEditing ? 'Editar Local' : 'Novo Local',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w600,
+                      color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Atualize as informações do local e suas associações.',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // Content
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                child: Form(
+                  key: _formKey,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      FloatingLabelTextField(
+                        label: 'Local *',
+                        controller: _localController,
+                        isDark: isDark,
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'Campo obrigatório';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 24),
+                      FloatingLabelTextField(
+                        label: 'Descrição',
+                        controller: _descricaoController,
+                        isDark: isDark,
+                        maxLines: 2,
+                        textCapitalization: TextCapitalization.sentences,
+                      ),
+                      const SizedBox(height: 24),
+                      FloatingLabelTextField(
+                        label: 'Local da Instalação SAP',
+                        controller: _localInstalacaoSapController,
+                        isDark: isDark,
+                        textCapitalization: TextCapitalization.characters,
+                      ),
+                      const SizedBox(height: 32),
+                      Text(
+                        'Associações',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: isDark ? const Color(0xFFcbd5e1) : const Color(0xFF334155),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Container(
+                        decoration: BoxDecoration(
+                          color: isDark ? const Color(0xFF1e293b).withOpacity(0.5) : const Color(0xFFf8fafc),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: isDark ? const Color(0xFF334155).withOpacity(0.5) : const Color(0xFFe2e8f0),
+                          ),
+                        ),
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          children: [
+                            CheckboxListTile(
+                              title: Text(
+                                'Para Toda Regional',
+                                style: TextStyle(
+                                  color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
+                                ),
+                              ),
+                              subtitle: Text(
+                                'Aplica-se a todas as regionais',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
+                                ),
+                              ),
+                              value: _paraTodaRegional,
+                              activeColor: const Color(0xFF3b82f6),
+                              onChanged: (value) {
+                                setState(() {
+                                  _paraTodaRegional = value ?? false;
+                                  if (_paraTodaRegional) {
+                                    _selectedRegional = null;
+                                  }
+                                });
+                              },
+                              controlAffinity: ListTileControlAffinity.leading,
+                            ),
+                            CheckboxListTile(
+                              title: Text(
+                                'Para Toda Divisão',
+                                style: TextStyle(
+                                  color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
+                                ),
+                              ),
+                              subtitle: Text(
+                                'Aplica-se a todas as divisões',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
+                                ),
+                              ),
+                              value: _paraTodaDivisao,
+                              activeColor: const Color(0xFF3b82f6),
+                              onChanged: (value) {
+                                setState(() {
+                                  _paraTodaDivisao = value ?? false;
+                                  if (_paraTodaDivisao) {
+                                    _selectedDivisao = null;
+                                  }
+                                });
+                              },
+                              controlAffinity: ListTileControlAffinity.leading,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      Text(
+                        'Associações Específicas',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: isDark ? const Color(0xFFcbd5e1) : const Color(0xFF334155),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      _isLoading
+                          ? const Center(child: CircularProgressIndicator())
+                          : Column(
+                              children: [
+                                FloatingLabelDropdown<Regional>(
+                                  label: 'Regional Específica',
+                                  value: _selectedRegional,
+                                  items: _regionais,
+                                  isLoading: false,
+                                  displayText: (regional) => _getRegionalDisplayText(regional),
+                                  onChanged: (value) {
+                                    setState(() {
+                                      _selectedRegional = value;
+                                    });
+                                  },
+                                  isDark: isDark,
+                                ),
+                                const SizedBox(height: 24),
+                                FloatingLabelDropdown<Divisao>(
+                                  label: 'Divisão Específica',
+                                  value: _selectedDivisao,
+                                  items: _divisoes,
+                                  isLoading: false,
+                                  displayText: (divisao) => '${divisao.divisao} - ${divisao.regional}',
+                                  onChanged: (value) {
+                                    setState(() {
+                                      _selectedDivisao = value;
+                                    });
+                                  },
+                                  isDark: isDark,
+                                ),
+                                const SizedBox(height: 24),
+                                FloatingLabelDropdown<Segmento>(
+                                  label: 'Segmento Específico',
+                                  value: _selectedSegmento,
+                                  items: _segmentos,
+                                  isLoading: false,
+                                  displayText: (segmento) => segmento.segmento,
+                                  onChanged: (value) {
+                                    setState(() {
+                                      _selectedSegmento = value;
+                                    });
+                                  },
+                                  isDark: isDark,
+                                ),
+                              ],
+                            ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
+            // Footer com botões
+            Container(
+              padding: const EdgeInsets.all(32),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF0f172a).withOpacity(0.5) : const Color(0xFFf8fafc),
+                border: Border(
+                  top: BorderSide(
+                    color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
+                    width: 1,
+                  ),
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
+                    ),
+                    child: Text(
+                      'Cancelar',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF475569),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  ElevatedButton(
+                    onPressed: _save,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF3b82f6),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 10),
+                      elevation: 2,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    child: Text(
+                      isEditing ? 'Salvar Alterações' : 'Criar Local',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancelar'),
-        ),
-        ElevatedButton(
-          onPressed: _save,
-          child: Text(isEditing ? 'Salvar' : 'Criar'),
-        ),
-      ],
     );
   }
 }
-

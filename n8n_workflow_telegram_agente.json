@@ -1,0 +1,1006 @@
+{
+  "name": "Telegram Agente com Validações",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "id": "telegram-trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "telegram-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalizar mensagem do Telegram\nconst message = $input.item.json.message;\nconst text = message?.text || message?.caption || '';\nconst from = message?.from || {};\n\nreturn {\n  json: {\n    telegram_user_id: from.id,\n    telegram_username: from.username,\n    telegram_first_name: from.first_name,\n    telegram_last_name: from.last_name,\n    chat_id: message.chat.id,\n    message_id: message.message_id,\n    text: text.trim().toLowerCase(),\n    original_text: text.trim(),\n    timestamp: new Date().toISOString()\n  }\n};"
+      },
+      "id": "normalize-message",
+      "name": "Normalize Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  ti.user_id as executor_id,\n  e.nome as executor_nome,\n  e.divisao_id\nFROM telegram_identities ti\nJOIN executores e ON e.id = ti.user_id\nWHERE ti.telegram_user_id = $1::bigint\n  AND e.ativo = true\nLIMIT 1;",
+        "additionalFields": {
+          "queryParameters": "={{ [$json.telegram_user_id] }}"
+        }
+      },
+      "id": "lookup-identity",
+      "name": "Lookup Identity",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [650, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT DISTINCT equipe_id\nFROM equipes_executores\nWHERE executor_id = $1::uuid;",
+        "additionalFields": {
+          "queryParameters": "={{ [$json.executor_id] }}"
+        }
+      },
+      "id": "lookup-equipes",
+      "name": "Lookup Equipes",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [850, 200],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-executor",
+              "leftValue": "={{ $json.executor_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "object",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-identity",
+      "name": "Check Identity",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Authorize Context - Combinar contexto completo do executor\nconst executorData = $('Lookup Identity').item.json;\nconst equipesData = $input.all();\n\nconst executorId = executorData.executor_id;\nconst executorNome = executorData.executor_nome;\nconst divisaoId = executorData.divisao_id;\n\n// Extrair IDs das equipes\nconst equipesIds = equipesData.map(item => item.json.equipe_id).filter(id => id != null);\n\nreturn {\n  json: {\n    executor_id: executorId,\n    executor_nome: executorNome,\n    divisao_id: divisaoId,\n    equipes_ids: equipesIds,\n    context_loaded: true\n  }\n};"
+      },
+      "id": "authorize-context",
+      "name": "Authorize Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Router - Parse comandos e rotear\nconst text = $input.item.json.text || '';\nconst originalText = $input.item.json.original_text || '';\nconst context = $input.item.json;\n\n// Padrões de comandos\nconst patterns = {\n  vencendo: /^vencendo$/i,\n  hoje: /^hoje$/i,\n  status: /^status\\s+(anda|prog|conc|canc|rpar)$/i,\n  tarefa: /^tarefa\\s+(.+)$/i,\n  id: /^id\\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i,\n  ordem: /^ordem\\s+(\\d+)$/i,\n  nota: /^nota\\s+(\\d+)$/i,\n  si: /^si\\s+(\\d+)$/i,\n  sap: /^sap\\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i,\n  chat: /^chat\\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i\n};\n\nlet intent = 'unknown';\nlet params = {};\n\n// Verificar cada padrão\nfor (const [key, pattern] of Object.entries(patterns)) {\n  const match = originalText.match(pattern);\n  if (match) {\n    intent = key;\n    if (match.length > 1) {\n      params.value = match[1];\n    }\n    break;\n  }\n}\n\nreturn {\n  json: {\n    ...context,\n    intent: intent,\n    params: params,\n    original_text: originalText\n  }\n};"
+      },
+      "id": "router",
+      "name": "Router",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 200]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "id": "combine-context",
+      "name": "Combine Context",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.1,
+      "position": [1050, 400]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "intent",
+              "value": "={{ $json.intent }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "switch-intent",
+      "name": "Switch Intent",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [1450, 200],
+      "rules": {
+        "rules": [
+          {
+            "conditions": {
+              "options": {
+                "caseSensitive": false,
+                "leftValue": "",
+                "typeValidation": "strict"
+              },
+              "conditions": [
+                {
+                  "id": "vencendo",
+                  "leftValue": "={{ $json.intent }}",
+                  "rightValue": "vencendo",
+                  "operator": {
+                    "type": "string",
+                    "operation": "equals"
+                  }
+                }
+              ],
+              "combinator": "and"
+            },
+            "renameOutput": true,
+            "outputKey": "vencendo",
+            "outputIndex": 0
+          },
+          {
+            "conditions": {
+              "options": {
+                "caseSensitive": false,
+                "leftValue": "",
+                "typeValidation": "strict"
+              },
+              "conditions": [
+                {
+                  "id": "hoje",
+                  "leftValue": "={{ $json.intent }}",
+                  "rightValue": "hoje",
+                  "operator": {
+                    "type": "string",
+                    "operation": "equals"
+                  }
+                }
+              ],
+              "combinator": "and"
+            },
+            "renameOutput": true,
+            "outputKey": "hoje",
+            "outputIndex": 1
+          },
+          {
+            "conditions": {
+              "options": {
+                "caseSensitive": false,
+                "leftValue": "",
+                "typeValidation": "strict"
+              },
+              "conditions": [
+                {
+                  "id": "status",
+                  "leftValue": "={{ $json.intent }}",
+                  "rightValue": "status",
+                  "operator": {
+                    "type": "string",
+                    "operation": "equals"
+                  }
+                }
+              ],
+              "combinator": "and"
+            },
+            "renameOutput": true,
+            "outputKey": "status",
+            "outputIndex": 2
+          },
+          {
+            "conditions": {
+              "options": {
+                "caseSensitive": false,
+                "leftValue": "",
+                "typeValidation": "strict"
+              },
+              "conditions": [
+                {
+                  "id": "tarefa",
+                  "leftValue": "={{ $json.intent }}",
+                  "rightValue": "tarefa",
+                  "operator": {
+                    "type": "string",
+                    "operation": "equals"
+                  }
+                }
+              ],
+              "combinator": "and"
+            },
+            "renameOutput": true,
+            "outputKey": "tarefa",
+            "outputIndex": 3
+          },
+          {
+            "conditions": {
+              "options": {
+                "caseSensitive": false,
+                "leftValue": "",
+                "typeValidation": "strict"
+              },
+              "conditions": [
+                {
+                  "id": "id",
+                  "leftValue": "={{ $json.intent }}",
+                  "rightValue": "id",
+                  "operator": {
+                    "type": "string",
+                    "operation": "equals"
+                  }
+                }
+              ],
+              "combinator": "and"
+            },
+            "renameOutput": true,
+            "outputKey": "id",
+            "outputIndex": 4
+          },
+          {
+            "conditions": {
+              "options": {
+                "caseSensitive": false,
+                "leftValue": "",
+                "typeValidation": "strict"
+              },
+              "conditions": [
+                {
+                  "id": "ordem",
+                  "leftValue": "={{ $json.intent }}",
+                  "rightValue": "ordem",
+                  "operator": {
+                    "type": "string",
+                    "operation": "equals"
+                  }
+                }
+              ],
+              "combinator": "and"
+            },
+            "renameOutput": true,
+            "outputKey": "ordem",
+            "outputIndex": 5
+          },
+          {
+            "conditions": {
+              "options": {
+                "caseSensitive": false,
+                "leftValue": "",
+                "typeValidation": "strict"
+              },
+              "conditions": [
+                {
+                  "id": "nota",
+                  "leftValue": "={{ $json.intent }}",
+                  "rightValue": "nota",
+                  "operator": {
+                    "type": "string",
+                    "operation": "equals"
+                  }
+                }
+              ],
+              "combinator": "and"
+            },
+            "renameOutput": true,
+            "outputKey": "nota",
+            "outputIndex": 6
+          },
+          {
+            "conditions": {
+              "options": {
+                "caseSensitive": false,
+                "leftValue": "",
+                "typeValidation": "strict"
+              },
+              "conditions": [
+                {
+                  "id": "si",
+                  "leftValue": "={{ $json.intent }}",
+                  "rightValue": "si",
+                  "operator": {
+                    "type": "string",
+                    "operation": "equals"
+                  }
+                }
+              ],
+              "combinator": "and"
+            },
+            "renameOutput": true,
+            "outputKey": "si",
+            "outputIndex": 7
+          },
+          {
+            "conditions": {
+              "options": {
+                "caseSensitive": false,
+                "leftValue": "",
+                "typeValidation": "strict"
+              },
+              "conditions": [
+                {
+                  "id": "sap",
+                  "leftValue": "={{ $json.intent }}",
+                  "rightValue": "sap",
+                  "operator": {
+                    "type": "string",
+                    "operation": "equals"
+                  }
+                }
+              ],
+              "combinator": "and"
+            },
+            "renameOutput": true,
+            "outputKey": "sap",
+            "outputIndex": 8
+          },
+          {
+            "conditions": {
+              "options": {
+                "caseSensitive": false,
+                "leftValue": "",
+                "typeValidation": "strict"
+              },
+              "conditions": [
+                {
+                  "id": "chat",
+                  "leftValue": "={{ $json.intent }}",
+                  "rightValue": "chat",
+                  "operator": {
+                    "type": "string",
+                    "operation": "equals"
+                  }
+                }
+              ],
+              "combinator": "and"
+            },
+            "renameOutput": true,
+            "outputKey": "chat",
+            "outputIndex": 9
+          }
+        ]
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH executor_equipes AS (\n  SELECT DISTINCT equipe_id\n  FROM equipes_executores\n  WHERE executor_id = $1::uuid\n)\nSELECT \n  t.id,\n  t.tarefa,\n  s.status,\n  s.codigo as status_codigo,\n  t.prioridade,\n  t.data_inicio,\n  t.data_fim,\n  t.coordenador,\n  r.regional,\n  d.divisao,\n  seg.segmento,\n  COALESCE(\n    (SELECT string_agg(e.nome, ', ')\n     FROM tasks_executores te\n     JOIN executores e ON e.id = te.executor_id\n     WHERE te.task_id = t.id),\n    '-N/A-'\n  ) as executores_nomes,\n  COALESCE(\n    (SELECT string_agg(l.local, ', ')\n     FROM tasks_locais tl\n     JOIN locais l ON l.id = tl.local_id\n     WHERE tl.task_id = t.id),\n    '-N/A-'\n  ) as locais_nomes,\n  ttt.telegram_topic_id\nFROM tasks t\nLEFT JOIN status s ON s.id = t.status_id\nLEFT JOIN regionais r ON r.id = t.regional_id\nLEFT JOIN divisoes d ON d.id = t.divisao_id\nLEFT JOIN segmentos seg ON seg.id = t.segmento_id\nLEFT JOIN telegram_task_topics ttt ON ttt.task_id = t.id\nWHERE \n  -- Filtro de data (vencendo/atrasadas)\n  t.data_fim < NOW() AT TIME ZONE 'America/Sao_Paulo'\n  AND t.status_id NOT IN (\n    SELECT id FROM status WHERE codigo IN ('CONC', 'CANC', 'RPAR')\n  )\n  -- Filtro de permissão\n  AND (\n    -- Condição 1: Participante direto\n    EXISTS (\n      SELECT 1 FROM tasks_executores te\n      WHERE te.task_id = t.id AND te.executor_id = $1::uuid\n    )\n    -- Condição 2: Via equipe\n    OR EXISTS (\n      SELECT 1\n      FROM tasks_equipes tq\n      JOIN equipes_executores ee ON ee.equipe_id = tq.equipe_id\n      WHERE tq.task_id = t.id AND ee.executor_id = $1::uuid\n    )\n    -- Condição 3: Por divisão/segmento (se aplicável)\n    OR (\n      $2::uuid IS NOT NULL \n      AND t.divisao_id = $2::uuid\n    )\n    OR EXISTS (\n      SELECT 1\n      FROM executores_segmentos es\n      WHERE es.executor_id = $1::uuid\n        AND es.segmento_id = t.segmento_id\n    )\n  )\nORDER BY t.data_fim ASC\nLIMIT 10;",
+        "additionalFields": {
+          "queryParameters": "={{ [$json.executor_id, $json.divisao_id] }}"
+        }
+      },
+      "id": "query-tasks-due",
+      "name": "Query Tasks Due",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1650, 50],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH executor_equipes AS (\n  SELECT DISTINCT equipe_id\n  FROM equipes_executores\n  WHERE executor_id = $1::uuid\n)\nSELECT \n  t.id,\n  t.tarefa,\n  s.status,\n  s.codigo as status_codigo,\n  t.prioridade,\n  t.data_inicio,\n  t.data_fim,\n  t.coordenador,\n  r.regional,\n  d.divisao,\n  seg.segmento,\n  COALESCE(\n    (SELECT string_agg(e.nome, ', ')\n     FROM tasks_executores te\n     JOIN executores e ON e.id = te.executor_id\n     WHERE te.task_id = t.id),\n    '-N/A-'\n  ) as executores_nomes,\n  COALESCE(\n    (SELECT string_agg(l.local, ', ')\n     FROM tasks_locais tl\n     JOIN locais l ON l.id = tl.local_id\n     WHERE tl.task_id = t.id),\n    '-N/A-'\n  ) as locais_nomes,\n  ttt.telegram_topic_id\nFROM tasks t\nLEFT JOIN status s ON s.id = t.status_id\nLEFT JOIN regionais r ON r.id = t.regional_id\nLEFT JOIN divisoes d ON d.id = t.divisao_id\nLEFT JOIN segmentos seg ON seg.id = t.segmento_id\nLEFT JOIN telegram_task_topics ttt ON ttt.task_id = t.id\nWHERE \n  -- Filtro de data (hoje)\n  DATE(t.data_inicio AT TIME ZONE 'America/Sao_Paulo') <= CURRENT_DATE\n  AND DATE(t.data_fim AT TIME ZONE 'America/Sao_Paulo') >= CURRENT_DATE\n  -- Filtro de permissão\n  AND (\n    EXISTS (\n      SELECT 1 FROM tasks_executores te\n      WHERE te.task_id = t.id AND te.executor_id = $1::uuid\n    )\n    OR EXISTS (\n      SELECT 1\n      FROM tasks_equipes tq\n      JOIN equipes_executores ee ON ee.equipe_id = tq.equipe_id\n      WHERE tq.task_id = t.id AND ee.executor_id = $1::uuid\n    )\n    OR ($2::uuid IS NOT NULL AND t.divisao_id = $2::uuid)\n    OR EXISTS (\n      SELECT 1\n      FROM executores_segmentos es\n      WHERE es.executor_id = $1::uuid\n        AND es.segmento_id = t.segmento_id\n    )\n  )\nORDER BY t.data_inicio ASC\nLIMIT 10;",
+        "additionalFields": {
+          "queryParameters": "={{ [$json.executor_id, $json.divisao_id] }}"
+        }
+      },
+      "id": "query-tasks-today",
+      "name": "Query Tasks Today",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1650, 150],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extrair status do comando\nconst originalText = $input.item.json.original_text || '';\nconst match = originalText.match(/^status\\s+(anda|prog|conc|canc|rpar)$/i);\nconst statusCodigo = match ? match[1].toUpperCase() : null;\n\nreturn {\n  json: {\n    ...$input.item.json,\n    status_codigo: statusCodigo\n  }\n};"
+      },
+      "id": "extract-status",
+      "name": "Extract Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1650, 250]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH executor_equipes AS (\n  SELECT DISTINCT equipe_id\n  FROM equipes_executores\n  WHERE executor_id = $1::uuid\n)\nSELECT \n  t.id,\n  t.tarefa,\n  s.status,\n  s.codigo as status_codigo,\n  t.prioridade,\n  t.data_inicio,\n  t.data_fim,\n  t.coordenador,\n  r.regional,\n  d.divisao,\n  seg.segmento,\n  COALESCE(\n    (SELECT string_agg(e.nome, ', ')\n     FROM tasks_executores te\n     JOIN executores e ON e.id = te.executor_id\n     WHERE te.task_id = t.id),\n    '-N/A-'\n  ) as executores_nomes,\n  COALESCE(\n    (SELECT string_agg(l.local, ', ')\n     FROM tasks_locais tl\n     JOIN locais l ON l.id = tl.local_id\n     WHERE tl.task_id = t.id),\n    '-N/A-'\n  ) as locais_nomes,\n  ttt.telegram_topic_id\nFROM tasks t\nLEFT JOIN status s ON s.id = t.status_id\nLEFT JOIN regionais r ON r.id = t.regional_id\nLEFT JOIN divisoes d ON d.id = t.divisao_id\nLEFT JOIN segmentos seg ON seg.id = t.segmento_id\nLEFT JOIN telegram_task_topics ttt ON ttt.task_id = t.id\nWHERE \n  s.codigo = $3::text\n  -- Filtro de permissão\n  AND (\n    EXISTS (\n      SELECT 1 FROM tasks_executores te\n      WHERE te.task_id = t.id AND te.executor_id = $1::uuid\n    )\n    OR EXISTS (\n      SELECT 1\n      FROM tasks_equipes tq\n      JOIN equipes_executores ee ON ee.equipe_id = tq.equipe_id\n      WHERE tq.task_id = t.id AND ee.executor_id = $1::uuid\n    )\n    OR ($2::uuid IS NOT NULL AND t.divisao_id = $2::uuid)\n    OR EXISTS (\n      SELECT 1\n      FROM executores_segmentos es\n      WHERE es.executor_id = $1::uuid\n        AND es.segmento_id = t.segmento_id\n    )\n  )\nORDER BY t.data_inicio DESC\nLIMIT 10;",
+        "additionalFields": {
+          "queryParameters": "={{ [$json.executor_id, $json.divisao_id, $json.status_codigo] }}"
+        }
+      },
+      "id": "query-tasks-by-status",
+      "name": "Query Tasks By Status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1850, 250],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extrair texto de busca\nconst originalText = $input.item.json.original_text || '';\nconst match = originalText.match(/^tarefa\\s+(.+)$/i);\nconst searchText = match ? match[1].trim() : '';\n\n// Sanitizar: remover caracteres perigosos\nconst sanitized = searchText.replace(/[;'\"\\\\]/g, '');\n\nreturn {\n  json: {\n    ...$input.item.json,\n    search_text: sanitized\n  }\n};"
+      },
+      "id": "extract-search-text",
+      "name": "Extract Search Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1650, 350]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH executor_equipes AS (\n  SELECT DISTINCT equipe_id\n  FROM equipes_executores\n  WHERE executor_id = $1::uuid\n)\nSELECT \n  t.id,\n  t.tarefa,\n  s.status,\n  s.codigo as status_codigo,\n  t.prioridade,\n  t.data_inicio,\n  t.data_fim,\n  t.coordenador,\n  r.regional,\n  d.divisao,\n  seg.segmento,\n  COALESCE(\n    (SELECT string_agg(e.nome, ', ')\n     FROM tasks_executores te\n     JOIN executores e ON e.id = te.executor_id\n     WHERE te.task_id = t.id),\n    '-N/A-'\n  ) as executores_nomes,\n  COALESCE(\n    (SELECT string_agg(l.local, ', ')\n     FROM tasks_locais tl\n     JOIN locais l ON l.id = tl.local_id\n     WHERE tl.task_id = t.id),\n    '-N/A-'\n  ) as locais_nomes,\n  ttt.telegram_topic_id\nFROM tasks t\nLEFT JOIN status s ON s.id = t.status_id\nLEFT JOIN regionais r ON r.id = t.regional_id\nLEFT JOIN divisoes d ON d.id = t.divisao_id\nLEFT JOIN segmentos seg ON seg.id = t.segmento_id\nLEFT JOIN telegram_task_topics ttt ON ttt.task_id = t.id\nWHERE \n  t.tarefa ILIKE '%' || $3::text || '%'\n  -- Filtro de permissão\n  AND (\n    EXISTS (\n      SELECT 1 FROM tasks_executores te\n      WHERE te.task_id = t.id AND te.executor_id = $1::uuid\n    )\n    OR EXISTS (\n      SELECT 1\n      FROM tasks_equipes tq\n      JOIN equipes_executores ee ON ee.equipe_id = tq.equipe_id\n      WHERE tq.task_id = t.id AND ee.executor_id = $1::uuid\n    )\n    OR ($2::uuid IS NOT NULL AND t.divisao_id = $2::uuid)\n    OR EXISTS (\n      SELECT 1\n      FROM executores_segmentos es\n      WHERE es.executor_id = $1::uuid\n        AND es.segmento_id = t.segmento_id\n    )\n  )\nORDER BY t.data_inicio DESC\nLIMIT 10;",
+        "additionalFields": {
+          "queryParameters": "={{ [$json.executor_id, $json.divisao_id, $json.search_text] }}"
+        }
+      },
+      "id": "query-tasks-by-name",
+      "name": "Query Tasks By Name",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1850, 350],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extrair UUID\nconst originalText = $input.item.json.original_text || '';\nconst match = originalText.match(/^id\\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);\nconst taskId = match ? match[1] : null;\n\n// Validar UUID\nif (!taskId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(taskId)) {\n  throw new Error('UUID inválido');\n}\n\nreturn {\n  json: {\n    ...$input.item.json,\n    task_id: taskId\n  }\n};"
+      },
+      "id": "extract-task-id",
+      "name": "Extract Task ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1650, 450]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH executor_equipes AS (\n  SELECT DISTINCT equipe_id\n  FROM equipes_executores\n  WHERE executor_id = $1::uuid\n)\nSELECT \n  t.id,\n  t.tarefa,\n  s.status,\n  s.codigo as status_codigo,\n  t.prioridade,\n  t.data_inicio,\n  t.data_fim,\n  t.coordenador,\n  r.regional,\n  d.divisao,\n  seg.segmento,\n  COALESCE(\n    (SELECT string_agg(e.nome, ', ')\n     FROM tasks_executores te\n     JOIN executores e ON e.id = te.executor_id\n     WHERE te.task_id = t.id),\n    '-N/A-'\n  ) as executores_nomes,\n  COALESCE(\n    (SELECT string_agg(l.local, ', ')\n     FROM tasks_locais tl\n     JOIN locais l ON l.id = tl.local_id\n     WHERE tl.task_id = t.id),\n    '-N/A-'\n  ) as locais_nomes,\n  ttt.telegram_topic_id\nFROM tasks t\nLEFT JOIN status s ON s.id = t.status_id\nLEFT JOIN regionais r ON r.id = t.regional_id\nLEFT JOIN divisoes d ON d.id = t.divisao_id\nLEFT JOIN segmentos seg ON seg.id = t.segmento_id\nLEFT JOIN telegram_task_topics ttt ON ttt.task_id = t.id\nWHERE \n  t.id = $3::uuid\n  -- Filtro de permissão\n  AND (\n    EXISTS (\n      SELECT 1 FROM tasks_executores te\n      WHERE te.task_id = t.id AND te.executor_id = $1::uuid\n    )\n    OR EXISTS (\n      SELECT 1\n      FROM tasks_equipes tq\n      JOIN equipes_executores ee ON ee.equipe_id = tq.equipe_id\n      WHERE tq.task_id = t.id AND ee.executor_id = $1::uuid\n    )\n    OR ($2::uuid IS NOT NULL AND t.divisao_id = $2::uuid)\n    OR EXISTS (\n      SELECT 1\n      FROM executores_segmentos es\n      WHERE es.executor_id = $1::uuid\n        AND es.segmento_id = t.segmento_id\n    )\n  )\nLIMIT 1;",
+        "additionalFields": {
+          "queryParameters": "={{ [$json.executor_id, $json.divisao_id, $json.task_id] }}"
+        }
+      },
+      "id": "query-task-by-id",
+      "name": "Query Task By ID",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1850, 450],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extrair número da ordem\nconst originalText = $input.item.json.original_text || '';\nconst match = originalText.match(/^ordem\\s+(\\d+)$/i);\nconst ordemNum = match ? match[1] : null;\n\n// Validar: apenas números\nif (!ordemNum || !/^\\d+$/.test(ordemNum)) {\n  throw new Error('Número de ordem inválido');\n}\n\nreturn {\n  json: {\n    ...$input.item.json,\n    ordem_num: ordemNum\n  }\n};"
+      },
+      "id": "extract-ordem",
+      "name": "Extract Ordem",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1650, 550]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH accessible_tasks AS (\n  SELECT DISTINCT t.id as task_id\n  FROM tasks t\n  WHERE \n    -- Filtro de permissão\n    (\n      EXISTS (\n        SELECT 1 FROM tasks_executores te\n        WHERE te.task_id = t.id AND te.executor_id = $1::uuid\n      )\n      OR EXISTS (\n        SELECT 1\n        FROM tasks_equipes tq\n        JOIN equipes_executores ee ON ee.equipe_id = tq.equipe_id\n        WHERE tq.task_id = t.id AND ee.executor_id = $1::uuid\n      )\n      OR ($2::uuid IS NOT NULL AND t.divisao_id = $2::uuid)\n      OR EXISTS (\n        SELECT 1\n        FROM executores_segmentos es\n        WHERE es.executor_id = $1::uuid\n          AND es.segmento_id = t.segmento_id\n      )\n    )\n)\nSELECT \n  o.ordem,\n  o.descricao,\n  o.data_emissao,\n  o.data_vencimento,\n  string_agg(DISTINCT t.id::text, ', ') as task_ids,\n  string_agg(DISTINCT t.tarefa, ' | ') as task_nomes\nFROM ordens o\nJOIN tasks_ordens to_rel ON to_rel.ordem_id = o.id\nJOIN accessible_tasks at ON at.task_id = to_rel.task_id\nJOIN tasks t ON t.id = at.task_id\nWHERE o.ordem = $3::text\nGROUP BY o.ordem, o.descricao, o.data_emissao, o.data_vencimento\nLIMIT 1;",
+        "additionalFields": {
+          "queryParameters": "={{ [$json.executor_id, $json.divisao_id, $json.ordem_num] }}"
+        }
+      },
+      "id": "query-ordem",
+      "name": "Query Ordem",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1850, 550],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extrair número da nota\nconst originalText = $input.item.json.original_text || '';\nconst match = originalText.match(/^nota\\s+(\\d+)$/i);\nconst notaNum = match ? match[1] : null;\n\nif (!notaNum || !/^\\d+$/.test(notaNum)) {\n  throw new Error('Número de nota inválido');\n}\n\nreturn {\n  json: {\n    ...$input.item.json,\n    nota_num: notaNum\n  }\n};"
+      },
+      "id": "extract-nota",
+      "name": "Extract Nota",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1650, 650]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH accessible_tasks AS (\n  SELECT DISTINCT t.id as task_id\n  FROM tasks t\n  WHERE \n    (\n      EXISTS (\n        SELECT 1 FROM tasks_executores te\n        WHERE te.task_id = t.id AND te.executor_id = $1::uuid\n      )\n      OR EXISTS (\n        SELECT 1\n        FROM tasks_equipes tq\n        JOIN equipes_executores ee ON ee.equipe_id = tq.equipe_id\n        WHERE tq.task_id = t.id AND ee.executor_id = $1::uuid\n      )\n      OR ($2::uuid IS NOT NULL AND t.divisao_id = $2::uuid)\n      OR EXISTS (\n        SELECT 1\n        FROM executores_segmentos es\n        WHERE es.executor_id = $1::uuid\n          AND es.segmento_id = t.segmento_id\n      )\n    )\n)\nSELECT \n  ns.nota,\n  ns.descricao,\n  ns.data_emissao,\n  ns.data_vencimento,\n  string_agg(DISTINCT t.id::text, ', ') as task_ids,\n  string_agg(DISTINCT t.tarefa, ' | ') as task_nomes\nFROM nota_sap ns\nJOIN tasks_notas_sap tns_rel ON tns_rel.nota_sap_id = ns.id\nJOIN accessible_tasks at ON at.task_id = tns_rel.task_id\nJOIN tasks t ON t.id = at.task_id\nWHERE ns.nota = $3::text\nGROUP BY ns.nota, ns.descricao, ns.data_emissao, ns.data_vencimento\nLIMIT 1;",
+        "additionalFields": {
+          "queryParameters": "={{ [$json.executor_id, $json.divisao_id, $json.nota_num] }}"
+        }
+      },
+      "id": "query-nota",
+      "name": "Query Nota",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1850, 650],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extrair número do SI\nconst originalText = $input.item.json.original_text || '';\nconst match = originalText.match(/^si\\s+(\\d+)$/i);\nconst siNum = match ? match[1] : null;\n\nif (!siNum || !/^\\d+$/.test(siNum)) {\n  throw new Error('Número de SI inválido');\n}\n\nreturn {\n  json: {\n    ...$input.item.json,\n    si_num: siNum\n  }\n};"
+      },
+      "id": "extract-si",
+      "name": "Extract SI",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1650, 750]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH accessible_tasks AS (\n  SELECT DISTINCT t.id as task_id\n  FROM tasks t\n  WHERE \n    (\n      EXISTS (\n        SELECT 1 FROM tasks_executores te\n        WHERE te.task_id = t.id AND te.executor_id = $1::uuid\n      )\n      OR EXISTS (\n        SELECT 1\n        FROM tasks_equipes tq\n        JOIN equipes_executores ee ON ee.equipe_id = tq.equipe_id\n        WHERE tq.task_id = t.id AND ee.executor_id = $1::uuid\n      )\n      OR ($2::uuid IS NOT NULL AND t.divisao_id = $2::uuid)\n      OR EXISTS (\n        SELECT 1\n        FROM executores_segmentos es\n        WHERE es.executor_id = $1::uuid\n          AND es.segmento_id = t.segmento_id\n      )\n    )\n)\nSELECT \n  si.si,\n  si.descricao,\n  si.data_emissao,\n  string_agg(DISTINCT t.id::text, ', ') as task_ids,\n  string_agg(DISTINCT t.tarefa, ' | ') as task_nomes\nFROM si\nJOIN tasks_si tsi_rel ON tsi_rel.si_id = si.id\nJOIN accessible_tasks at ON at.task_id = tsi_rel.task_id\nJOIN tasks t ON t.id = at.task_id\nWHERE si.si = $3::text\nGROUP BY si.si, si.descricao, si.data_emissao\nLIMIT 1;",
+        "additionalFields": {
+          "queryParameters": "={{ [$json.executor_id, $json.divisao_id, $json.si_num] }}"
+        }
+      },
+      "id": "query-si",
+      "name": "Query SI",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1850, 750],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extrair UUID da tarefa para SAP\nconst originalText = $input.item.json.original_text || '';\nconst match = originalText.match(/^sap\\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);\nconst taskId = match ? match[1] : null;\n\nif (!taskId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(taskId)) {\n  throw new Error('UUID inválido');\n}\n\nreturn {\n  json: {\n    ...$input.item.json,\n    task_id: taskId\n  }\n};"
+      },
+      "id": "extract-sap-task-id",
+      "name": "Extract SAP Task ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1650, 850]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  CASE \n    WHEN EXISTS (\n      SELECT 1 FROM tasks_executores te\n      WHERE te.task_id = $3::uuid AND te.executor_id = $1::uuid\n    ) THEN true\n    WHEN EXISTS (\n      SELECT 1\n      FROM tasks_equipes tq\n      JOIN equipes_executores ee ON ee.equipe_id = tq.equipe_id\n      WHERE tq.task_id = $3::uuid AND ee.executor_id = $1::uuid\n    ) THEN true\n    WHEN EXISTS (\n      SELECT 1 FROM tasks t\n      WHERE t.id = $3::uuid\n        AND (\n          ($2::uuid IS NOT NULL AND t.divisao_id = $2::uuid)\n          OR EXISTS (\n            SELECT 1\n            FROM executores_segmentos es\n            WHERE es.executor_id = $1::uuid\n              AND es.segmento_id = t.segmento_id\n          )\n        )\n    ) THEN true\n    ELSE false\n  END as has_access;",
+        "additionalFields": {
+          "queryParameters": "={{ [$json.executor_id, $json.divisao_id, $json.task_id] }}"
+        }
+      },
+      "id": "check-task-permission-sap",
+      "name": "Check Task Permission (SAP)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1850, 850],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-access",
+              "leftValue": "={{ $json.has_access }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-has-access-sap",
+      "name": "If Has Access (SAP)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2050, 850]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  COALESCE(\n    (SELECT string_agg(DISTINCT o.ordem, ', ')\n     FROM tasks_ordens to_rel\n     JOIN ordens o ON o.id = to_rel.ordem_id\n     WHERE to_rel.task_id = $1::uuid),\n    'Nenhuma'\n  ) as ordens,\n  COALESCE(\n    (SELECT string_agg(DISTINCT ns.nota::text, ', ')\n     FROM tasks_notas_sap tns_rel\n     JOIN nota_sap ns ON ns.id = tns_rel.nota_sap_id\n     WHERE tns_rel.task_id = $1::uuid),\n    'Nenhuma'\n  ) as notas,\n  COALESCE(\n    (SELECT string_agg(DISTINCT si.si, ', ')\n     FROM tasks_si tsi_rel\n     JOIN si ON si.id = tsi_rel.si_id\n     WHERE tsi_rel.task_id = $1::uuid),\n    'Nenhum'\n  ) as sis,\n  ttt.telegram_topic_id\nFROM tasks t\nLEFT JOIN telegram_task_topics ttt ON ttt.task_id = t.id\nWHERE t.id = $1::uuid\nLIMIT 1;",
+        "additionalFields": {
+          "queryParameters": "={{ [$json.task_id] }}"
+        }
+      },
+      "id": "query-sap-links",
+      "name": "Query SAP Links",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [2250, 750],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extrair UUID da tarefa para chat\nconst originalText = $input.item.json.original_text || '';\nconst match = originalText.match(/^chat\\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);\nconst taskId = match ? match[1] : null;\n\nif (!taskId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(taskId)) {\n  throw new Error('UUID inválido');\n}\n\nreturn {\n  json: {\n    ...$input.item.json,\n    task_id: taskId\n  }\n};"
+      },
+      "id": "extract-chat-task-id",
+      "name": "Extract Chat Task ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1650, 950]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  CASE \n    WHEN EXISTS (\n      SELECT 1 FROM tasks_executores te\n      WHERE te.task_id = $3::uuid AND te.executor_id = $1::uuid\n    ) THEN true\n    WHEN EXISTS (\n      SELECT 1\n      FROM tasks_equipes tq\n      JOIN equipes_executores ee ON ee.equipe_id = tq.equipe_id\n      WHERE tq.task_id = $3::uuid AND ee.executor_id = $1::uuid\n    ) THEN true\n    WHEN EXISTS (\n      SELECT 1 FROM tasks t\n      WHERE t.id = $3::uuid\n        AND (\n          ($2::uuid IS NOT NULL AND t.divisao_id = $2::uuid)\n          OR EXISTS (\n            SELECT 1\n            FROM executores_segmentos es\n            WHERE es.executor_id = $1::uuid\n              AND es.segmento_id = t.segmento_id\n          )\n        )\n    ) THEN true\n    ELSE false\n  END as has_access;",
+        "additionalFields": {
+          "queryParameters": "={{ [$json.executor_id, $json.divisao_id, $json.task_id] }}"
+        }
+      },
+      "id": "check-task-permission-chat",
+      "name": "Check Task Permission (Chat)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1850, 950],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-access",
+              "leftValue": "={{ $json.has_access }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-has-access-chat",
+      "name": "If Has Access (Chat)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2050, 950]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  m.id,\n  m.conteudo,\n  m.created_at,\n  m.source,\n  COALESCE(e.nome, u.email, 'Sistema') as autor_nome,\n  gc.tarefa_id,\n  t.tarefa as tarefa_nome\nFROM mensagens m\nJOIN grupos_chat gc ON gc.id = m.grupo_id\nJOIN tasks t ON t.id = gc.tarefa_id\nLEFT JOIN executores e ON e.id = m.usuario_id\nLEFT JOIN auth.users u ON u.id = m.usuario_id\nWHERE \n  gc.tarefa_id = $1::uuid\n  AND m.deleted_at IS NULL\nORDER BY m.created_at DESC\nLIMIT 5;",
+        "additionalFields": {
+          "queryParameters": "={{ [$json.task_id] }}"
+        }
+      },
+      "id": "query-chat-messages",
+      "name": "Query Chat Messages",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [2250, 850],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Formatar resposta para listagens de tarefas\nconst items = $input.all();\n\nif (items.length === 0) {\n  return {\n    json: {\n      response: 'Nenhuma tarefa encontrada.'\n    }\n  };\n}\n\nconst formatDate = (dateStr) => {\n  if (!dateStr) return 'N/A';\n  const date = new Date(dateStr);\n  return date.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });\n};\n\nlet response = `📋 Tarefas encontradas: ${items.length}\\n\\n`;\n\nitems.forEach((item, index) => {\n  const t = item.json;\n  const statusEmoji = {\n    'ANDA': '🟡',\n    'PROG': '🔵',\n    'CONC': '✅',\n    'CANC': '❌',\n    'RPAR': '🔄'\n  }[t.status_codigo] || '⚪';\n  \n  response += `${index + 1}. ${statusEmoji} [${t.status_codigo}] ${t.tarefa}\\n`;\n  response += `   Local: ${t.locais_nomes} | Executor: ${t.executores_nomes}\\n`;\n  response += `   Início: ${formatDate(t.data_inicio)} | Fim: ${formatDate(t.data_fim)}\\n`;\n  response += `   ID: ${t.id}\\n`;\n  if (t.telegram_topic_id) {\n    response += `   TG: topic_id ${t.telegram_topic_id}\\n`;\n  }\n  response += '\\n';\n});\n\nreturn {\n  json: {\n    response: response.trim()\n  }\n};"
+      },
+      "id": "format-tasks-response",
+      "name": "Format Tasks Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2050, 50]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Formatar resposta para ordem/nota/si\nconst item = $input.item.json;\n\nif (!item.ordem && !item.nota && !item.si) {\n  return {\n    json: {\n      response: 'Ordem/Nota/SI não encontrada ou sem vínculo com tarefas acessíveis para você.'\n    }\n  };\n}\n\nlet response = '';\nif (item.ordem) {\n  response = `📄 Ordem: ${item.ordem}\\n`;\n  if (item.descricao) response += `   ${item.descricao}\\n`;\n  if (item.data_emissao) {\n    const date = new Date(item.data_emissao);\n    response += `   Emissão: ${date.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' })}\\n`;\n  }\n  if (item.task_ids) {\n    response += `\\n   Vinculada a tarefas: ${item.task_nomes}\\n`;\n    response += `   IDs: ${item.task_ids}`;\n  }\n} else if (item.nota) {\n  response = `📋 Nota: ${item.nota}\\n`;\n  if (item.descricao) response += `   ${item.descricao}\\n`;\n  if (item.task_ids) {\n    response += `\\n   Vinculada a tarefas: ${item.task_nomes}\\n`;\n    response += `   IDs: ${item.task_ids}`;\n  }\n} else if (item.si) {\n  response = `📑 SI: ${item.si}\\n`;\n  if (item.descricao) response += `   ${item.descricao}\\n`;\n  if (item.task_ids) {\n    response += `\\n   Vinculado a tarefas: ${item.task_nomes}\\n`;\n    response += `   IDs: ${item.task_ids}`;\n  }\n}\n\nreturn {\n  json: {\n    response: response.trim()\n  }\n};"
+      },
+      "id": "format-sap-response",
+      "name": "Format SAP Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2050, 550]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Formatar resposta para links SAP de uma tarefa\nconst item = $input.item.json;\n\nlet response = '🔗 Links SAP:\\n\\n';\n\nif (item.ordens && item.ordens !== 'Nenhuma') {\n  response += `📄 Ordens: ${item.ordens}\\n`;\n} else {\n  response += '📄 Ordens: Nenhuma\\n';\n}\n\nif (item.notas && item.notas !== 'Nenhuma') {\n  response += `📋 Notas: ${item.notas}\\n`;\n} else {\n  response += '📋 Notas: Nenhuma\\n';\n}\n\nif (item.sis && item.sis !== 'Nenhum') {\n  response += `📑 SIs: ${item.sis}\\n`;\n} else {\n  response += '📑 SIs: Nenhum\\n';\n}\n\nif (item.telegram_topic_id) {\n  response += `\\nTG: topic_id ${item.telegram_topic_id}`;\n}\n\nreturn {\n  json: {\n    response: response.trim()\n  }\n};"
+      },
+      "id": "format-sap-links-response",
+      "name": "Format SAP Links Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2450, 750]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Formatar resposta para mensagens de chat\nconst items = $input.all();\n\nif (items.length === 0) {\n  return {\n    json: {\n      response: 'Nenhuma mensagem encontrada.'\n    }\n  };\n}\n\nconst formatDateTime = (dateStr) => {\n  if (!dateStr) return 'N/A';\n  const date = new Date(dateStr);\n  return date.toLocaleString('pt-BR', { \n    timeZone: 'America/Sao_Paulo',\n    day: '2-digit',\n    month: '2-digit',\n    year: 'numeric',\n    hour: '2-digit',\n    minute: '2-digit'\n  });\n};\n\nlet response = `💬 Últimas mensagens (Tarefa: ${items[0]?.json?.tarefa_nome || 'N/A'}):\\n\\n`;\n\n// Reverter ordem (mais antigas primeiro)\nitems.reverse().forEach((item) => {\n  const m = item.json;\n  const sourceEmoji = m.source === 'telegram' ? '📱' : '📲';\n  response += `[${formatDateTime(m.created_at)}] ${m.autor_nome} ${sourceEmoji}:\\n`;\n  response += `  ${m.conteudo}\\n\\n`;\n});\n\nreturn {\n  json: {\n    response: response.trim()\n  }\n};"
+      },
+      "id": "format-chat-response",
+      "name": "Format Chat Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2450, 850]
+    },
+    {
+      "parameters": {
+        "jsCode": "return {\n  json: {\n    response: 'Você não tem acesso a essa tarefa.'\n  }\n};"
+      },
+      "id": "format-no-access",
+      "name": "Format No Access",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2250, 950]
+    },
+    {
+      "parameters": {
+        "jsCode": "return {\n  json: {\n    response: 'Comando não reconhecido. Use: vencendo, hoje, status <codigo>, tarefa <texto>, id <uuid>, ordem <num>, nota <num>, si <num>, sap <uuid>, chat <uuid>'\n  }\n};"
+      },
+      "id": "format-unknown",
+      "name": "Format Unknown",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1650, 1050]
+    },
+    {
+      "parameters": {
+        "jsCode": "return {\n  json: {\n    response: 'Usuário não identificado. Verifique se sua conta Telegram está vinculada.'\n  }\n};"
+      },
+      "id": "format-no-identity",
+      "name": "Format No Identity",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 500]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $('Normalize Message').item.json.chat_id }}",
+        "text": "={{ $json.response }}",
+        "additionalFields": {
+          "reply_to_message_id": "={{ $('Normalize Message').item.json.message_id }}"
+        }
+      },
+      "id": "reply-telegram",
+      "name": "Reply to Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2650, 500],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-credentials",
+          "name": "Telegram Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [[{"node": "Normalize Message", "type": "main", "index": 0}]]
+    },
+    "Normalize Message": {
+      "main": [[{"node": "Lookup Identity", "type": "main", "index": 0}]]
+    },
+    "Lookup Identity": {
+      "main": [[{"node": "Check Identity", "type": "main", "index": 0}]]
+    },
+    "Check Identity": {
+      "main": [
+        [{"node": "Lookup Equipes", "type": "main", "index": 0}],
+        [{"node": "Format No Identity", "type": "main", "index": 0}]
+      ]
+    },
+    "Lookup Equipes": {
+      "main": [[{"node": "Authorize Context", "type": "main", "index": 0}]]
+    },
+    "Authorize Context": {
+      "main": [[{"node": "Router", "type": "main", "index": 0}]]
+    },
+    "Router": {
+      "main": [[{"node": "Switch Intent", "type": "main", "index": 0}]]
+    },
+    "Switch Intent": {
+      "main": [
+        [{"node": "Query Tasks Due", "type": "main", "index": 0}],
+        [{"node": "Query Tasks Today", "type": "main", "index": 0}],
+        [{"node": "Extract Status", "type": "main", "index": 0}],
+        [{"node": "Extract Search Text", "type": "main", "index": 0}],
+        [{"node": "Extract Task ID", "type": "main", "index": 0}],
+        [{"node": "Extract Ordem", "type": "main", "index": 0}],
+        [{"node": "Extract Nota", "type": "main", "index": 0}],
+        [{"node": "Extract SI", "type": "main", "index": 0}],
+        [{"node": "Extract SAP Task ID", "type": "main", "index": 0}],
+        [{"node": "Extract Chat Task ID", "type": "main", "index": 0}],
+        [{"node": "Format Unknown", "type": "main", "index": 0}]
+      ]
+    },
+    "Query Tasks Due": {
+      "main": [[{"node": "Format Tasks Response", "type": "main", "index": 0}]]
+    },
+    "Query Tasks Today": {
+      "main": [[{"node": "Format Tasks Response", "type": "main", "index": 0}]]
+    },
+    "Extract Status": {
+      "main": [[{"node": "Query Tasks By Status", "type": "main", "index": 0}]]
+    },
+    "Query Tasks By Status": {
+      "main": [[{"node": "Format Tasks Response", "type": "main", "index": 0}]]
+    },
+    "Extract Search Text": {
+      "main": [[{"node": "Query Tasks By Name", "type": "main", "index": 0}]]
+    },
+    "Query Tasks By Name": {
+      "main": [[{"node": "Format Tasks Response", "type": "main", "index": 0}]]
+    },
+    "Extract Task ID": {
+      "main": [[{"node": "Query Task By ID", "type": "main", "index": 0}]]
+    },
+    "Query Task By ID": {
+      "main": [[{"node": "Format Tasks Response", "type": "main", "index": 0}]]
+    },
+    "Extract Ordem": {
+      "main": [[{"node": "Query Ordem", "type": "main", "index": 0}]]
+    },
+    "Query Ordem": {
+      "main": [[{"node": "Format SAP Response", "type": "main", "index": 0}]]
+    },
+    "Extract Nota": {
+      "main": [[{"node": "Query Nota", "type": "main", "index": 0}]]
+    },
+    "Query Nota": {
+      "main": [[{"node": "Format SAP Response", "type": "main", "index": 0}]]
+    },
+    "Extract SI": {
+      "main": [[{"node": "Query SI", "type": "main", "index": 0}]]
+    },
+    "Query SI": {
+      "main": [[{"node": "Format SAP Response", "type": "main", "index": 0}]]
+    },
+    "Extract SAP Task ID": {
+      "main": [[{"node": "Check Task Permission (SAP)", "type": "main", "index": 0}]]
+    },
+    "Check Task Permission (SAP)": {
+      "main": [[{"node": "If Has Access (SAP)", "type": "main", "index": 0}]]
+    },
+    "If Has Access (SAP)": {
+      "main": [
+        [{"node": "Query SAP Links", "type": "main", "index": 0}],
+        [{"node": "Format No Access", "type": "main", "index": 0}]
+      ]
+    },
+    "Query SAP Links": {
+      "main": [[{"node": "Format SAP Links Response", "type": "main", "index": 0}]]
+    },
+    "Extract Chat Task ID": {
+      "main": [[{"node": "Check Task Permission (Chat)", "type": "main", "index": 0}]]
+    },
+    "Check Task Permission (Chat)": {
+      "main": [[{"node": "If Has Access (Chat)", "type": "main", "index": 0}]]
+    },
+    "If Has Access (Chat)": {
+      "main": [
+        [{"node": "Query Chat Messages", "type": "main", "index": 0}],
+        [{"node": "Format No Access", "type": "main", "index": 0}]
+      ]
+    },
+    "Query Chat Messages": {
+      "main": [[{"node": "Format Chat Response", "type": "main", "index": 0}]]
+    },
+    "Format Tasks Response": {
+      "main": [[{"node": "Reply to Telegram", "type": "main", "index": 0}]]
+    },
+    "Format SAP Response": {
+      "main": [[{"node": "Reply to Telegram", "type": "main", "index": 0}]]
+    },
+    "Format SAP Links Response": {
+      "main": [[{"node": "Reply to Telegram", "type": "main", "index": 0}]]
+    },
+    "Format Chat Response": {
+      "main": [[{"node": "Reply to Telegram", "type": "main", "index": 0}]]
+    },
+    "Format No Access": {
+      "main": [[{"node": "Reply to Telegram", "type": "main", "index": 0}]]
+    },
+    "Format No Identity": {
+      "main": [[{"node": "Reply to Telegram", "type": "main", "index": 0}]]
+    },
+    "Format Unknown": {
+      "main": [[{"node": "Reply to Telegram", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2026-01-25T12:00:00.000Z",
+  "versionId": "1"
+}

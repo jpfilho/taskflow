@@ -119,24 +119,31 @@ class _GanttChartState extends State<GanttChart> {
   }
 
   bool _taskHasExecutionOnDayForExecutor(Task task, String executorId, DateTime dayStart, DateTime dayEnd) {
-    // Priorizar executorPeriods
-    bool hasIndividual = false;
+    // IMPORTANTE: Se houver período específico para o executor, usar APENAS ele
+    // Não considerar períodos gerais da tarefa (ganttSegments)
+    bool hasSpecificPeriods = false;
     for (final ep in task.executorPeriods) {
       if (ep.executorId != executorId) continue;
-      hasIndividual = true;
-      for (final period in ep.periods) {
-        if (period.tipoPeriodo.toUpperCase() != 'EXECUCAO') continue;
-        final ps = period.dataInicio;
-        final pe = period.dataFim;
-        if (ps.isBefore(dayEnd) && pe.isAfter(dayStart)) {
-          return true;
+      if (ep.periods.isNotEmpty) {
+        hasSpecificPeriods = true;
+        // Verificar se algum período específico sobrepõe o dia
+        for (final period in ep.periods) {
+          if (period.tipoPeriodo.toUpperCase() != 'EXECUCAO') continue;
+          final ps = period.dataInicio;
+          final pe = period.dataFim;
+          if (ps.isBefore(dayEnd) && pe.isAfter(dayStart)) {
+            return true; // Tem execução no período específico
+          }
         }
       }
     }
 
-    if (hasIndividual) return false; // Já avaliou períodos específicos
+    // Se houver períodos específicos para este executor, não considerar segmentos gerais
+    if (hasSpecificPeriods) {
+      return false; // Já verificou períodos específicos, não sobrepõe o dia
+    }
 
-    // Usar segmentos gerais
+    // Só usar segmentos gerais se NÃO houver períodos específicos para este executor
     for (final segment in task.ganttSegments) {
       if (segment.tipoPeriodo.toUpperCase() != 'EXECUCAO') continue;
       final ss = segment.dataInicio;
@@ -256,17 +263,29 @@ class _GanttChartState extends State<GanttChart> {
   }
 
   bool _taskHasExecutionForExecutorOnDay(Task task, String executorId, DateTime dayStart, DateTime dayEnd) {
-    // executorPeriods (específicos do executor)
+    // IMPORTANTE: Se houver período específico para o executor, usar APENAS ele
+    // Não considerar períodos gerais da tarefa (ganttSegments)
+    bool hasSpecificPeriods = false;
     for (final ep in task.executorPeriods) {
       if (ep.executorId != executorId) continue;
-      for (final p in ep.periods) {
-        if (p.tipoPeriodo.toUpperCase() != 'EXECUCAO') continue;
-        if (p.dataInicio.isBefore(dayEnd) && p.dataFim.isAfter(dayStart)) {
-          return true;
+      if (ep.periods.isNotEmpty) {
+        hasSpecificPeriods = true;
+        // Verificar se algum período específico sobrepõe o dia
+        for (final p in ep.periods) {
+          if (p.tipoPeriodo.toUpperCase() != 'EXECUCAO') continue;
+          if (p.dataInicio.isBefore(dayEnd) && p.dataFim.isAfter(dayStart)) {
+            return true; // Tem execução no período específico
+          }
         }
       }
     }
-    // Sem período específico: usar segmentos gerais
+    
+    // Se houver períodos específicos para este executor, não considerar segmentos gerais
+    if (hasSpecificPeriods) {
+      return false; // Já verificou períodos específicos, não sobrepõe o dia
+    }
+    
+    // Só usar segmentos gerais se NÃO houver períodos específicos para este executor
     for (final seg in task.ganttSegments) {
       if (seg.tipoPeriodo.toUpperCase() != 'EXECUCAO') continue;
       if (seg.dataInicio.isBefore(dayEnd) && seg.dataFim.isAfter(dayStart)) {

@@ -23,9 +23,10 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
   List<Task> _displayedTasks = [];
   String _searchQuery = '';
   String _viewMode = 'cards'; // 'cards', 'list', 'table'
-  String? _filterStatus;
-  String? _filterRegional;
-  String? _filterTipo;
+  Set<String> _filterStatus = {};
+  Set<String> _filterLocal = {};
+  Set<String> _filterTipo = {};
+  Task? _selectedTask; // Tarefa selecionada
   final int _itemsPerPage = 50;
   int _currentPage = 0;
   final ScrollController _scrollController = ScrollController();
@@ -36,6 +37,14 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
     _filteredTasks = widget.tasks;
     _loadMoreItems();
     _scrollController.addListener(_onScroll);
+    // No desktop, tabela é o padrão
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && Responsive.isDesktop(context)) {
+        setState(() {
+          _viewMode = 'table';
+        });
+      }
+    });
   }
 
   @override
@@ -80,24 +89,23 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
           if (!matchesSearch) return false;
         }
 
-        // Filtro de status
-        if (_filterStatus != null && task.status != _filterStatus) {
+        // Filtro de status (multiseleção)
+        if (_filterStatus.isNotEmpty && !_filterStatus.contains(task.status)) {
           return false;
         }
 
-        // Filtro de regional
-        if (_filterRegional != null && task.regional != _filterRegional) {
+        // Filtro de local (multiseleção)
+        if (_filterLocal.isNotEmpty && !task.locais.any((l) => _filterLocal.contains(l))) {
           return false;
         }
 
-        // Filtro de tipo
-        if (_filterTipo != null && task.tipo != _filterTipo) {
+        // Filtro de tipo (multiseleção)
+        if (_filterTipo.isNotEmpty && !_filterTipo.contains(task.tipo)) {
           return false;
         }
 
         return true;
       }).toList();
-      // Resetar paginação quando filtrar
       _currentPage = 0;
       _displayedTasks = [];
       _loadMoreItems();
@@ -108,8 +116,12 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
     return widget.tasks.map((t) => t.status).toSet().toList()..sort();
   }
 
-  List<String> _getUniqueRegionais() {
-    return widget.tasks.map((t) => t.regional).toSet().toList()..sort();
+  List<String> _getUniqueLocais() {
+    final allLocais = <String>{};
+    for (final task in widget.tasks) {
+      allLocais.addAll(task.locais);
+    }
+    return allLocais.toList()..sort();
   }
 
   List<String> _getUniqueTipos() {
@@ -135,53 +147,204 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
     return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
   }
 
+  Widget _buildMultiSelect({
+    required String label,
+    required Set<String> selected,
+    required List<String> items,
+  }) {
+    final displayText = selected.isEmpty ? 'Todos' : selected.length == 1 ? selected.first : '${selected.length} selecionado(s)';
+    return InkWell(
+      onTap: () async {
+        final result = await _showMultiSelectDialog(label, items, selected);
+        if (result != null) {
+          setState(() {
+            selected
+              ..clear()
+              ..addAll(result);
+            _applyFilters();
+          });
+        }
+      },
+      borderRadius: BorderRadius.circular(8),
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: label,
+          labelStyle: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+            color: Colors.grey[700],
+            letterSpacing: 0.5,
+          ),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide(color: Colors.grey[300]!),
+          ),
+          filled: true,
+          fillColor: Colors.white,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          mainAxisSize: MainAxisSize.max,
+          children: [
+            Expanded(
+              child: Text(
+                displayText,
+                style: const TextStyle(fontSize: 13),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
+              ),
+            ),
+            const Icon(Icons.arrow_drop_down),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<Set<String>?> _showMultiSelectDialog(
+    String title,
+    List<String> options,
+    Set<String> current,
+  ) async {
+    final temp = {...current};
+    String searchQuery = '';
+    return showDialog<Set<String>>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setStateDialog) {
+            final filtered = searchQuery.isEmpty
+                ? options
+                : options.where((o) => o.toLowerCase().contains(searchQuery.toLowerCase())).toList();
+            return AlertDialog(
+              title: Text('Selecionar $title'),
+              content: SizedBox(
+                width: 320,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      decoration: const InputDecoration(
+                        hintText: 'Pesquisar...',
+                        prefixIcon: Icon(Icons.search),
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      onChanged: (v) => setStateDialog(() => searchQuery = v),
+                    ),
+                    const SizedBox(height: 12),
+                    Flexible(
+                      child: ListView(
+                        shrinkWrap: true,
+                        children: filtered
+                            .map(
+                              (opt) => CheckboxListTile(
+                                dense: true,
+                                value: temp.contains(opt),
+                                title: Text(opt, style: const TextStyle(fontSize: 13)),
+                                onChanged: (checked) {
+                                  setStateDialog(() {
+                                    if (checked == true) {
+                                      temp.add(opt);
+                                    } else {
+                                      temp.remove(opt);
+                                    }
+                                  });
+                                },
+                              ),
+                            )
+                            .toList(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Cancelar'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(temp),
+                  child: const Text('Aplicar'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isMobile = Responsive.isMobile(context);
+    final isDesktop = Responsive.isDesktop(context);
 
     return Dialog(
       insetPadding: const EdgeInsets.all(16),
       child: Container(
-        width: isMobile ? double.infinity : 900,
-        height: isMobile ? double.infinity : 700,
+        width: isMobile 
+            ? double.infinity 
+            : isDesktop 
+                ? 1200  // Largura reduzida para ficar apenas da largura da tabela
+                : 900,  // Tablet: tamanho médio
+        height: isMobile 
+            ? double.infinity 
+            : isDesktop 
+                ? 850   // Desktop: mais alto
+                : 700,  // Tablet: altura padrão
         child: Column(
           children: [
             // Header
             Container(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                color: Colors.blue[50],
+                color: Colors.white,
                 border: Border(
-                  bottom: BorderSide(color: Colors.grey[300]!),
+                  bottom: BorderSide(color: Colors.grey[300]!, width: 1),
                 ),
               ),
               child: Row(
                 children: [
+                  Icon(
+                    Icons.link,
+                    color: Colors.blue[700],
+                    size: 28,
+                  ),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          widget.title,
-                          style: const TextStyle(
-                            fontSize: 20,
+                          widget.title.toUpperCase(),
+                          style: TextStyle(
+                            fontSize: 18,
                             fontWeight: FontWeight.bold,
+                            color: Colors.grey[900],
+                            letterSpacing: 0.5,
                           ),
                         ),
-                        if (widget.notaSapNumero != null)
+                        if (widget.notaSapNumero != null) ...[
+                          const SizedBox(height: 4),
                           Text(
                             'Nota SAP: ${widget.notaSapNumero}',
                             style: TextStyle(
-                              fontSize: 14,
+                              fontSize: 13,
                               color: Colors.grey[600],
+                              fontWeight: FontWeight.w500,
                             ),
                           ),
+                        ],
                       ],
                     ),
                   ),
                   IconButton(
-                    icon: const Icon(Icons.close),
+                    icon: const Icon(Icons.close, size: 24),
                     onPressed: () => Navigator.of(context).pop(),
+                    color: Colors.grey[700],
                   ),
                 ],
               ),
@@ -193,7 +356,7 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
               decoration: BoxDecoration(
                 color: Colors.grey[50],
                 border: Border(
-                  bottom: BorderSide(color: Colors.grey[300]!),
+                  bottom: BorderSide(color: Colors.grey[300]!, width: 1),
                 ),
               ),
               child: Column(
@@ -201,7 +364,7 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
                   // Campo de pesquisa
                   TextField(
                     decoration: InputDecoration(
-                      hintText: 'Pesquisar tarefa, ordem, regional, tipo, executor...',
+                      hintText: 'Pesquisar tarefa, ordem, local, tipo, executor...',
                       prefixIcon: const Icon(Icons.search),
                       suffixIcon: _searchQuery.isNotEmpty
                           ? IconButton(
@@ -216,9 +379,14 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
                           : null,
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(color: Colors.grey[300]!),
                       ),
                       filled: true,
                       fillColor: Colors.white,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
                     ),
                     onChanged: (value) {
                       setState(() {
@@ -231,112 +399,16 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
                   // Filtros e visualização
                   Row(
                     children: [
-                      // Filtro Status
                       Expanded(
-                        child: DropdownButtonFormField<String>(
-                          value: _filterStatus,
-                          decoration: InputDecoration(
-                            labelText: 'Status',
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            filled: true,
-                            fillColor: Colors.white,
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 8,
-                            ),
-                          ),
-                          items: [
-                            const DropdownMenuItem<String>(
-                              value: null,
-                              child: Text('Todos'),
-                            ),
-                            ..._getUniqueStatuses().map((status) =>
-                                DropdownMenuItem<String>(
-                                  value: status,
-                                  child: Text(status),
-                                )),
-                          ],
-                          onChanged: (value) {
-                            setState(() {
-                              _filterStatus = value;
-                              _applyFilters();
-                            });
-                          },
-                        ),
+                        child: _buildMultiSelect(label: 'STATUS', selected: _filterStatus, items: _getUniqueStatuses()),
                       ),
                       const SizedBox(width: 8),
-                      // Filtro Regional
                       Expanded(
-                        child: DropdownButtonFormField<String>(
-                          value: _filterRegional,
-                          decoration: InputDecoration(
-                            labelText: 'Regional',
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            filled: true,
-                            fillColor: Colors.white,
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 8,
-                            ),
-                          ),
-                          items: [
-                            const DropdownMenuItem<String>(
-                              value: null,
-                              child: Text('Todas'),
-                            ),
-                            ..._getUniqueRegionais().map((regional) =>
-                                DropdownMenuItem<String>(
-                                  value: regional,
-                                  child: Text(regional),
-                                )),
-                          ],
-                          onChanged: (value) {
-                            setState(() {
-                              _filterRegional = value;
-                              _applyFilters();
-                            });
-                          },
-                        ),
+                        child: _buildMultiSelect(label: 'LOCAL', selected: _filterLocal, items: _getUniqueLocais()),
                       ),
                       const SizedBox(width: 8),
-                      // Filtro Tipo
                       Expanded(
-                        child: DropdownButtonFormField<String>(
-                          value: _filterTipo,
-                          decoration: InputDecoration(
-                            labelText: 'Tipo',
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            filled: true,
-                            fillColor: Colors.white,
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 8,
-                            ),
-                          ),
-                          items: [
-                            const DropdownMenuItem<String>(
-                              value: null,
-                              child: Text('Todos'),
-                            ),
-                            ..._getUniqueTipos().map((tipo) =>
-                                DropdownMenuItem<String>(
-                                  value: tipo,
-                                  child: Text(tipo),
-                                )),
-                          ],
-                          onChanged: (value) {
-                            setState(() {
-                              _filterTipo = value;
-                              _applyFilters();
-                            });
-                          },
-                        ),
+                        child: _buildMultiSelect(label: 'TIPO', selected: _filterTipo, items: _getUniqueTipos()),
                       ),
                       const SizedBox(width: 8),
                       // Botões de visualização
@@ -349,50 +421,52 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            _buildViewButton(Icons.view_module, 'cards'),
-                            _buildViewButton(Icons.view_list, 'list'),
                             _buildViewButton(Icons.table_chart, 'table'),
+                            _buildViewButton(Icons.view_module, 'cards'),
                           ],
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  // Contador
+                  const SizedBox(height: 12),
+                  // Status de sincronização e contador
                   Row(
                     children: [
-                      Text(
-                        '${_displayedTasks.length}${_displayedTasks.length < _filteredTasks.length ? '+' : ''} de ${_filteredTasks.length} tarefas (${widget.tasks.length} total)',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey[600],
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      const Spacer(),
-                      if (_filterStatus != null ||
-                          _filterRegional != null ||
-                          _filterTipo != null ||
-                          _searchQuery.isNotEmpty)
-                        TextButton.icon(
-                          onPressed: () {
-                            setState(() {
-                              _searchQuery = '';
-                              _filterStatus = null;
-                              _filterRegional = null;
-                              _filterTipo = null;
-                              _applyFilters();
-                            });
-                          },
-                          icon: const Icon(Icons.clear, size: 16),
-                          label: const Text('Limpar filtros'),
-                          style: TextButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
+                      // Status de sincronização
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 8,
+                            height: 8,
+                            decoration: BoxDecoration(
+                              color: Colors.green,
+                              shape: BoxShape.circle,
                             ),
                           ),
+                          const SizedBox(width: 6),
+                          Text(
+                            'SINCRONIZADO',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.grey[700],
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const Spacer(),
+                      // Contador
+                      Text(
+                        'EXIBINDO ${_displayedTasks.length}${_displayedTasks.length < _filteredTasks.length ? '+' : ''} DE ${_filteredTasks.length} TAREFAS ENCONTRADAS',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey[700],
+                          letterSpacing: 0.3,
                         ),
+                      ),
                     ],
                   ),
                 ],
@@ -420,18 +494,18 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
                             ),
                           ),
                           if (_searchQuery.isNotEmpty ||
-                              _filterStatus != null ||
-                              _filterRegional != null ||
-                              _filterTipo != null)
+                              _filterStatus.isNotEmpty ||
+                              _filterLocal.isNotEmpty ||
+                              _filterTipo.isNotEmpty)
                             Padding(
                               padding: const EdgeInsets.only(top: 8),
                               child: TextButton(
                                 onPressed: () {
                                   setState(() {
                                     _searchQuery = '';
-                                    _filterStatus = null;
-                                    _filterRegional = null;
-                                    _filterTipo = null;
+                                    _filterStatus = {};
+                                    _filterLocal = {};
+                                    _filterTipo = {};
                                     _applyFilters();
                                   });
                                 },
@@ -442,6 +516,61 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
                       ),
                     )
                   : _buildTasksView(),
+            ),
+
+            // Footer com botões de ação
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                border: Border(
+                  top: BorderSide(color: Colors.grey[300]!, width: 1),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Text(
+                    '${_selectedTask != null ? '1' : '0'} tarefa${_selectedTask != null ? '' : 's'} selecionada${_selectedTask != null ? '' : 's'} para vinculação',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.grey[700],
+                    ),
+                  ),
+                  const Spacer(),
+                  OutlinedButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                      side: BorderSide(color: Colors.grey[400]!),
+                    ),
+                    child: const Text(
+                      'Cancelar',
+                      style: TextStyle(fontSize: 14),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  ElevatedButton(
+                    onPressed: _selectedTask != null
+                        ? () {
+                            Navigator.of(context).pop(_selectedTask);
+                          }
+                        : null,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue[700],
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                    ),
+                    child: const Text(
+                      'Vincular Selecionados',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -490,7 +619,16 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
       padding: const EdgeInsets.all(16),
       itemCount: _displayedTasks.length + (_displayedTasks.length < _filteredTasks.length ? 1 : 0),
       itemBuilder: (context, index) {
-        final task = _filteredTasks[index];
+        if (index >= _displayedTasks.length) {
+          // Mostrar indicador de carregamento no final
+          return const Center(
+            child: Padding(
+              padding: EdgeInsets.all(16.0),
+              child: CircularProgressIndicator(),
+            ),
+          );
+        }
+        final task = _displayedTasks[index];
         return Card(
           margin: const EdgeInsets.only(bottom: 12),
           elevation: 2,
@@ -681,27 +819,57 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
 
   Widget _buildTableView() {
     return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: SingleChildScrollView(
-        controller: _scrollController,
-        child: DataTable(
+      controller: _scrollController,
+      child: DataTable(
           headingRowColor: MaterialStateProperty.all(Colors.blue[50]),
-          columns: const [
-            DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Local', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Tarefa', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Regional', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Divisão', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Tipo', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Ordem', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Data Início', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Data Fim', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Executores', style: TextStyle(fontWeight: FontWeight.bold))),
+          columns: [
+            const DataColumn(
+              label: SizedBox.shrink(),
+            ),
+            const DataColumn(
+              label: Text('STATUS', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+            ),
+            const DataColumn(
+              label: Text('LOCAL', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+            ),
+            const DataColumn(
+              label: Text('TAREFA', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+            ),
+            const DataColumn(
+              label: Text('REGIONAL', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+            ),
+            const DataColumn(
+              label: Text('DIVISÃO', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+            ),
+            const DataColumn(
+              label: Text('TIPO', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+            ),
+            const DataColumn(
+              label: Text('INÍCIO', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+            ),
+            const DataColumn(
+              label: Text('FIM', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+            ),
+            const DataColumn(
+              label: Text('EXECUTORES', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+            ),
           ],
           rows: [
             ..._displayedTasks.map((task) {
             return DataRow(
+              selected: _selectedTask == task,
               cells: [
+                DataCell(
+                  Radio<Task>(
+                    value: task,
+                    groupValue: _selectedTask,
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedTask = value;
+                      });
+                    },
+                  ),
+                ),
                 DataCell(
                   Container(
                     padding: const EdgeInsets.symmetric(
@@ -716,7 +884,7 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
                       task.status,
                       style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 12,
+                        fontSize: 11,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -724,9 +892,10 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
                 ),
                 DataCell(
                   SizedBox(
-                    width: 150,
+                    width: 120,
                     child: Text(
                       task.locais.isNotEmpty ? task.locais.join(', ') : '-',
+                      style: const TextStyle(fontSize: 12),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -734,20 +903,45 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
                 ),
                 DataCell(
                   SizedBox(
-                    width: 200,
+                    width: 250,
                     child: Text(
                       task.tarefa,
+                      style: const TextStyle(fontSize: 12),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
                 ),
-                DataCell(Text(task.regional)),
-                DataCell(Text(task.divisao)),
-                DataCell(Text(task.tipo)),
-                DataCell(Text(task.ordem ?? '-')),
-                DataCell(Text(_formatDate(task.dataInicio))),
-                DataCell(Text(_formatDate(task.dataFim))),
+                DataCell(
+                  Text(
+                    task.regional,
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+                DataCell(
+                  Text(
+                    task.divisao,
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+                DataCell(
+                  Text(
+                    task.tipo,
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+                DataCell(
+                  Text(
+                    _formatDate(task.dataInicio),
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+                DataCell(
+                  Text(
+                    _formatDate(task.dataFim),
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
                 DataCell(
                   SizedBox(
                     width: 150,
@@ -759,7 +953,6 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
                   ),
                 ),
               ],
-              onSelectChanged: (_) => Navigator.of(context).pop(task),
             );
             }),
             if (_displayedTasks.length < _filteredTasks.length)
@@ -775,8 +968,7 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
               ),
           ],
         ),
-      ),
-    );
+      );
   }
 
   Widget _buildInfoChip(IconData icon, String label) {

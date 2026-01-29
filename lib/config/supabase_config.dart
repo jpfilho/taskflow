@@ -1,11 +1,9 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class SupabaseConfig {
-  // URL do seu projeto Supabase
-  //static const String supabaseUrl = 'https://srv750497.hstgr.cloud';
-  //static const String supabaseUrl = 'https://srv750497.hstgr.cloud:8000';
-  static const String supabaseUrl = 'http://212.85.0.249:8000/';
-
+  // URL do seu projeto Supabase (HTTP na porta 8000)
+  // NOTA: HTTPS está dando "Unauthorized" - proxy Nginx precisa ser configurado
+  static const String supabaseUrl = 'http://212.85.0.249:8000';
   
   // Chave anon do Supabase
   static const String supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzY1ODE3OTgzLCJleHAiOjIwODExNzc5ODN9.YQByqDrpmw0en7VeEcjDfvvTx8Ind_q8gD6-bzEY4Yc';

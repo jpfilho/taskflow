@@ -12,13 +12,18 @@ import '../models/at.dart';
 import '../models/si.dart';
 import 'anexos_section.dart';
 import 'pex_apr_crc_view.dart';
+import 'task_form_dialog.dart';
+import '../services/task_service.dart';
+import '../services/executor_service.dart';
 
 class TaskViewDialog extends StatefulWidget {
   final Task task;
+  final Function(Task)? onEdit;
 
   const TaskViewDialog({
     super.key,
     required this.task,
+    this.onEdit,
   });
 
   @override
@@ -31,17 +36,124 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
   final ATService _atService = ATService();
   final SIService _siService = SIService();
   final AuthServiceSimples _authService = AuthServiceSimples();
+  final TaskService _taskService = TaskService();
+  final ExecutorService _executorService = ExecutorService();
   
   List<NotaSAP> _notasSAP = [];
   List<Ordem> _ordens = [];
   List<AT> _ats = [];
   List<SI> _sis = [];
   bool _loadingSAP = true;
+  bool _canEdit = false;
 
   @override
   void initState() {
     super.initState();
     _loadSAPData();
+    _checkEditPermission();
+  }
+
+  Future<void> _checkEditPermission() async {
+    try {
+      final usuario = _authService.currentUser;
+      if (usuario == null) {
+        setState(() {
+          _canEdit = false;
+        });
+        return;
+      }
+
+      if (usuario.isRoot) {
+        setState(() {
+          _canEdit = true;
+        });
+        return;
+      }
+
+      final email = usuario.email;
+      if (email.isEmpty) {
+        setState(() {
+          _canEdit = false;
+        });
+        return;
+      }
+
+      final permitido = await _executorService.isCoordenadorOuGerentePorLogin(email);
+      setState(() {
+        _canEdit = permitido;
+      });
+    } catch (e) {
+      print('⚠️ Erro ao verificar permissão de edição: $e');
+      setState(() {
+        _canEdit = false;
+      });
+    }
+  }
+
+  Future<void> _editarTarefa() async {
+    if (!_canEdit) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Você não tem permissão para editar tarefas'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
+    try {
+      // Se há um callback onEdit, usar ele (permite que o widget pai controle a abertura)
+      if (widget.onEdit != null) {
+        Navigator.of(context).pop();
+        widget.onEdit!(widget.task);
+        return;
+      }
+
+      // Buscar a tarefa atualizada primeiro
+      final taskAtualizada = await _taskService.getTaskById(widget.task.id);
+      
+      if (taskAtualizada == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Tarefa não encontrada'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+
+      // Fechar o diálogo de visualização primeiro
+      Navigator.of(context).pop();
+      
+      // Aguardar um frame para garantir que o diálogo foi fechado
+      await Future.delayed(const Duration(milliseconds: 200));
+      
+      // Buscar o contexto raiz para abrir o novo diálogo
+      // Usar o contexto do widget pai (que chamou este diálogo)
+      final rootContext = Navigator.of(context, rootNavigator: true).context;
+      await showDialog(
+        context: rootContext,
+        builder: (context) => TaskFormDialog(
+          task: taskAtualizada,
+          startDate: taskAtualizada.dataInicio,
+          endDate: taskAtualizada.dataFim,
+        ),
+      );
+    } catch (e) {
+      print('⚠️ Erro ao abrir edição de tarefa: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erro ao abrir edição: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _loadSAPData() async {
@@ -250,6 +362,22 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
+                  if (_canEdit) ...[
+                    ElevatedButton.icon(
+                      onPressed: _editarTarefa,
+                      icon: const Icon(Icons.edit, size: 18),
+                      label: const Text('Editar Tarefa'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blue,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                  ],
                   ElevatedButton.icon(
                     onPressed: () => Navigator.of(context).pop(),
                     icon: const Icon(Icons.close, size: 18),
@@ -544,6 +672,25 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
     );
   }
 
+  Future<void> _copiarParaAreaTransferencia(String texto, String mensagemSucesso) async {
+    try {
+      await Clipboard.setData(ClipboardData(text: texto));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(mensagemSucesso), duration: const Duration(seconds: 1)),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Não foi possível copiar: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
   Widget _buildNotaSAPCard(NotaSAP nota, int index) {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -580,15 +727,7 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: nota.nota));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Nota copiada!'),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
-              },
+              onPressed: () => _copiarParaAreaTransferencia(nota.nota, 'Nota copiada!'),
               tooltip: 'Copiar nota',
             ),
           ],
@@ -738,15 +877,7 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: ordem.ordem));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Ordem copiada!'),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
-              },
+              onPressed: () => _copiarParaAreaTransferencia(ordem.ordem, 'Ordem copiada!'),
               tooltip: 'Copiar ordem',
             ),
           ],
@@ -896,15 +1027,7 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: at.autorzTrab));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('AT copiada!'),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
-              },
+              onPressed: () => _copiarParaAreaTransferencia(at.autorzTrab, 'AT copiada!'),
               tooltip: 'Copiar AT',
             ),
           ],
@@ -1053,15 +1176,7 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: si.solicitacao));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('SI copiada!'),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
-              },
+              onPressed: () => _copiarParaAreaTransferencia(si.solicitacao, 'SI copiada!'),
               tooltip: 'Copiar SI',
             ),
           ],

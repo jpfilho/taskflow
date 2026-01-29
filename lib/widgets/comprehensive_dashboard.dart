@@ -70,11 +70,21 @@ class _ComprehensiveDashboardState extends State<ComprehensiveDashboard> {
   }
 
   Future<Map<String, dynamic>> _loadTaskStats() async {
-    List<Task> tasks;
-    if (widget.filteredTasks != null) {
-      tasks = widget.filteredTasks!;
-    } else {
-      tasks = await widget.taskService.getAllTasks();
+    // IMPORTANTE: Sempre usar filteredTasks quando disponível para evitar crash
+    // Se não houver filteredTasks, usar lista vazia em vez de buscar todas as tarefas
+    final tasks = widget.filteredTasks ?? [];
+    
+    if (tasks.isEmpty && widget.filteredTasks == null) {
+      // Retornar estatísticas vazias se não houver tarefas filtradas
+      return {
+        'total': 0,
+        'emAndamento': 0,
+        'concluidas': 0,
+        'programadas': 0,
+        'vencidas': 0,
+        'porStatus': <String, int>{},
+        'porTipo': <String, int>{},
+      };
     }
 
     final now = DateTime.now();

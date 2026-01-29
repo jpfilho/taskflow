@@ -15,6 +15,7 @@ import '../models/task.dart';
 import '../models/status.dart';
 import '../services/status_service.dart';
 import 'task_view_dialog.dart';
+import 'multi_select_filter_dialog.dart';
 
 class SIView extends StatefulWidget {
   const SIView({super.key});
@@ -32,9 +33,9 @@ class _SIViewState extends State<SIView> {
   Map<String, List<Map<String, dynamic>>> _sisProgramadasInfo = {}; // Lista de vinculações por SI
   Map<String, Status> _statusMap = {}; // Mapa de status (codigo -> Status)
   bool _isLoading = false;
-  String? _filtroStatus;
-  String? _filtroLocal;
-  String? _filtroStatusUsuario;
+  Set<String> _filtroStatus = {};
+  Set<String> _filtroLocal = {};
+  Set<String> _filtroStatusUsuario = {};
   DateTime? _dataInicio;
   DateTime? _dataFim;
   int _totalSIs = 0;
@@ -175,9 +176,9 @@ class _SIViewState extends State<SIView> {
 
     try {
       final sis = await _service.getAllSIs(
-        filtroStatus: _filtroStatus,
-        filtroLocal: _filtroLocal,
-        filtroStatusUsuario: _filtroStatusUsuario,
+        filtroStatus: _filtroStatus.isEmpty ? null : _filtroStatus.toList(),
+        filtroLocal: _filtroLocal.isEmpty ? null : _filtroLocal.toList(),
+        filtroStatusUsuario: _filtroStatusUsuario.isEmpty ? null : _filtroStatusUsuario.toList(),
         dataInicio: _dataInicio,
         dataFim: _dataFim,
         limit: _itensPorPagina,
@@ -185,9 +186,9 @@ class _SIViewState extends State<SIView> {
       );
 
       final total = await _service.contarSIs(
-        filtroStatus: _filtroStatus,
-        filtroLocal: _filtroLocal,
-        filtroStatusUsuario: _filtroStatusUsuario,
+        filtroStatus: _filtroStatus.isEmpty ? null : _filtroStatus.toList(),
+        filtroLocal: _filtroLocal.isEmpty ? null : _filtroLocal.toList(),
+        filtroStatusUsuario: _filtroStatusUsuario.isEmpty ? null : _filtroStatusUsuario.toList(),
         dataInicio: _dataInicio,
         dataFim: _dataFim,
       );
@@ -413,9 +414,9 @@ class _SIViewState extends State<SIView> {
     try {
       // Carregar todas as SIs sem paginação para calcular estatísticas, usando os mesmos filtros
       final todasSIs = await _service.getAllSIs(
-        filtroStatus: _filtroStatus,
-        filtroLocal: _filtroLocal,
-        filtroStatusUsuario: _filtroStatusUsuario,
+        filtroStatus: _filtroStatus.isEmpty ? null : _filtroStatus.toList(),
+        filtroLocal: _filtroLocal.isEmpty ? null : _filtroLocal.toList(),
+        filtroStatusUsuario: _filtroStatusUsuario.isEmpty ? null : _filtroStatusUsuario.toList(),
         dataInicio: _dataInicio,
         dataFim: _dataFim,
         limit: null, // Sem limite
@@ -535,9 +536,9 @@ class _SIViewState extends State<SIView> {
                 ElevatedButton.icon(
                   onPressed: () {
                     setState(() {
-                      _filtroStatus = null;
-                      _filtroLocal = null;
-                      _filtroStatusUsuario = null;
+                      _filtroStatus = {};
+                      _filtroLocal = {};
+                      _filtroStatusUsuario = {};
                       _dataInicio = null;
                       _dataFim = null;
                       _paginaAtual = 0;
@@ -573,7 +574,7 @@ class _SIViewState extends State<SIView> {
                         const Icon(Icons.filter_list, size: 20),
                         const SizedBox(width: 8),
                         const Text('Filtros', style: TextStyle(fontSize: 16)),
-                        if (_filtroStatus != null || _filtroLocal != null || _filtroStatusUsuario != null || _dataInicio != null || _dataFim != null)
+                        if (_filtroStatus.isNotEmpty || _filtroLocal.isNotEmpty || _filtroStatusUsuario.isNotEmpty || _dataInicio != null || _dataFim != null)
                           Container(
                             margin: const EdgeInsets.only(left: 8),
                             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -583,9 +584,9 @@ class _SIViewState extends State<SIView> {
                             ),
                             child: Text(
                               [
-                                if (_filtroStatus != null) '1',
-                                if (_filtroLocal != null) '1',
-                                if (_filtroStatusUsuario != null) '1',
+                                if (_filtroStatus.isNotEmpty) '1',
+                                if (_filtroLocal.isNotEmpty) '1',
+                                if (_filtroStatusUsuario.isNotEmpty) '1',
                                 if (_dataInicio != null) '1',
                                 if (_dataFim != null) '1',
                               ].length.toString(),
@@ -597,13 +598,13 @@ class _SIViewState extends State<SIView> {
                     initiallyExpanded: false,
                     childrenPadding: const EdgeInsets.all(8),
                     children: [
-                      _buildFilterField(
+                      _buildMultiSelectFilterField(
                         'Status Sistema',
                         _filtroStatus,
                         _statusDisponiveis,
-                        (value) {
+                        (newValues) {
                           setState(() {
-                            _filtroStatus = value;
+                            _filtroStatus = newValues;
                             _paginaAtual = 0;
                           });
                           _loadSIs();
@@ -611,13 +612,13 @@ class _SIViewState extends State<SIView> {
                         },
                       ),
                       const SizedBox(height: 8),
-                      _buildFilterField(
+                      _buildMultiSelectFilterField(
                         'Local de Instalação',
                         _filtroLocal,
                         _locaisDisponiveis,
-                        (value) {
+                        (newValues) {
                           setState(() {
-                            _filtroLocal = value;
+                            _filtroLocal = newValues;
                             _paginaAtual = 0;
                           });
                           _loadSIs();
@@ -625,13 +626,13 @@ class _SIViewState extends State<SIView> {
                         },
                       ),
                       const SizedBox(height: 8),
-                      _buildFilterField(
-                        'Tipo',
+                      _buildMultiSelectFilterField(
+                        'Status Usuário',
                         _filtroStatusUsuario,
                         _statusUsuarioDisponiveis,
-                        (value) {
+                        (newValues) {
                           setState(() {
-                            _filtroStatusUsuario = value;
+                            _filtroStatusUsuario = newValues;
                             _paginaAtual = 0;
                           });
                           _loadSIs();
@@ -670,81 +671,15 @@ class _SIViewState extends State<SIView> {
                     spacing: 16,
                     runSpacing: 16,
                     children: [
-                // Filtro Status
                 SizedBox(
                   width: isMobile ? double.infinity : 200,
-                  child: DropdownButtonFormField<String>(
-                    value: _filtroStatus,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Status Sistema',
-                      border: OutlineInputBorder(),
-                      filled: true,
-                      fillColor: Colors.white,
-                    ),
-                    selectedItemBuilder: (context) {
-                      return [
-                        const Text('Todos'),
-                        ..._statusDisponiveis.map((status) => Text(
-                              status.length > 25 ? '${status.substring(0, 25)}...' : status,
-                              overflow: TextOverflow.ellipsis,
-                            )),
-                      ];
-                    },
-                    items: [
-                      const DropdownMenuItem<String>(
-                        value: null,
-                        child: Text('Todos'),
-                      ),
-                      ..._statusDisponiveis.map((status) => DropdownMenuItem<String>(
-                            value: status,
-                            child: Text(status),
-                          )),
-                    ],
-                    onChanged: (value) {
+                  child: _buildMultiSelectFilterField(
+                    'Status Sistema',
+                    _filtroStatus,
+                    _statusDisponiveis,
+                    (newValues) {
                       setState(() {
-                        _filtroStatus = value;
-                        _paginaAtual = 0;
-                      });
-                      _loadSIs();
-                    },
-                  ),
-                ),
-
-                // Filtro Local
-                SizedBox(
-                  width: isMobile ? double.infinity : 250,
-                  child: DropdownButtonFormField<String>(
-                    value: _filtroLocal,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Local de Instalação',
-                      border: OutlineInputBorder(),
-                      filled: true,
-                      fillColor: Colors.white,
-                    ),
-                    selectedItemBuilder: (context) {
-                      return [
-                        const Text('Todos'),
-                        ..._locaisDisponiveis.map((local) => Text(
-                              local.length > 30 ? '${local.substring(0, 30)}...' : local,
-                              overflow: TextOverflow.ellipsis,
-                            )),
-                      ];
-                    },
-                    items: [
-                      const DropdownMenuItem<String>(
-                        value: null,
-                        child: Text('Todos'),
-                      ),
-                      ..._locaisDisponiveis.map((local) => DropdownMenuItem<String>(
-                            value: local,
-                            child: Text(local.length > 40 ? '${local.substring(0, 40)}...' : local),
-                          )),
-                    ],
-                    onChanged: (value) {
-                      setState(() {
-                        _filtroLocal = value;
+                        _filtroStatus = newValues;
                         _paginaAtual = 0;
                       });
                       _loadSIs();
@@ -752,32 +687,31 @@ class _SIViewState extends State<SIView> {
                     },
                   ),
                 ),
-
-                // Filtro Tipo
+                SizedBox(
+                  width: isMobile ? double.infinity : 250,
+                  child: _buildMultiSelectFilterField(
+                    'Local de Instalação',
+                    _filtroLocal,
+                    _locaisDisponiveis,
+                    (newValues) {
+                      setState(() {
+                        _filtroLocal = newValues;
+                        _paginaAtual = 0;
+                      });
+                      _loadSIs();
+                      _loadTodasSIsParaEstatisticas();
+                    },
+                  ),
+                ),
                 SizedBox(
                   width: isMobile ? double.infinity : 200,
-                  child: DropdownButtonFormField<String>(
-                    value: _filtroStatusUsuario,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Tipo',
-                      border: OutlineInputBorder(),
-                      filled: true,
-                      fillColor: Colors.white,
-                    ),
-                    items: [
-                      const DropdownMenuItem<String>(
-                        value: null,
-                        child: Text('Todos'),
-                      ),
-                      ..._statusUsuarioDisponiveis.map((tipo) => DropdownMenuItem<String>(
-                            value: tipo,
-                            child: Text(tipo),
-                          )),
-                    ],
-                    onChanged: (value) {
+                  child: _buildMultiSelectFilterField(
+                    'Status Usuário',
+                    _filtroStatusUsuario,
+                    _statusUsuarioDisponiveis,
+                    (newValues) {
                       setState(() {
-                        _filtroStatusUsuario = value;
+                        _filtroStatusUsuario = newValues;
                         _paginaAtual = 0;
                       });
                       _loadSIs();
@@ -865,9 +799,9 @@ class _SIViewState extends State<SIView> {
                   ElevatedButton.icon(
                     onPressed: () {
                       setState(() {
-                        _filtroStatus = null;
-                        _filtroLocal = null;
-                        _filtroStatusUsuario = null;
+                        _filtroStatus = {};
+                        _filtroLocal = {};
+                        _filtroStatusUsuario = {};
                         _dataInicio = null;
                         _dataFim = null;
                         _paginaAtual = 0;
@@ -1202,6 +1136,21 @@ class _SIViewState extends State<SIView> {
     );
   }
 
+  Future<void> _copiarParaAreaTransferencia(String texto, String mensagemSucesso) async {
+    try {
+      await Clipboard.setData(ClipboardData(text: texto));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(mensagemSucesso), duration: const Duration(seconds: 1)),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Não foi possível copiar: $e'), backgroundColor: Colors.red, duration: const Duration(seconds: 3)),
+      );
+    }
+  }
+
   Widget _buildSICard(SI si) {
     final isProgramada = _sisProgramadasIds.contains(si.id);
     final programadasList = isProgramada ? _sisProgramadasInfo[si.id] : null;
@@ -1257,15 +1206,7 @@ class _SIViewState extends State<SIView> {
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: si.solicitacao));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('SI copiada!'),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
-              },
+              onPressed: () => _copiarParaAreaTransferencia(si.solicitacao, 'SI copiada!'),
               tooltip: 'Copiar SI',
             ),
             if (isProgramada && tarefaStatus != null && statusColor != null)
@@ -1563,28 +1504,48 @@ class _SIViewState extends State<SIView> {
   }
 
 
-  Widget _buildFilterField(String label, String? value, List<String> options, Function(String?) onChanged) {
-    return DropdownButtonFormField<String>(
-      value: value,
-      isExpanded: true,
-      decoration: InputDecoration(
-        labelText: label,
-        border: const OutlineInputBorder(),
-        filled: true,
-        fillColor: Colors.white,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
-      ),
-      items: [
-        const DropdownMenuItem<String>(
-          value: null,
-          child: Text('Todos'),
+  Widget _buildMultiSelectFilterField(
+    String label,
+    Set<String> selectedValues,
+    List<String> options,
+    Function(Set<String>) onChanged, {
+    String? searchHint,
+  }) {
+    return InkWell(
+      onTap: () {
+        showDialog(
+          context: context,
+          builder: (context) => MultiSelectFilterDialog(
+            title: label,
+            options: options,
+            selectedValues: selectedValues,
+            onSelectionChanged: (newValues) {
+              onChanged(newValues);
+            },
+            searchHint: searchHint,
+          ),
+        );
+      },
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: label,
+          border: const OutlineInputBorder(),
+          filled: true,
+          fillColor: Colors.white,
+          suffixIcon: const Icon(Icons.arrow_drop_down),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
         ),
-        ...options.map((option) => DropdownMenuItem<String>(
-              value: option,
-              child: Text(option.length > 40 ? '${option.substring(0, 40)}...' : option),
-            )),
-      ],
-      onChanged: onChanged,
+        child: Text(
+          selectedValues.isEmpty
+              ? 'Todos'
+              : selectedValues.length == 1
+                  ? selectedValues.first
+                  : '${selectedValues.length} selecionado(s)',
+          style: TextStyle(
+            color: selectedValues.isEmpty ? Colors.grey[600] : Colors.black,
+          ),
+        ),
+      ),
     );
   }
 
@@ -1788,15 +1749,7 @@ class _SIViewState extends State<SIView> {
                       ),
                       const SizedBox(width: 8),
                       InkWell(
-                        onTap: () {
-                          Clipboard.setData(ClipboardData(text: si.solicitacao));
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('SI copiada!'),
-                              duration: Duration(seconds: 1),
-                            ),
-                          );
-                        },
+                        onTap: () => _copiarParaAreaTransferencia(si.solicitacao, 'SI copiada!'),
                         child: const Icon(Icons.copy, size: 16, color: Colors.blue),
                       ),
                     ],
@@ -1926,15 +1879,7 @@ class _SIViewState extends State<SIView> {
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: si.solicitacao));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('SI copiada!'),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
-              },
+              onPressed: () => _copiarParaAreaTransferencia(si.solicitacao, 'SI copiada!'),
               tooltip: 'Copiar SI',
             ),
           ],

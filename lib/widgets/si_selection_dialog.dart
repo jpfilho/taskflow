@@ -28,9 +28,9 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
   Set<String> _selectedSIIds = {}; // IDs das sis selecionadas
   String _searchQuery = '';
   String _viewMode = 'cards'; // 'cards', 'list', 'table'
-  String? _filterStatus;
-  String? _filterTipo;
-  String? _filterLocal;
+  Set<String> _filterStatus = {};
+  Set<String> _filterTipo = {};
+  Set<String> _filterLocal = {};
   final int _itemsPerPage = 50;
   int _currentPage = 0;
   final ScrollController _scrollController = ScrollController();
@@ -39,7 +39,7 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
   void initState() {
     super.initState();
     if (widget.taskLocal != null && widget.taskLocal!.trim().isNotEmpty) {
-      _filterLocal = widget.taskLocal!.trim();
+      _filterLocal = {widget.taskLocal!.trim()};
     }
     _filteredSIs = widget.sis;
     _applyFilters();
@@ -83,12 +83,6 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
   }
 
   void _applyFilters() {
-    // Garantir que o valor selecionado exista nas opções
-    final locaisDisponiveis = _getUniqueLocais();
-    if (_filterLocal != null && !locaisDisponiveis.contains(_filterLocal)) {
-      _filterLocal = null;
-    }
-
     setState(() {
       _filteredSIs = widget.sis.where((si) {
         // Filtro de pesquisa
@@ -107,38 +101,37 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
           if (!matchesSearch) return false;
         }
 
-        // Filtro de status (Status Usuário)
-        if (_filterStatus != null && si.statusUsuario != _filterStatus) {
+        // Filtro de status (Status Usuário) - multiseleção
+        if (_filterStatus.isNotEmpty && (si.statusUsuario == null || !_filterStatus.contains(si.statusUsuario!))) {
           return false;
         }
 
-        // Filtro de tipo
-        if (_filterTipo != null && si.tipo != _filterTipo) {
+        // Filtro de tipo - multiseleção
+        if (_filterTipo.isNotEmpty && (si.tipo == null || !_filterTipo.contains(si.tipo!))) {
           return false;
         }
 
-        // Filtro de local (contains, prioriza 'local' da view)
-        if (_filterLocal != null) {
+        // Filtro de local - multiseleção (contains ou match exato)
+        if (_filterLocal.isNotEmpty) {
           final loc = (si.local != null && si.local!.isNotEmpty)
               ? si.local!
               : (si.localInstalacao ?? '');
-          if (loc.isEmpty || !loc.toLowerCase().contains(_filterLocal!.toLowerCase())) {
-          return false;
-          }
+          if (loc.isEmpty) return false;
+          final locLower = loc.toLowerCase();
+          final match = _filterLocal.any((f) => locLower.contains(f.toLowerCase()) || f.toLowerCase().contains(locLower));
+          if (!match) return false;
         }
 
         return true;
       }).toList();
-      // Ordenar por data_inicio (mais recente primeiro), fallback para data_fim
       _filteredSIs.sort((a, b) {
         final aInicio = a.dataInicio ?? a.dataFim;
         final bInicio = b.dataInicio ?? b.dataFim;
         if (aInicio == null && bInicio == null) return 0;
-        if (aInicio == null) return 1; // Nulls por último
+        if (aInicio == null) return 1;
         if (bInicio == null) return -1;
-        return bInicio.compareTo(aInicio); // mais recente primeiro
+        return bInicio.compareTo(aInicio);
       });
-      // Resetar paginação quando filtrar
       _currentPage = 0;
       _displayedSIs = [];
       _loadMoreItems();
@@ -196,13 +189,6 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
   @override
   Widget build(BuildContext context) {
     final isMobile = Responsive.isMobile(context);
-    final locaisDropdown = () {
-      final list = _getUniqueLocais();
-      if (_filterLocal != null && _filterLocal!.isNotEmpty && !list.contains(_filterLocal)) {
-        list.insert(0, _filterLocal!);
-      }
-      return list;
-    }();
 
     return Dialog(
       insetPadding: const EdgeInsets.all(16),
@@ -297,107 +283,11 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
                   isMobile
                       ? Column(
                           children: [
-                            // Filtro Status
-                            DropdownButtonFormField<String>(
-                              value: _filterStatus,
-                              decoration: InputDecoration(
-                                labelText: 'Status',
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                filled: true,
-                                fillColor: Colors.white,
-                                contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 8,
-                                ),
-                              ),
-                              items: [
-                                const DropdownMenuItem<String>(
-                                  value: null,
-                                  child: Text('Todos'),
-                                ),
-                                ..._getUniqueStatuses().map((status) =>
-                                    DropdownMenuItem<String>(
-                                      value: status,
-                                      child: Text(status),
-                                    )),
-                              ],
-                              onChanged: (value) {
-                                setState(() {
-                                  _filterStatus = value;
-                                  _applyFilters();
-                                });
-                              },
-                            ),
+                            _buildMultiSelect(label: 'Status', selected: _filterStatus, items: _getUniqueStatuses()),
                             const SizedBox(height: 8),
-                            // Filtro Tipo
-                            DropdownButtonFormField<String>(
-                              value: _filterTipo,
-                              decoration: InputDecoration(
-                                labelText: 'Tipo',
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                filled: true,
-                                fillColor: Colors.white,
-                                contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 8,
-                                ),
-                              ),
-                              items: [
-                                const DropdownMenuItem<String>(
-                                  value: null,
-                                  child: Text('Todos'),
-                                ),
-                                ..._getUniqueTipos().map((tipo) =>
-                                    DropdownMenuItem<String>(
-                                      value: tipo,
-                                      child: Text(tipo),
-                                    )),
-                              ],
-                              onChanged: (value) {
-                                setState(() {
-                                  _filterTipo = value;
-                                  _applyFilters();
-                                });
-                              },
-                            ),
+                            _buildMultiSelect(label: 'Tipo', selected: _filterTipo, items: _getUniqueTipos()),
                             const SizedBox(height: 8),
-                            // Filtro Local
-                            DropdownButtonFormField<String>(
-                              value: _filterLocal,
-                              decoration: InputDecoration(
-                                labelText: 'Local',
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                filled: true,
-                                fillColor: Colors.white,
-                                contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 8,
-                                ),
-                              ),
-                              items: [
-                                const DropdownMenuItem<String>(
-                                  value: null,
-                                  child: Text('Todos'),
-                                ),
-                                ...locaisDropdown.map((local) =>
-                                    DropdownMenuItem<String>(
-                                      value: local,
-                                      child: Text(local),
-                                    )),
-                              ],
-                              onChanged: (value) {
-                                setState(() {
-                                  _filterLocal = value;
-                                  _applyFilters();
-                                });
-                              },
-                            ),
+                            _buildMultiSelect(label: 'Local', selected: _filterLocal, items: _getUniqueLocais()),
                             const SizedBox(height: 8),
                             // Botões de visualização
                             Container(
@@ -420,118 +310,19 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
                         )
                       : Row(
                           children: [
-                            // Filtro Status
                             Expanded(
                               flex: 2,
-                              child: DropdownButtonFormField<String>(
-                                value: _filterStatus,
-                                isExpanded: true,
-                                decoration: InputDecoration(
-                                  labelText: 'Status',
-                                  border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  filled: true,
-                                  fillColor: Colors.white,
-                                  contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 8,
-                                  ),
-                                ),
-                                items: [
-                                  const DropdownMenuItem<String>(
-                                    value: null,
-                                    child: Text('Todos'),
-                                  ),
-                                  ..._getUniqueStatuses().map((status) =>
-                                      DropdownMenuItem<String>(
-                                        value: status,
-                                        child: Text(status),
-                                      )),
-                                ],
-                                onChanged: (value) {
-                                  setState(() {
-                                    _filterStatus = value;
-                                    _applyFilters();
-                                  });
-                                },
-                              ),
+                              child: _buildMultiSelect(label: 'Status', selected: _filterStatus, items: _getUniqueStatuses()),
                             ),
                             const SizedBox(width: 8),
-                            // Filtro Tipo
                             Expanded(
                               flex: 2,
-                              child: DropdownButtonFormField<String>(
-                                value: _filterTipo,
-                                isExpanded: true,
-                                decoration: InputDecoration(
-                                  labelText: 'Tipo',
-                                  border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  filled: true,
-                                  fillColor: Colors.white,
-                                  contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 8,
-                                  ),
-                                ),
-                                items: [
-                                  const DropdownMenuItem<String>(
-                                    value: null,
-                                    child: Text('Todos'),
-                                  ),
-                                  ..._getUniqueTipos().map((tipo) =>
-                                      DropdownMenuItem<String>(
-                                        value: tipo,
-                                        child: Text(tipo),
-                                      )),
-                                ],
-                                onChanged: (value) {
-                                  setState(() {
-                                    _filterTipo = value;
-                                    _applyFilters();
-                                  });
-                                },
-                              ),
+                              child: _buildMultiSelect(label: 'Tipo', selected: _filterTipo, items: _getUniqueTipos()),
                             ),
                             const SizedBox(width: 8),
-                            // Filtro Local
                             Expanded(
                               flex: 3,
-                              child: DropdownButtonFormField<String>(
-                                value: _filterLocal,
-                                isExpanded: true,
-                                decoration: InputDecoration(
-                                  labelText: 'Local',
-                                  border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  filled: true,
-                                  fillColor: Colors.white,
-                                  contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 8,
-                                  ),
-                                ),
-                                items: [
-                                  const DropdownMenuItem<String>(
-                                    value: null,
-                                    child: Text('Todos'),
-                                  ),
-                                  ...locaisDropdown.map((local) =>
-                                      DropdownMenuItem<String>(
-                                        value: local,
-                                        child: Text(local),
-                                      )),
-                                ],
-                                onChanged: (value) {
-                                  setState(() {
-                                    _filterLocal = value;
-                                    _applyFilters();
-                                  });
-                                },
-                              ),
+                              child: _buildMultiSelect(label: 'Local', selected: _filterLocal, items: _getUniqueLocais()),
                             ),
                             const SizedBox(width: 8),
                             // Botões de visualização
@@ -565,17 +356,17 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
                         ),
                       ),
                       const Spacer(),
-                      if (_filterStatus != null ||
-                          _filterTipo != null ||
-                          _filterLocal != null ||
+                      if (_filterStatus.isNotEmpty ||
+                          _filterTipo.isNotEmpty ||
+                          _filterLocal.isNotEmpty ||
                           _searchQuery.isNotEmpty)
                         TextButton.icon(
                           onPressed: () {
                             setState(() {
                               _searchQuery = '';
-                              _filterStatus = null;
-                              _filterTipo = null;
-                              _filterLocal = null;
+                              _filterStatus = {};
+                              _filterTipo = {};
+                              _filterLocal = {};
                               _applyFilters();
                             });
                           },
@@ -615,18 +406,18 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
                             ),
                           ),
                           if (_searchQuery.isNotEmpty ||
-                              _filterStatus != null ||
-                              _filterTipo != null ||
-                              _filterLocal != null)
+                              _filterStatus.isNotEmpty ||
+                              _filterTipo.isNotEmpty ||
+                              _filterLocal.isNotEmpty)
                             Padding(
                               padding: const EdgeInsets.only(top: 8),
                               child: TextButton(
                                 onPressed: () {
                                   setState(() {
                                     _searchQuery = '';
-                                    _filterStatus = null;
-                                    _filterTipo = null;
-                                    _filterLocal = null;
+                                    _filterStatus = {};
+                                    _filterTipo = {};
+                                    _filterLocal = {};
                                     _applyFilters();
                                   });
                                 },
@@ -692,6 +483,142 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
         _selectedSIIds.add(siId);
       }
     });
+  }
+
+  Future<void> _copiarSI(String texto) async {
+    try {
+      await Clipboard.setData(ClipboardData(text: texto));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('SI copiada!'), duration: Duration(seconds: 1)),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Não foi possível copiar: $e'), backgroundColor: Colors.red, duration: const Duration(seconds: 3)),
+      );
+    }
+  }
+
+  Widget _buildMultiSelect({
+    required String label,
+    required Set<String> selected,
+    required List<String> items,
+  }) {
+    final displayText = selected.isEmpty ? 'Todos' : selected.length == 1 ? selected.first : '${selected.length} selecionado(s)';
+    return InkWell(
+      onTap: () async {
+        final result = await _showMultiSelectDialog(label, items, selected);
+        if (result != null) {
+          setState(() {
+            selected
+              ..clear()
+              ..addAll(result);
+            _applyFilters();
+          });
+        }
+      },
+      borderRadius: BorderRadius.circular(8),
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: label,
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+          filled: true,
+          fillColor: Colors.white,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          mainAxisSize: MainAxisSize.max,
+          children: [
+            Expanded(
+              child: Text(
+                displayText,
+                style: const TextStyle(fontSize: 14),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
+              ),
+            ),
+            const Icon(Icons.arrow_drop_down),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<Set<String>?> _showMultiSelectDialog(
+    String title,
+    List<String> options,
+    Set<String> current,
+  ) async {
+    final temp = {...current};
+    String searchQuery = '';
+    return showDialog<Set<String>>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setStateDialog) {
+            final filtered = searchQuery.isEmpty
+                ? options
+                : options.where((o) => o.toLowerCase().contains(searchQuery.toLowerCase())).toList();
+            return AlertDialog(
+              title: Text('Selecionar $title'),
+              content: SizedBox(
+                width: 320,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      decoration: const InputDecoration(
+                        hintText: 'Pesquisar...',
+                        prefixIcon: Icon(Icons.search),
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      onChanged: (v) => setStateDialog(() => searchQuery = v),
+                    ),
+                    const SizedBox(height: 12),
+                    Flexible(
+                      child: ListView(
+                        shrinkWrap: true,
+                        children: filtered
+                            .map(
+                              (opt) => CheckboxListTile(
+                                dense: true,
+                                value: temp.contains(opt),
+                                title: Text(opt),
+                                onChanged: (checked) {
+                                  setStateDialog(() {
+                                    if (checked == true) {
+                                      temp.add(opt);
+                                    } else {
+                                      temp.remove(opt);
+                                    }
+                                  });
+                                },
+                              ),
+                            )
+                            .toList(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Cancelar'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(temp),
+                  child: const Text('Aplicar'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   Widget _buildViewButton(IconData icon, String mode) {
@@ -823,15 +750,7 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
                         icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(),
-                        onPressed: () {
-                          Clipboard.setData(ClipboardData(text: si.solicitacao));
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('SI copiada!'),
-                              duration: Duration(seconds: 1),
-                            ),
-                          );
-                        },
+                        onPressed: () => _copiarSI(si.solicitacao),
                         tooltip: 'Copiar SI',
                       ),
                     ],
@@ -1041,15 +960,7 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
                       ),
                       const SizedBox(width: 8),
                       InkWell(
-                        onTap: () {
-                          Clipboard.setData(ClipboardData(text: si.solicitacao));
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('SI copiada!'),
-                              duration: Duration(seconds: 1),
-                            ),
-                          );
-                        },
+                        onTap: () => _copiarSI(si.solicitacao),
                         child: const Icon(Icons.copy, size: 16, color: Colors.blue),
                       ),
                     ],

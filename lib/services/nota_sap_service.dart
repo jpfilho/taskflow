@@ -385,9 +385,25 @@ class NotaSAPService {
     }
   }
 
+  // Cache para centros de trabalho do usuário (evita múltiplas chamadas)
+  List<Map<String, String>>? _centrosTrabalhoCache;
+  String? _centrosTrabalhoCacheUserId;
+  DateTime? _centrosTrabalhoCacheTime;
+  static const _centrosTrabalhoCacheTimeout = Duration(minutes: 5);
+
   // Obter centros de trabalho do usuário baseado no perfil
   // Retornar lista de pares (centro, gpm) para o usuário
   Future<List<Map<String, String>>> _obterCentrosTrabalhoComGPMUsuario() async {
+    final usuario = _authService.currentUser;
+    final userId = usuario?.id;
+    
+    // Verificar cache
+    if (_centrosTrabalhoCache != null && 
+        _centrosTrabalhoCacheUserId == userId &&
+        _centrosTrabalhoCacheTime != null &&
+        DateTime.now().difference(_centrosTrabalhoCacheTime!) < _centrosTrabalhoCacheTimeout) {
+      return _centrosTrabalhoCache!;
+    }
     try {
       final usuario = _authService.currentUser;
       
@@ -436,6 +452,11 @@ class NotaSAPService {
         print('     - ${item['centro']} (GPM: ${item['gpm']})');
       }
 
+      // Atualizar cache
+      _centrosTrabalhoCache = centrosComGPM;
+      _centrosTrabalhoCacheUserId = userId;
+      _centrosTrabalhoCacheTime = DateTime.now();
+
       return centrosComGPM;
     } catch (e) {
       print('⚠️ Erro ao obter centros de trabalho do usuário: $e');
@@ -465,7 +486,11 @@ class NotaSAPService {
     int? limit,
     int? offset,
   }) async {
+    final totalSw = Stopwatch()..start();
+    print('⏱ [getAllNotas] Iniciando | limit=$limit | offset=$offset');
+    
     try {
+      final querySw = Stopwatch()..start();
       dynamic query = _supabase.from('notas_sap_com_prazo').select();
 
       // Aplicar filtros por perfil do usuário
@@ -503,29 +528,49 @@ class NotaSAPService {
       }
 
       // Filtros multi-seleção
+      // IMPORTANTE: Para múltiplas seleções, usar filtragem no código após buscar
+      // O .or() do Supabase pode ter problemas quando combinado com outros filtros
+      List<String>? filtroLocaisParaCodigo;
+      List<String>? filtroSalasParaCodigo;
+      List<String>? filtroTiposParaCodigo;
+      List<String>? filtroNotasParaCodigo;
+      List<String>? filtroPrioridadesParaCodigo;
+      List<String>? filtroStatusUsuarioParaCodigo;
+      List<String>? filtroResponsaveisParaCodigo;
+      List<String>? filtroGPMsParaCodigo;
+      
       if (filtroLocais != null && filtroLocais.isNotEmpty) {
         if (filtroLocais.length == 1) {
           query = query.ilike('local', '%${filtroLocais[0]}%');
         } else {
-          final orConditions = filtroLocais.map((local) => 'local.ilike.%$local%').join(',');
-          query = query.or(orConditions);
+          // Para múltiplas seleções, vamos filtrar no código
+          filtroLocaisParaCodigo = filtroLocais;
         }
       }
 
-    if (filtroSalas != null && filtroSalas.isNotEmpty) {
-      if (filtroSalas.length == 1) {
-        query = query.ilike('sala', '%${filtroSalas[0]}%');
-      } else {
-        final orConditions = filtroSalas.map((sala) => 'sala.ilike.%$sala%').join(',');
-        query = query.or(orConditions);
+      if (filtroSalas != null && filtroSalas.isNotEmpty) {
+        if (filtroSalas.length == 1) {
+          query = query.ilike('sala', '%${filtroSalas[0]}%');
+        } else {
+          // Para múltiplas seleções, vamos filtrar no código
+          filtroSalasParaCodigo = filtroSalas;
+        }
       }
-    }
+
+      if (filtroResponsaveis != null && filtroResponsaveis.isNotEmpty) {
+        if (filtroResponsaveis.length == 1) {
+          query = query.ilike('denominacao_executor', '%${filtroResponsaveis[0]}%');
+        } else {
+          // Para múltiplas seleções, vamos filtrar no código
+          filtroResponsaveisParaCodigo = filtroResponsaveis;
+        }
+      }
 
       if (filtroTipos != null && filtroTipos.isNotEmpty) {
         if (filtroTipos.length == 1) {
           query = query.eq('tipo', filtroTipos[0]);
         } else {
-          query = query.in_('tipo', filtroTipos);
+          filtroTiposParaCodigo = filtroTipos;
         }
       }
 
@@ -533,7 +578,7 @@ class NotaSAPService {
         if (filtroNotas.length == 1) {
           query = query.eq('nota', filtroNotas[0]);
         } else {
-          query = query.in_('nota', filtroNotas);
+          filtroNotasParaCodigo = filtroNotas;
         }
       }
 
@@ -541,7 +586,7 @@ class NotaSAPService {
         if (filtroPrioridades.length == 1) {
           query = query.eq('text_prioridade', filtroPrioridades[0]);
         } else {
-          query = query.in_('text_prioridade', filtroPrioridades);
+          filtroPrioridadesParaCodigo = filtroPrioridades;
         }
       }
 
@@ -549,7 +594,7 @@ class NotaSAPService {
         if (filtroStatusUsuario.length == 1) {
           query = query.eq('status_usuario', filtroStatusUsuario[0]);
         } else {
-          query = query.in_('status_usuario', filtroStatusUsuario);
+          filtroStatusUsuarioParaCodigo = filtroStatusUsuario;
         }
       }
 
@@ -566,7 +611,7 @@ class NotaSAPService {
         if (filtroGPMs.length == 1) {
           query = query.eq('gpm', filtroGPMs[0]);
         } else {
-          query = query.in_('gpm', filtroGPMs);
+          filtroGPMsParaCodigo = filtroGPMs;
         }
       }
 
@@ -584,10 +629,25 @@ class NotaSAPService {
       }
 
       final response = await query;
-      var notas = (response as List).map((map) => NotaSAP.fromMap(map)).toList();
+      querySw.stop();
+      print('⏱ [getAllNotas] Query Supabase concluída em ${querySw.elapsedMilliseconds}ms | registros=${response is List ? response.length : 0}');
+      
+      final mapSw = Stopwatch()..start();
+      // Converter LinkedMap para Map<String, dynamic> se necessário
+      var notas = (response as List).map((item) {
+        if (item is Map) {
+          // Converter LinkedMap ou qualquer Map para Map<String, dynamic>
+          final map = item.map((key, value) => MapEntry(key.toString(), value));
+          return NotaSAP.fromMap(map);
+        }
+        return NotaSAP.fromMap(item as Map<String, dynamic>);
+      }).toList();
+      mapSw.stop();
+      print('⏱ [getAllNotas] Mapeamento concluído em ${mapSw.elapsedMilliseconds}ms | notas=${notas.length}');
       
       // O prazo já vem calculado da VIEW notas_sap_com_prazo
       
+      final filterSw = Stopwatch()..start();
       // Filtrar no código: sempre excluir MREL e aplicar filtro de tipo
       notas = notas.where((nota) {
         final status = nota.statusSistema?.toUpperCase() ?? '';
@@ -610,17 +670,88 @@ class NotaSAPService {
           }
         }
         
+        // Aplicar filtros de múltiplas seleções no código (quando necessário)
+        // Filtro de locais (múltiplas seleções)
+        if (filtroLocaisParaCodigo != null && filtroLocaisParaCodigo.isNotEmpty) {
+          final localNota = nota.local ?? '';
+          final matchesLocal = filtroLocaisParaCodigo.any((local) => 
+            localNota.toLowerCase().contains(local.toLowerCase())
+          );
+          if (!matchesLocal) {
+            return false;
+          }
+        }
+        
+        // Filtro de salas (múltiplas seleções)
+        if (filtroSalasParaCodigo != null && filtroSalasParaCodigo.isNotEmpty) {
+          final salaNota = nota.sala ?? '';
+          final matchesSala = filtroSalasParaCodigo.any((sala) => 
+            salaNota.toLowerCase().contains(sala.toLowerCase())
+          );
+          if (!matchesSala) {
+            return false;
+          }
+        }
+        
+        // Filtro de responsáveis (múltiplas seleções)
+        if (filtroResponsaveisParaCodigo != null && filtroResponsaveisParaCodigo.isNotEmpty) {
+          final responsavelNota = nota.denominacaoExecutor ?? '';
+          final matchesResponsavel = filtroResponsaveisParaCodigo.any((resp) => 
+            responsavelNota.toLowerCase().contains(resp.toLowerCase())
+          );
+          if (!matchesResponsavel) {
+            return false;
+          }
+        }
+        
+        // Filtros de múltiplas seleções usando .in_() - agora filtrados no código
+        if (filtroTiposParaCodigo != null && filtroTiposParaCodigo.isNotEmpty) {
+          if (!filtroTiposParaCodigo.contains(nota.tipo)) {
+            return false;
+          }
+        }
+        
+        if (filtroNotasParaCodigo != null && filtroNotasParaCodigo.isNotEmpty) {
+          if (!filtroNotasParaCodigo.contains(nota.nota)) {
+            return false;
+          }
+        }
+        
+        if (filtroPrioridadesParaCodigo != null && filtroPrioridadesParaCodigo.isNotEmpty) {
+          if (!filtroPrioridadesParaCodigo.contains(nota.textPrioridade)) {
+            return false;
+          }
+        }
+        
+        if (filtroStatusUsuarioParaCodigo != null && filtroStatusUsuarioParaCodigo.isNotEmpty) {
+          if (!filtroStatusUsuarioParaCodigo.contains(nota.statusUsuario)) {
+            return false;
+          }
+        }
+        
+        if (filtroGPMsParaCodigo != null && filtroGPMsParaCodigo.isNotEmpty) {
+          if (!filtroGPMsParaCodigo.contains(nota.gpm)) {
+            return false;
+          }
+        }
+        
         return true;
       }).toList();
+      filterSw.stop();
+      print('⏱ [getAllNotas] Filtros aplicados em ${filterSw.elapsedMilliseconds}ms | notas=${notas.length}');
       
+      final sortSw = Stopwatch()..start();
       // Ordenar por prazo (diasRestantes) - nulls por último
       notas.sort((a, b) {
         final diasA = a.diasRestantes ?? 999999;
         final diasB = b.diasRestantes ?? 999999;
         return diasA.compareTo(diasB);
       });
+      sortSw.stop();
+      print('⏱ [getAllNotas] Ordenação concluída em ${sortSw.elapsedMilliseconds}ms');
 
       // Enriquecer com status da tarefa vinculada (quando existir)
+      final enrichSw = Stopwatch()..start();
       if (notas.isNotEmpty) {
         final notaIds = notas.map((n) => n.id).toList();
         final statusPorNota = <String, String>{};
@@ -628,17 +759,26 @@ class NotaSAPService {
         try {
           for (var i = 0; i < notaIds.length; i += batchSize) {
             final batch = notaIds.skip(i).take(batchSize).toList();
-          final vinculos = await _supabase
-              .from('tasks_notas_sap')
-              .select('nota_sap_id, tasks(status)')
+            final vinculos = await _supabase
+                .from('tasks_notas_sap')
+                .select('nota_sap_id, tasks(status)')
                 .inFilter('nota_sap_id', batch);
 
-          for (var v in vinculos as List) {
-            final notaId = v['nota_sap_id'] as String?;
-            final task = v['tasks'] as Map<String, dynamic>?;
-            final status = task != null ? task['status'] as String? : null;
-            if (notaId != null && status != null) {
-              statusPorNota[notaId] = status;
+            for (var v in vinculos as List) {
+              try {
+                final notaId = v['nota_sap_id']?.toString();
+                // Converter task (pode ser LinkedMap) para Map<String, dynamic>
+                final taskRaw = v['tasks'];
+                Map<String, dynamic>? task;
+                if (taskRaw is Map) {
+                  task = taskRaw.map((key, value) => MapEntry(key.toString(), value));
+                }
+                final status = task?['status']?.toString();
+                if (notaId != null && status != null) {
+                  statusPorNota[notaId] = status;
+                }
+              } catch (e) {
+                print('⚠️ Erro ao processar vínculo: $e');
               }
             }
           }
@@ -653,6 +793,10 @@ class NotaSAPService {
           print('⚠️ Erro ao enriquecer status da tarefa: $e');
         }
       }
+      enrichSw.stop();
+      totalSw.stop();
+      print('⏱ [getAllNotas] Enriquecimento concluído em ${enrichSw.elapsedMilliseconds}ms');
+      print('⏱ [getAllNotas] TOTAL: ${totalSw.elapsedMilliseconds}ms | notas=${notas.length}');
       
       return notas;
     } catch (e, stackTrace) {
@@ -755,6 +899,19 @@ class NotaSAPService {
   // Vincular nota a uma tarefa
   Future<void> vincularNotaATarefa(String taskId, String notaSapId) async {
     try {
+      // Verificar se já está vinculada antes de inserir
+      final vinculoExistente = await _supabase
+          .from('tasks_notas_sap')
+          .select('id')
+          .eq('task_id', taskId)
+          .eq('nota_sap_id', notaSapId)
+          .maybeSingle();
+      
+      if (vinculoExistente != null) {
+        print('ℹ️ Nota $notaSapId já está vinculada à tarefa $taskId');
+        return;
+      }
+      
       // Vincular a nota
       await _supabase.from('tasks_notas_sap').insert({
         'task_id': taskId,
@@ -800,6 +957,7 @@ class NotaSAPService {
               print('✅ Ordem encontrada com ID: $ordemId');
               
               // Vincular a ordem automaticamente usando o serviço de ordens
+              // Isso também vinculará automaticamente outras notas com a mesma ordem (comportamento correto)
               print('🔗 Vinculando ordem $ordemId à tarefa $taskId...');
               try {
                 final ordemService = OrdemService();
@@ -999,9 +1157,18 @@ class NotaSAPService {
 
       final contagens = <String, int>{};
       for (var item in response) {
-        final taskId = item['task_id'] as String;
-        final quantidade = item['quantidade'] as int;
-        if (quantidade > 0) {
+        // Converter LinkedMap para Map<String, dynamic> se necessário
+        Map<String, dynamic> itemMap;
+        if (item is Map) {
+          itemMap = item.map((key, value) => MapEntry(key.toString(), value));
+        } else {
+          itemMap = item as Map<String, dynamic>;
+        }
+        
+        final taskId = itemMap['task_id']?.toString();
+        final quantidadeRaw = itemMap['quantidade'];
+        final quantidade = quantidadeRaw is int ? quantidadeRaw : (quantidadeRaw != null ? int.tryParse(quantidadeRaw.toString()) : null);
+        if (taskId != null && quantidade != null && quantidade > 0) {
           contagens[taskId] = quantidade;
         }
       }
@@ -1048,11 +1215,18 @@ class NotaSAPService {
       
       if (centrosTrabalhoUsuario.isNotEmpty) {
         filteredResponse = filteredResponse.where((item) {
-          final nota = item['notas_sap_com_prazo'] as Map<String, dynamic>?;
+          // Converter LinkedMap para Map<String, dynamic> se necessário
+          final notaRaw = item['notas_sap_com_prazo'];
+          Map<String, dynamic>? nota;
+          if (notaRaw is Map) {
+            nota = notaRaw.map((key, value) => MapEntry(key.toString(), value));
+          } else if (notaRaw != null) {
+            nota = notaRaw as Map<String, dynamic>?;
+          }
           if (nota == null) return false;
           
           // Filtrar por centro de trabalho
-          final centroTrabalho = nota['centro_trabalho_responsavel'] as String?;
+          final centroTrabalho = nota['centro_trabalho_responsavel']?.toString();
           if (centroTrabalho == null) return false;
           
           final centroTrabalhoUpper = centroTrabalho.trim().toUpperCase();
@@ -1068,13 +1242,39 @@ class NotaSAPService {
       }
 
       return filteredResponse.map((item) {
+        // Converter LinkedMap para Map<String, dynamic> se necessário
+        Map<String, dynamic> itemMap;
+        if (item is Map) {
+          itemMap = item.map((key, value) => MapEntry(key.toString(), value));
+        } else {
+          itemMap = item as Map<String, dynamic>;
+        }
+        
+        // Converter notas_sap_com_prazo se necessário
+        Map<String, dynamic>? notaMap;
+        final notaRaw = itemMap['notas_sap_com_prazo'];
+        if (notaRaw is Map) {
+          notaMap = notaRaw.map((key, value) => MapEntry(key.toString(), value));
+        } else if (notaRaw != null) {
+          notaMap = notaRaw as Map<String, dynamic>?;
+        }
+        
+        // Converter tasks se necessário
+        Map<String, dynamic>? taskMap;
+        final taskRaw = itemMap['tasks'];
+        if (taskRaw is Map) {
+          taskMap = taskRaw.map((key, value) => MapEntry(key.toString(), value));
+        } else if (taskRaw != null) {
+          taskMap = taskRaw as Map<String, dynamic>?;
+        }
+        
         return {
-          'vinculo_id': item['id'],
-          'vinculado_em': item['created_at'] != null 
-              ? DateTime.parse(item['created_at'])
+          'vinculo_id': itemMap['id'],
+          'vinculado_em': itemMap['created_at'] != null 
+              ? DateTime.parse(itemMap['created_at'].toString())
               : null,
-          'nota': NotaSAP.fromMap(item['notas_sap_com_prazo'] as Map<String, dynamic>),
-          'tarefa': item['tasks'] != null ? item['tasks'] : null,
+          'nota': notaMap != null ? NotaSAP.fromMap(notaMap) : null,
+          'tarefa': taskMap,
         };
       }).toList();
     } catch (e) {
@@ -1127,6 +1327,13 @@ class NotaSAPService {
       }
 
       // Filtros multi-seleção
+      // Declarar variáveis para filtragem no código quando necessário
+      List<String>? filtroTiposParaCodigo;
+      List<String>? filtroNotasParaCodigo;
+      List<String>? filtroPrioridadesParaCodigo;
+      List<String>? filtroStatusUsuarioParaCodigo;
+      List<String>? filtroGPMsParaCodigo;
+      
       if (filtroLocais != null && filtroLocais.isNotEmpty) {
         if (filtroLocais.length == 1) {
           query = query.ilike('local', '%${filtroLocais[0]}%');
@@ -1140,7 +1347,7 @@ class NotaSAPService {
         if (filtroTipos.length == 1) {
           query = query.eq('tipo', filtroTipos[0]);
         } else {
-          query = query.in_('tipo', filtroTipos);
+          filtroTiposParaCodigo = filtroTipos;
         }
       }
 
@@ -1148,7 +1355,7 @@ class NotaSAPService {
         if (filtroNotas.length == 1) {
           query = query.eq('nota', filtroNotas[0]);
         } else {
-          query = query.in_('nota', filtroNotas);
+          filtroNotasParaCodigo = filtroNotas;
         }
       }
 
@@ -1156,7 +1363,7 @@ class NotaSAPService {
         if (filtroPrioridades.length == 1) {
           query = query.eq('text_prioridade', filtroPrioridades[0]);
         } else {
-          query = query.in_('text_prioridade', filtroPrioridades);
+          filtroPrioridadesParaCodigo = filtroPrioridades;
         }
       }
 
@@ -1164,7 +1371,7 @@ class NotaSAPService {
         if (filtroStatusUsuario.length == 1) {
           query = query.eq('status_usuario', filtroStatusUsuario[0]);
         } else {
-          query = query.in_('status_usuario', filtroStatusUsuario);
+          filtroStatusUsuarioParaCodigo = filtroStatusUsuario;
         }
       }
 
@@ -1181,7 +1388,7 @@ class NotaSAPService {
         if (filtroGPMs.length == 1) {
           query = query.eq('gpm', filtroGPMs[0]);
         } else {
-          query = query.in_('gpm', filtroGPMs);
+          filtroGPMsParaCodigo = filtroGPMs;
         }
       }
 
@@ -1308,39 +1515,39 @@ class NotaSAPService {
         }
         
         // Aplicar filtro de tipos (exceto se for o campo que estamos buscando)
+        // Para múltiplas seleções, vamos filtrar no código depois
         if (campoExcluir != 'tipo' && filtroTipos != null && filtroTipos.isNotEmpty) {
           if (filtroTipos.length == 1) {
             q = q.eq('tipo', filtroTipos[0]);
-          } else {
-            q = q.in_('tipo', filtroTipos);
           }
+          // Para múltiplas seleções, não aplicar aqui - será filtrado no código
         }
 
         // Aplicar filtro de notas (exceto se for o campo que estamos buscando)
+        // Para múltiplas seleções, vamos filtrar no código depois
         if (campoExcluir != 'nota' && filtroNotas != null && filtroNotas.isNotEmpty) {
           if (filtroNotas.length == 1) {
             q = q.eq('nota', filtroNotas[0]);
-          } else {
-            q = q.in_('nota', filtroNotas);
           }
+          // Para múltiplas seleções, não aplicar aqui - será filtrado no código
         }
 
         // Aplicar filtro de prioridades (exceto se for o campo que estamos buscando)
+        // Para múltiplas seleções, vamos filtrar no código depois
         if (campoExcluir != 'prioridade' && filtroPrioridades != null && filtroPrioridades.isNotEmpty) {
           if (filtroPrioridades.length == 1) {
             q = q.eq('text_prioridade', filtroPrioridades[0]);
-          } else {
-            q = q.in_('text_prioridade', filtroPrioridades);
           }
+          // Para múltiplas seleções, não aplicar aqui - será filtrado no código
         }
 
         // Aplicar filtro de status usuário (exceto se for o campo que estamos buscando)
+        // Para múltiplas seleções, vamos filtrar no código depois
         if (campoExcluir != 'status_usuario' && filtroStatusUsuario != null && filtroStatusUsuario.isNotEmpty) {
           if (filtroStatusUsuario.length == 1) {
             q = q.eq('status_usuario', filtroStatusUsuario[0]);
-          } else {
-            q = q.in_('status_usuario', filtroStatusUsuario);
           }
+          // Para múltiplas seleções, não aplicar aqui - será filtrado no código
         }
 
         // Aplicar filtro de responsáveis (exceto se for o campo que estamos buscando)
@@ -1354,12 +1561,12 @@ class NotaSAPService {
         }
 
         // Aplicar filtro de GPMs (exceto se for o campo que estamos buscando)
+        // Para múltiplas seleções, vamos filtrar no código depois
         if (campoExcluir != 'gpm' && filtroGPMs != null && filtroGPMs.isNotEmpty) {
           if (filtroGPMs.length == 1) {
             q = q.eq('gpm', filtroGPMs[0]);
-          } else {
-            q = q.in_('gpm', filtroGPMs);
           }
+          // Para múltiplas seleções, não aplicar aqui - será filtrado no código
         }
         
         return q;
@@ -1394,6 +1601,42 @@ class NotaSAPService {
           } else if (filtroTipoNota == 'concluidas') {
             // Apenas incluir se contém MSEN
             if (!status.contains('MSEN')) {
+              return false;
+            }
+          }
+          
+          // Aplicar filtros de múltiplas seleções no código
+          if (filtroTipos != null && filtroTipos.length > 1) {
+            final tipo = item['tipo'] as String? ?? '';
+            if (!filtroTipos.contains(tipo)) {
+              return false;
+            }
+          }
+          
+          if (filtroNotas != null && filtroNotas.length > 1) {
+            final nota = item['nota'] as String? ?? '';
+            if (!filtroNotas.contains(nota)) {
+              return false;
+            }
+          }
+          
+          if (filtroPrioridades != null && filtroPrioridades.length > 1) {
+            final prioridade = item['text_prioridade'] as String? ?? '';
+            if (!filtroPrioridades.contains(prioridade)) {
+              return false;
+            }
+          }
+          
+          if (filtroStatusUsuario != null && filtroStatusUsuario.length > 1) {
+            final statusUsuario = item['status_usuario'] as String? ?? '';
+            if (!filtroStatusUsuario.contains(statusUsuario)) {
+              return false;
+            }
+          }
+          
+          if (filtroGPMs != null && filtroGPMs.length > 1) {
+            final gpm = item['gpm'] as String? ?? '';
+            if (!filtroGPMs.contains(gpm)) {
               return false;
             }
           }

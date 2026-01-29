@@ -783,6 +783,21 @@ class _NotaSAPSelectionDialogState extends State<NotaSAPSelectionDialog> {
     );
   }
 
+  Future<void> _copiarNota(String texto) async {
+    try {
+      await Clipboard.setData(ClipboardData(text: texto));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Nota copiada!'), duration: Duration(seconds: 1)),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Não foi possível copiar: $e'), backgroundColor: Colors.red, duration: const Duration(seconds: 3)),
+      );
+    }
+  }
+
   Widget _buildViewButton(IconData icon, String mode) {
     final isSelected = _viewMode == mode;
     return InkWell(
@@ -911,15 +926,7 @@ class _NotaSAPSelectionDialogState extends State<NotaSAPSelectionDialog> {
                         icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(),
-                        onPressed: () {
-                          Clipboard.setData(ClipboardData(text: nota.nota));
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Nota copiada!'),
-                              duration: Duration(seconds: 1),
-                            ),
-                          );
-                        },
+                        onPressed: () => _copiarNota(nota.nota),
                         tooltip: 'Copiar nota',
                       ),
                     ],
@@ -1135,15 +1142,7 @@ class _NotaSAPSelectionDialogState extends State<NotaSAPSelectionDialog> {
                           ),
                           const SizedBox(width: 6),
                       InkWell(
-                        onTap: () {
-                          Clipboard.setData(ClipboardData(text: nota.nota));
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Nota copiada!'),
-                              duration: Duration(seconds: 1),
-                            ),
-                          );
-                        },
+                        onTap: () => _copiarNota(nota.nota),
                             child: const Icon(Icons.copy, size: 14, color: Colors.blue),
                       ),
                     ],

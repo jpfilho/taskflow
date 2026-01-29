@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/task.dart';
 import '../models/status.dart';
@@ -1435,6 +1436,8 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
               : 'Segmento';
           
           final comunidade = await _chatService.criarOuObterComunidade(
+            widget.task!.regionalId ?? '',
+            widget.task!.regional,
             widget.task!.divisaoId!,
             divisaoNome,
             widget.task!.segmentoId!,
@@ -5043,14 +5046,13 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                   margin: const EdgeInsets.only(bottom: 8),
                   child: ListTile(
                     leading: CircleAvatar(
-                      backgroundColor: nota.statusSistema?.contains('MSPR') == true
-                          ? Colors.orange
-                          : nota.statusSistema?.contains('MSPN') == true
-                              ? Colors.blue
-                              : Colors.grey,
+                      backgroundColor: _getStatusUsuarioColor(nota.statusUsuario),
                       child: Text(
                         nota.tipo ?? '?',
-                        style: const TextStyle(color: Colors.white, fontSize: 12),
+                        style: TextStyle(
+                          color: _getStatusUsuarioTextColor(nota.statusUsuario),
+                          fontSize: 12,
+                        ),
                       ),
                     ),
                     title: Row(
@@ -5126,6 +5128,44 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
   
   String _formatDateNotaSAP(DateTime date) {
     return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
+  }
+
+  // Retorna a cor do avatar baseada no status do usuário da nota
+  Color _getStatusUsuarioColor(String? statusUsuario) {
+    if (statusUsuario == null || statusUsuario.isEmpty) return Colors.grey;
+    
+    final status = statusUsuario.toUpperCase();
+    
+    // CONC - Verde
+    if (status.contains('CONC')) return Colors.green;
+    
+    // CADU ou CAIM - Cinza
+    if (status.contains('CADU') || status.contains('CAIM')) return Colors.grey;
+    
+    // REGI - Laranja
+    if (status.contains('REGI')) return Colors.orange;
+    
+    // EMAM - Amarelo
+    if (status.contains('EMAM')) return Colors.yellow;
+    
+    // ANLS - Azul
+    if (status.contains('ANLS')) return Colors.blue;
+    
+    // Padrão: cinza
+    return Colors.grey;
+  }
+
+  // Retorna a cor do texto do avatar baseada no status do usuário da nota
+  Color _getStatusUsuarioTextColor(String? statusUsuario) {
+    if (statusUsuario == null || statusUsuario.isEmpty) return Colors.white;
+    
+    final status = statusUsuario.toUpperCase();
+    
+    // Para EMAM (amarelo), usar texto preto para melhor contraste
+    if (status.contains('EMAM')) return Colors.black;
+    
+    // Para os outros, usar texto branco
+    return Colors.white;
   }
   
   Future<void> _adicionarNotaSAP() async {
@@ -5554,7 +5594,39 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                         style: const TextStyle(color: Colors.white, fontSize: 12),
                       ),
                     ),
-                    title: Text('Ordem: ${ordem.ordem}'),
+                    title: Row(
+                      children: [
+                        Expanded(
+                          child: Text('Ordem: ${ordem.ordem}'),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                          onPressed: () async {
+                            try {
+                              await Clipboard.setData(ClipboardData(text: ordem.ordem));
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Ordem copiada!'),
+                                  duration: Duration(seconds: 1),
+                                ),
+                              );
+                            } catch (e) {
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Não foi possível copiar a ordem: $e'),
+                                  backgroundColor: Colors.red,
+                                ),
+                              );
+                            }
+                          },
+                          tooltip: 'Copiar ordem',
+                        ),
+                      ],
+                    ),
                     subtitle: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [

@@ -55,7 +55,6 @@ class RegraPrazoNotaService {
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar regras de prazo');
               return <Map<String, dynamic>>[];
             },
           );
@@ -87,7 +86,6 @@ class RegraPrazoNotaService {
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar regras ativas');
               return <Map<String, dynamic>>[];
             },
           );
@@ -118,7 +116,6 @@ class RegraPrazoNotaService {
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar regra por ID');
               return <String, dynamic>{};
             },
           );
@@ -172,7 +169,6 @@ class RegraPrazoNotaService {
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar regras ativas');
               return <Map<String, dynamic>>[];
             },
           );

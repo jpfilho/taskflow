@@ -3,6 +3,7 @@ import '../config/supabase_config.dart';
 import '../services/regional_service.dart';
 import '../services/segmento_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'chat_service.dart';
 
 class DivisaoService {
   static final DivisaoService _instance = DivisaoService._internal();
@@ -12,6 +13,7 @@ class DivisaoService {
   final SupabaseClient _supabase = SupabaseConfig.client;
   final RegionalService _regionalService = RegionalService();
   final SegmentoService _segmentoService = SegmentoService();
+  final ChatService _chatService = ChatService();
 
   // Converter Map do Supabase para Divisao
   Divisao _divisaoFromMap(Map<String, dynamic> map) {
@@ -43,7 +45,6 @@ class DivisaoService {
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar divisões');
               return <Map<String, dynamic>>[];
             },
           );
@@ -125,7 +126,6 @@ class DivisaoService {
           .timeout(
             const Duration(seconds: 10),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar divisão por ID');
               return <String, dynamic>{};
             },
           );
@@ -165,8 +165,134 @@ class DivisaoService {
     }
   }
 
+  // Cadastrar Chat IDs do Telegram para comunidades de uma divisão (um por segmento)
+  // IMPORTANTE: Se chatId estiver vazio, REMOVE o registro existente
+  Future<void> cadastrarTelegramChatIdsParaDivisao(
+    String divisaoId,
+    String divisaoNome,
+    List<String> segmentoIds,
+    List<String> segmentosNomes,
+    Map<String, String>? telegramChatIds, // Map<segmentoId, chatId>
+  ) async {
+    try {
+      print('🔍 DEBUG: Processando Chat IDs do Telegram para divisão $divisaoNome');
+      print('   Total de segmentos: ${segmentoIds.length}');
+      print('   Chat IDs fornecidos: ${telegramChatIds?.length ?? 0}');
+      
+      // Para cada segmento, processar (cadastrar ou remover)
+      for (int i = 0; i < segmentoIds.length; i++) {
+        final segmentoId = segmentoIds[i];
+        final segmentoNome = segmentosNomes[i];
+        
+        // Obter regional da divisão
+        final divisaoCompleta = await getDivisaoById(divisaoId);
+        if (divisaoCompleta == null) {
+          print('⚠️ DEBUG: Divisão não encontrada: $divisaoId');
+          continue;
+        }
+        
+        // Criar ou obter comunidade primeiro (sempre, para poder remover se necessário)
+        final comunidade = await _chatService.criarOuObterComunidade(
+          divisaoCompleta.regionalId,
+          divisaoCompleta.regional,
+          divisaoId,
+          divisaoNome,
+          segmentoId,
+          segmentoNome,
+        );
+        
+        // Verificar se há Chat ID fornecido para este segmento
+        final chatId = telegramChatIds?[segmentoId];
+        
+        // Se não há Chat ID fornecido OU está vazio, REMOVER o registro existente
+        if (chatId == null || chatId.trim().isEmpty) {
+          print('🔍 DEBUG: Chat ID vazio para segmento $segmentoNome - removendo registro existente');
+          try {
+            await _supabase
+                .from('telegram_communities')
+                .delete()
+                .eq('community_id', comunidade.id.toString());
+            print('✅ DEBUG: Chat ID removido para comunidade ${comunidade.divisaoNome} - ${comunidade.segmentoNome}');
+          } catch (e) {
+            print('⚠️ DEBUG: Erro ao remover Chat ID (pode não existir): $e');
+          }
+          continue;
+        }
+        
+        // Se há Chat ID, cadastrar/atualizar
+        try {
+          final chatIdInt = int.parse(chatId.trim());
+          print('🔍 DEBUG: Tentando salvar Chat ID $chatIdInt para comunidade ${comunidade.id}');
+          print('   Comunidade ID: ${comunidade.id}');
+          print('   Comunidade: ${comunidade.divisaoNome} - ${comunidade.segmentoNome}');
+          
+          // Verificar autenticação no Supabase
+          final currentUser = _supabase.auth.currentUser;
+          print('🔍 DEBUG: Usuário Supabase Auth: ${currentUser?.id ?? "NÃO AUTENTICADO"}');
+          print('🔍 DEBUG: Email: ${currentUser?.email ?? "N/A"}');
+          
+          // Tentar upsert
+          print('🔍 DEBUG: Executando upsert...');
+          final result = await _supabase
+              .from('telegram_communities')
+              .upsert({
+                'community_id': comunidade.id,
+                'telegram_chat_id': chatIdInt,
+              }, onConflict: 'community_id')
+              .select();
+          
+          print('✅ DEBUG: Upsert executado! Resultado: $result');
+          
+          // Aguardar um pouco para garantir que foi commitado
+          await Future.delayed(const Duration(milliseconds: 100));
+          
+          // Verificar se realmente foi salvo
+          print('🔍 DEBUG: Verificando se foi salvo...');
+          final verificado = await _supabase
+              .from('telegram_communities')
+              .select('telegram_chat_id, community_id')
+              .eq('community_id', comunidade.id.toString())
+              .maybeSingle();
+          
+          if (verificado != null) {
+            print('✅ DEBUG: Verificação OK - Chat ID no banco: ${verificado['telegram_chat_id']}');
+            print('✅ DEBUG: Chat ID cadastrado para comunidade ${comunidade.divisaoNome} - ${comunidade.segmentoNome}: $chatId');
+          } else {
+            print('⚠️ DEBUG: AVISO - Chat ID não encontrado após salvar!');
+            print('   Tentando buscar novamente...');
+            
+            // Tentar buscar novamente após um delay maior
+            await Future.delayed(const Duration(milliseconds: 500));
+            final verificado2 = await _supabase
+                .from('telegram_communities')
+                .select('telegram_chat_id')
+                .eq('community_id', comunidade.id.toString())
+                .maybeSingle();
+            
+            if (verificado2 != null) {
+              print('✅ DEBUG: Encontrado na segunda tentativa: ${verificado2['telegram_chat_id']}');
+            } else {
+              print('❌ DEBUG: ERRO - Chat ID ainda não encontrado após múltiplas tentativas!');
+            }
+          }
+        } catch (e, stackTrace) {
+          print('❌ DEBUG: Erro ao cadastrar Chat ID para comunidade ${comunidade.divisaoNome} - ${comunidade.segmentoNome}');
+          print('❌ DEBUG: Erro: $e');
+          print('❌ DEBUG: Tipo do erro: ${e.runtimeType}');
+          print('❌ DEBUG: Stack trace: $stackTrace');
+          
+          // Re-lançar o erro para que seja visível
+          rethrow;
+        }
+      }
+    } catch (e) {
+      print('❌ Erro ao cadastrar Chat IDs do Telegram: $e');
+      // Não re-lançar erro, pois a divisão já foi criada
+    }
+  }
+
   // Criar divisão
-  Future<Divisao?> createDivisao(Divisao divisao) async {
+  Future<Divisao?> createDivisao(Divisao divisao, {Map<String, String>? telegramChatIds}) async {
     try {
       print('🔍 DEBUG: Criando divisão');
       print('   Nome: ${divisao.divisao}');
@@ -246,6 +372,18 @@ class DivisaoService {
       print('🔍 DEBUG: Buscando divisão criada...');
       final divisaoCriada = await getDivisaoById(divisaoId);
       print('✅ DEBUG: Divisão criada e carregada: ${divisaoCriada?.divisao}');
+      
+      // Se Chat IDs do Telegram foram fornecidos, cadastrar para as comunidades
+      if (telegramChatIds != null && telegramChatIds.isNotEmpty && divisaoCriada != null) {
+        await cadastrarTelegramChatIdsParaDivisao(
+          divisaoId,
+          divisaoCriada.divisao,
+          divisaoCriada.segmentoIds,
+          divisaoCriada.segmentos,
+          telegramChatIds,
+        );
+      }
+      
       return divisaoCriada;
     } catch (e, stackTrace) {
       print('❌ Erro ao criar divisão: $e');
@@ -255,7 +393,7 @@ class DivisaoService {
   }
 
   // Atualizar divisão
-  Future<Divisao?> updateDivisao(String id, Divisao divisao) async {
+  Future<Divisao?> updateDivisao(String id, Divisao divisao, {Map<String, String>? telegramChatIds}) async {
     try {
       print('🔍 DEBUG: Atualizando divisão');
       print('   ID: $id');
@@ -316,6 +454,32 @@ class DivisaoService {
       print('🔍 DEBUG: Buscando divisão atualizada...');
       final divisaoAtualizada = await getDivisaoById(id);
       print('✅ DEBUG: Divisão atualizada e carregada: ${divisaoAtualizada?.divisao}');
+      
+      // Sempre processar Chat IDs (mesmo se vazio, para remover registros)
+      print('🔍 DEBUG: Verificando Chat IDs para processamento...');
+      print('   telegramChatIds: ${telegramChatIds != null ? "não null" : "null"}');
+      print('   divisaoAtualizada: ${divisaoAtualizada != null ? "não null" : "null"}');
+      
+      if (divisaoAtualizada != null) {
+        print('✅ DEBUG: Chamando cadastrarTelegramChatIdsParaDivisao...');
+        try {
+          await cadastrarTelegramChatIdsParaDivisao(
+            id,
+            divisaoAtualizada.divisao,
+            divisaoAtualizada.segmentoIds,
+            divisaoAtualizada.segmentos,
+            telegramChatIds, // Pode ser null ou vazio - isso é OK, vai remover registros
+          );
+          print('✅ DEBUG: cadastrarTelegramChatIdsParaDivisao concluído');
+        } catch (e, stackTrace) {
+          print('❌ DEBUG: Erro em cadastrarTelegramChatIdsParaDivisao: $e');
+          print('❌ DEBUG: Stack trace: $stackTrace');
+          // Não re-lançar, apenas logar
+        }
+      } else {
+        print('⚠️ DEBUG: Divisão não encontrada, pulando processamento de Chat IDs');
+      }
+      
       return divisaoAtualizada;
     } catch (e, stackTrace) {
       print('❌ Erro ao atualizar divisão: $e');
@@ -365,7 +529,6 @@ class DivisaoService {
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
-              print('⚠️ Timeout ao filtrar divisões');
               return <Map<String, dynamic>>[];
             },
           );
@@ -405,7 +568,6 @@ class DivisaoService {
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar divisões');
               return <Map<String, dynamic>>[];
             },
           );

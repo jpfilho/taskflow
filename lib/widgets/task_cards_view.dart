@@ -666,6 +666,8 @@ class _TaskCardsViewState extends State<TaskCardsView> {
             : 'Segmento';
         
         final comunidade = await _chatService.criarOuObterComunidade(
+          task.regionalId ?? '',
+          task.regional,
           task.divisaoId!,
           divisao.divisao,
           task.segmentoId!,
@@ -1665,6 +1667,8 @@ class _TaskCardsViewState extends State<TaskCardsView> {
             : 'Segmento';
         
         final comunidade = await _chatService.criarOuObterComunidade(
+          task.regionalId ?? '',
+          task.regional,
           task.divisaoId!,
           divisao.divisao,
           task.segmentoId!,
@@ -1672,9 +1676,9 @@ class _TaskCardsViewState extends State<TaskCardsView> {
         );
         
         grupoChat = await _chatService.criarOuObterGrupo(
-          comunidade.id!,
           task.id,
           task.tarefa,
+          comunidade.id!,
         );
       }
       
@@ -1750,12 +1754,21 @@ class _TaskCardsViewState extends State<TaskCardsView> {
                     const SnackBar(content: Text('Compartilhando via Email...')),
                   );
                 }),
-                _buildShareOption(Icons.link, 'Copiar Link', () {
-                  Clipboard.setData(ClipboardData(text: 'Tarefa: ${task.tarefa}'));
-                  Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Link copiado!')),
-                  );
+                _buildShareOption(Icons.link, 'Copiar Link', () async {
+                  try {
+                    await Clipboard.setData(ClipboardData(text: 'Tarefa: ${task.tarefa}'));
+                    if (!context.mounted) return;
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Link copiado!')),
+                    );
+                  } catch (e) {
+                    if (!context.mounted) return;
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Não foi possível copiar: $e'), backgroundColor: Colors.red),
+                    );
+                  }
                 }),
                 _buildShareOption(Icons.more_horiz, 'Mais', () {
                   Navigator.pop(context);
@@ -1767,6 +1780,25 @@ class _TaskCardsViewState extends State<TaskCardsView> {
         ),
       ),
     );
+  }
+
+  Future<void> _copiarParaAreaTransferencia(String texto, String mensagemSucesso) async {
+    try {
+      await Clipboard.setData(ClipboardData(text: texto));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(mensagemSucesso), duration: const Duration(seconds: 1)),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Não foi possível copiar: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
   }
 
   Widget _buildShareOption(IconData icon, String label, VoidCallback onTap) {
@@ -2172,15 +2204,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: nota.nota));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Nota copiada!'),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
-              },
+              onPressed: () => _copiarParaAreaTransferencia(nota.nota, 'Nota copiada!'),
               tooltip: 'Copiar nota',
             ),
           ],
@@ -2329,15 +2353,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: ordem.ordem));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Ordem copiada!'),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
-              },
+              onPressed: () => _copiarParaAreaTransferencia(ordem.ordem, 'Ordem copiada!'),
               tooltip: 'Copiar ordem',
             ),
           ],
@@ -2487,15 +2503,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: at.autorzTrab));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('AT copiada!'),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
-              },
+              onPressed: () => _copiarParaAreaTransferencia(at.autorzTrab, 'AT copiada!'),
               tooltip: 'Copiar AT',
             ),
           ],
@@ -2644,15 +2652,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: si.solicitacao));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('SI copiada!'),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
-              },
+              onPressed: () => _copiarParaAreaTransferencia(si.solicitacao, 'SI copiada!'),
               tooltip: 'Copiar SI',
             ),
           ],

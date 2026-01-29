@@ -48,7 +48,6 @@ class ExecutorService {
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar executores');
               return <Map<String, dynamic>>[];
             },
           );
@@ -148,7 +147,6 @@ class ExecutorService {
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar executores ativos');
               return <Map<String, dynamic>>[];
             },
           );
@@ -594,7 +592,6 @@ class ExecutorService {
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar coordenadores');
               return <Map<String, dynamic>>[];
             },
           );
@@ -716,7 +713,6 @@ class ExecutorService {
             .timeout(
               const Duration(seconds: 5),
               onTimeout: () {
-                print('⚠️ Timeout ao buscar executores por login');
                 return <Map<String, dynamic>>[];
               },
             );
@@ -792,7 +788,6 @@ class ExecutorService {
           .timeout(
             const Duration(seconds: 5),
             onTimeout: () {
-              print('⚠️ Timeout ao validar função do executor');
               return null;
             },
           );

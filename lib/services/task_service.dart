@@ -7,6 +7,7 @@ import 'auth_service_simples.dart';
 import 'local_database_service.dart';
 import 'connectivity_service.dart';
 import 'sync_service.dart';
+import 'tab_sync_service.dart';
 import 'package:sqflite/sqflite.dart';
 
 class TaskService {
@@ -37,9 +38,15 @@ class TaskService {
     required DateTime endDate,
   }) async {
     if (executorIds.isEmpty) return [];
+    
+    final sw = Stopwatch()..start();
+    _logDebug('⏱ [getExecucoesDia] Iniciando | executores=${executorIds.length} | período=${startDate.toString().substring(0, 10)} até ${endDate.toString().substring(0, 10)}');
+    
     try {
+      // Tentar usar a view normal (não materializada) primeiro - atualiza automaticamente
+      final querySw = Stopwatch()..start();
       final rows = await _supabase
-          .from('mv_execucoes_dia')
+          .from('v_execucoes_dia_completa')
           .select()
           .inFilter('executor_id', executorIds)
           .gte(
@@ -50,13 +57,103 @@ class TaskService {
               'day',
               DateTime(endDate.year, endDate.month, endDate.day)
                   .toIso8601String());
+      querySw.stop();
+      _logDebug('⏱ [getExecucoesDia] Query Supabase concluída em ${querySw.elapsedMilliseconds}ms | registros=${rows is List ? rows.length : 0}');
 
       // rows é List<dynamic> vindo do supabase
+      final mapSw = Stopwatch()..start();
+      final result = (rows as List)
+          .map((e) => e as Map<String, dynamic>)
+          .toList();
+      mapSw.stop();
+      sw.stop();
+      _logDebug('⏱ [getExecucoesDia] Mapeamento concluído em ${mapSw.elapsedMilliseconds}ms | total=${sw.elapsedMilliseconds}ms | registros=${result.length}');
+      return result;
+    } catch (e) {
+      // Fallback para view materializada se a normal não existir
+      _logDebug('⚠️ [getExecucoesDia] View normal não encontrada, tentando view materializada: $e');
+      try {
+        final rows = await _supabase
+            .from('mv_execucoes_dia_completa')
+            .select()
+            .inFilter('executor_id', executorIds)
+            .gte(
+                'day',
+                DateTime(startDate.year, startDate.month, startDate.day)
+                    .toIso8601String())
+            .lte(
+                'day',
+                DateTime(endDate.year, endDate.month, endDate.day)
+                    .toIso8601String());
+
+        return (rows as List)
+            .map((e) => e as Map<String, dynamic>)
+            .toList();
+      } catch (e2) {
+        // Fallback para view antiga se a nova não existir
+        _logDebug('⚠️ [getExecucoesDia] View materializada não encontrada, usando view antiga: $e2');
+        try {
+          final rows = await _supabase
+              .from('mv_execucoes_dia')
+              .select()
+              .inFilter('executor_id', executorIds)
+              .gte(
+                  'day',
+                  DateTime(startDate.year, startDate.month, startDate.day)
+                      .toIso8601String())
+              .lte(
+                  'day',
+                  DateTime(endDate.year, endDate.month, endDate.day)
+                      .toIso8601String());
+
+          // Adicionar tipo_periodo padrão para view antiga
+          return (rows as List)
+              .map((e) {
+                final map = e as Map<String, dynamic>;
+                // View antiga só tem EXECUCAO, então adicionar campo padrão
+                if (!map.containsKey('tipo_periodo')) {
+                  map['tipo_periodo'] = 'EXECUCAO';
+                }
+                return map;
+              })
+              .toList();
+        } catch (e3) {
+          _logDebug('⚠️ [getExecucoesDia] Erro ao buscar view antiga: $e3');
+          return [];
+        }
+      }
+    }
+  }
+
+  /// Busca execuções diárias (por frota) usando a view v_execucoes_dia_frota.
+  /// Exclui tarefas com status CANC e REPR (a view já filtra).
+  /// Filtros: frotaIds (perfil) e período (startDate/endDate).
+  Future<List<Map<String, dynamic>>> getExecucoesDiaFrota({
+    required List<String> frotaIds,
+    required DateTime startDate,
+    required DateTime endDate,
+  }) async {
+    if (frotaIds.isEmpty) return [];
+
+    try {
+      final rows = await _supabase
+          .from('v_execucoes_dia_frota')
+          .select()
+          .inFilter('frota_id', frotaIds)
+          .gte(
+              'day',
+              DateTime(startDate.year, startDate.month, startDate.day)
+                  .toIso8601String())
+          .lte(
+              'day',
+              DateTime(endDate.year, endDate.month, endDate.day)
+                  .toIso8601String());
+
       return (rows as List)
           .map((e) => e as Map<String, dynamic>)
           .toList();
     } catch (e) {
-      _logDebug('⚠️ [getExecucoesDia] Erro: $e');
+      _logDebug('⚠️ [getExecucoesDiaFrota] View não encontrada ou erro: $e');
       return [];
     }
   }
@@ -165,6 +262,65 @@ class TaskService {
       return result;
     } catch (e) {
       _logDebug('⚠️ [_loadExecutorPeriodsBatch] Erro: $e');
+      return {};
+    }
+  }
+
+  // Carregar períodos específicos por frota em BATCH (otimizado)
+  Future<Map<String, List<FrotaPeriod>>> _loadFrotaPeriodsBatch(
+    List<String> taskIds,
+  ) async {
+    if (taskIds.isEmpty) return {};
+    if (!_useSupabase) return {};
+    
+    try {
+      final rows = await _supabase
+          .from('frota_periods')
+          .select()
+          .filter('task_id', 'in', taskIds)
+          .order('frota_nome', ascending: true)
+          .order('data_inicio', ascending: true);
+
+      // Agrupa por tarefa e por frota, acumulando segmentos
+      final taskFrotaMap = <String, Map<String, FrotaPeriod>>{};
+
+      for (final row in rows as List) {
+        try {
+          final taskId = row['task_id']?.toString();
+          final frotaId = row['frota_id']?.toString();
+          if (taskId == null || frotaId == null) continue;
+
+          final frotaNome = row['frota_nome']?.toString() ?? '';
+          final segment = _segmentFromMap(row as Map<String, dynamic>);
+
+          final byFrota =
+              taskFrotaMap.putIfAbsent(taskId, () => <String, FrotaPeriod>{});
+
+          if (byFrota.containsKey(frotaId)) {
+            final existing = byFrota[frotaId]!;
+            byFrota[frotaId] = existing.copyWith(
+              periods: [...existing.periods, segment],
+            );
+          } else {
+            byFrota[frotaId] = FrotaPeriod(
+              frotaId: frotaId,
+              frotaNome: frotaNome,
+              periods: [segment],
+            );
+          }
+        } catch (e) {
+          _logDebug('⚠️ [_loadFrotaPeriodsBatch] Linha ignorada: $e');
+        }
+      }
+
+      // Converter para o formato esperado: taskId -> lista de FrotaPeriod
+      final result = <String, List<FrotaPeriod>>{};
+      for (final entry in taskFrotaMap.entries) {
+        result[entry.key] = entry.value.values.toList();
+      }
+      return result;
+    } catch (e) {
+      _logDebug('⚠️ [_loadFrotaPeriodsBatch] Erro: $e');
       return {};
     }
   }
@@ -705,7 +861,6 @@ class TaskService {
       final response = await query.timeout(
         const Duration(seconds: 5),
         onTimeout: () {
-          print('⚠️ Timeout ao carregar segmentos para tarefa $taskId');
           return <Map<String, dynamic>>[];
         },
       );
@@ -756,7 +911,6 @@ class TaskService {
           .timeout(
             const Duration(seconds: 5),
             onTimeout: () {
-              print('⚠️ Timeout ao carregar períodos por executor para tarefa $taskId');
               return <Map<String, dynamic>>[];
             },
           );
@@ -1219,7 +1373,6 @@ class TaskService {
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar tarefas');
               return <Map<String, dynamic>>[];
             },
           );
@@ -1235,7 +1388,6 @@ class TaskService {
             .timeout(
               const Duration(seconds: 30),
               onTimeout: () {
-                print('⚠️ Timeout ao buscar tarefas');
                 return <Map<String, dynamic>>[];
               },
             );
@@ -1267,9 +1419,27 @@ class TaskService {
       buildSw.stop();
       _logDebug('⏱ [tasks] Montagem inicial de ${tasks.length} tarefas em ${buildSw.elapsedMilliseconds}ms');
       
-      // Carregar segmentos em paralelo para todas as tarefas (limitado a 100 por tarefa)
-      final segmentFutures = <Future<void>>[];
+      // OTIMIZAÇÃO: Carregar segmentos e períodos em BATCH (uma query para todas as tarefas)
+      // Em vez de 231 queries individuais, fazemos apenas 3 queries batch
       final segSw = Stopwatch()..start();
+      final taskIds = tasks.map((t) => t.id).toList();
+      
+      // Carregar tudo em batch (muito mais rápido!)
+      final batchSw = Stopwatch()..start();
+      final batchResults = await Future.wait([
+        _loadGanttSegmentsBatch(taskIds, limitPerTask: 100),
+        _loadExecutorPeriodsBatch(taskIds),
+        _loadFrotaPeriodsBatch(taskIds),
+      ]);
+      batchSw.stop();
+      _logDebug('⏱ [tasks] Batch queries concluídas em ${batchSw.elapsedMilliseconds}ms');
+      
+      final segMap = batchResults[0] as Map<String, List<GanttSegment>>;
+      final epMap = batchResults[1] as Map<String, List<ExecutorPeriod>>;
+      final fpMap = batchResults[2] as Map<String, List<FrotaPeriod>>;
+      
+      // Aplicar segmentos e períodos às tarefas
+      final applySw = Stopwatch()..start();
       int totalSegments = 0;
       int tasksWithSegments = 0;
       int totalExecutorPeriods = 0;
@@ -1277,88 +1447,43 @@ class TaskService {
       
       for (var i = 0; i < tasks.length; i++) {
         final task = tasks[i];
-        final index = i;
+        final segments = segMap[task.id] ?? [];
+        final executorPeriods = epMap[task.id] ?? [];
+        final frotaPeriods = fpMap[task.id] ?? [];
         
-        // Carregar segmentos e períodos por executor de forma assíncrona
-        segmentFutures.add(
-          Future.wait([
-            _loadGanttSegments(task.id, limit: 100),
-            _loadExecutorPeriods(task.id),
-            _loadFrotaPeriods(task.id),
-          ]).then((results) {
-            final segments = results[0] as List<GanttSegment>;
-            final executorPeriods = results[1] as List<ExecutorPeriod>;
-            final frotaPeriods = results[2] as List<FrotaPeriod>;
-            
-            // Se não houver segmentos, criar um inicial baseado nas datas da tarefa
-            final finalSegments = segments.isEmpty
-                ? [
-                    GanttSegment(
-                      dataInicio: task.dataInicio,
-                      dataFim: task.dataFim,
-                      label: task.tarefa,
-                      tipo: _mapTaskTypeToSegmentType(task.tipo),
-                      tipoPeriodo: 'EXECUCAO',
-                    ),
-                  ]
-                : segments;
-            
-            tasks[index] = task.copyWith(
-              ganttSegments: finalSegments,
-              executorPeriods: executorPeriods,
-              frotaPeriods: frotaPeriods,
-            );
-            
-            totalSegments += finalSegments.length;
-            if (finalSegments.isNotEmpty) tasksWithSegments++;
-
-            if (executorPeriods.isNotEmpty) {
-              tasksWithExecutorPeriods++;
-              totalExecutorPeriods += executorPeriods.fold<int>(
-                0,
-                (prev, ep) => prev + ep.periods.length,
-              );
-            }
-
-            if (frotaPeriods.isNotEmpty) {
-              // apenas contabilização simples
-            }
-          }).catchError((e) {
-            print('⚠️ Erro ao carregar segmentos/períodos para tarefa ${task.id}: $e');
-            // Em caso de erro, criar segmento inicial baseado nas datas
-            final segmentType = _mapTaskTypeToSegmentType(task.tipo);
-            tasks[index] = task.copyWith(
-              ganttSegments: [
+        // Se não houver segmentos, criar um inicial baseado nas datas da tarefa
+        final finalSegments = segments.isEmpty
+            ? [
                 GanttSegment(
                   dataInicio: task.dataInicio,
                   dataFim: task.dataFim,
                   label: task.tarefa,
-                  tipo: segmentType,
+                  tipo: _mapTaskTypeToSegmentType(task.tipo),
                   tipoPeriodo: 'EXECUCAO',
                 ),
-              ],
-              executorPeriods: [],
-              frotaPeriods: [],
-            );
-          }),
+              ]
+            : segments;
+        
+        tasks[i] = task.copyWith(
+          ganttSegments: finalSegments,
+          executorPeriods: executorPeriods,
+          frotaPeriods: frotaPeriods,
         );
-      }
-      
-      // Aguardar todos os segmentos carregarem (com timeout reduzido)
-      try {
-        await Future.wait(segmentFutures, eagerError: false).timeout(
-          const Duration(seconds: 30),
-        );
-      } catch (e) {
-        if (e is TimeoutException) {
-          print('⚠️ Timeout ao carregar alguns segmentos. Continuando sem segmentos...');
-          // Não criar segmentos automaticamente - deixar vazio
-        } else {
-          print('⚠️ Erro ao carregar segmentos: $e');
-          // Não criar segmentos automaticamente - deixar vazio
+        
+        totalSegments += finalSegments.length;
+        if (finalSegments.isNotEmpty) tasksWithSegments++;
+
+        if (executorPeriods.isNotEmpty) {
+          tasksWithExecutorPeriods++;
+          totalExecutorPeriods += executorPeriods.fold<int>(
+            0,
+            (prev, ep) => prev + ep.periods.length,
+          );
         }
       }
+      applySw.stop();
       segSw.stop();
+      _logDebug('⏱ [tasks] Aplicação de segmentos/períodos concluída em ${applySw.elapsedMilliseconds}ms');
       _logDebug(
         '⏱ [tasks] Segmentos/Períodos: tempo=${segSw.elapsedMilliseconds}ms | tarefas=${tasks.length} | com segmentos=${tasksWithSegments} (total seg=${totalSegments}) | com períodos=${tasksWithExecutorPeriods} (total períodos=${totalExecutorPeriods})',
       );
@@ -1643,7 +1768,16 @@ class TaskService {
       }
       
       // Atualizar a view de execuções para refletir o novo estado
-      await _refreshMvExecucoesDia();
+      await refreshMvExecucoesDia();
+      
+      // Notificar outras abas sobre a criação da tarefa
+      if (kIsWeb) {
+        try {
+          TabSyncService().notifyTaskCreated(createdTask.id);
+        } catch (e) {
+          print('⚠️ Erro ao notificar criação de tarefa: $e');
+        }
+      }
       
       return finalTask;
     } catch (e) {
@@ -1658,6 +1792,15 @@ class TaskService {
         await _syncService.queueOperation('tasks', 'insert', taskId, _taskToMap(taskWithId));
       } catch (e2) {
         print('❌ Erro ao salvar tarefa no banco local: $e2');
+      }
+      
+      // Notificar outras abas sobre a criação da tarefa
+      if (kIsWeb) {
+        try {
+          TabSyncService().notifyTaskCreated(taskId);
+        } catch (e) {
+          print('⚠️ Erro ao notificar criação de tarefa: $e');
+        }
       }
       
       return taskWithId;
@@ -1891,7 +2034,16 @@ class TaskService {
         );
         
         // Atualizar a view de execuções para refletir a alteração
-        await _refreshMvExecucoesDia();
+        await refreshMvExecucoesDia();
+        
+        // Notificar outras abas sobre a atualização da tarefa
+        if (kIsWeb) {
+          try {
+            TabSyncService().notifyTaskUpdated(id);
+          } catch (e) {
+            print('⚠️ Erro ao notificar atualização de tarefa: $e');
+          }
+        }
         
         return updatedTask;
       } catch (e) {
@@ -1924,7 +2076,16 @@ class TaskService {
       await _supabase.from('tasks').delete().eq('id', id);
       
       // Atualizar a view de execuções para refletir a exclusão
-      await _refreshMvExecucoesDia();
+      await refreshMvExecucoesDia();
+      
+      // Notificar outras abas sobre a exclusão da tarefa
+      if (kIsWeb) {
+        try {
+          TabSyncService().notifyTaskDeleted(id);
+        } catch (e) {
+          print('⚠️ Erro ao notificar exclusão de tarefa: $e');
+        }
+      }
       
       // Deletar do banco local também
       try {
@@ -2083,7 +2244,7 @@ class TaskService {
       }
 
       // Atualizar a view de execuções para refletir a criação da subtarefa
-      await _refreshMvExecucoesDia();
+      await refreshMvExecucoesDia();
 
       return createdSubtask.copyWith(ganttSegments: loadedSegments);
     } catch (e) {
@@ -2101,15 +2262,34 @@ class TaskService {
   }
 
   // Atualiza a materialized view de execuções dia-a-dia após alterações relevantes
-  Future<void> _refreshMvExecucoesDia() async {
+  // NOTA: Se estiver usando view normal (v_execucoes_dia_completa), não precisa de refresh
+  // Método público para permitir atualização manual da view materializada (se ainda estiver em uso)
+  Future<void> refreshMvExecucoesDia() async {
     if (!_useSupabase) return;
     try {
-      print('🔄 Atualizando mv_execucoes_dia...');
-      await _supabase.rpc('refresh_mv_execucoes_dia');
-      print('✅ mv_execucoes_dia atualizada');
+      // Tentar atualizar a view materializada (se ainda estiver em uso)
+      // Se estiver usando view normal, este método não faz nada (view normal atualiza automaticamente)
+      try {
+        print('🔄 Atualizando mv_execucoes_dia_completa (se existir)...');
+        await _supabase.rpc('refresh_mv_execucoes_dia_completa');
+        print('✅ mv_execucoes_dia_completa atualizada');
+      } catch (e) {
+        // Se a view materializada não existir, tentar view antiga
+        try {
+          print('⚠️ View materializada completa não encontrada, tentando view antiga: $e');
+          print('🔄 Atualizando mv_execucoes_dia...');
+          await _supabase.rpc('refresh_mv_execucoes_dia');
+          print('✅ mv_execucoes_dia atualizada');
+        } catch (e2) {
+          // Se nenhuma view materializada existir, provavelmente está usando view normal
+          // View normal atualiza automaticamente, então não precisa fazer nada
+          print('ℹ️ Nenhuma view materializada encontrada. Usando view normal (atualiza automaticamente)');
+        }
+      }
     } catch (e) {
       // Não bloquear o fluxo se o refresh falhar; apenas logar
-      print('⚠️ Não foi possível atualizar mv_execucoes_dia: $e');
+      print('⚠️ Não foi possível atualizar views materializadas: $e');
+      print('ℹ️ Se estiver usando view normal (v_execucoes_dia_completa), isso é esperado');
     }
   }
 
@@ -2190,16 +2370,16 @@ class TaskService {
     }
   }
 
-  // Filtros
+  // Filtros (listas = multiseleção; null ou vazio = sem filtro)
   Future<List<Task>> filterTasks({
-    String? status,
-    String? regional,
-    String? divisao,
-    String? local,
-    String? tipo,
-    String? executor,
-    String? coordenador,
-    String? frota,
+    List<String>? status,
+    List<String>? regional,
+    List<String>? divisao,
+    List<String>? local,
+    List<String>? tipo,
+    List<String>? executor,
+    List<String>? coordenador,
+    List<String>? frota,
     DateTime? dataInicioMin,
     DateTime? dataFimMax,
   }) async {
@@ -2213,30 +2393,27 @@ class TaskService {
         'dataInicioMin=${dataInicioMin?.toIso8601String()}, dataFimMax=${dataFimMax?.toIso8601String()}',
       );
 
-      bool _match(String? value, String? filter) {
-        if (filter == null) return true;
+      bool _matchOne(String? value, List<String>? filterList) {
+        if (filterList == null || filterList.isEmpty) return true;
         if (value == null) return false;
-        // dividir por vírgula para suportar valores concatenados
         final parts = value.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty);
-        return parts.contains(filter);
+        return parts.any((p) => filterList.contains(p));
       }
 
       final filtradas = _tasks.where((task) {
-        if (status != null && task.status != status) return false;
-        if (regional != null && task.regional != regional) return false;
-        if (divisao != null && task.divisao != divisao) return false;
-        if (local != null && !task.locais.contains(local)) return false;
-        if (!_match(task.tipo, tipo)) return false;
-        // executores podem vir em executor (string) ou lista executores
-        if (executor != null) {
+        if (status != null && status.isNotEmpty && !status.contains(task.status)) return false;
+        if (regional != null && regional.isNotEmpty && !regional.contains(task.regional)) return false;
+        if (divisao != null && divisao.isNotEmpty && !divisao.contains(task.divisao)) return false;
+        if (local != null && local.isNotEmpty && !task.locais.any((l) => local.contains(l))) return false;
+        if (tipo != null && tipo.isNotEmpty && !_matchOne(task.tipo, tipo)) return false;
+        if (executor != null && executor.isNotEmpty) {
           final execList = task.executores.map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
           final execFromField = task.executor.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty);
-          if (!execList.contains(executor) && !execFromField.contains(executor)) {
-            return false;
-          }
+          final match = execList.any((e) => executor.contains(e)) || execFromField.any((e) => executor.contains(e));
+          if (!match) return false;
         }
-        if (!_match(task.coordenador, coordenador)) return false;
-        if (!_match(task.frota, frota)) return false;
+        if (coordenador != null && coordenador.isNotEmpty && !_matchOne(task.coordenador, coordenador)) return false;
+        if (frota != null && frota.isNotEmpty && !_matchOne(task.frota, frota)) return false;
         // Filtrar por período considerando os segmentos do Gantt
         if (dataInicioMin != null || dataFimMax != null) {
           // Se a tarefa tem segmentos, verificar se algum está no período
@@ -2322,14 +2499,20 @@ class TaskService {
             gantt_segments!inner(data_inicio,data_fim,label,tipo,tipo_periodo)
           ''');
 
-        if (status != null) query = query.eq('status', status);
-        if (regional != null) query = query.eq('regional', regional);
-        if (divisao != null) query = query.eq('divisao', divisao);
-        if (local != null) query = query.eq('local', local);
-        if (tipo != null) query = query.eq('tipo', tipo);
-        if (executor != null) query = query.ilike('executor', '%$executor%');
-        if (coordenador != null) query = query.eq('coordenador', coordenador);
-        if (frota != null) query = query.eq('frota', frota);
+        if (status != null && status.isNotEmpty) query = query.inFilter('status', status);
+        if (regional != null && regional.isNotEmpty) query = query.inFilter('regional', regional);
+        if (divisao != null && divisao.isNotEmpty) query = query.inFilter('divisao', divisao);
+        if (local != null && local.isNotEmpty) query = query.inFilter('local', local);
+        if (tipo != null && tipo.isNotEmpty) query = query.inFilter('tipo', tipo);
+        if (executor != null && executor.isNotEmpty) {
+          if (executor.length == 1) {
+            query = query.ilike('executor', '%${executor.single}%');
+          } else {
+            query = query.or(executor.map((e) => 'executor.ilike.%${e.replaceAll('%', '\\%')}%').join(','));
+          }
+        }
+        if (coordenador != null && coordenador.isNotEmpty) query = query.inFilter('coordenador', coordenador);
+        if (frota != null && frota.isNotEmpty) query = query.inFilter('frota', frota);
         // Overlap tanto na tarefa quanto nos segmentos
         if (dataFimMax != null) {
           query = query.lte('data_inicio', dataFimMax.toIso8601String());
@@ -2352,14 +2535,20 @@ class TaskService {
             gantt_segments!inner(data_inicio,data_fim,label,tipo,tipo_periodo)
           ''');
 
-        if (status != null) query = query.eq('status', status);
-        if (regional != null) query = query.eq('regional', regional);
-        if (divisao != null) query = query.eq('divisao', divisao);
-        if (local != null) query = query.eq('local', local);
-        if (tipo != null) query = query.eq('tipo', tipo);
-        if (executor != null) query = query.ilike('executor', '%$executor%');
-        if (coordenador != null) query = query.eq('coordenador', coordenador);
-        if (frota != null) query = query.eq('frota', frota);
+        if (status != null && status.isNotEmpty) query = query.inFilter('status', status);
+        if (regional != null && regional.isNotEmpty) query = query.inFilter('regional', regional);
+        if (divisao != null && divisao.isNotEmpty) query = query.inFilter('divisao', divisao);
+        if (local != null && local.isNotEmpty) query = query.inFilter('local', local);
+        if (tipo != null && tipo.isNotEmpty) query = query.inFilter('tipo', tipo);
+        if (executor != null && executor.isNotEmpty) {
+          if (executor.length == 1) {
+            query = query.ilike('executor', '%${executor.single}%');
+          } else {
+            query = query.or(executor.map((e) => 'executor.ilike.%${e.replaceAll('%', '\\%')}%').join(','));
+          }
+        }
+        if (coordenador != null && coordenador.isNotEmpty) query = query.inFilter('coordenador', coordenador);
+        if (frota != null && frota.isNotEmpty) query = query.inFilter('frota', frota);
         // Overlap na tarefa e nos segmentos (fallback)
         if (dataFimMax != null) {
           query = query.lte('data_inicio', dataFimMax.toIso8601String());
@@ -2531,8 +2720,10 @@ class TaskService {
   }
 
   // Estatísticas
-  Future<Map<String, dynamic>> getStatistics() async {
-    final allTasks = await getAllTasks();
+  // IMPORTANTE: Aceita lista opcional de tarefas para evitar buscar todas do banco
+  // Se tasks não for fornecida, usa getAllTasks() (pode ser pesado - evitar em produção)
+  Future<Map<String, dynamic>> getStatistics({List<Task>? tasks}) async {
+    final allTasks = tasks ?? await getAllTasks(aplicarPerfil: true);
     final total = allTasks.length;
     final porStatus = <String, int>{};
     final porTipo = <String, int>{};
@@ -2540,22 +2731,75 @@ class TaskService {
     int emAndamento = 0;
     int concluidas = 0;
     int programadas = 0;
+    int canceladas = 0;
+    int atrasadas = 0;
+    int venceHoje = 0;
+    int semExecutor = 0;
+    int semLocal = 0;
+    int semCoordenador = 0;
+
+    final now = DateTime.now();
+    final List<Task> atrasadasList = [];
+    final List<Task> venceHojeList = [];
+    final List<Task> semExecutorList = [];
+    final List<Task> semLocalList = [];
+    final List<Task> semCoordenadorList = [];
+    final List<Task> canceladasList = [];
+    final List<Task> emAndamentoList = [];
+    final List<Task> programadasList = [];
+    final List<Task> concluidasList = [];
+    final List<Task> listaTotal = [];
 
     for (var task in allTasks) {
-      porStatus[task.status] = (porStatus[task.status] ?? 0) + 1;
-      porTipo[task.tipo] = (porTipo[task.tipo] ?? 0) + 1;
-      porRegional[task.regional] = (porRegional[task.regional] ?? 0) + 1;
+      listaTotal.add(task);
+      final status = task.status.trim().toUpperCase();
+      final isConcluida = status.contains('CONC') || status.contains('RPAR');
+      final isAndamento = status.contains('ANDA');
+      final isProgramada = status.contains('PROG');
+      final isCancelada = status.contains('CANC');
 
-      switch (task.status) {
-        case 'ANDA':
-          emAndamento++;
-          break;
-        case 'CONC':
-          concluidas++;
-          break;
-        case 'PROG':
-          programadas++;
-          break;
+      porStatus[task.status.isEmpty ? 'Sem Status' : task.status] = (porStatus[task.status.isEmpty ? 'Sem Status' : task.status] ?? 0) + 1;
+      porTipo[task.tipo.isEmpty ? 'Sem Tipo' : task.tipo] = (porTipo[task.tipo.isEmpty ? 'Sem Tipo' : task.tipo] ?? 0) + 1;
+      porRegional[task.regional.isEmpty ? 'Sem Regional' : task.regional] = (porRegional[task.regional.isEmpty ? 'Sem Regional' : task.regional] ?? 0) + 1;
+
+      if (isConcluida) {
+        concluidas++;
+        concluidasList.add(task);
+      } else if (isAndamento) {
+        emAndamento++;
+        emAndamentoList.add(task);
+      } else if (isProgramada) {
+        programadas++;
+        programadasList.add(task);
+      } else if (isCancelada) {
+        canceladas++;
+        canceladasList.add(task);
+      }
+
+      if (task.executor.isEmpty && task.executores.isEmpty) {
+        semExecutor++;
+        semExecutorList.add(task);
+      }
+      if (task.locais.isEmpty && (task.localId == null || task.localId!.isEmpty)) {
+        semLocal++;
+        semLocalList.add(task);
+      }
+      if (task.coordenador.isEmpty) {
+        semCoordenador++;
+        semCoordenadorList.add(task);
+      }
+
+      // Prazos e datas
+      final fim = task.dataFim;
+      if (!isConcluida && !isCancelada && (isAndamento || isProgramada) && fim.isBefore(now)) {
+        atrasadas++;
+        atrasadasList.add(task);
+      } else if (!isConcluida && !isCancelada &&
+          fim.year == now.year &&
+          fim.month == now.month &&
+          fim.day == now.day) {
+        venceHoje++;
+        venceHojeList.add(task);
       }
     }
 
@@ -2564,6 +2808,22 @@ class TaskService {
       'emAndamento': emAndamento,
       'concluidas': concluidas,
       'programadas': programadas,
+      'canceladas': canceladas,
+      'atrasadas': atrasadas,
+      'venceHoje': venceHoje,
+      'semExecutor': semExecutor,
+      'semLocal': semLocal,
+      'semCoordenador': semCoordenador,
+      'listaAtrasadas': atrasadasList,
+      'listaVenceHoje': venceHojeList,
+      'listaSemExecutor': semExecutorList,
+      'listaSemLocal': semLocalList,
+      'listaSemCoordenador': semCoordenadorList,
+      'listaCanceladas': canceladasList,
+      'listaEmAndamento': emAndamentoList,
+      'listaProgramadas': programadasList,
+      'listaConcluidas': concluidasList,
+      'listaTotal': listaTotal,
       'porStatus': porStatus,
       'porTipo': porTipo,
       'porRegional': porRegional,
@@ -2690,14 +2950,14 @@ class TaskService {
         final tasks = await filterTasks(
           dataInicioMin: dataInicioMin,
           dataFimMax: dataFimMax,
-          status: status,
-          regional: regional,
-          divisao: divisao,
-          local: local,
-          tipo: tipo,
-          executor: executor,
-          coordenador: coordenador,
-          frota: frota,
+          status: status != null ? [status] : null,
+          regional: regional != null ? [regional] : null,
+          divisao: divisao != null ? [divisao] : null,
+          local: local != null ? [local] : null,
+          tipo: tipo != null ? [tipo] : null,
+          executor: executor != null ? [executor] : null,
+          coordenador: coordenador != null ? [coordenador] : null,
+          frota: frota != null ? [frota] : null,
         );
 
         final regionais = <String>{};
@@ -2777,5 +3037,70 @@ class TaskService {
     }
 
     return buffer.toString();
+  }
+
+  /// Subscribe para mudanças em tempo real na tabela tasks
+  /// Retorna um RealtimeChannel que pode ser usado para escutar INSERT, UPDATE e DELETE
+  RealtimeChannel subscribeToTasks({
+    required void Function(Task task) onUpsert,
+    required void Function(String taskId) onDelete,
+  }) {
+    final channel = _supabase
+        .channel('public:tasks')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'tasks',
+          callback: (payload) {
+            try {
+              final record = payload.newRecord;
+              if (record != null) {
+                final task = _taskFromMap(record);
+                print('📡 TaskService: Nova tarefa detectada via Realtime: ${task.id}');
+                onUpsert(task);
+              }
+            } catch (e) {
+              print('⚠️ Erro ao processar INSERT de tarefa via Realtime: $e');
+            }
+          },
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'tasks',
+          callback: (payload) {
+            try {
+              final record = payload.newRecord;
+              if (record != null) {
+                final task = _taskFromMap(record);
+                print('📡 TaskService: Tarefa atualizada via Realtime: ${task.id}');
+                onUpsert(task);
+              }
+            } catch (e) {
+              print('⚠️ Erro ao processar UPDATE de tarefa via Realtime: $e');
+            }
+          },
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.delete,
+          schema: 'public',
+          table: 'tasks',
+          callback: (payload) {
+            try {
+              final record = payload.oldRecord;
+              if (record != null && record['id'] != null) {
+                final taskId = record['id'] as String;
+                print('📡 TaskService: Tarefa deletada via Realtime: $taskId');
+                onDelete(taskId);
+              }
+            } catch (e) {
+              print('⚠️ Erro ao processar DELETE de tarefa via Realtime: $e');
+            }
+          },
+        )
+        .subscribe();
+    
+    print('✅ TaskService: Subscription Realtime ativada para tabela tasks');
+    return channel;
   }
 }

@@ -1,0 +1,4 @@
+// Init script do Gradle - configurações gerais
+// Nota: Este script não pode resolver problemas de SSL do Gradle Wrapper
+// pois o wrapper executa antes deste script ser carregado.
+// Use variáveis de ambiente JAVA_OPTS ou GRADLE_OPTS para resolver SSL.

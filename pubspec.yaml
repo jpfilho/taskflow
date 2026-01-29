@@ -51,6 +51,9 @@ dependencies:
   # Supabase
   supabase_flutter: ^2.5.6
   
+  # HTTP client para requisições
+  http: ^1.2.0
+  
   # File picker para seleção de arquivos
   file_picker: ^8.1.2
   
@@ -107,6 +110,16 @@ dependencies:
   
   # Gráficos modernos
   fl_chart: ^1.1.1
+  
+  # UUID para geração de IDs únicos
+  uuid: ^4.5.1
+  
+  # Crypto para hash determinístico (UUIDs determinísticos)
+  crypto: ^3.0.5
+  
+  # Internacionalização (formatação de datas)
+  # Versão atualizada para compatibilidade com flutter_gantt
+  intl: ^0.20.2
 
 dependency_overrides:
   record_platform_interface: ^1.4.0

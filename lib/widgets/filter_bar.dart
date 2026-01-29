@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 import '../utils/responsive.dart';
 import '../models/task.dart';
+import 'multi_select_filter_dialog.dart';
 
 class FilterBar extends StatefulWidget {
   final Function(Map<String, String?>) onFiltersChanged;
@@ -38,14 +39,14 @@ class FilterBar extends StatefulWidget {
 }
 
 class _FilterBarState extends State<FilterBar> {
-  String? _selectedRegional;
-  String? _selectedDivisao;
-  String? _selectedStatus;
-  String? _selectedLocal;
-  String? _selectedTipo;
-  String? _selectedExecutor;
-  String? _selectedFrota;
-  String? _selectedCoordenador;
+  Set<String> _selectedRegional = {};
+  Set<String> _selectedDivisao = {};
+  Set<String> _selectedStatus = {};
+  Set<String> _selectedLocal = {};
+  Set<String> _selectedTipo = {};
+  Set<String> _selectedExecutor = {};
+  Set<String> _selectedFrota = {};
+  Set<String> _selectedCoordenador = {};
   Map<String, String?> _lastSentFilters = {};
   Timer? _debounceTimer;
   bool _isExpanded = false; // Para mobile: controla se os filtros estão expandidos
@@ -62,17 +63,7 @@ class _FilterBarState extends State<FilterBar> {
     'COORDENADOR',
   ];
   
-  // Valores disponíveis para cada filtro (com resultados)
-  List<String> _regionais = [];
-  List<String> _divisoes = [];
-  List<String> _status = [];
-  List<String> _locais = [];
-  List<String> _tipos = [];
-  List<String> _executores = [];
-  List<String> _frotas = [];
-  List<String> _coordenadores = [];
-  
-  // Valores totais possíveis (para mostrar opções sem resultados em cinza)
+  // Valores totais possíveis para cada filtro (para multiseleção com pesquisa)
   List<String> _regionaisTotais = [];
   List<String> _divisoesTotais = [];
   List<String> _statusTotais = [];
@@ -115,15 +106,6 @@ class _FilterBarState extends State<FilterBar> {
     _executoresTotais = [];
     _frotasTotais = [];
     _coordenadoresTotais = [];
-
-    _regionais = [];
-    _divisoes = [];
-    _status = [];
-    _locais = [];
-    _tipos = [];
-    _executores = [];
-    _frotas = [];
-    _coordenadores = [];
 
     String _normalize(String s) => s.trim();
     void _splitAndAdd(Set<String> target, String raw) {
@@ -175,28 +157,24 @@ class _FilterBarState extends State<FilterBar> {
     _frotasTotais = sortSet(frotas);
     _coordenadoresTotais = sortSet(coordenadores);
 
-    _regionais = _regionaisTotais;
-    _divisoes = _divisoesTotais;
-    _status = _statusTotais;
-    _locais = _locaisTotais;
-    _tipos = _tiposTotais;
-    _executores = _executoresTotais;
-    _frotas = _frotasTotais;
-    _coordenadores = _coordenadoresTotais;
-
     if (mounted) setState(() {});
+  }
+
+  static Set<String> _parseFilterSet(String? value) {
+    if (value == null || value.trim().isEmpty) return {};
+    return value.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
   }
 
   void _updateFilters() {
     final current = <String, String?>{
-      'regional': _selectedRegional,
-      'divisao': _selectedDivisao,
-      'status': _selectedStatus,
-      'local': _selectedLocal,
-      'tipo': _selectedTipo,
-      'executor': _selectedExecutor,
-      'frota': _selectedFrota,
-      'coordenador': _selectedCoordenador,
+      'regional': _selectedRegional.isEmpty ? null : _selectedRegional.join(','),
+      'divisao': _selectedDivisao.isEmpty ? null : _selectedDivisao.join(','),
+      'status': _selectedStatus.isEmpty ? null : _selectedStatus.join(','),
+      'local': _selectedLocal.isEmpty ? null : _selectedLocal.join(','),
+      'tipo': _selectedTipo.isEmpty ? null : _selectedTipo.join(','),
+      'executor': _selectedExecutor.isEmpty ? null : _selectedExecutor.join(','),
+      'frota': _selectedFrota.isEmpty ? null : _selectedFrota.join(','),
+      'coordenador': _selectedCoordenador.isEmpty ? null : _selectedCoordenador.join(','),
       'minhasTarefas': _minhasTarefas ? 'true' : null,
     };
 
@@ -233,16 +211,16 @@ class _FilterBarState extends State<FilterBar> {
   @override
   void initState() {
     super.initState();
-    // Restaurar valores dos filtros se fornecidos
+    // Restaurar valores dos filtros se fornecidos (multiseleção: vírgula-separado)
     if (widget.initialFilters != null) {
-      _selectedRegional = widget.initialFilters!['regional'];
-      _selectedDivisao = widget.initialFilters!['divisao'];
-      _selectedStatus = widget.initialFilters!['status'];
-      _selectedLocal = widget.initialFilters!['local'];
-      _selectedTipo = widget.initialFilters!['tipo'];
-      _selectedExecutor = widget.initialFilters!['executor'];
-      _selectedFrota = widget.initialFilters!['frota'];
-      _selectedCoordenador = widget.initialFilters!['coordenador'];
+      _selectedRegional = _parseFilterSet(widget.initialFilters!['regional']);
+      _selectedDivisao = _parseFilterSet(widget.initialFilters!['divisao']);
+      _selectedStatus = _parseFilterSet(widget.initialFilters!['status']);
+      _selectedLocal = _parseFilterSet(widget.initialFilters!['local']);
+      _selectedTipo = _parseFilterSet(widget.initialFilters!['tipo']);
+      _selectedExecutor = _parseFilterSet(widget.initialFilters!['executor']);
+      _selectedFrota = _parseFilterSet(widget.initialFilters!['frota']);
+      _selectedCoordenador = _parseFilterSet(widget.initialFilters!['coordenador']);
       _minhasTarefas = widget.initialFilters!['minhasTarefas'] == 'true';
     }
     // Carregar valores iniciais a partir das tarefas visíveis (se houver)
@@ -261,14 +239,14 @@ class _FilterBarState extends State<FilterBar> {
     // Se os filtros iniciais mudaram, restaurar os valores
     if (widget.initialFilters != null && oldWidget.initialFilters != widget.initialFilters) {
       setState(() {
-        _selectedRegional = widget.initialFilters!['regional'];
-        _selectedDivisao = widget.initialFilters!['divisao'];
-        _selectedStatus = widget.initialFilters!['status'];
-        _selectedLocal = widget.initialFilters!['local'];
-        _selectedTipo = widget.initialFilters!['tipo'];
-        _selectedExecutor = widget.initialFilters!['executor'];
-        _selectedFrota = widget.initialFilters!['frota'];
-        _selectedCoordenador = widget.initialFilters!['coordenador'];
+        _selectedRegional = _parseFilterSet(widget.initialFilters!['regional']);
+        _selectedDivisao = _parseFilterSet(widget.initialFilters!['divisao']);
+        _selectedStatus = _parseFilterSet(widget.initialFilters!['status']);
+        _selectedLocal = _parseFilterSet(widget.initialFilters!['local']);
+        _selectedTipo = _parseFilterSet(widget.initialFilters!['tipo']);
+        _selectedExecutor = _parseFilterSet(widget.initialFilters!['executor']);
+        _selectedFrota = _parseFilterSet(widget.initialFilters!['frota']);
+        _selectedCoordenador = _parseFilterSet(widget.initialFilters!['coordenador']);
         _minhasTarefas = widget.initialFilters!['minhasTarefas'] == 'true';
       });
     }
@@ -277,25 +255,25 @@ class _FilterBarState extends State<FilterBar> {
   @override
   Widget build(BuildContext context) {
     final isMobile = Responsive.isMobile(context);
-    final isTablet = Responsive.isTablet(context);
-    final isCompact = isMobile || isTablet;
+    // Apenas mobile usa layout compacto (expandível); tablet e desktop usam barra completa
+    final isCompact = isMobile;
     
     // Sempre mostrar os filtros, mesmo durante o carregamento
     // Os dados serão atualizados em background quando chegarem
     
     if (isCompact) {
-      // Contar quantos filtros estão ativos
+      // Contar quantos filtros estão ativos (multiseleção: conjunto não vazio)
       final activeFiltersCount = [
-        _selectedRegional,
-        _selectedDivisao,
-        _selectedStatus,
-        _selectedLocal,
-        _selectedTipo,
-        _selectedExecutor,
-        _selectedFrota,
-        _selectedCoordenador,
-        if (_minhasTarefas) 'minhasTarefas',
-      ].where((f) => f != null).length;
+        _selectedRegional.isNotEmpty,
+        _selectedDivisao.isNotEmpty,
+        _selectedStatus.isNotEmpty,
+        _selectedLocal.isNotEmpty,
+        _selectedTipo.isNotEmpty,
+        _selectedExecutor.isNotEmpty,
+        _selectedFrota.isNotEmpty,
+        _selectedCoordenador.isNotEmpty,
+        _minhasTarefas,
+      ].where((f) => f).length;
 
       return Container(
         color: Colors.grey[200],
@@ -380,14 +358,14 @@ class _FilterBarState extends State<FilterBar> {
                       TextButton(
                         onPressed: () {
                           setState(() {
-                            _selectedRegional = null;
-                            _selectedDivisao = null;
-                            _selectedStatus = null;
-                            _selectedLocal = null;
-                            _selectedTipo = null;
-                            _selectedExecutor = null;
-                            _selectedFrota = null;
-                            _selectedCoordenador = null;
+                            _selectedRegional = {};
+                            _selectedDivisao = {};
+                            _selectedStatus = {};
+                            _selectedLocal = {};
+                            _selectedTipo = {};
+                            _selectedExecutor = {};
+                            _selectedFrota = {};
+                            _selectedCoordenador = {};
                             _minhasTarefas = false;
                             _updateFilters();
                           });
@@ -421,53 +399,29 @@ class _FilterBarState extends State<FilterBar> {
                       physics: const NeverScrollableScrollPhysics(),
                       shrinkWrap: true,
                       children: [
-                    _buildFilterDropdown('REGIONAL', _regionais, _selectedRegional, (value) {
-                      setState(() {
-                        _selectedRegional = value;
-                        _updateFilters();
-                      });
+                    _buildMultiSelectFilterField('REGIONAL', _regionaisTotais, _selectedRegional, (v) {
+                      setState(() { _selectedRegional = v; _updateFilters(); });
                     }, isMobile: true),
-                    _buildFilterDropdown('DIVISAO', _divisoes, _selectedDivisao, (value) {
-                      setState(() {
-                        _selectedDivisao = value;
-                        _updateFilters();
-                      });
+                    _buildMultiSelectFilterField('DIVISAO', _divisoesTotais, _selectedDivisao, (v) {
+                      setState(() { _selectedDivisao = v; _updateFilters(); });
                     }, isMobile: true),
-                    _buildFilterDropdown('STATUS', _status, _selectedStatus, (value) {
-                      setState(() {
-                        _selectedStatus = value;
-                        _updateFilters();
-                      });
+                    _buildMultiSelectFilterField('STATUS', _statusTotais, _selectedStatus, (v) {
+                      setState(() { _selectedStatus = v; _updateFilters(); });
                     }, isMobile: true),
-                    _buildFilterDropdown('LOCAL', _locais, _selectedLocal, (value) {
-                      setState(() {
-                        _selectedLocal = value;
-                        _updateFilters();
-                      });
+                    _buildMultiSelectFilterField('LOCAL', _locaisTotais, _selectedLocal, (v) {
+                      setState(() { _selectedLocal = v; _updateFilters(); });
                     }, isMobile: true),
-                    _buildFilterDropdown('TIPO', _tipos, _selectedTipo, (value) {
-                      setState(() {
-                        _selectedTipo = value;
-                        _updateFilters();
-                      });
+                    _buildMultiSelectFilterField('TIPO', _tiposTotais, _selectedTipo, (v) {
+                      setState(() { _selectedTipo = v; _updateFilters(); });
                     }, isMobile: true),
-                    _buildFilterDropdown('EXECUTOR', _executores, _selectedExecutor, (value) {
-                      setState(() {
-                        _selectedExecutor = value;
-                        _updateFilters();
-                      });
+                    _buildMultiSelectFilterField('EXECUTOR', _executoresTotais, _selectedExecutor, (v) {
+                      setState(() { _selectedExecutor = v; _updateFilters(); });
                     }, isMobile: true),
-                    _buildFilterDropdown('FROTA', _frotas, _selectedFrota, (value) {
-                      setState(() {
-                        _selectedFrota = value;
-                        _updateFilters();
-                      });
+                    _buildMultiSelectFilterField('FROTA', _frotasTotais, _selectedFrota, (v) {
+                      setState(() { _selectedFrota = v; _updateFilters(); });
                     }, isMobile: true),
-                    _buildFilterDropdown('COORDENADOR', _coordenadores, _selectedCoordenador, (value) {
-                      setState(() {
-                        _selectedCoordenador = value;
-                        _updateFilters();
-                      });
+                    _buildMultiSelectFilterField('COORDENADOR', _coordenadoresTotais, _selectedCoordenador, (v) {
+                      setState(() { _selectedCoordenador = v; _updateFilters(); });
                     }, isMobile: true),
                       ],
                   ),
@@ -478,236 +432,191 @@ class _FilterBarState extends State<FilterBar> {
         ),
       );
     } else {
+      // Desktop e tablet: usar todo o espaço horizontal com Expanded (altura suficiente para label + valor sem overflow)
       return Container(
-        height: 60,
+        width: double.infinity,
+        height: 72,
         color: Colors.grey[200],
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
         child: Stack(
-          children: [
-            // Indicador de loading (desktop - no topo)
-            if (widget.isFiltering)
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                child: Container(
-                  height: 3,
-                  child: LinearProgressIndicator(
-                    backgroundColor: Colors.grey[300],
-                    valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
+              children: [
+                if (widget.isFiltering)
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: Container(
+                      height: 3,
+                      child: LinearProgressIndicator(
+                        backgroundColor: Colors.grey[300],
+                        valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
+                      ),
+                    ),
+                  ),
+                Padding(
+                  padding: EdgeInsets.only(top: widget.isFiltering ? 3 : 0),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _buildSortSelector(isMobile: false),
+                      const SizedBox(width: 16),
+                      _buildMinhasTarefasToggle(),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: _buildMultiSelectFilterField(
+                          'REGIONAL', _regionaisTotais, _selectedRegional, (v) {
+                            setState(() { _selectedRegional = v; _updateFilters(); });
+                          },
+                          isMobile: false,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _buildMultiSelectFilterField(
+                          'DIVISAO', _divisoesTotais, _selectedDivisao, (v) {
+                            setState(() { _selectedDivisao = v; _updateFilters(); });
+                          },
+                          isMobile: false,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _buildMultiSelectFilterField(
+                          'STATUS', _statusTotais, _selectedStatus, (v) {
+                            setState(() { _selectedStatus = v; _updateFilters(); });
+                          },
+                          isMobile: false,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _buildMultiSelectFilterField(
+                          'LOCAL', _locaisTotais, _selectedLocal, (v) {
+                            setState(() { _selectedLocal = v; _updateFilters(); });
+                          },
+                          isMobile: false,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _buildMultiSelectFilterField(
+                          'TIPO', _tiposTotais, _selectedTipo, (v) {
+                            setState(() { _selectedTipo = v; _updateFilters(); });
+                          },
+                          isMobile: false,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _buildMultiSelectFilterField(
+                          'EXECUTOR', _executoresTotais, _selectedExecutor, (v) {
+                            setState(() { _selectedExecutor = v; _updateFilters(); });
+                          },
+                          isMobile: false,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _buildMultiSelectFilterField(
+                          'FROTA', _frotasTotais, _selectedFrota, (v) {
+                            setState(() { _selectedFrota = v; _updateFilters(); });
+                          },
+                          isMobile: false,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _buildMultiSelectFilterField(
+                          'COORDENADOR', _coordenadoresTotais, _selectedCoordenador, (v) {
+                            setState(() { _selectedCoordenador = v; _updateFilters(); });
+                          },
+                          isMobile: false,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ),
-            // Conteúdo dos filtros
-            Padding(
-              padding: EdgeInsets.only(top: widget.isFiltering ? 3 : 0),
-              child: Row(
-          children: [
-            // Seletor de Ordenação (desktop)
-            _buildSortSelector(isMobile: false),
-            const SizedBox(width: 12),
-            // Toggle Minhas Tarefas
-            _buildMinhasTarefasToggle(),
-            const SizedBox(width: 12),
-            Flexible(child: _buildFilterDropdown('REGIONAL', _regionais, _selectedRegional, (value) {
-              setState(() {
-                _selectedRegional = value;
-                _updateFilters();
-              });
-            }, totalOptions: _regionaisTotais)),
-            const SizedBox(width: 12),
-            Flexible(child: _buildFilterDropdown('DIVISAO', _divisoes, _selectedDivisao, (value) {
-              setState(() {
-                _selectedDivisao = value;
-                _updateFilters();
-              });
-            }, totalOptions: _divisoesTotais)),
-            const SizedBox(width: 12),
-            Flexible(child: _buildFilterDropdown('STATUS', _status, _selectedStatus, (value) {
-              setState(() {
-                _selectedStatus = value;
-                _updateFilters();
-              });
-            }, totalOptions: _statusTotais)),
-            const SizedBox(width: 12),
-            Flexible(child: _buildFilterDropdown('LOCAL', _locais, _selectedLocal, (value) {
-              setState(() {
-                _selectedLocal = value;
-                _updateFilters();
-              });
-            }, totalOptions: _locaisTotais)),
-            const SizedBox(width: 12),
-            Flexible(child: _buildFilterDropdown('TIPO', _tipos, _selectedTipo, (value) {
-              setState(() {
-                _selectedTipo = value;
-                _updateFilters();
-              });
-            }, totalOptions: _tiposTotais)),
-            const SizedBox(width: 12),
-            Flexible(child: _buildFilterDropdown('EXECUTOR', _executores, _selectedExecutor, (value) {
-              setState(() {
-                _selectedExecutor = value;
-                _updateFilters();
-              });
-            }, totalOptions: _executoresTotais)),
-            const SizedBox(width: 12),
-            Flexible(child: _buildFilterDropdown('FROTA', _frotas, _selectedFrota, (value) {
-              setState(() {
-                _selectedFrota = value;
-                _updateFilters();
-              });
-            }, totalOptions: _frotasTotais)),
-            const SizedBox(width: 12),
-            Flexible(child: _buildFilterDropdown('COORDENADOR', _coordenadores, _selectedCoordenador, (value) {
-              setState(() {
-                _selectedCoordenador = value;
-                _updateFilters();
-              });
-            }, totalOptions: _coordenadoresTotais)),
-                ],
-              ),
+              ],
             ),
-          ],
-        ),
-      );
+          );
     }
   }
 
-  Widget _buildFilterDropdown(String label, List<String> options, String? selectedValue, ValueChanged<String?> onChanged, {bool isMobile = false, List<String>? totalOptions}) {
-    // SEMPRE usar opções totais se fornecidas para mostrar todas as opções
-    // Se não houver opções totais, usar apenas as opções disponíveis (fallback)
-    final opcoesParaMostrar = (totalOptions != null && totalOptions.isNotEmpty) ? totalOptions : options;
-    
-    // Validar se o valor selecionado está presente na lista de itens
-    // Se estiver nas opções totais (mesmo sem resultados), manter o valor
-    // Se não estiver em nenhuma lista, usar null
-    String? valorValido;
-    if (selectedValue != null) {
-      // Se o valor está nas opções para mostrar (totais), usar diretamente
-      // Isso permite que valores selecionados permaneçam mesmo quando não têm resultados
-      if (opcoesParaMostrar.contains(selectedValue)) {
-        valorValido = selectedValue;
-      } else {
-        // Se não está nas opções totais, usar null
-        valorValido = null;
-      }
-    } else {
-      valorValido = null;
-    }
-    
+  Widget _buildMultiSelectFilterField(
+    String label,
+    List<String> options,
+    Set<String> selectedValues,
+    ValueChanged<Set<String>> onChanged, {
+    bool isMobile = false,
+  }) {
+    final hasSelection = selectedValues.isNotEmpty;
+    final horizontalPad = isMobile ? 6.0 : 12.0;
+    // Desktop: padding vertical menor para caber na barra (evitar overflow)
+    final verticalPad = isMobile ? 6.0 : 6.0;
+    final fontSize = isMobile ? 9.0 : 11.0;
+    final labelSize = isMobile ? 7.0 : 9.0;
+    final iconSize = isMobile ? 14.0 : 20.0;
     return Container(
-      padding: EdgeInsets.symmetric(horizontal: isMobile ? 6 : 4, vertical: isMobile ? 4 : 2),
+      constraints: isMobile ? null : const BoxConstraints(minWidth: 56),
+      padding: EdgeInsets.symmetric(horizontal: horizontalPad, vertical: verticalPad),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: valorValido != null ? Colors.blue : Colors.grey[300]!),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: hasSelection ? Colors.blue : Colors.grey[300]!, width: isMobile ? 1 : 1.2),
       ),
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          // Dropdown
-          DropdownButtonHideUnderline(
-            child: DropdownButton<String>(
-              value: valorValido,
-              hint: Padding(
-                padding: EdgeInsets.only(left: isMobile ? 6 : 8, top: isMobile ? 8 : 10),
-                child: Text(
-                  'Todos',
-                  style: TextStyle(fontSize: isMobile ? 9 : 10, color: Colors.grey[600]),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              selectedItemBuilder: (context) {
-                // selectedItemBuilder deve retornar um item para cada item na lista items
-                // Retornar uma lista com o mesmo tamanho de items
-                return [
-                  // Item para "Todos" (null)
-                  Padding(
-                    padding: EdgeInsets.only(left: isMobile ? 6 : 8, top: isMobile ? 8 : 10),
-                    child: Text(
-                      valorValido ?? 'Todos',
-                      style: TextStyle(
-                        fontSize: isMobile ? 9 : 10,
-                        color: valorValido == null ? Colors.grey[600] : Colors.black,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  // Itens para cada opção (mostrar todas, mas marcar as sem resultados)
-                  ...opcoesParaMostrar.map((option) {
-                    final temResultados = options.contains(option);
-                    return Padding(
-                      padding: EdgeInsets.only(left: isMobile ? 6 : 8, top: isMobile ? 8 : 10),
-                      child: Text(
-                        option,
-                        style: TextStyle(
-                          fontSize: isMobile ? 9 : 10,
-                          color: temResultados ? Colors.black : Colors.grey[400],
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    );
-                  }),
-                ];
+      child: InkWell(
+        onTap: () {
+          showDialog(
+            context: context,
+            builder: (ctx) => MultiSelectFilterDialog(
+              title: label,
+              options: options,
+              selectedValues: selectedValues,
+              onSelectionChanged: (newValues) {
+                onChanged(newValues);
               },
-              items: [
-                DropdownMenuItem<String>(
-                  value: null,
-                  child: Padding(
-                    padding: EdgeInsets.only(left: isMobile ? 6 : 8),
-                    child: Text('Todos', style: TextStyle(fontSize: isMobile ? 9 : 10, color: Colors.grey)),
-                  ),
-                ),
-                ...opcoesParaMostrar.map((option) {
-                  final temResultados = options.contains(option);
-                  // IMPORTANTE: Sempre usar o valor da opção, mesmo se não tiver resultados
-                  // Apenas desabilitar visualmente. Isso evita múltiplos valores null.
-                  return DropdownMenuItem(
-                    value: option, // Sempre usar o valor da opção
-                    enabled: temResultados, // Desabilitar apenas visualmente/interativamente
-                    child: Padding(
-                      padding: EdgeInsets.only(left: isMobile ? 6 : 8),
-                      child: Text(
-                        option,
-                        style: TextStyle(
-                          fontSize: isMobile ? 9 : 10,
-                          color: temResultados ? Colors.black : Colors.grey[400],
-                        ),
-                      ),
-                    ),
-                  );
-                }),
-              ],
-              onChanged: (String? newValue) {
-                // Só permitir mudança se a opção tiver resultados ou for null (Todos)
-                if (newValue == null || options.contains(newValue)) {
-                  onChanged(newValue);
-                }
-                // Se tentar selecionar uma opção sem resultados, ignorar
-              },
-              isExpanded: true,
-              icon: Icon(Icons.arrow_drop_down, size: isMobile ? 14 : 16),
+              searchHint: 'Pesquisar...',
             ),
-          ),
-          // Label sempre visível no topo (sobreposto com fundo branco)
-          Positioned(
-            top: isMobile ? -5 : -6,
-            left: isMobile ? 4 : 6,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 3),
-              color: Colors.white,
-              child: Text(
-                label,
-                style: TextStyle(
-                  fontSize: isMobile ? 7 : 8,
-                  color: Colors.grey[700],
-                  fontWeight: FontWeight.w600,
-                ),
-                overflow: TextOverflow.ellipsis,
+          );
+        },
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: labelSize,
+                      color: Colors.grey[700],
+                      fontWeight: FontWeight.w600,
+                      height: 1.1,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  SizedBox(height: isMobile ? 2 : 3),
+                  Text(
+                    selectedValues.isEmpty
+                        ? 'Todos'
+                        : selectedValues.length == 1
+                            ? selectedValues.first
+                            : '${selectedValues.length} selecionado(s)',
+                    style: TextStyle(
+                      fontSize: fontSize,
+                      color: selectedValues.isEmpty ? Colors.grey[600] : Colors.black,
+                      height: 1.2,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
               ),
             ),
-          ),
-        ],
+            Icon(Icons.arrow_drop_down, size: iconSize, color: Colors.grey[700]),
+          ],
+        ),
       ),
     );
   }
@@ -715,29 +624,28 @@ class _FilterBarState extends State<FilterBar> {
   Widget _buildSortSelector({bool isMobile = false}) {
     final currentSortColumn = widget.currentSortColumn ?? 'PERÍODO';
     final currentSortAscending = widget.currentSortAscending ?? true;
-    
+    final padH = isMobile ? 6.0 : 10.0;
+    final padV = isMobile ? 4.0 : 8.0;
+    final iconSz = isMobile ? 14.0 : 20.0;
+    final fontSz = isMobile ? 10.0 : 12.0;
     return Container(
-      padding: EdgeInsets.symmetric(horizontal: isMobile ? 6 : 4, vertical: isMobile ? 4 : 2),
+      padding: EdgeInsets.symmetric(horizontal: padH, vertical: padV),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: Colors.blue),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: Colors.blue, width: isMobile ? 1 : 1.2),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            Icons.sort,
-            size: isMobile ? 14 : 16,
-            color: Colors.blue[700],
-          ),
-          const SizedBox(width: 4),
+          Icon(Icons.sort, size: iconSz, color: Colors.blue[700]),
+          const SizedBox(width: 6),
           DropdownButton<String>(
             value: currentSortColumn,
-            isDense: true,
+            isDense: !isMobile,
             underline: const SizedBox.shrink(),
             style: TextStyle(
-              fontSize: isMobile ? 10 : 11,
+              fontSize: fontSz,
               color: Colors.blue[700],
               fontWeight: FontWeight.bold,
             ),
@@ -757,7 +665,7 @@ class _FilterBarState extends State<FilterBar> {
           IconButton(
             icon: Icon(
               currentSortAscending ? Icons.arrow_upward : Icons.arrow_downward,
-              size: isMobile ? 14 : 16,
+              size: iconSz,
               color: Colors.blue[700],
             ),
             onPressed: () {
@@ -767,8 +675,8 @@ class _FilterBarState extends State<FilterBar> {
             },
             padding: EdgeInsets.zero,
             constraints: BoxConstraints(
-              minWidth: isMobile ? 20 : 24,
-              minHeight: isMobile ? 20 : 24,
+              minWidth: isMobile ? 20 : 28,
+              minHeight: isMobile ? 20 : 28,
             ),
             tooltip: currentSortAscending ? 'Crescente' : 'Decrescente',
           ),
@@ -778,14 +686,19 @@ class _FilterBarState extends State<FilterBar> {
   }
 
   Widget _buildMinhasTarefasToggle() {
+    final isCompact = Responsive.isMobile(context);
+    final padH = isCompact ? 8.0 : 12.0;
+    final padV = isCompact ? 4.0 : 8.0;
+    final iconSz = isCompact ? 16.0 : 20.0;
+    final fontSz = isCompact ? 11.0 : 12.0;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: EdgeInsets.symmetric(horizontal: padH, vertical: padV),
       decoration: BoxDecoration(
         color: _minhasTarefas ? Colors.blue[100] : Colors.white,
-        borderRadius: BorderRadius.circular(4),
+        borderRadius: BorderRadius.circular(6),
         border: Border.all(
           color: _minhasTarefas ? Colors.blue : Colors.grey[300]!,
-          width: _minhasTarefas ? 2 : 1,
+          width: _minhasTarefas ? 2 : 1.2,
         ),
       ),
       child: Row(
@@ -793,19 +706,19 @@ class _FilterBarState extends State<FilterBar> {
         children: [
           Icon(
             Icons.person,
-            size: 16,
+            size: iconSz,
             color: _minhasTarefas ? Colors.blue[700] : Colors.grey[600],
           ),
-          const SizedBox(width: 6),
+          SizedBox(width: isCompact ? 6 : 8),
           Text(
             'Minhas Tarefas',
             style: TextStyle(
-              fontSize: 11,
+              fontSize: fontSz,
               fontWeight: _minhasTarefas ? FontWeight.bold : FontWeight.normal,
               color: _minhasTarefas ? Colors.blue[700] : Colors.grey[700],
             ),
           ),
-          const SizedBox(width: 6),
+          SizedBox(width: isCompact ? 6 : 8),
           Switch(
             value: _minhasTarefas,
             onChanged: (value) {

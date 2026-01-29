@@ -1,5 +1,7 @@
 class Comunidade {
   final String? id;
+  final String regionalId; // ID da regional
+  final String regionalNome; // Nome da regional (para exibição)
   final String divisaoId; // ID da divisão
   final String divisaoNome; // Nome da divisão (para exibição)
   final String segmentoId; // ID do segmento
@@ -13,6 +15,8 @@ class Comunidade {
 
   Comunidade({
     this.id,
+    required this.regionalId,
+    required this.regionalNome,
     required this.divisaoId,
     required this.divisaoNome,
     required this.segmentoId,
@@ -28,6 +32,8 @@ class Comunidade {
   factory Comunidade.fromMap(Map<String, dynamic> map) {
     return Comunidade(
       id: map['id'] as String?,
+      regionalId: map['regional_id'] as String? ?? '',
+      regionalNome: map['regional_nome'] as String? ?? '',
       divisaoId: map['divisao_id'] as String,
       divisaoNome: map['divisao_nome'] as String? ?? map['divisao_id'] as String,
       segmentoId: map['segmento_id'] as String,
@@ -50,6 +56,8 @@ class Comunidade {
   Map<String, dynamic> toMap() {
     return {
       'id': id,
+      'regional_id': regionalId,
+      'regional_nome': regionalNome,
       'divisao_id': divisaoId,
       'divisao_nome': divisaoNome,
       'segmento_id': segmentoId,

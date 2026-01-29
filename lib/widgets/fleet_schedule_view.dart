@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'dart:async';
 import '../models/task.dart';
 import '../models/frota.dart';
 import '../models/tipo_atividade.dart';
@@ -12,6 +15,7 @@ import '../services/tipo_atividade_service.dart';
 import '../services/auth_service_simples.dart';
 import '../services/feriado_service.dart';
 import '../services/status_service.dart';
+import '../services/tab_sync_service.dart';
 import '../utils/responsive.dart';
 
 class FleetScheduleView extends StatefulWidget {
@@ -59,6 +63,8 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
   List<Frota> _frotas = [];
   bool _isLoading = true;
   List<FleetTaskRow> _fleetRows = [];
+  /// Dias com conflito por frota (mesmo conceito da tela de equipes: múltiplos locais no mesmo dia).
+  Map<String, Set<DateTime>> _conflictDaysByFrota = {};
   final ScrollController _tableVerticalScrollController = ScrollController();
   final ScrollController _ganttVerticalScrollController = ScrollController();
   final ScrollController _ganttHorizontalScrollController = ScrollController();
@@ -81,6 +87,15 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
   // Serviços para modal de atividades
   final StatusService _statusService = StatusService();
   Map<String, Status> _statusMap = {}; // Mapa de código de status -> Status
+  
+  // Serviço de sincronização entre abas
+  StreamSubscription<Map<String, dynamic>>? _tabSyncSubscription;
+  
+  // Subscription do Supabase Realtime
+  RealtimeChannel? _realtimeChannel;
+  
+  // Indicador de atualização manual
+  bool _isRefreshing = false;
 
   @override
   void initState() {
@@ -104,6 +119,63 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
       }
     });
     
+    // Inicializar sincronização entre abas (apenas no web)
+    if (kIsWeb) {
+      try {
+        TabSyncService().initialize();
+        _tabSyncSubscription = TabSyncService().events.listen((event) {
+          final type = event['type']?.toString() ?? 'null';
+          print('📡 FleetScheduleView: Evento recebido via BroadcastChannel: $type');
+          
+          if (type == 'task_created' || type == 'task_updated' || type == 'task_deleted' || type == 'tasks_reload') {
+            // Forçar atualização e recarregar dados
+            print('🔄 FleetScheduleView: Recarregando dados devido a evento de outra aba: $type');
+            if (mounted) {
+              _reloadWithViewRefresh(showLoading: false);
+              // Notificar o callback se existir
+              if (widget.onTasksUpdated != null) {
+                widget.onTasksUpdated!();
+              }
+            }
+          }
+        });
+        print('✅ FleetScheduleView: Sincronização entre abas inicializada');
+      } catch (e) {
+        print('⚠️ Erro ao inicializar sincronização entre abas: $e');
+      }
+    }
+    
+    // Inicializar Supabase Realtime para escutar mudanças na tabela tasks
+    try {
+      _realtimeChannel = widget.taskService.subscribeToTasks(
+        onUpsert: (task) {
+          print('📡 FleetScheduleView: Tarefa criada/atualizada via Supabase Realtime: ${task.id}');
+          // Forçar atualização e recarregar dados
+          if (mounted) {
+            _reloadWithViewRefresh(showLoading: false);
+            // Notificar o callback se existir
+            if (widget.onTasksUpdated != null) {
+              widget.onTasksUpdated!();
+            }
+          }
+        },
+        onDelete: (taskId) {
+          print('📡 FleetScheduleView: Tarefa deletada via Supabase Realtime: $taskId');
+          // Forçar atualização e recarregar dados
+          if (mounted) {
+            _reloadWithViewRefresh(showLoading: false);
+            // Notificar o callback se existir
+            if (widget.onTasksUpdated != null) {
+              widget.onTasksUpdated!();
+            }
+          }
+        },
+      );
+      print('✅ FleetScheduleView: Subscription Supabase Realtime ativada');
+    } catch (e) {
+      print('⚠️ Erro ao inicializar Supabase Realtime: $e');
+    }
+    
     _loadData();
   }
 
@@ -114,12 +186,14 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
     if (oldWidget.startDate != widget.startDate || oldWidget.endDate != widget.endDate) {
       print('🔄 Período mudou, reconstruindo dados...');
       _loadFeriados(); // Recarregar feriados para o novo período
-      _buildFleetRows();
+      _buildFleetRowsFromView();
     }
   }
 
   @override
   void dispose() {
+    _tabSyncSubscription?.cancel();
+    _realtimeChannel?.unsubscribe();
     _tableVerticalScrollController.dispose();
     _ganttVerticalScrollController.dispose();
     _ganttHorizontalScrollController.dispose();
@@ -195,12 +269,15 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
       setState(() {
         _tasks = tasks;
         _frotas = frotasFiltradas;
-        _isLoading = false;
       });
-      
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _buildFleetRows();
-      });
+      // Manter loading até as linhas (view) estarem prontas, para não mostrar
+      // "Nenhuma frota encontrada" antes de terminar o carregamento.
+      await _buildFleetRowsFromView();
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     } catch (e, stackTrace) {
       print('❌ Erro ao carregar dados: $e');
       print('📚 StackTrace: $stackTrace');
@@ -235,8 +312,214 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
     return _feriadosMap.containsKey(dateKey);
   }
 
+  /// Recarrega dados
+  /// Se estiver usando view normal (v_execucoes_dia_completa), não precisa de refresh - atualiza automaticamente
+  /// Se estiver usando view materializada, força o refresh primeiro
+  Future<void> _reloadWithViewRefresh({bool showLoading = false}) async {
+    if (showLoading && mounted) {
+      setState(() {
+        _isRefreshing = true;
+      });
+    }
+    
+    print('🔄 FleetScheduleView: Recarregando dados...');
+    try {
+      // Tentar atualizar view materializada (se existir)
+      // Se estiver usando view normal, isso não faz nada e a view já está atualizada automaticamente
+      try {
+        await widget.taskService.refreshMvExecucoesDia();
+        // Aguardar um pouco apenas se for view materializada (view normal não precisa)
+        await Future.delayed(const Duration(milliseconds: 200));
+      } catch (e) {
+        // Se falhar, pode ser porque está usando view normal (que não precisa de refresh)
+        print('ℹ️ View materializada não encontrada ou erro (pode ser normal se estiver usando view normal): $e');
+      }
+      
+      // Recarregar todos os dados (view normal já está atualizada automaticamente)
+      await _loadData();
+      
+      print('✅ FleetScheduleView: Dados recarregados com sucesso');
+    } catch (e, stackTrace) {
+      print('❌ FleetScheduleView: Erro ao recarregar dados: $e');
+      print('   Stack trace: $stackTrace');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erro ao atualizar dados: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } finally {
+      if (showLoading && mounted) {
+        setState(() {
+          _isRefreshing = false;
+        });
+      }
+    }
+  }
+
+  /// Atualização manual via botão
+  Future<void> _manualRefresh() async {
+    await _reloadWithViewRefresh(showLoading: true);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Dados atualizados'),
+          backgroundColor: Colors.green,
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  /// Constrói linhas a partir da view v_execucoes_dia_frota (exclui CANC e REPR).
+  /// Em caso de erro ou view indisponível, faz fallback para _buildFleetRows().
+  Future<void> _buildFleetRowsFromView() async {
+    if (_frotas.isEmpty) {
+      setState(() => _fleetRows = []);
+      return;
+    }
+    final frotaIds = _frotas.map((e) => e.id).toList();
+    try {
+      final rows = await widget.taskService.getExecucoesDiaFrota(
+        frotaIds: frotaIds,
+        startDate: widget.startDate,
+        endDate: widget.endDate,
+      );
+      if (!mounted) return;
+      final byFrota = <String, List<Map<String, dynamic>>>{};
+      final conflictDaysByFrota = <String, Set<DateTime>>{};
+      for (final r in rows) {
+        final fid = r['frota_id']?.toString() ?? '';
+        if (fid.isEmpty) continue;
+        byFrota.putIfAbsent(fid, () => []).add(r);
+        if (r['has_conflict'] == true) {
+          final dayStr = r['day']?.toString();
+          if (dayStr != null) {
+            final d = DateTime.parse(dayStr);
+            final dayKey = DateTime(d.year, d.month, d.day);
+            conflictDaysByFrota.putIfAbsent(fid, () => <DateTime>{}).add(dayKey);
+          }
+        }
+      }
+      final fleetRows = <FleetTaskRow>[];
+      final sortedFrotas = _getSortedFrotas();
+      for (final frota in sortedFrotas) {
+        final list = byFrota[frota.id] ?? [];
+        final tasksById = <String, Task>{};
+        final taskDaysByTipo = <String, Map<String, List<DateTime>>>{};
+        for (final r in list) {
+          final taskId = r['task_id']?.toString() ?? '';
+          if (taskId.isEmpty) continue;
+          final dayStr = r['day']?.toString();
+          if (dayStr == null) continue;
+          final day = DateTime.parse(dayStr);
+          final tipoPeriodo = (r['tipo_periodo']?.toString() ?? 'EXECUCAO').toUpperCase();
+          final locName = (r['local_nome'] ?? r['local'] ?? r['loc'] ?? '').toString();
+          final locKey = (r['loc_key'] ?? '').toString();
+          final locs = locName.isNotEmpty ? locName.split(RegExp(r'\s*\|\s*')).where((e) => e.isNotEmpty).toList() : <String>[];
+          final locIds = locKey.isNotEmpty ? locKey.split('|').where((e) => e.isNotEmpty).toList() : <String>[];
+          final taskStatus = r['task_status']?.toString() ?? '';
+          final taskTipo = r['task_tipo']?.toString() ?? '';
+          final taskLabel = (r['task_tarefa'] ?? r['task_tipo'] ?? '').toString();
+          final hasConflict = (r['has_conflict'] == true);
+          taskDaysByTipo.putIfAbsent(taskId, () => {});
+          taskDaysByTipo[taskId]!.putIfAbsent(tipoPeriodo, () => []).add(day);
+          tasksById.putIfAbsent(
+            taskId,
+            () => Task(
+              id: taskId,
+              status: taskStatus,
+              statusNome: '',
+              regional: '',
+              divisao: '',
+              locais: locs,
+              segmento: '',
+              equipes: const [],
+              tipo: taskTipo,
+              tarefa: taskLabel,
+              executores: const [],
+              executor: '',
+              frota: frota.nome + (frota.placa.isNotEmpty ? ' - ${frota.placa}' : ''),
+              coordenador: '',
+              si: '',
+              dataInicio: day,
+              dataFim: day,
+              ganttSegments: const [],
+              executorPeriods: const [],
+              frotaPeriods: const [],
+              precisaSi: false,
+              executorIds: const [],
+              equipeIds: const [],
+              frotaIds: const [],
+              localIds: locIds,
+              hasConflict: hasConflict,
+            ),
+          );
+        }
+        // Montar segmentos do Gantt a partir dos dias (agrupados por tipo_periodo)
+        for (final entry in tasksById.entries.toList()) {
+          final taskId = entry.key;
+          final task = entry.value;
+          final daysByTipo = taskDaysByTipo[taskId] ?? {};
+          if (daysByTipo.isEmpty) continue;
+          final segments = <GanttSegment>[];
+          DateTime? minStart;
+          DateTime? maxEnd;
+          for (final tipoPeriodoEntry in daysByTipo.entries) {
+            final tipoPeriodo = tipoPeriodoEntry.key;
+            final days = tipoPeriodoEntry.value;
+            if (days.isEmpty) continue;
+            days.sort();
+            DateTime? segStart;
+            DateTime? segEnd;
+            for (final d in days) {
+              final dDate = DateTime(d.year, d.month, d.day);
+              if (segStart == null) {
+                segStart = dDate;
+                segEnd = dDate;
+                continue;
+              }
+              if (dDate.difference(segEnd!).inDays <= 1) {
+                segEnd = dDate;
+              } else {
+                segments.add(GanttSegment(dataInicio: segStart, dataFim: segEnd, label: '', tipo: 'ADM', tipoPeriodo: tipoPeriodo));
+                if (minStart == null || segStart.isBefore(minStart)) minStart = segStart;
+                if (maxEnd == null || segEnd.isAfter(maxEnd)) maxEnd = segEnd;
+                segStart = dDate;
+                segEnd = dDate;
+              }
+            }
+            if (segStart != null) {
+              segments.add(GanttSegment(dataInicio: segStart, dataFim: segEnd ?? segStart, label: '', tipo: 'ADM', tipoPeriodo: tipoPeriodo));
+              if (minStart == null || segStart.isBefore(minStart)) minStart = segStart;
+              if (maxEnd == null || (segEnd ?? segStart).isAfter(maxEnd)) maxEnd = segEnd ?? segStart;
+            }
+          }
+          if (segments.isNotEmpty && minStart != null && maxEnd != null) {
+            tasksById[taskId] = task.copyWith(ganttSegments: segments, dataInicio: minStart, dataFim: maxEnd);
+          }
+        }
+        fleetRows.add(FleetTaskRow(frota: frota, tasks: tasksById.values.toList()));
+      }
+      if (!mounted) return;
+      setState(() {
+        _fleetRows = fleetRows;
+        _conflictDaysByFrota = conflictDaysByFrota;
+      });
+      print('✅ FleetScheduleView: Dados via view v_execucoes_dia_frota: ${fleetRows.length} frotas');
+    } catch (e, st) {
+      print('⚠️ FleetScheduleView: View indisponível, usando fallback: $e');
+      print(st);
+      setState(() => _conflictDaysByFrota = {});
+      _buildFleetRows();
+    }
+  }
+
   void _buildFleetRows() {
-    print('🔨 _buildFleetRows: Iniciando construção');
+    print('🔨 _buildFleetRows: Iniciando construção (fallback)');
     print('   Período: ${widget.startDate} a ${widget.endDate}');
     
     // Criar mapa de frotas por nome e placa
@@ -261,8 +544,15 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
     final periodStart = DateTime(widget.startDate.year, widget.startDate.month, widget.startDate.day);
     final periodEnd = DateTime(widget.endDate.year, widget.endDate.month, widget.endDate.day);
 
+    // Desconsiderar CANC (cancelados) e REPR (reprogramados)
+    const statusExcluidos = ['CANC', 'REPR'];
+    final tasksFiltradas = _tasks.where((t) {
+      final s = (t.status).toUpperCase().trim();
+      return s.isEmpty || !statusExcluidos.contains(s);
+    }).toList();
+
     // Processar tarefas e vincular às frotas
-    for (var task in _tasks) {
+    for (var task in tasksFiltradas) {
       // Verificar se a tarefa tem segmentos no período selecionado
       bool hasSegmentInPeriod = false;
       for (var segment in task.ganttSegments) {
@@ -334,7 +624,75 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
     
     setState(() {
       _fleetRows = fleetRows;
+      _conflictDaysByFrota = {}; // fallback não tem sinal de conflito da view
     });
+  }
+
+  /// Verifica se o segmento cobre o dia (mesma lógica da tela de equipes).
+  bool _overlapsDay(DateTime segStart, DateTime segEnd, DateTime dayStart, DateTime dayEnd) {
+    final s = DateTime(segStart.year, segStart.month, segStart.day);
+    final e = DateTime(segEnd.year, segEnd.month, segEnd.day);
+    return s.isBefore(dayEnd) && e.isAfter(dayStart);
+  }
+
+  /// Chave de local para comparar conflitos (múltiplos locais no mesmo dia = conflito).
+  String _taskLocationKey(Task task) {
+    if (task.localIds.isNotEmpty) {
+      return task.localIds.join('|');
+    }
+    if (task.locais.isNotEmpty) {
+      return task.locais.join('|');
+    }
+    return '';
+  }
+
+  /// Conflito em um dia para uma frota: view sinalizou ou múltiplos locais distintos (EXECUÇÃO).
+  bool _hasConflictOnDayForFrota(DateTime day, String frotaId) {
+    final dayStart = DateTime(day.year, day.month, day.day);
+    final dayEnd = dayStart.add(const Duration(days: 1));
+
+    final conflicts = _conflictDaysByFrota[frotaId];
+    if (conflicts != null && conflicts.contains(dayStart)) {
+      return true;
+    }
+
+    FleetTaskRow? row;
+    for (final r in _fleetRows) {
+      if (r.frota.id == frotaId) {
+        row = r;
+        break;
+      }
+    }
+    if (row == null || row.tasks.isEmpty) return false;
+
+    final Set<String> locationsWithSegmentsOnDay = {};
+    for (final task in row.tasks) {
+      if (task.status.toUpperCase().trim() == 'CANC' || task.status.toUpperCase().trim() == 'REPR') {
+        continue;
+      }
+      bool taskHasExecSegmentOnDay = false;
+      for (final segment in task.ganttSegments) {
+        if (segment.tipoPeriodo.toUpperCase() != 'EXECUCAO') continue;
+        if (_overlapsDay(segment.dataInicio, segment.dataFim, dayStart, dayEnd)) {
+          taskHasExecSegmentOnDay = true;
+          break;
+        }
+      }
+      if (taskHasExecSegmentOnDay) {
+        final locKey = _taskLocationKey(task);
+        locationsWithSegmentsOnDay.add(locKey.isNotEmpty ? locKey : 'task-${task.id}');
+      }
+    }
+    return locationsWithSegmentsOnDay.length > 1;
+  }
+
+  /// Se a frota tem conflito em algum dia do período.
+  bool _hasConflictForFrota(String frotaId) {
+    final days = _getDaysInPeriod();
+    for (final day in days) {
+      if (_hasConflictOnDayForFrota(day, frotaId)) return true;
+    }
+    return false;
   }
 
   List<Frota> _getSortedFrotas() {
@@ -566,20 +924,23 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
 
   Widget _buildFleetTableRow(FleetTaskRow row, int index) {
     final frota = row.frota;
-    
+    final hasConflict = _hasConflictForFrota(frota.id);
+
     return Container(
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: Colors.grey[200]!)),
-        color: row.tasks.isNotEmpty ? Colors.white : Colors.grey[50],
+        color: hasConflict
+            ? Colors.red[100]
+            : (row.tasks.isNotEmpty ? Colors.white : Colors.grey[50]),
       ),
       child: Row(
         children: [
-          _buildCell(frota.regional ?? '-', 100),
-          _buildCell(frota.divisao ?? '-', 100),
-          _buildCell(_getTipoVeiculoLabel(frota.tipoVeiculo), 100),
-          _buildCell(frota.placa, 100),
-          _buildTasksCell(row.tasks.length, row, 80),
-          _buildFleetNameCell(frota, 150),
+          _buildCell(frota.regional ?? '-', 100, hasConflict: hasConflict),
+          _buildCell(frota.divisao ?? '-', 100, hasConflict: hasConflict),
+          _buildCell(_getTipoVeiculoLabel(frota.tipoVeiculo), 100, hasConflict: hasConflict),
+          _buildCell(frota.placa, 100, hasConflict: hasConflict),
+          _buildTasksCell(row.tasks.length, row, 80, hasConflict: hasConflict),
+          _buildFleetNameCell(frota, 150, hasConflict: hasConflict),
         ],
       ),
     );
@@ -671,6 +1032,30 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
+                              // Botão de atualizar (antes dos outros ícones)
+                              Tooltip(
+                                message: 'Atualizar dados',
+                                child: _isRefreshing
+                                    ? const SizedBox(
+                                        width: 20,
+                                        height: 20,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          valueColor: AlwaysStoppedAnimation<Color>(Colors.grey),
+                                        ),
+                                      )
+                                    : IconButton(
+                                        icon: const Icon(Icons.refresh, size: 18),
+                                        color: Colors.grey[700],
+                                        padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints(
+                                          minWidth: 32,
+                                          minHeight: 24,
+                                        ),
+                                        onPressed: _isRefreshing ? null : _manualRefresh,
+                                      ),
+                              ),
+                              const SizedBox(width: 6),
                               Tooltip(
                                 message: _showOnlyLocalText ? 'Mostrar local e tarefa' : 'Mostrar só local',
                                 child: IconButton(
@@ -999,7 +1384,7 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
                       );
                     }).toList(),
                   ),
-                  // Segmentos das tarefas
+                  // Segmentos das tarefas (com overlay de conflito por dia, igual à tela de equipes)
                   ...row.tasks.expand((task) {
                     return task.ganttSegments.map((segment) {
                       final startDate = DateTime(
@@ -1013,7 +1398,6 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
                         segment.dataFim.day,
                       );
                       
-                      // Verificar se o segmento está no período
                       final periodEnd = DateTime(widget.endDate.year, widget.endDate.month, widget.endDate.day);
                       final periodStart = DateTime(widget.startDate.year, widget.startDate.month, widget.startDate.day);
                       
@@ -1025,24 +1409,69 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
                       final duration = endDate.difference(startDate).inDays + 1;
                       final barWidth = duration * dayWidth;
                       
+                      // Dias de conflito neste segmento (mesma lógica da tela de equipes)
+                      List<DateTime> conflictDays = [];
+                      var currentDay = startDate.isBefore(periodStart) ? periodStart : startDate;
+                      final lastDay = endDate.isAfter(periodEnd) ? periodEnd : endDate;
+                      while (!currentDay.isAfter(lastDay)) {
+                        if (_hasConflictOnDayForFrota(currentDay, row.frota.id)) {
+                          conflictDays.add(DateTime(currentDay.year, currentDay.month, currentDay.day));
+                        }
+                        currentDay = currentDay.add(const Duration(days: 1));
+                      }
+                      
                       final segmentColor = _getSegmentColor(segment, task);
                       
                       return Positioned(
                         left: startOffset,
                         top: 1,
                         bottom: 1,
-                        child: Container(
+                        child: SizedBox(
                           width: barWidth - 1,
                           height: _rowHeight - 2,
-                          decoration: BoxDecoration(
-                            color: segmentColor,
-                            borderRadius: BorderRadius.circular(2),
-                            border: Border.all(
-                              color: segmentColor.withOpacity(0.3),
-                              width: 1,
-                            ),
+                          child: Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              Container(
+                                width: barWidth - 1,
+                                height: _rowHeight - 2,
+                                decoration: BoxDecoration(
+                                  color: segmentColor,
+                                  borderRadius: BorderRadius.circular(2),
+                                  border: Border.all(
+                                    color: segmentColor.withOpacity(0.3),
+                                    width: 1,
+                                  ),
+                                ),
+                                child: _buildSegmentContent(segment, task, barWidth),
+                              ),
+                              // Overlay de conflito por dia (acima de tudo), só nos dias conflitantes
+                              if (conflictDays.isNotEmpty)
+                                Positioned.fill(
+                                  child: IgnorePointer(
+                                    child: Row(
+                                      children: days.map((day) {
+                                        final dayStart = DateTime(day.year, day.month, day.day);
+                                        final dayEnd = dayStart.add(const Duration(days: 1));
+                                        final coversDay = startDate.isBefore(dayEnd) && endDate.isAfter(dayStart);
+                                        if (!coversDay) return const SizedBox.shrink();
+                                        final isConflictDay = conflictDays.any((d) =>
+                                            d.year == day.year && d.month == day.month && d.day == day.day);
+                                        return Expanded(
+                                          child: Container(
+                                            decoration: BoxDecoration(
+                                              color: isConflictDay ? Colors.red[600]!.withOpacity(0.9) : Colors.transparent,
+                                              borderRadius: isConflictDay ? BorderRadius.circular(2) : null,
+                                              border: isConflictDay ? Border.all(color: Colors.red[800]!, width: 2) : null,
+                                            ),
+                                          ),
+                                        );
+                                      }).toList(),
+                                    ),
+                                  ),
+                                ),
+                            ],
                           ),
-                          child: _buildSegmentContent(segment, task, barWidth),
                         ),
                       );
                     }).whereType<Widget>();
@@ -1250,7 +1679,7 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
     );
   }
 
-  Widget _buildFleetNameCell(Frota frota, double width) {
+  Widget _buildFleetNameCell(Frota frota, double width, {bool hasConflict = false}) {
     return SizedBox(
       width: width,
       child: Padding(
@@ -1261,10 +1690,10 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
             Expanded(
               child: Text(
                 frota.nome,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 11,
-                  fontWeight: FontWeight.normal,
-                  color: Colors.black,
+                  fontWeight: hasConflict ? FontWeight.bold : FontWeight.normal,
+                  color: hasConflict ? Colors.red[900] : Colors.black,
                 ),
                 textAlign: TextAlign.right,
                 maxLines: 1,
@@ -1869,7 +2298,7 @@ class _FleetDetailsModal extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(left: 8),
               child: InkWell(
-                onTap: () => _copyToClipboard(context, value, label),
+                onTap: () async { await _copyToClipboard(context, value, label); },
                 borderRadius: BorderRadius.circular(4),
                 child: Padding(
                   padding: const EdgeInsets.all(4),
@@ -1886,16 +2315,29 @@ class _FleetDetailsModal extends StatelessWidget {
     );
   }
 
-  void _copyToClipboard(BuildContext context, String text, String label) {
-    Clipboard.setData(ClipboardData(text: text));
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('$label copiado para a área de transferência'),
-        duration: const Duration(seconds: 2),
-        backgroundColor: Colors.green[600],
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
+  Future<void> _copyToClipboard(BuildContext context, String text, String label) async {
+    try {
+      await Clipboard.setData(ClipboardData(text: text));
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$label copiado para a área de transferência'),
+          duration: const Duration(seconds: 2),
+          backgroundColor: Colors.green[600],
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Não foi possível copiar: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   void _shareFleetInfo(BuildContext context) {

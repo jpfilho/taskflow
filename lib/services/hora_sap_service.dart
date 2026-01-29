@@ -212,7 +212,8 @@ class HoraSAPService {
         if (filtroOrdens.length == 1) {
           query = query.eq('ordem', filtroOrdens[0]);
         } else {
-          query = query.in_('ordem', filtroOrdens);
+          final orConditions = filtroOrdens.map((v) => 'ordem.eq.$v').join(',');
+          query = query.or(orConditions);
         }
       }
 
@@ -220,7 +221,8 @@ class HoraSAPService {
         if (filtroOperacoes.length == 1) {
           query = query.eq('operacao', filtroOperacoes[0]);
         } else {
-          query = query.in_('operacao', filtroOperacoes);
+          final orConditions = filtroOperacoes.map((v) => 'operacao.eq.$v').join(',');
+          query = query.or(orConditions);
         }
       }
 
@@ -228,7 +230,8 @@ class HoraSAPService {
         if (filtroTipoAtividade.length == 1) {
           query = query.eq('tipo_atividade_real', filtroTipoAtividade[0]);
         } else {
-          query = query.in_('tipo_atividade_real', filtroTipoAtividade);
+          final orConditions = filtroTipoAtividade.map((v) => 'tipo_atividade_real.eq.$v').join(',');
+          query = query.or(orConditions);
         }
       }
 
@@ -236,7 +239,8 @@ class HoraSAPService {
         if (filtroNumeroPessoa.length == 1) {
           query = query.eq('numero_pessoa', filtroNumeroPessoa[0]);
         } else {
-          query = query.in_('numero_pessoa', filtroNumeroPessoa);
+          final orConditions = filtroNumeroPessoa.map((v) => 'numero_pessoa.eq.$v').join(',');
+          query = query.or(orConditions);
         }
       }
 
@@ -311,6 +315,7 @@ class HoraSAPService {
       final dataIni = dataLancamentoInicio ?? padraoInicio;
       final dataFim = dataLancamentoFim ?? padraoFim;
 
+      // Com os índices criados, buscar apenas IDs é rápido (PostgreSQL usa índices)
       dynamic query = _supabase.from('horas_sap').select('id');
 
       // Aplicar filtros por perfil do usuário (mesma lógica do getAllHoras)
@@ -350,7 +355,8 @@ class HoraSAPService {
         if (filtroOrdens.length == 1) {
           query = query.eq('ordem', filtroOrdens[0]);
         } else {
-          query = query.in_('ordem', filtroOrdens);
+          final orConditions = filtroOrdens.map((v) => 'ordem.eq.$v').join(',');
+          query = query.or(orConditions);
         }
       }
 
@@ -358,7 +364,8 @@ class HoraSAPService {
         if (filtroOperacoes.length == 1) {
           query = query.eq('operacao', filtroOperacoes[0]);
         } else {
-          query = query.in_('operacao', filtroOperacoes);
+          final orConditions = filtroOperacoes.map((v) => 'operacao.eq.$v').join(',');
+          query = query.or(orConditions);
         }
       }
 
@@ -366,7 +373,8 @@ class HoraSAPService {
         if (filtroTipoAtividade.length == 1) {
           query = query.eq('tipo_atividade_real', filtroTipoAtividade[0]);
         } else {
-          query = query.in_('tipo_atividade_real', filtroTipoAtividade);
+          final orConditions = filtroTipoAtividade.map((v) => 'tipo_atividade_real.eq.$v').join(',');
+          query = query.or(orConditions);
         }
       }
 
@@ -374,7 +382,8 @@ class HoraSAPService {
         if (filtroNumeroPessoa.length == 1) {
           query = query.eq('numero_pessoa', filtroNumeroPessoa[0]);
         } else {
-          query = query.in_('numero_pessoa', filtroNumeroPessoa);
+          final orConditions = filtroNumeroPessoa.map((v) => 'numero_pessoa.eq.$v').join(',');
+          query = query.or(orConditions);
         }
       }
 
@@ -410,6 +419,7 @@ class HoraSAPService {
           .gte('data_lancamento', dataIni.toIso8601String().split('T')[0])
           .lte('data_lancamento', dataFim.toIso8601String().split('T')[0]);
 
+      // Executar query - Com índices, buscar IDs é RÁPIDO (PostgreSQL usa índices)
       final response = await query;
       return (response as List).length;
     } catch (e) {
@@ -443,28 +453,32 @@ class HoraSAPService {
           if (filtroOrdens.length == 1) {
             query = query.eq('ordem', filtroOrdens[0]);
           } else {
-            query = query.in_('ordem', filtroOrdens);
+            final orConditions = filtroOrdens.map((v) => 'ordem.eq.$v').join(',');
+          query = query.or(orConditions);
           }
         }
         if (campoExcluido != 'operacao' && filtroOperacoes != null && filtroOperacoes.isNotEmpty) {
           if (filtroOperacoes.length == 1) {
             query = query.eq('operacao', filtroOperacoes[0]);
           } else {
-            query = query.in_('operacao', filtroOperacoes);
+            final orConditions = filtroOperacoes.map((v) => 'operacao.eq.$v').join(',');
+          query = query.or(orConditions);
           }
         }
         if (campoExcluido != 'tipo_atividade_real' && filtroTipoAtividade != null && filtroTipoAtividade.isNotEmpty) {
           if (filtroTipoAtividade.length == 1) {
             query = query.eq('tipo_atividade_real', filtroTipoAtividade[0]);
           } else {
-            query = query.in_('tipo_atividade_real', filtroTipoAtividade);
+            final orConditions = filtroTipoAtividade.map((v) => 'tipo_atividade_real.eq.$v').join(',');
+          query = query.or(orConditions);
           }
         }
         if (campoExcluido != 'numero_pessoa' && filtroNumeroPessoa != null && filtroNumeroPessoa.isNotEmpty) {
           if (filtroNumeroPessoa.length == 1) {
             query = query.eq('numero_pessoa', filtroNumeroPessoa[0]);
           } else {
-            query = query.in_('numero_pessoa', filtroNumeroPessoa);
+            final orConditions = filtroNumeroPessoa.map((v) => 'numero_pessoa.eq.$v').join(',');
+          query = query.or(orConditions);
           }
         }
         if (campoExcluido != 'nome_empregado' && filtroNomeEmpregado != null && filtroNomeEmpregado.isNotEmpty) {
@@ -714,11 +728,18 @@ class HoraSAPService {
 
       // Restringir às matrículas do perfil para não varrer toda a tabela
       final matriculasFiltro = mapaExecutores.keys.toList();
-      if (matriculasFiltro.isNotEmpty) {
-        query = query.in_('numero_pessoa', matriculasFiltro);
-      } else {
+      if (matriculasFiltro.isEmpty) {
         // Sem matrículas válidas => não há dados
         return [];
+      }
+      
+      // Usar filtro IN com sintaxe correta
+      if (matriculasFiltro.length == 1) {
+        query = query.eq('numero_pessoa', matriculasFiltro[0]);
+      } else {
+        // Para múltiplas matrículas, usar OR
+        final orConditions = matriculasFiltro.map((m) => 'numero_pessoa.eq.$m').join(',');
+        query = query.or(orConditions);
       }
 
       // Filtrar por ano e mês se especificado; caso contrário, limitar a janela de 12 meses para evitar timeout
@@ -1021,7 +1042,8 @@ class HoraSAPService {
 
       // Filtrar pelas matrículas do perfil (mesmo conjunto já usado nas horas apontadas)
       if (matriculasFiltro.isNotEmpty) {
-        query = query.in_('matricula', matriculasFiltro);
+        final orConditions = matriculasFiltro.map((v) => 'matricula.eq.$v').join(',');
+        query = query.or(orConditions);
       } else {
         return {};
       }

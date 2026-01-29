@@ -12,6 +12,7 @@ import '../models/task.dart';
 import '../models/status.dart';
 import '../services/status_service.dart';
 import 'task_view_dialog.dart';
+import 'multi_select_filter_dialog.dart';
 
 class ATView extends StatefulWidget {
   const ATView({super.key});
@@ -29,9 +30,9 @@ class _ATViewState extends State<ATView> {
   Map<String, List<Map<String, dynamic>>> _atsProgramadasInfo = {}; // Lista de vinculações por AT
   Map<String, Status> _statusMap = {}; // Mapa de status (codigo -> Status)
   bool _isLoading = false;
-  String? _filtroStatus;
-  String? _filtroLocal;
-  String? _filtroStatusUsuario;
+  Set<String> _filtroStatus = {};
+  Set<String> _filtroLocal = {};
+  Set<String> _filtroStatusUsuario = {};
   DateTime? _dataInicio;
   DateTime? _dataFim;
   int? _filtroAnoFim;
@@ -179,9 +180,9 @@ class _ATViewState extends State<ATView> {
 
     try {
       final ats = await _service.getAllATs(
-        filtroStatus: _filtroStatus,
-        filtroLocal: _filtroLocal,
-        filtroStatusUsuario: _filtroStatusUsuario,
+        filtroStatus: _filtroStatus.isEmpty ? null : _filtroStatus.toList(),
+        filtroLocal: _filtroLocal.isEmpty ? null : _filtroLocal.toList(),
+        filtroStatusUsuario: _filtroStatusUsuario.isEmpty ? null : _filtroStatusUsuario.toList(),
         dataInicio: periodo['inicio'],
         dataFim: periodo['fim'],
         limit: _itensPorPagina,
@@ -189,9 +190,9 @@ class _ATViewState extends State<ATView> {
       );
 
       final total = await _service.contarATs(
-        filtroStatus: _filtroStatus,
-        filtroLocal: _filtroLocal,
-        filtroStatusUsuario: _filtroStatusUsuario,
+        filtroStatus: _filtroStatus.isEmpty ? null : _filtroStatus.toList(),
+        filtroLocal: _filtroLocal.isEmpty ? null : _filtroLocal.toList(),
+        filtroStatusUsuario: _filtroStatusUsuario.isEmpty ? null : _filtroStatusUsuario.toList(),
         dataInicio: periodo['inicio'],
         dataFim: periodo['fim'],
       );
@@ -223,9 +224,9 @@ class _ATViewState extends State<ATView> {
       final periodo = _calcularPeriodo();
       // Carregar todas as ATs sem paginação para calcular estatísticas, usando os mesmos filtros
       final todasATs = await _service.getAllATs(
-        filtroStatus: _filtroStatus,
-        filtroLocal: _filtroLocal,
-        filtroStatusUsuario: _filtroStatusUsuario,
+        filtroStatus: _filtroStatus.isEmpty ? null : _filtroStatus.toList(),
+        filtroLocal: _filtroLocal.isEmpty ? null : _filtroLocal.toList(),
+        filtroStatusUsuario: _filtroStatusUsuario.isEmpty ? null : _filtroStatusUsuario.toList(),
         dataInicio: periodo['inicio'],
         dataFim: periodo['fim'],
         limit: null, // Sem limite
@@ -353,9 +354,9 @@ class _ATViewState extends State<ATView> {
                 ElevatedButton.icon(
                   onPressed: () {
                     setState(() {
-                      _filtroStatus = null;
-                      _filtroLocal = null;
-                      _filtroStatusUsuario = null;
+                      _filtroStatus = {};
+                      _filtroLocal = {};
+                      _filtroStatusUsuario = {};
                       _dataInicio = null;
                       _dataFim = null;
                       _filtroAnoFim = null;
@@ -394,7 +395,7 @@ class _ATViewState extends State<ATView> {
                         const Icon(Icons.filter_list, size: 20),
                         const SizedBox(width: 8),
                         const Text('Filtros', style: TextStyle(fontSize: 16)),
-                        if (_filtroStatus != null || _filtroLocal != null || _filtroStatusUsuario != null || _dataInicio != null || _dataFim != null)
+                        if (_filtroStatus.isNotEmpty || _filtroLocal.isNotEmpty || _filtroStatusUsuario.isNotEmpty || _dataInicio != null || _dataFim != null)
                           Container(
                             margin: const EdgeInsets.only(left: 8),
                             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -404,9 +405,9 @@ class _ATViewState extends State<ATView> {
                             ),
                             child: Text(
                               [
-                                if (_filtroStatus != null) '1',
-                                if (_filtroLocal != null) '1',
-                                if (_filtroStatusUsuario != null) '1',
+                                if (_filtroStatus.isNotEmpty) '1',
+                                if (_filtroLocal.isNotEmpty) '1',
+                                if (_filtroStatusUsuario.isNotEmpty) '1',
                                 if (_dataInicio != null) '1',
                                 if (_dataFim != null) '1',
                               ].length.toString(),
@@ -418,13 +419,13 @@ class _ATViewState extends State<ATView> {
                     initiallyExpanded: false,
                     childrenPadding: const EdgeInsets.all(8),
                     children: [
-                      _buildFilterField(
+                      _buildMultiSelectFilterField(
                         'Status Sistema',
                         _filtroStatus,
                         _statusDisponiveis,
-                        (value) {
+                        (newValues) {
                           setState(() {
-                            _filtroStatus = value;
+                            _filtroStatus = newValues;
                             _paginaAtual = 0;
                           });
                           _loadATs();
@@ -432,13 +433,13 @@ class _ATViewState extends State<ATView> {
                         },
                       ),
                       const SizedBox(height: 8),
-                      _buildFilterField(
+                      _buildMultiSelectFilterField(
                         'Local de Instalação',
                         _filtroLocal,
                         _locaisDisponiveis,
-                        (value) {
+                        (newValues) {
                           setState(() {
-                            _filtroLocal = value;
+                            _filtroLocal = newValues;
                             _paginaAtual = 0;
                           });
                           _loadATs();
@@ -446,13 +447,13 @@ class _ATViewState extends State<ATView> {
                         },
                       ),
                       const SizedBox(height: 8),
-                      _buildFilterField(
-                          'Status Usuário',
+                      _buildMultiSelectFilterField(
+                        'Status Usuário',
                         _filtroStatusUsuario,
                         _statusUsuarioDisponiveis,
-                        (value) {
+                        (newValues) {
                           setState(() {
-                            _filtroStatusUsuario = value;
+                            _filtroStatusUsuario = newValues;
                             _paginaAtual = 0;
                           });
                           _loadATs();
@@ -499,40 +500,15 @@ class _ATViewState extends State<ATView> {
                     spacing: 16,
                     runSpacing: 16,
                     children: [
-                // Filtro Status
                 SizedBox(
                   width: isMobile ? double.infinity : 200,
-                  child: DropdownButtonFormField<String>(
-                    value: _filtroStatus,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Status Sistema',
-                      border: OutlineInputBorder(),
-                      filled: true,
-                      fillColor: Colors.white,
-                    ),
-                    selectedItemBuilder: (context) {
-                      return [
-                        const Text('Todos'),
-                        ..._statusDisponiveis.map((status) => Text(
-                              status.length > 25 ? '${status.substring(0, 25)}...' : status,
-                              overflow: TextOverflow.ellipsis,
-                            )),
-                      ];
-                    },
-                    items: [
-                      const DropdownMenuItem<String>(
-                        value: null,
-                        child: Text('Todos'),
-                      ),
-                      ..._statusDisponiveis.map((status) => DropdownMenuItem<String>(
-                            value: status,
-                            child: Text(status),
-                          )),
-                    ],
-                    onChanged: (value) {
+                  child: _buildMultiSelectFilterField(
+                    'Status Sistema',
+                    _filtroStatus,
+                    _statusDisponiveis,
+                    (newValues) {
                       setState(() {
-                        _filtroStatus = value;
+                        _filtroStatus = newValues;
                         _paginaAtual = 0;
                       });
                       _loadATs();
@@ -540,41 +516,15 @@ class _ATViewState extends State<ATView> {
                     },
                   ),
                 ),
-
-                // Filtro Local
                 SizedBox(
                   width: isMobile ? double.infinity : 250,
-                  child: DropdownButtonFormField<String>(
-                    value: _filtroLocal,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Local',
-                      border: OutlineInputBorder(),
-                      filled: true,
-                      fillColor: Colors.white,
-                    ),
-                    selectedItemBuilder: (context) {
-                      return [
-                        const Text('Todos'),
-                        ..._locaisDisponiveis.map((local) => Text(
-                              local.length > 30 ? '${local.substring(0, 30)}...' : local,
-                              overflow: TextOverflow.ellipsis,
-                            )),
-                      ];
-                    },
-                    items: [
-                      const DropdownMenuItem<String>(
-                        value: null,
-                        child: Text('Todos'),
-                      ),
-                      ..._locaisDisponiveis.map((local) => DropdownMenuItem<String>(
-                            value: local,
-                            child: Text(local.length > 40 ? '${local.substring(0, 40)}...' : local),
-                          )),
-                    ],
-                    onChanged: (value) {
+                  child: _buildMultiSelectFilterField(
+                    'Local',
+                    _filtroLocal,
+                    _locaisDisponiveis,
+                    (newValues) {
                       setState(() {
-                        _filtroLocal = value;
+                        _filtroLocal = newValues;
                         _paginaAtual = 0;
                       });
                       _loadATs();
@@ -582,32 +532,15 @@ class _ATViewState extends State<ATView> {
                     },
                   ),
                 ),
-
-                // Filtro Tipo
                 SizedBox(
                   width: isMobile ? double.infinity : 200,
-                  child: DropdownButtonFormField<String>(
-                    value: _filtroStatusUsuario,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Status Usuário',
-                      border: OutlineInputBorder(),
-                      filled: true,
-                      fillColor: Colors.white,
-                    ),
-                    items: [
-                      const DropdownMenuItem<String>(
-                        value: null,
-                        child: Text('Todos'),
-                      ),
-                      ..._statusUsuarioDisponiveis.map((tipo) => DropdownMenuItem<String>(
-                            value: tipo,
-                            child: Text(tipo),
-                          )),
-                    ],
-                    onChanged: (value) {
+                  child: _buildMultiSelectFilterField(
+                    'Status Usuário',
+                    _filtroStatusUsuario,
+                    _statusUsuarioDisponiveis,
+                    (newValues) {
                       setState(() {
-                        _filtroStatusUsuario = value;
+                        _filtroStatusUsuario = newValues;
                         _paginaAtual = 0;
                       });
                       _loadATs();
@@ -711,9 +644,9 @@ class _ATViewState extends State<ATView> {
                   ElevatedButton.icon(
                     onPressed: () {
                       setState(() {
-                        _filtroStatus = null;
-                        _filtroLocal = null;
-                        _filtroStatusUsuario = null;
+                        _filtroStatus = {};
+                        _filtroLocal = {};
+                        _filtroStatusUsuario = {};
                         _dataInicio = null;
                         _dataFim = null;
                         _filtroAnoFim = null;
@@ -1449,6 +1382,21 @@ class _ATViewState extends State<ATView> {
     );
   }
 
+  Future<void> _copiarParaAreaTransferencia(String texto, String mensagemSucesso) async {
+    try {
+      await Clipboard.setData(ClipboardData(text: texto));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(mensagemSucesso), duration: const Duration(seconds: 1)),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Não foi possível copiar: $e'), backgroundColor: Colors.red, duration: const Duration(seconds: 3)),
+      );
+    }
+  }
+
   Widget _buildATCard(AT at) {
     final isProgramada = _atsProgramadasIds.contains(at.id);
     final programadasList = isProgramada ? _atsProgramadasInfo[at.id] : null;
@@ -1504,15 +1452,7 @@ class _ATViewState extends State<ATView> {
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: at.autorzTrab));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('AT copiada!'),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
-              },
+              onPressed: () => _copiarParaAreaTransferencia(at.autorzTrab, 'AT copiada!'),
               tooltip: 'Copiar AT',
             ),
             if (isProgramada && tarefaStatus != null && statusColor != null)
@@ -1818,28 +1758,48 @@ class _ATViewState extends State<ATView> {
   }
 
 
-  Widget _buildFilterField(String label, String? value, List<String> options, Function(String?) onChanged) {
-    return DropdownButtonFormField<String>(
-      value: value,
-      isExpanded: true,
-      decoration: InputDecoration(
-        labelText: label,
-        border: const OutlineInputBorder(),
-        filled: true,
-        fillColor: Colors.white,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
-      ),
-      items: [
-        const DropdownMenuItem<String>(
-          value: null,
-          child: Text('Todos'),
+  Widget _buildMultiSelectFilterField(
+    String label,
+    Set<String> selectedValues,
+    List<String> options,
+    Function(Set<String>) onChanged, {
+    String? searchHint,
+  }) {
+    return InkWell(
+      onTap: () {
+        showDialog(
+          context: context,
+          builder: (context) => MultiSelectFilterDialog(
+            title: label,
+            options: options,
+            selectedValues: selectedValues,
+            onSelectionChanged: (newValues) {
+              onChanged(newValues);
+            },
+            searchHint: searchHint,
+          ),
+        );
+      },
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: label,
+          border: const OutlineInputBorder(),
+          filled: true,
+          fillColor: Colors.white,
+          suffixIcon: const Icon(Icons.arrow_drop_down),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
         ),
-        ...options.map((option) => DropdownMenuItem<String>(
-              value: option,
-              child: Text(option.length > 40 ? '${option.substring(0, 40)}...' : option),
-            )),
-      ],
-      onChanged: onChanged,
+        child: Text(
+          selectedValues.isEmpty
+              ? 'Todos'
+              : selectedValues.length == 1
+                  ? selectedValues.first
+                  : '${selectedValues.length} selecionado(s)',
+          style: TextStyle(
+            color: selectedValues.isEmpty ? Colors.grey[600] : Colors.black,
+          ),
+        ),
+      ),
     );
   }
 
@@ -2458,15 +2418,7 @@ class _ATViewState extends State<ATView> {
                       ),
                       const SizedBox(width: 8),
                       InkWell(
-                        onTap: () {
-                          Clipboard.setData(ClipboardData(text: at.autorzTrab));
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('AT copiada!'),
-                              duration: Duration(seconds: 1),
-                            ),
-                          );
-                        },
+                        onTap: () => _copiarParaAreaTransferencia(at.autorzTrab, 'AT copiada!'),
                         child: const Icon(Icons.copy, size: 16, color: Colors.blue),
                       ),
                     ],
@@ -2549,15 +2501,7 @@ class _ATViewState extends State<ATView> {
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: at.autorzTrab));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('AT copiada!'),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
-              },
+              onPressed: () => _copiarParaAreaTransferencia(at.autorzTrab, 'AT copiada!'),
               tooltip: 'Copiar AT',
             ),
           ],

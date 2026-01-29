@@ -1,3 +1,4 @@
+
 #!/bin/bash
 
 # ============================================
@@ -11,8 +12,17 @@ set -e
 # Configurações do servidor
 SERVER="root@212.85.0.249"
 REMOTE_PATH="/var/www/html/task2026"
-# Reutilizar conexão SSH para evitar pedir senha várias vezes
-SSH_OPTS="-o ControlMaster=auto -o ControlPath=~/.ssh/cm-%r@%h:%p -o ControlPersist=300"
+
+# Reutilizar conexão SSH (ControlMaster) evita pedir senha várias vezes no Linux/Mac.
+# No Windows (Git Bash) o ControlMaster costuma falhar com "Connection reset by peer" /
+# "Failed to connect to new control master", então desabilitamos e você digita a senha em cada etapa.
+if [ -n "$MSYSTEM" ] || [ -n "$WINDIR" ] || [ "$OSTYPE" = "msys" ] || [ "$OSTYPE" = "cygwin" ]; then
+  SSH_OPTS=""
+  SSH_WINDOWS=1
+else
+  SSH_OPTS="-o ControlMaster=auto -o ControlPath=~/.ssh/cm-%r@%h:%p -o ControlPersist=300"
+  SSH_WINDOWS=""
+fi
 
 echo "=========================================="
 echo "Deploy da Aplicação para Produção"
@@ -45,7 +55,8 @@ if [ "$DO_BUILD" = true ]; then
     # Build para web
     echo "   ⚙️  Compilando para web (release)..."
     # Usar build web com base href configurado
-    flutter build web --release --base-href="/task2026/"
+    # MSYS_NO_PATHCONV=1 evita conversao de path no Git Bash (Windows)
+    MSYS_NO_PATHCONV=1 flutter build web --release --base-href="/task2026/"
     
     if [ ! -d "build/web" ]; then
         echo "❌ Erro: Build falhou! Diretório build/web não encontrado!"
@@ -116,6 +127,9 @@ echo ""
 
 # Criar diretório remoto se não existir
 echo "📁 Criando diretório remoto (se necessário)..."
+if [ -n "$SSH_WINDOWS" ]; then
+  echo "   (Windows: digite a senha do servidor quando solicitado)"
+fi
 echo "   Executando: ssh $SERVER 'mkdir -p $REMOTE_PATH'"
 ssh $SSH_OPTS "$SERVER" "mkdir -p $REMOTE_PATH && chmod 755 $REMOTE_PATH" || {
     echo ""
@@ -152,7 +166,7 @@ rsync -avz --progress --delete --checksum -e "ssh $SSH_OPTS" \
     echo ""
     echo "⚠️  rsync falhou, tentando com scp..."
   ssh $SSH_OPTS "$SERVER" "rm -rf $REMOTE_PATH/*" || true
-  scp -o ControlMaster=auto -o ControlPath=~/.ssh/cm-%r@%h:%p -o ControlPersist=300 -r build/web/* "$SERVER:$REMOTE_PATH/"
+  scp $SSH_OPTS -r build/web/* "$SERVER:$REMOTE_PATH/"
 }
 
 # Verificar se os arquivos foram transferidos

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/feriado.dart';
 import '../services/feriado_service.dart';
+import 'form_dialog_helpers.dart';
 
 class FeriadoFormDialog extends StatefulWidget {
   final Feriado? feriado;
@@ -41,7 +42,7 @@ class _FeriadoFormDialogState extends State<FeriadoFormDialog> {
       _cidadeController.text = widget.feriado!.cidade ?? '';
     } else {
       _selectedDate = DateTime.now();
-      _paisController.text = 'Brasil'; // País padrão
+      _paisController.text = 'Brasil';
     }
   }
 
@@ -72,7 +73,6 @@ class _FeriadoFormDialogState extends State<FeriadoFormDialog> {
   void _onTipoChanged(String? tipo) {
     setState(() {
       _selectedTipo = tipo;
-      // Limpar campos baseado no tipo
       if (tipo == 'NACIONAL') {
         _estadoController.clear();
         _cidadeController.clear();
@@ -101,7 +101,6 @@ class _FeriadoFormDialogState extends State<FeriadoFormDialog> {
       return;
     }
 
-    // Validar campos baseado no tipo
     if (_selectedTipo == 'NACIONAL' && _paisController.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('País é obrigatório para feriado nacional')),
@@ -174,158 +173,237 @@ class _FeriadoFormDialogState extends State<FeriadoFormDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final isMobile = MediaQuery.of(context).size.width < 600;
+    final isEditing = widget.feriado != null;
+    final brightness = Theme.of(context).brightness;
+    final isDark = brightness == Brightness.dark;
 
     return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.all(16),
+      elevation: 0,
       child: Container(
-        width: isMobile ? double.infinity : 500,
-        padding: const EdgeInsets.all(16),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                widget.feriado != null ? 'Editar Feriado' : 'Novo Feriado',
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 16),
-              // Data
-              InkWell(
-                onTap: () => _selectDate(context),
-                child: InputDecorator(
-                  decoration: const InputDecoration(
-                    labelText: 'Data *',
-                    border: OutlineInputBorder(),
-                    suffixIcon: Icon(Icons.calendar_today),
+        constraints: const BoxConstraints(maxWidth: 512),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF1e293b) : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
+            width: 1,
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Header
+            Padding(
+              padding: const EdgeInsets.fromLTRB(32, 32, 32, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    isEditing ? 'Editar Feriado' : 'Novo Feriado',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w600,
+                      color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
+                    ),
                   ),
-                  child: Text(
-                    _selectedDate != null
-                        ? '${_selectedDate!.day.toString().padLeft(2, '0')}/${_selectedDate!.month.toString().padLeft(2, '0')}/${_selectedDate!.year}'
-                        : 'Selecione uma data',
+                  const SizedBox(height: 4),
+                  Text(
+                    'Atualize as informações do feriado.',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // Content
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                child: Form(
+                  key: _formKey,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      InkWell(
+                        onTap: () => _selectDate(context),
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                          decoration: BoxDecoration(
+                            border: Border.all(
+                              color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
+                            ),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            children: [
+                              Text(
+                                'Data *',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                  color: const Color(0xFF3b82f6),
+                                ),
+                              ),
+                              const Spacer(),
+                              Text(
+                                _selectedDate != null
+                                    ? '${_selectedDate!.day.toString().padLeft(2, '0')}/${_selectedDate!.month.toString().padLeft(2, '0')}/${_selectedDate!.year}'
+                                    : 'Selecione uma data',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: isDark ? const Color(0xFFcbd5e1) : const Color(0xFF475569),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Icon(
+                                Icons.calendar_today,
+                                color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
+                                size: 20,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      FloatingLabelTextField(
+                        label: 'Descrição *',
+                        controller: _descricaoController,
+                        isDark: isDark,
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'Por favor, informe a descrição';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 24),
+                      FloatingLabelDropdown<String>(
+                        label: 'Tipo *',
+                        value: _selectedTipo,
+                        items: _tipos,
+                        isLoading: false,
+                        displayText: (tipo) => tipo,
+                        onChanged: _onTipoChanged,
+                        isDark: isDark,
+                        validator: (value) {
+                          if (value == null) {
+                            return 'Por favor, selecione o tipo';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 24),
+                      FloatingLabelTextField(
+                        label: 'País *',
+                        controller: _paisController,
+                        isDark: isDark,
+                        validator: (value) {
+                          if (_selectedTipo != null && 
+                              (_selectedTipo == 'NACIONAL' || 
+                               _selectedTipo == 'ESTADUAL' || 
+                               _selectedTipo == 'MUNICIPAL')) {
+                            if (value == null || value.trim().isEmpty) {
+                              return 'País é obrigatório';
+                            }
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 24),
+                      FloatingLabelTextField(
+                        label: 'Estado',
+                        controller: _estadoController,
+                        isDark: isDark,
+                        validator: (value) {
+                          if (_selectedTipo == 'ESTADUAL' || _selectedTipo == 'MUNICIPAL') {
+                            if (value == null || value.trim().isEmpty) {
+                              return 'Estado é obrigatório';
+                            }
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 24),
+                      FloatingLabelTextField(
+                        label: 'Cidade',
+                        controller: _cidadeController,
+                        isDark: isDark,
+                        validator: (value) {
+                          if (_selectedTipo == 'MUNICIPAL') {
+                            if (value == null || value.trim().isEmpty) {
+                              return 'Cidade é obrigatória';
+                            }
+                          }
+                          return null;
+                        },
+                      ),
+                    ],
                   ),
                 ),
               ),
-              const SizedBox(height: 16),
-              // Descrição
-              TextFormField(
-                controller: _descricaoController,
-                decoration: const InputDecoration(
-                  labelText: 'Descrição *',
-                  border: OutlineInputBorder(),
+            ),
+
+            // Footer com botões
+            Container(
+              padding: const EdgeInsets.all(32),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF0f172a).withOpacity(0.5) : const Color(0xFFf8fafc),
+                border: Border(
+                  top: BorderSide(
+                    color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
+                    width: 1,
+                  ),
                 ),
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'Por favor, informe a descrição';
-                  }
-                  return null;
-                },
               ),
-              const SizedBox(height: 16),
-              // Tipo
-              DropdownButtonFormField<String>(
-                value: _selectedTipo,
-                decoration: const InputDecoration(
-                  labelText: 'Tipo *',
-                  border: OutlineInputBorder(),
-                ),
-                items: _tipos.map((tipo) {
-                  return DropdownMenuItem(
-                    value: tipo,
-                    child: Text(tipo),
-                  );
-                }).toList(),
-                onChanged: _onTipoChanged,
-                validator: (value) {
-                  if (value == null) {
-                    return 'Por favor, selecione o tipo';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-              // País
-              TextFormField(
-                controller: _paisController,
-                decoration: const InputDecoration(
-                  labelText: 'País *',
-                  border: OutlineInputBorder(),
-                ),
-                enabled: _selectedTipo != null,
-                validator: (value) {
-                  if (_selectedTipo != null && 
-                      (_selectedTipo == 'NACIONAL' || 
-                       _selectedTipo == 'ESTADUAL' || 
-                       _selectedTipo == 'MUNICIPAL')) {
-                    if (value == null || value.trim().isEmpty) {
-                      return 'País é obrigatório';
-                    }
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-              // Estado
-              TextFormField(
-                controller: _estadoController,
-                decoration: const InputDecoration(
-                  labelText: 'Estado',
-                  border: OutlineInputBorder(),
-                ),
-                enabled: _selectedTipo != null && 
-                        (_selectedTipo == 'ESTADUAL' || _selectedTipo == 'MUNICIPAL'),
-                validator: (value) {
-                  if (_selectedTipo == 'ESTADUAL' || _selectedTipo == 'MUNICIPAL') {
-                    if (value == null || value.trim().isEmpty) {
-                      return 'Estado é obrigatório';
-                    }
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-              // Cidade
-              TextFormField(
-                controller: _cidadeController,
-                decoration: const InputDecoration(
-                  labelText: 'Cidade',
-                  border: OutlineInputBorder(),
-                ),
-                enabled: _selectedTipo == 'MUNICIPAL',
-                validator: (value) {
-                  if (_selectedTipo == 'MUNICIPAL') {
-                    if (value == null || value.trim().isEmpty) {
-                      return 'Cidade é obrigatória';
-                    }
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 24),
-              // Botões
-              Row(
+              child: Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   TextButton(
                     onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('Cancelar'),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
+                    ),
+                    child: Text(
+                      'Cancelar',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF475569),
+                      ),
+                    ),
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 12),
                   ElevatedButton(
                     onPressed: _save,
-                    child: const Text('Salvar'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF3b82f6),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 10),
+                      elevation: 2,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    child: Text(
+                      isEditing ? 'Salvar Alterações' : 'Criar Feriado',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
                 ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
   }
 }
-

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode;
 import 'package:file_picker/file_picker.dart';
 import 'dart:io';
 import 'dart:convert';
@@ -19,9 +19,23 @@ import '../services/executor_service.dart';
 import 'task_view_dialog.dart';
 import 'multi_select_filter_dialog.dart';
 import 'ordem_calendar_view.dart';
+import '../services/local_service.dart';
+import '../features/media_albums/data/models/room.dart';
+import '../features/media_albums/data/repositories/supabase_media_repository.dart';
+import '../features/media_albums/presentation/pages/gallery_page.dart';
+
+/// Info de álbum (imagens) para uma ordem: contagem e filtros para abrir a galeria.
+class _AlbumInfo {
+  final int count;
+  final String? localId;
+  final String? roomId;
+  _AlbumInfo({required this.count, this.localId, this.roomId});
+}
 
 class OrdemView extends StatefulWidget {
-  const OrdemView({super.key});
+  final String? searchQuery;
+  
+  const OrdemView({super.key, this.searchQuery});
 
   @override
   State<OrdemView> createState() => _OrdemViewState();
@@ -34,13 +48,16 @@ class _OrdemViewState extends State<OrdemView> {
   List<Ordem> _ordensOriginais = [];
   List<Ordem> _todasOrdens = []; // Todas as ordens para calcular estatísticas
   List<Ordem> _todasOrdensOriginais = [];
-  bool _ordenacaoAscendente = true; // Ordenação por prazo (tolerância)
+  bool _ordenacaoAscendente = true; // Direção da ordenação (asc/desc)
+  String? _sortColumn; // Coluna de ordenação atual (null = padrão Tolerância)
   bool _filtrosExpandidos = false;
   Set<String> _ordensProgramadasIds = {}; // IDs das ordens vinculadas a tarefas
   bool _ordensProgramadasCarregadas = false; // Controle de carregamento (evitar limpar tabela enquanto carrega)
   Map<String, List<Map<String, dynamic>>> _ordensProgramadasInfo = {}; // Lista de vinculações por ordem
   Map<String, Status> _statusMap = {}; // Mapa de status (codigo -> Status)
   bool _isLoading = false;
+  Set<String> _ordensVinculando = {}; // IDs das ordens que estão sendo vinculadas
+  Set<String> _ordensSelecionadas = {}; // IDs das ordens selecionadas para vinculação múltipla
   // Filtros (multi-seleção, padronizados com Notas)
   Set<String> _filtroStatusTarefa = {};
   Set<String> _filtroLocais = {};
@@ -74,16 +91,21 @@ class _OrdemViewState extends State<OrdemView> {
   // ignore: unused_field
   List<String> _tiposDisponiveis = [];
   String _modoVisualizacao = 'cards'; // cards, tabela, calendario
+  String _searchQuery = ''; // Termo de busca do HeaderBar
   StreamSubscription<String>? _statusChangeSubscription;
   bool _canEditTasks = false; // Permissão para criar/editar tarefas
   bool _canEditTasksChecked = false; // Indica se a permissão já foi verificada
   bool _isCheckingTaskPermission = false; // Evita múltiplas verificações simultâneas
   final AuthServiceSimples _authService = AuthServiceSimples();
   final ExecutorService _executorService = ExecutorService();
+  /// Contagem de imagens por ordem (local+sala) para coluna Álbum
+  Map<String, _AlbumInfo> _albumInfoByOrdemId = {};
+  final SupabaseMediaRepository _mediaRepo = SupabaseMediaRepository();
 
   @override
   void initState() {
     super.initState();
+    _searchQuery = widget.searchQuery ?? '';
     _loadTaskEditPermission();
     _loadStatus();
     _loadFiltros();
@@ -104,6 +126,21 @@ class _OrdemViewState extends State<OrdemView> {
     });
   }
 
+  @override
+  void didUpdateWidget(OrdemView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.searchQuery != oldWidget.searchQuery) {
+      setState(() {
+        _searchQuery = widget.searchQuery ?? '';
+        _paginaAtual = 0;
+      });
+      // Reaplicar filtros com o novo searchQuery
+      _todasOrdens = _aplicarFiltrosLocais(_todasOrdensOriginais);
+      _aplicarOrdenacaoEPaginacao();
+      _loadTodasOrdensParaEstatisticas();
+    }
+  }
+
   int _totalFiltrosAtivos() {
     return _filtroStatusTarefa.length +
         _filtroLocais.length +
@@ -113,30 +150,55 @@ class _OrdemViewState extends State<OrdemView> {
         _filtroGPMs.length;
   }
 
-  Widget _buildViewButton(String label, IconData icon, String value, bool selected) {
-    return OutlinedButton.icon(
-      style: OutlinedButton.styleFrom(
-        backgroundColor: selected ? Colors.blue[50] : Colors.white,
-        foregroundColor: selected ? Colors.blue : Colors.grey[800],
-        side: BorderSide(color: selected ? Colors.blue : Colors.grey[300]!),
-      ),
-      onPressed: () {
+  Widget _buildViewButton(String label, IconData icon, String value, bool isSelected) {
+    return InkWell(
+      onTap: () {
         setState(() {
           _modoVisualizacao = value;
           _paginaAtual = 0;
         });
       },
-      icon: Icon(icon, size: 18),
-      label: Text(
-        label,
-        style: const TextStyle(fontWeight: FontWeight.w600),
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? Colors.blue[600] : Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 16,
+              color: isSelected ? Colors.white : Colors.grey[700],
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                color: isSelected ? Colors.white : Colors.grey[700],
+                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                fontSize: 13,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Future<void> _copiarOrdem(String ordemNumero) async {
     try {
-      await Clipboard.setData(ClipboardData(text: ordemNumero));
+      // Verificar se está em web e clipboard está disponível
+      if (kIsWeb) {
+        // Em web, pode precisar de permissão ou contexto seguro
+        // Tentar copiar mesmo assim
+        await Clipboard.setData(ClipboardData(text: ordemNumero));
+      } else {
+        await Clipboard.setData(ClipboardData(text: ordemNumero));
+      }
+      
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -148,8 +210,9 @@ class _OrdemViewState extends State<OrdemView> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Não foi possível copiar a ordem: $e'),
+          content: Text('Não foi possível copiar a ordem: ${e.toString()}'),
           backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
         ),
       );
     }
@@ -238,9 +301,8 @@ class _OrdemViewState extends State<OrdemView> {
 
   Future<void> _loadOrdensProgramadas() async {
     try {
-      setState(() {
-        _ordensProgramadasCarregadas = false;
-      });
+      // Não zerar _ordensProgramadasCarregadas aqui para evitar flicker:
+      // a lista não deve ser substituída por loading ao apenas atualizar programadas.
 
       final programadas = await _service.getOrdensProgramadas();
       final ids = <String>{};
@@ -304,9 +366,73 @@ class _OrdemViewState extends State<OrdemView> {
     return status.contains('ENCE') || status.contains('ENTE');
   }
 
+  /// Carrega contagem de imagens (álbum) por ordem (local + sala) para exibir na coluna Álbum.
+  Future<void> _loadAlbumInfoForOrdens() async {
+    if (_todasOrdens.isEmpty) {
+      setState(() => _albumInfoByOrdemId = {});
+      return;
+    }
+    try {
+      final locais = await LocalService().getAllLocais();
+      final localDisplayLower = (String s) => (s.trim().toLowerCase());
+      const _sep = '\u0001';
+      final uniqueKeys = <String>{};
+      for (final o in _todasOrdens) {
+        final localD = _localParaExibicao(o);
+        final sala = o.sala?.trim() ?? '';
+        uniqueKeys.add('$localD$_sep$sala');
+      }
+      final cache = <String, _AlbumInfo>{};
+      for (final key in uniqueKeys) {
+        final idx = key.indexOf(_sep);
+        final localDisplay = idx >= 0 ? key.substring(0, idx) : key;
+        final sala = idx >= 0 && idx < key.length - 1 ? key.substring(idx + 1) : '';
+        String? localId;
+        String? roomId;
+        final match = locais.where((l) =>
+            localDisplayLower(l.local) == localDisplayLower(localDisplay)).toList();
+        if (match.isNotEmpty) {
+          final local = match.first;
+          localId = local.id;
+          final sap = local.localInstalacaoSap?.trim() ?? '';
+          if (sala.isNotEmpty && sap.isNotEmpty) {
+            roomId = Room.generateDeterministicUuid('room:$sala:$sap');
+          }
+        }
+        final count = await _mediaRepo.countImagesByLocalAndRoom(localId, roomId);
+        cache[key] = _AlbumInfo(count: count, localId: localId, roomId: roomId);
+      }
+      final newMap = <String, _AlbumInfo>{};
+      for (final o in _todasOrdens) {
+        final localD = _localParaExibicao(o);
+        final sala = o.sala?.trim() ?? '';
+        final k = '$localD$_sep$sala';
+        newMap[o.id] = cache[k] ?? _AlbumInfo(count: 0);
+      }
+      if (mounted) setState(() => _albumInfoByOrdemId = newMap);
+    } catch (e) {
+      if (kDebugMode) print('⚠️ _loadAlbumInfoForOrdens: $e');
+      if (mounted) setState(() => _albumInfoByOrdemId = {});
+    }
+  }
+
+  static List<String> _ordenarOpcoes(Set<String> set) {
+    final list = set.toList();
+    list.sort();
+    return list;
+  }
+
+  /// Atualiza as opções de cada filtro com base na lista ATUALMENTE FILTRADA (_todasOrdens),
+  /// para que os demais filtros só mostrem valores que existem na junção dos filtros já aplicados.
   void _atualizarOpcoesFiltros() {
+    if (!mounted) return;
+    // Usar a lista já filtrada (_todasOrdens), não a original, para que opções reflitam combinações possíveis
+    final base = _todasOrdens;
+
     final statusTarefaSet = <String>{};
-    for (final lista in _ordensProgramadasInfo.values) {
+    for (final ordem in base) {
+      final lista = _ordensProgramadasInfo[ordem.id];
+      if (lista == null) continue;
       for (final vinculo in lista) {
         final tarefa = vinculo['tarefa'] as Map<String, dynamic>?;
         final status = tarefa?['status'] as String?;
@@ -316,40 +442,32 @@ class _OrdemViewState extends State<OrdemView> {
       }
     }
 
-    List<String> _ordenar(Set<String> set) {
-      final list = set.toList();
-      list.sort();
-      return list;
-    }
-
     setState(() {
-      _statusTarefaDisponiveis = _ordenar(statusTarefaSet);
-      _locaisDisponiveisFiltro = _ordenar(
-        _todasOrdensOriginais
+      _statusTarefaDisponiveis = _ordenarOpcoes(statusTarefaSet);
+      _locaisDisponiveisFiltro = _ordenarOpcoes(
+        base
             .map((o) => o.local)
             .where((v) => (v ?? '').isNotEmpty)
             .cast<String>()
             .toSet(),
       );
-      _salasDisponiveis = _ordenar(
-        _todasOrdensOriginais
+      _salasDisponiveis = _ordenarOpcoes(
+        base
             .map((o) => o.sala)
             .where((v) => (v ?? '').isNotEmpty)
             .cast<String>()
             .toSet(),
       );
-      _tiposDisponiveisFiltro = _ordenar(
-        _todasOrdensOriginais
+      _tiposDisponiveisFiltro = _ordenarOpcoes(
+        base
             .map((o) => o.tipo)
             .where((v) => (v ?? '').isNotEmpty)
             .cast<String>()
             .toSet(),
       );
-      _ordensDisponiveis = _ordenar(
-        _todasOrdensOriginais.map((o) => o.ordem).toSet(),
-      );
-      _gpmsDisponiveis = _ordenar(
-        _todasOrdensOriginais
+      _ordensDisponiveis = _ordenarOpcoes(base.map((o) => o.ordem).toSet());
+      _gpmsDisponiveis = _ordenarOpcoes(
+        base
             .map((o) => o.gpm)
             .where((v) => (v ?? '').isNotEmpty)
             .cast<String>()
@@ -397,8 +515,47 @@ class _OrdemViewState extends State<OrdemView> {
       if (_filtroOrdens.isNotEmpty && !_filtroOrdens.contains(ordem.ordem)) return false;
       if (_filtroGPMs.isNotEmpty && !_filtroGPMs.contains(ordem.gpm ?? '')) return false;
 
+      // Filtro de pesquisa (searchQuery do HeaderBar)
+      if (_searchQuery.isNotEmpty) {
+        final lowerQuery = _searchQuery.toLowerCase();
+        final matchesSearch = 
+            ordem.ordem.toLowerCase().contains(lowerQuery) ||
+            (ordem.textoBreve?.toLowerCase().contains(lowerQuery) ?? false) ||
+            (ordem.local?.toLowerCase().contains(lowerQuery) ?? false) ||
+            (ordem.localInstalacao?.toLowerCase().contains(lowerQuery) ?? false) ||
+            (ordem.denominacaoLocalInstalacao?.toLowerCase().contains(lowerQuery) ?? false) ||
+            (ordem.denominacaoObjeto?.toLowerCase().contains(lowerQuery) ?? false) ||
+            (ordem.codigoSI?.toLowerCase().contains(lowerQuery) ?? false) ||
+            (ordem.sala?.toLowerCase().contains(lowerQuery) ?? false) ||
+            (ordem.tipo?.toLowerCase().contains(lowerQuery) ?? false) ||
+            (ordem.gpm?.toLowerCase().contains(lowerQuery) ?? false);
+        
+        if (!matchesSearch) return false;
+      }
+
       return true;
     }).toList();
+  }
+
+  /// Reaplica filtros localmente sem nova requisição à API (evita loading/flicker).
+  /// Filtra a lista COMPLETA (_todasOrdensOriginais) e depois pagina, para não filtrar só a primeira página.
+  /// Atualiza as opções dos demais filtros para refletir apenas valores que existem na lista filtrada.
+  void _reaplicarFiltrosLocais() {
+    if (!mounted) return;
+    final filtradas = _aplicarFiltrosLocais(_todasOrdensOriginais);
+    final ordenadas = List<Ordem>.from(filtradas);
+    _ordenarListaPorColuna(ordenadas);
+    final start = 0;
+    final end = (_itensPorPagina).clamp(0, ordenadas.length);
+    final pagina = start < ordenadas.length ? ordenadas.sublist(start, end) : <Ordem>[];
+    setState(() {
+      _paginaAtual = 0;
+      _todasOrdens = ordenadas;
+      _ordens = pagina;
+      _totalOrdens = ordenadas.length;
+    });
+    _atualizarOpcoesFiltros();
+    _loadAlbumInfoForOrdens();
   }
 
   Widget _buildMultiSelectFilterField(
@@ -418,11 +575,7 @@ class _OrdemViewState extends State<OrdemView> {
             selectedValues: selectedValues,
             onSelectionChanged: (newValues) {
               onChanged(newValues);
-              setState(() {
-                _paginaAtual = 0;
-              });
-              _loadOrdens();
-              _loadTodasOrdensParaEstatisticas();
+              _reaplicarFiltrosLocais();
             },
             searchHint: searchHint,
           ),
@@ -514,12 +667,28 @@ class _OrdemViewState extends State<OrdemView> {
         _todasOrdensOriginais = ordens;
         _todasOrdens = filtradas;
         _isLoading = false;
+        // Opções dos filtros no mesmo frame para não ter tela com ordens e opções vazias
+        _locaisDisponiveisFiltro = _ordenarOpcoes(
+          ordens.map((o) => o.local).where((v) => (v ?? '').isNotEmpty).cast<String>().toSet(),
+        );
+        _salasDisponiveis = _ordenarOpcoes(
+          ordens.map((o) => o.sala).where((v) => (v ?? '').isNotEmpty).cast<String>().toSet(),
+        );
+        _tiposDisponiveisFiltro = _ordenarOpcoes(
+          ordens.map((o) => o.tipo).where((v) => (v ?? '').isNotEmpty).cast<String>().toSet(),
+        );
+        _ordensDisponiveis = _ordenarOpcoes(ordens.map((o) => o.ordem).toSet());
+        _gpmsDisponiveis = _ordenarOpcoes(
+          ordens.map((o) => o.gpm).where((v) => (v ?? '').isNotEmpty).cast<String>().toSet(),
+        );
+        // _statusTarefaDisponiveis continua do _ordensProgramadasInfo (atualizado em _loadOrdensProgramadas)
       });
 
       _aplicarOrdenacaoEPaginacao();
 
       _loadOrdensProgramadas();
-      _atualizarOpcoesFiltros();
+      if (mounted) _atualizarOpcoesFiltros();
+      if (mounted) _loadAlbumInfoForOrdens();
     } catch (e) {
       setState(() {
         _isLoading = false;
@@ -805,28 +974,44 @@ class _OrdemViewState extends State<OrdemView> {
                 SegmentedButton<String?>(
                   segments: tipoOrdemSegments,
                   selected: {_filtroTipoOrdem},
-                  onSelectionChanged: (selection) {
+                  onSelectionChanged: (Set<String?> newSelection) {
                     setState(() {
-                      _filtroTipoOrdem = selection.first;
-                      _paginaAtual = 0;
+                      _filtroTipoOrdem = newSelection.first;
                     });
-                    _loadOrdens();
-                    _loadTodasOrdensParaEstatisticas();
+                    _reaplicarFiltrosLocais();
                   },
+                  style: SegmentedButton.styleFrom(
+                    backgroundColor: Colors.grey[200],
+                    selectedBackgroundColor: Colors.blue[600],
+                    selectedForegroundColor: Colors.white,
+                    foregroundColor: Colors.grey[700],
+                    side: BorderSide(color: Colors.grey[300]!, width: 1),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
                   ),
-                const SizedBox(width: 12),
+                ),
+                const SizedBox(width: 16),
                 SegmentedButton<String?>(
                   segments: programacaoSegments,
                   selected: {_filtroProgramacao},
-                  onSelectionChanged: (selection) {
+                  onSelectionChanged: (Set<String?> newSelection) {
                     setState(() {
-                      _filtroProgramacao = selection.first;
-                      _paginaAtual = 0;
+                      _filtroProgramacao = newSelection.first;
                     });
-                    _loadOrdens();
-                    _loadTodasOrdensParaEstatisticas();
+                    _reaplicarFiltrosLocais();
                   },
+                  style: SegmentedButton.styleFrom(
+                    backgroundColor: Colors.grey[200],
+                    selectedBackgroundColor: Colors.blue[600],
+                    selectedForegroundColor: Colors.white,
+                    foregroundColor: Colors.grey[700],
+                    side: BorderSide(color: Colors.grey[300]!, width: 1),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
                   ),
+                ),
                 const SizedBox(width: 16),
             // Botão de filtros na barra
             OutlinedButton.icon(
@@ -849,8 +1034,8 @@ class _OrdemViewState extends State<OrdemView> {
                               '${_totalFiltrosAtivos()}',
                               style: const TextStyle(color: Colors.white, fontSize: 12),
                             ),
-                  ),
-                ],
+                          ),
+                        ],
                       ],
                     ),
               style: OutlinedButton.styleFrom(
@@ -860,46 +1045,110 @@ class _OrdemViewState extends State<OrdemView> {
                   vertical: 12,
                 ),
               ),
-                  onPressed: () {
-                    setState(() {
+              onPressed: () {
+                setState(() {
                   _filtrosExpandidos = !_filtrosExpandidos;
-                    });
-                  },
+                });
+              },
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 8),
             if (!isCompact)
               Text(
                 _filtrosExpandidos ? 'Ocultar' : 'Mostrar',
                 style: TextStyle(color: Colors.grey[600]),
               ),
             const SizedBox(width: 16),
+            if (_ordensSelecionadas.isNotEmpty) ...[
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.blue[100],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue[300]!),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.check_circle, size: 18, color: Colors.blue[700]),
+                    const SizedBox(width: 8),
+                    Text(
+                      '${_ordensSelecionadas.length} selecionada${_ordensSelecionadas.length > 1 ? 's' : ''}',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue[700],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    InkWell(
+                      onTap: () {
+                        setState(() {
+                          _ordensSelecionadas.clear();
+                        });
+                      },
+                      child: Icon(Icons.close, size: 16, color: Colors.blue[700]),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 16),
+            ],
             const Spacer(),
-                // Botões de visualização (desktop/tablet)
-                if (!isMobile)
+                // Opções de visualização
+                if (isCompact)
+                  PopupMenuButton<String>(
+                    onSelected: (value) {
+                      setState(() {
+                        _modoVisualizacao = value;
+                      });
+                    },
+                    itemBuilder: (context) => [
+                      const PopupMenuItem(value: 'tabela', child: Row(children: [Icon(Icons.table_chart, size: 18), SizedBox(width: 8), Text('Tabela')])),
+                      const PopupMenuItem(value: 'cards', child: Row(children: [Icon(Icons.view_module, size: 18), SizedBox(width: 8), Text('Cards')])),
+                      const PopupMenuItem(value: 'calendario', child: Row(children: [Icon(Icons.calendar_today, size: 18), SizedBox(width: 8), Text('Calendário')])),
+                    ],
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.view_agenda),
+                      label: Text(
+                        _modoVisualizacao == 'tabela' ? 'Tabela' : _modoVisualizacao == 'cards' ? 'Cards' : 'Calendário',
+                      ),
+                      onPressed: null,
+                    ),
+                  )
+                else
                   Row(
                     children: [
-                      _buildViewButton(
-                        'Tabela',
-                        Icons.table_chart,
-                        'tabela',
-                        _modoVisualizacao == 'tabela',
-                ),
-                const SizedBox(width: 8),
-                      _buildViewButton(
-                        'Cards',
-                        Icons.view_module,
-                        'cards',
-                        _modoVisualizacao == 'cards',
+                      // Container para os botões de visualização (estilo SegmentedButton)
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Colors.grey[200],
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _buildViewButton(
+                              'Tabela',
+                              Icons.table_chart,
+                              'tabela',
+                              _modoVisualizacao == 'tabela',
+                            ),
+                            _buildViewButton(
+                              'Cards',
+                              Icons.view_module,
+                              'cards',
+                              _modoVisualizacao == 'cards',
+                            ),
+                            _buildViewButton(
+                              'Calendário',
+                              Icons.calendar_today,
+                              'calendario',
+                              _modoVisualizacao == 'calendario',
+                            ),
+                          ],
+                        ),
                       ),
-                      const SizedBox(width: 8),
-                      _buildViewButton(
-                        'Calendário',
-                        Icons.calendar_today,
-                        'calendario',
-                        _modoVisualizacao == 'calendario',
-                  ),
                     ],
-                ),
+                  ),
                 const SizedBox(width: 8),
                 ElevatedButton.icon(
                   onPressed: () {
@@ -915,9 +1164,17 @@ class _OrdemViewState extends State<OrdemView> {
                       _paginaAtual = 0;
                     });
                     _loadOrdens();
+                    _loadTodasOrdensParaEstatisticas();
                   },
                   icon: const Icon(Icons.refresh),
-                  label: const Text('Atualizar'),
+                  label: isCompact ? const SizedBox.shrink() : const Text('Atualizar'),
+                  style: ElevatedButton.styleFrom(
+                    minimumSize: Size(isCompact ? 44 : 0, 36),
+                    padding: EdgeInsets.symmetric(
+                      horizontal: isCompact ? 12 : 16,
+                      vertical: 12,
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -950,10 +1207,7 @@ class _OrdemViewState extends State<OrdemView> {
                       _statusTarefaDisponiveis,
                       (values) {
                         setState(() => _filtroStatusTarefa = values);
-                            _paginaAtual = 0;
-                          _loadOrdens();
-                          _loadTodasOrdensParaEstatisticas();
-                        },
+                      },
                       searchHint: 'Pesquisar status...',
                     ),
                       ),
@@ -965,10 +1219,7 @@ class _OrdemViewState extends State<OrdemView> {
                       _locaisDisponiveisFiltro,
                       (values) {
                         setState(() => _filtroLocais = values);
-                        _paginaAtual = 0;
-                      _loadOrdens();
-                      _loadTodasOrdensParaEstatisticas();
-                    },
+                      },
                       searchHint: 'Pesquisar local...',
                   ),
                 ),
@@ -980,10 +1231,7 @@ class _OrdemViewState extends State<OrdemView> {
                       _salasDisponiveis,
                       (values) {
                         setState(() => _filtroSalas = values);
-                        _paginaAtual = 0;
-                      _loadOrdens();
-                      _loadTodasOrdensParaEstatisticas();
-                    },
+                      },
                       searchHint: 'Pesquisar sala...',
                   ),
                 ),
@@ -995,10 +1243,7 @@ class _OrdemViewState extends State<OrdemView> {
                       _tiposDisponiveisFiltro,
                       (values) {
                         setState(() => _filtroTipos = values);
-                        _paginaAtual = 0;
-                      _loadOrdens();
-                      _loadTodasOrdensParaEstatisticas();
-                    },
+                      },
                       searchHint: 'Pesquisar tipo...',
                   ),
                 ),
@@ -1010,9 +1255,6 @@ class _OrdemViewState extends State<OrdemView> {
                       _ordensDisponiveis,
                       (values) {
                         setState(() => _filtroOrdens = values);
-                          _paginaAtual = 0;
-                        _loadOrdens();
-                        _loadTodasOrdensParaEstatisticas();
                       },
                       searchHint: 'Pesquisar ordem...',
                       ),
@@ -1025,10 +1267,7 @@ class _OrdemViewState extends State<OrdemView> {
                       _gpmsDisponiveis,
                       (values) {
                         setState(() => _filtroGPMs = values);
-                          _paginaAtual = 0;
-                        _loadOrdens();
-                        _loadTodasOrdensParaEstatisticas();
-                    },
+                      },
                       searchHint: 'Pesquisar GPM...',
                       ),
                     ),
@@ -1068,10 +1307,8 @@ class _OrdemViewState extends State<OrdemView> {
           // Lista de ordems (Cards, Tabela ou Calendário - usando tolerância)
           Expanded(
             child: (() {
-              final aguardandoProgramadas = !_ordensProgramadasCarregadas &&
-                  ((_filtroProgramacao != null && _filtroProgramacao!.isNotEmpty) ||
-                      _filtroStatusTarefa.isNotEmpty);
-              final loading = _isLoading || aguardandoProgramadas;
+              // Apenas loading de ordens da API mostra spinner; atualização de programadas não.
+              final loading = _isLoading;
               if (loading) {
                 return const Center(child: CircularProgressIndicator());
               }
@@ -1157,36 +1394,187 @@ class _OrdemViewState extends State<OrdemView> {
   // Criar tarefa a partir de uma ordem
   Future<void> _criarTarefaDaOrdem(Ordem ordem) async {
     try {
-      // Calcular datas padrão
-      final dataInicio = ordem.inicioBase ?? DateTime.now();
-      final dataFim = ordem.fimBase ?? dataInicio.add(const Duration(days: 1));
+      if (!await _ensureCanEditTasks()) return;
       
+      // Verificar se há ordens selecionadas
+      final ordensParaVincular = _ordensSelecionadas.isNotEmpty 
+          ? _ordens.where((o) => _ordensSelecionadas.contains(o.id)).toList()
+          : [ordem];
+      
+      // Se há múltiplas ordens selecionadas, usar a primeira para pré-preencher o formulário
+      final ordemPrincipal = ordensParaVincular.first;
+      
+      // Calcular datas padrão baseado na primeira ordem
+      final dataInicio = ordemPrincipal.inicioBase ?? DateTime.now();
+      final dataFim = ordemPrincipal.fimBase ?? dataInicio.add(const Duration(days: 1));
+      
+      // Mostrar formulário de criação de tarefa pré-preenchido com dados da ordem principal
       final taskCriada = await showDialog<Task>(
         context: context,
         builder: (context) => TaskFormDialog(
           startDate: dataInicio,
           endDate: dataFim,
-          ordem: ordem,
+          ordem: ordemPrincipal,
         ),
       );
       
       if (taskCriada != null) {
+        // Mostrar diálogo de progresso se houver múltiplas ordens
+        final progressDialogContext = context;
+        StateSetter? setDialogState;
+        int ordensProcessadas = 0;
+        String statusAtual = 'Criando tarefa...';
+        
+        if (ordensParaVincular.length > 1) {
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) {
+              return StatefulBuilder(
+                builder: (context, setState) {
+                  setDialogState = setState;
+                  return AlertDialog(
+                    content: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const CircularProgressIndicator(),
+                        const SizedBox(height: 20),
+                        Text(
+                          'Criando tarefa e vinculando ${ordensParaVincular.length} ordens...',
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          'Tarefa: ${taskCriada.tarefa}',
+                          style: const TextStyle(
+                            fontSize: 14,
+                            color: Colors.grey,
+                          ),
+                          textAlign: TextAlign.center,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 20),
+                        LinearProgressIndicator(
+                          value: ordensParaVincular.length > 0 
+                              ? ordensProcessadas / (ordensParaVincular.length + 1) // +1 para a criação da tarefa
+                              : 0.0,
+                          backgroundColor: Colors.grey[300],
+                          valueColor: const AlwaysStoppedAnimation<Color>(Colors.blue),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          statusAtual,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              );
+            },
+          );
+        }
+        
         final taskService = TaskService();
         try {
+          // Atualizar progresso: criando tarefa
+          if (ordensParaVincular.length > 1 && setDialogState != null) {
+            statusAtual = 'Criando tarefa...';
+            setDialogState!(() {});
+          }
+          
           final createdTask = await taskService.createTask(taskCriada);
-          await _service.vincularOrdemATarefa(createdTask.id, ordem.id);
+          ordensProcessadas++;
+          
+          // Atualizar progresso: tarefa criada, iniciando vinculação
+          if (ordensParaVincular.length > 1 && setDialogState != null) {
+            statusAtual = 'Vinculando ordens...';
+            setDialogState!(() {});
+          }
+          
+          // Vincular todas as ordens selecionadas (ou apenas a ordem clicada)
+          int vinculadasComSucesso = 0;
+          int vinculadasComErro = 0;
+          
+          for (final ordemParaVincular in ordensParaVincular) {
+            try {
+              await _service.vincularOrdemATarefa(createdTask.id, ordemParaVincular.id);
+              vinculadasComSucesso++;
+              ordensProcessadas++;
+              
+              // Atualizar progresso no diálogo
+              if (ordensParaVincular.length > 1 && setDialogState != null) {
+                statusAtual = 'Vinculando ordens... ($ordensProcessadas/${ordensParaVincular.length + 1})';
+                setDialogState!(() {});
+              }
+            } catch (e) {
+              print('❌ Erro ao vincular ordem ${ordemParaVincular.ordem}: $e');
+              vinculadasComErro++;
+              ordensProcessadas++;
+              
+              // Atualizar progresso mesmo em caso de erro
+              if (ordensParaVincular.length > 1 && setDialogState != null) {
+                statusAtual = 'Vinculando ordens... ($ordensProcessadas/${ordensParaVincular.length + 1})';
+                setDialogState!(() {});
+              }
+            }
+          }
+          
+          // Fechar diálogo de progresso se foi aberto
+          if (ordensParaVincular.length > 1 && mounted) {
+            Navigator.of(progressDialogContext, rootNavigator: true).pop();
+          }
+          
+          // Recarregar ordens programadas para atualizar a visualização
           await _loadOrdensProgramadas();
           
+          // Limpar seleção
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Tarefa criada e vinculada à ordem ${ordem.ordem} com sucesso!'),
-                backgroundColor: Colors.green,
-                duration: const Duration(seconds: 3),
-              ),
-            );
+            setState(() {
+              _ordensSelecionadas.clear();
+            });
+          }
+          
+          if (mounted) {
+            final scaffoldMessenger = ScaffoldMessenger.of(context);
+            if (vinculadasComErro == 0) {
+              scaffoldMessenger.showSnackBar(
+                SnackBar(
+                  content: Text(
+                    vinculadasComSucesso == 1
+                        ? 'Tarefa criada e vinculada à ordem ${ordemPrincipal.ordem} com sucesso!'
+                        : 'Tarefa criada e ${vinculadasComSucesso} ordens vinculadas com sucesso!',
+                  ),
+                  backgroundColor: Colors.green,
+                  duration: const Duration(seconds: 3),
+                ),
+              );
+            } else {
+              scaffoldMessenger.showSnackBar(
+                SnackBar(
+                  content: Text(
+                    'Tarefa criada. $vinculadasComSucesso ordem(s) vinculada(s) com sucesso. $vinculadasComErro erro(s).',
+                  ),
+                  backgroundColor: Colors.orange,
+                  duration: const Duration(seconds: 3),
+                ),
+              );
+            }
           }
         } catch (e) {
+          // Fechar diálogo de progresso se foi aberto
+          if (ordensParaVincular.length > 1 && mounted) {
+            Navigator.of(progressDialogContext, rootNavigator: true).pop();
+          }
+          
           print('⚠️ Erro ao criar/vincular tarefa: $e');
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -1212,15 +1600,306 @@ class _OrdemViewState extends State<OrdemView> {
     }
   }
 
-  // Vincular ordem a uma tarefa existente
-  Future<void> _vincularOrdemATarefaExistente(Ordem ordem) async {
+  // Vincular ordens selecionadas (ou apenas a ordem clicada)
+  Future<void> _vincularOrdensSelecionadas(Ordem ordem) async {
+    // Se há ordens selecionadas, vincular todas elas
+    if (_ordensSelecionadas.isNotEmpty) {
+      await _vincularMultiplasOrdens(_ordensSelecionadas.toList());
+    } else {
+      // Se não há seleção, vincular apenas a ordem clicada
+      await _vincularOrdemATarefaExistente(ordem);
+    }
+  }
+
+  // Vincular múltiplas ordens a uma tarefa
+  Future<void> _vincularMultiplasOrdens(List<String> ordemIds) async {
+    if (!mounted || ordemIds.isEmpty) {
+      return;
+    }
+
+    // Verificar se alguma ordem já está sendo vinculada
+    final ordensEmProcessamento = ordemIds.where((id) => _ordensVinculando.contains(id)).toList();
+    if (ordensEmProcessamento.isNotEmpty) {
+      return;
+    }
+
+    // Marcar todas como processando
+    setState(() {
+      for (final id in ordemIds) {
+        _ordensVinculando.add(id);
+      }
+    });
+
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+
     try {
+      // Buscar as ordens selecionadas
+      final ordensSelecionadas = _ordens.where((o) => ordemIds.contains(o.id)).toList();
+      if (ordensSelecionadas.isEmpty) {
+        if (mounted) {
+          scaffoldMessenger.showSnackBar(
+            const SnackBar(
+              content: Text('Nenhuma ordem selecionada encontrada'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+
+      // Usar o local da primeira ordem para filtrar tarefas (ou todas se não houver local)
+      final localComum = ordensSelecionadas.first.local;
+      
+      // Buscar tarefas disponíveis
       final taskService = TaskService();
       final todasTarefas = await taskService.getAllTasks();
+
+      if (todasTarefas.isEmpty) {
+        if (mounted) {
+          scaffoldMessenger.showSnackBar(
+            const SnackBar(
+              content: Text('Não há tarefas disponíveis para vincular'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+
+      // Filtrar tarefas já vinculadas a qualquer uma das ordens selecionadas
+      final tarefasVinculadasSet = <String>{};
+      for (final ordem in ordensSelecionadas) {
+        final tarefasVinculadas = await _service.getTarefasPorOrdem(ordem.id);
+        tarefasVinculadasSet.addAll(tarefasVinculadas);
+      }
+
+      var tarefasDisponiveis = todasTarefas
+          .where((t) => !tarefasVinculadasSet.contains(t.id))
+          .toList();
+
+      // Filtrar tarefas do mesmo local (se houver local comum)
+      if (localComum != null && localComum.isNotEmpty) {
+        tarefasDisponiveis = tarefasDisponiveis
+            .where((t) => t.locais.contains(localComum))
+            .toList();
+      }
+
+      if (tarefasDisponiveis.isEmpty) {
+        if (mounted) {
+          scaffoldMessenger.showSnackBar(
+            SnackBar(
+              content: Text(
+                localComum != null && localComum.isNotEmpty
+                    ? 'Não há tarefas disponíveis do mesmo local ($localComum) para vincular'
+                    : 'Todas as tarefas já estão vinculadas às ordens selecionadas',
+              ),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+
+      // Remover do conjunto de processamento antes de abrir o diálogo
+      if (mounted) {
+        setState(() {
+          for (final id in ordemIds) {
+            _ordensVinculando.remove(id);
+          }
+        });
+      }
+
+      if (!mounted) {
+        return;
+      }
+
+      // Mostrar diálogo de seleção de tarefa
+      final tarefaSelecionada = await showDialog<Task>(
+        context: context,
+        barrierDismissible: true,
+        builder: (context) => TaskSelectionDialog(
+          tasks: tarefasDisponiveis,
+          title: 'Vincular ${ordemIds.length} Ordem${ordemIds.length > 1 ? 's' : ''} a Tarefa',
+        ),
+      );
+
+      if (tarefaSelecionada != null && mounted) {
+        // Mostrar diálogo de progresso com StatefulBuilder para atualização dinâmica
+        int ordensProcessadas = 0;
+        final progressDialogContext = context;
+        StateSetter? setDialogState;
+        
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) {
+            return StatefulBuilder(
+              builder: (context, setState) {
+                setDialogState = setState;
+                return AlertDialog(
+                  content: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const CircularProgressIndicator(),
+                      const SizedBox(height: 20),
+                      Text(
+                        'Vinculando ${ordensSelecionadas.length} ordem${ordensSelecionadas.length > 1 ? 's' : ''}...',
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        'Tarefa: ${tarefaSelecionada.tarefa}',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey,
+                        ),
+                        textAlign: TextAlign.center,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 20),
+                      LinearProgressIndicator(
+                        value: ordensSelecionadas.length > 0 ? ordensProcessadas / ordensSelecionadas.length : 0.0,
+                        backgroundColor: Colors.grey[300],
+                        valueColor: const AlwaysStoppedAnimation<Color>(Colors.blue),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        '$ordensProcessadas de ${ordensSelecionadas.length} vinculada${ordensSelecionadas.length > 1 ? 's' : ''}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            );
+          },
+        );
+
+        // Vincular todas as ordens selecionadas
+        int vinculadasComSucesso = 0;
+        int vinculadasComErro = 0;
+
+        for (int i = 0; i < ordensSelecionadas.length; i++) {
+          final ordem = ordensSelecionadas[i];
+          try {
+            await _service.vincularOrdemATarefa(tarefaSelecionada.id, ordem.id);
+            vinculadasComSucesso++;
+            ordensProcessadas++;
+            
+            // Atualizar progresso no diálogo
+            if (mounted && setDialogState != null) {
+              setDialogState!(() {});
+            }
+          } catch (e) {
+            print('❌ Erro ao vincular ordem ${ordem.ordem}: $e');
+            vinculadasComErro++;
+            ordensProcessadas++;
+            
+            // Atualizar progresso mesmo em caso de erro
+            if (mounted && setDialogState != null) {
+              setDialogState!(() {});
+            }
+          }
+        }
+
+        // Fechar diálogo de progresso
+        if (mounted) {
+          Navigator.of(progressDialogContext, rootNavigator: true).pop();
+        }
+
+        // Recarregar ordens programadas
+        await _loadOrdensProgramadas();
+
+        // Limpar seleção
+        setState(() {
+          _ordensSelecionadas.clear();
+        });
+
+        if (mounted) {
+          if (vinculadasComErro == 0) {
+            scaffoldMessenger.showSnackBar(
+              SnackBar(
+                content: Text(
+                  vinculadasComSucesso == 1
+                      ? 'Ordem vinculada à tarefa "${tarefaSelecionada.tarefa}" com sucesso!'
+                      : '$vinculadasComSucesso ordens vinculadas à tarefa "${tarefaSelecionada.tarefa}" com sucesso!',
+                ),
+                backgroundColor: Colors.green,
+                duration: const Duration(seconds: 3),
+              ),
+            );
+          } else {
+            scaffoldMessenger.showSnackBar(
+              SnackBar(
+                content: Text(
+                  '$vinculadasComSucesso ordem(s) vinculada(s) com sucesso. $vinculadasComErro erro(s).',
+                ),
+                backgroundColor: Colors.orange,
+                duration: const Duration(seconds: 3),
+              ),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      print('❌ Erro ao vincular múltiplas ordens: $e');
+      if (mounted) {
+        scaffoldMessenger.showSnackBar(
+          SnackBar(
+            content: Text('Erro ao vincular ordens: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } finally {
+      // Remover do conjunto de processamento
+      if (mounted) {
+        setState(() {
+          for (final id in ordemIds) {
+            _ordensVinculando.remove(id);
+          }
+        });
+      }
+    }
+  }
+
+  // Vincular ordem a uma tarefa existente
+  Future<void> _vincularOrdemATarefaExistente(Ordem ordem) async {
+    if (!mounted || _ordensVinculando.contains(ordem.id)) {
+      return;
+    }
+    
+    // Marcar como processando
+    setState(() {
+      _ordensVinculando.add(ordem.id);
+    });
+    
+    // Capturar o contexto antes de operações assíncronas
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    
+    try {
+      // Executar operações em paralelo para ser mais rápido
+      final taskService = TaskService();
+      final results = await Future.wait([
+        taskService.getAllTasks(),
+        _service.getTarefasPorOrdem(ordem.id),
+      ]);
+      
+      final todasTarefas = results[0] as List<Task>;
+      final tarefasVinculadas = results[1] as List<String>;
       
       if (todasTarefas.isEmpty) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
+          scaffoldMessenger.showSnackBar(
             const SnackBar(
               content: Text('Não há tarefas disponíveis para vincular'),
               backgroundColor: Colors.orange,
@@ -1230,20 +1909,62 @@ class _OrdemViewState extends State<OrdemView> {
         return;
       }
       
+      // Filtrar tarefas já vinculadas
+      var tarefasDisponiveis = todasTarefas
+          .where((t) => !tarefasVinculadas.contains(t.id))
+          .toList();
+      
+      // Filtrar tarefas do mesmo local da ordem (se a ordem tiver local)
+      if (ordem.local != null && ordem.local!.isNotEmpty) {
+        tarefasDisponiveis = tarefasDisponiveis
+            .where((t) => t.locais.contains(ordem.local))
+            .toList();
+      }
+      
+      if (tarefasDisponiveis.isEmpty) {
+        if (mounted) {
+          scaffoldMessenger.showSnackBar(
+            SnackBar(
+              content: Text(
+                ordem.local != null && ordem.local!.isNotEmpty
+                    ? 'Não há tarefas disponíveis do mesmo local (${ordem.local}) para vincular'
+                    : 'Todas as tarefas já estão vinculadas a esta ordem',
+              ),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+      
+      // Remover do conjunto de processamento antes de abrir o diálogo
+      if (mounted) {
+        setState(() {
+          _ordensVinculando.remove(ordem.id);
+        });
+      }
+      
+      // Mostrar diálogo imediatamente
+      if (!mounted) {
+        return;
+      }
+      
       final tarefaSelecionada = await showDialog<Task>(
         context: context,
+        barrierDismissible: true,
         builder: (context) => TaskSelectionDialog(
-          tasks: todasTarefas,
+          tasks: tarefasDisponiveis,
+          title: 'Vincular Ordem a Tarefa',
         ),
       );
       
-      if (tarefaSelecionada != null) {
+      if (tarefaSelecionada != null && mounted) {
         try {
           await _service.vincularOrdemATarefa(tarefaSelecionada.id, ordem.id);
           await _loadOrdensProgramadas();
           
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
+            scaffoldMessenger.showSnackBar(
               SnackBar(
                 content: Text('Ordem ${ordem.ordem} vinculada à tarefa "${tarefaSelecionada.tarefa}" com sucesso!'),
                 backgroundColor: Colors.green,
@@ -1251,15 +1972,13 @@ class _OrdemViewState extends State<OrdemView> {
               ),
             );
           }
-        } catch (e, stackTrace) {
-          print('❌ Erro ao vincular ordem: $e');
-          print('❌ Stack trace: $stackTrace');
+        } catch (e) {
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
+            scaffoldMessenger.showSnackBar(
               SnackBar(
-                content: Text('Erro ao vincular ordem: ${e.toString()}'),
+                content: Text('Erro ao vincular ordem: $e'),
                 backgroundColor: Colors.red,
-                duration: const Duration(seconds: 5),
+                duration: const Duration(seconds: 3),
               ),
             );
           }
@@ -1267,13 +1986,20 @@ class _OrdemViewState extends State<OrdemView> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        scaffoldMessenger.showSnackBar(
           SnackBar(
-            content: Text('Erro ao vincular ordem: $e'),
+            content: Text('Erro ao buscar tarefas: $e'),
             backgroundColor: Colors.red,
             duration: const Duration(seconds: 3),
           ),
         );
+      }
+    } finally {
+      // Remover do conjunto de processamento
+      if (mounted) {
+        setState(() {
+          _ordensVinculando.remove(ordem.id);
+        });
       }
     }
   }
@@ -1434,15 +2160,7 @@ class _OrdemViewState extends State<OrdemView> {
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: ordem.ordem));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Ordem copiada!'),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
-              },
+              onPressed: () => _copiarOrdem(ordem.ordem),
               tooltip: 'Copiar ordem',
             ),
             if (isProgramada && tarefaStatus != null && statusColor != null)
@@ -1583,8 +2301,16 @@ class _OrdemViewState extends State<OrdemView> {
                     ),
                     const SizedBox(width: 8),
                     OutlinedButton.icon(
-                      onPressed: () => _vincularOrdemATarefaExistente(ordem),
-                      icon: const Icon(Icons.link, size: 18),
+                      onPressed: _ordensVinculando.contains(ordem.id) 
+                          ? null 
+                          : () => _vincularOrdemATarefaExistente(ordem),
+                      icon: _ordensVinculando.contains(ordem.id)
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.link, size: 18),
                       label: const Text('Vincular a Tarefa'),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: Colors.blue,
@@ -1761,6 +2487,56 @@ class _OrdemViewState extends State<OrdemView> {
     return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
   }
 
+  /// Local para exibição: VIEW (local) → denominação → local_instalacao, para funcionar com tabela ou VIEW.
+  String _localParaExibicao(Ordem ordem) {
+    final v = ordem.local?.trim();
+    if (v != null && v.isNotEmpty) return v;
+    final d = ordem.denominacaoLocalInstalacao?.trim();
+    if (d != null && d.isNotEmpty) return d;
+    final i = ordem.localInstalacao?.trim();
+    if (i != null && i.isNotEmpty) return i;
+    return '-';
+  }
+
+  Widget _buildAlbumCell(Ordem ordem) {
+    final info = _albumInfoByOrdemId[ordem.id];
+    if (info == null || info.count <= 0) {
+      return Text('-', style: TextStyle(fontSize: _kTableDataFontSize, color: Colors.grey));
+    }
+    return InkWell(
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => MediaAlbumsGalleryPage(
+              initialLocalId: info.localId,
+              initialRoomId: info.roomId,
+            ),
+          ),
+        );
+      },
+      borderRadius: BorderRadius.circular(4),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.photo_library, size: 16, color: Colors.blue[700]),
+            const SizedBox(width: 4),
+            Text(
+              '${info.count}',
+              style: TextStyle(
+                fontSize: _kTableDataFontSize,
+                fontWeight: FontWeight.w600,
+                color: Colors.blue[700],
+                decoration: TextDecoration.underline,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Color _getStatusColor(String? status) {
     if (status == null) return Colors.grey;
     if (status.contains('ABER')) return Colors.orange;
@@ -1780,17 +2556,72 @@ class _OrdemViewState extends State<OrdemView> {
     return prazoSemHora.difference(hojeSemHora).inDays;
   }
 
-  void _ordenarListaPorPrazo(List<Ordem> lista) {
+  /// Chave de ordenação para uma ordem na coluna [columnKey].
+  String _sortKey(Ordem o, String columnKey) {
+    switch (columnKey) {
+      case 'Status': {
+        final list = _ordensProgramadasInfo[o.id];
+        if (list == null || list.isEmpty) return '';
+        final tarefa = list.first['tarefa'];
+        final status = tarefa is Map<String, dynamic> ? tarefa['status'] as String? : null;
+        return (status ?? '').toLowerCase();
+      }
+      case 'Tarefa Vinculada': {
+        final list = _ordensProgramadasInfo[o.id];
+        if (list == null || list.isEmpty) return '';
+        final tarefa = list.first['tarefa'];
+        final titulo = tarefa is Map<String, dynamic> ? tarefa['titulo'] as String? : null;
+        return (titulo ?? '').toLowerCase();
+      }
+      case 'Local':
+        return _localParaExibicao(o).toLowerCase();
+      case 'Sala':
+        return (o.sala ?? '').trim().toLowerCase();
+      case 'Álbum':
+        final info = _albumInfoByOrdemId[o.id];
+        return (info?.count ?? 0).toString().padLeft(8, '0');
+      case 'Ordem':
+        return (o.ordem).toLowerCase();
+      case 'Tipo':
+        return (o.tipo ?? '').toLowerCase();
+      case 'Texto Breve':
+        return (o.textoBreve ?? '').toLowerCase();
+      case 'Tolerância':
+        return _diasRestantes(o).toString().padLeft(8, '0');
+      case 'Status Sistema':
+        return (o.statusSistema ?? '').toLowerCase();
+      case 'Status Usuário':
+        return (o.statusUsuario ?? '').toLowerCase();
+      case 'Local Instalação':
+        final loc = o.denominacaoLocalInstalacao ?? o.localInstalacao ?? '';
+        return loc.trim().toLowerCase();
+      case 'Início Base':
+        if (o.inicioBase == null) return '';
+        return o.inicioBase!.toIso8601String();
+      case 'Fim Base':
+        if (o.fimBase == null) return '';
+        return o.fimBase!.toIso8601String();
+      case 'GPM':
+        return (o.gpm ?? '').toLowerCase();
+      default:
+        return _diasRestantes(o).toString().padLeft(8, '0');
+    }
+  }
+
+  void _ordenarListaPorColuna(List<Ordem> lista) {
+    final col = _sortColumn ?? 'Tolerância';
+    final asc = _ordenacaoAscendente;
     lista.sort((a, b) {
-      final diasA = _diasRestantes(a);
-      final diasB = _diasRestantes(b);
-      return _ordenacaoAscendente ? diasA.compareTo(diasB) : diasB.compareTo(diasA);
+      final va = _sortKey(a, col);
+      final vb = _sortKey(b, col);
+      final cmp = va.compareTo(vb);
+      return asc ? cmp : -cmp;
     });
   }
 
   void _aplicarOrdenacaoEPaginacao() {
     final ordenadas = List<Ordem>.from(_todasOrdens);
-    _ordenarListaPorPrazo(ordenadas);
+    _ordenarListaPorColuna(ordenadas);
 
     final start = _paginaAtual * _itensPorPagina;
     final end = (start + _itensPorPagina).clamp(0, ordenadas.length);
@@ -1887,37 +2718,83 @@ class _OrdemViewState extends State<OrdemView> {
     );
   }
 
+  // Tabela: fonte cabeçalho/dados e larguras (ajuste aqui para reduzir/aumentar)
+  static const double _kTableHeaderFontSize = 11;
+  static const double _kTableDataFontSize = 10;
+  static const double _wTarefaVinculada = 200;
+  static const double _wLocal = 72;
+  static const double _wSala = 72;
+  static const double _wTextoBreve = 250;
+  static const double _wLocalInstalacao = 170;
+
+  DataColumn _sortableColumn(String title, String columnKey, TextStyle headerStyle) {
+    final isActive = _sortColumn == columnKey || (_sortColumn == null && columnKey == 'Tolerância');
+    return DataColumn(
+      tooltip: 'Clique para ordenar por $title',
+      label: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(title, style: headerStyle),
+          const SizedBox(width: 4),
+          Icon(
+            isActive
+                ? (_ordenacaoAscendente ? Icons.arrow_upward : Icons.arrow_downward)
+                : Icons.unfold_more,
+            size: 14,
+            color: isActive ? Theme.of(context).colorScheme.primary : Colors.grey,
+          ),
+        ],
+      ),
+      onSort: (columnIndex, ascending) {
+        setState(() {
+          _sortColumn = columnKey;
+          _ordenacaoAscendente = ascending;
+          _paginaAtual = 0;
+        });
+        _aplicarOrdenacaoEPaginacao();
+      },
+    );
+  }
+
   Widget _buildTabelaView() {
+    const headerStyle = TextStyle(fontWeight: FontWeight.bold, fontSize: _kTableHeaderFontSize);
+    const dataStyle = TextStyle(fontSize: _kTableDataFontSize);
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: SingleChildScrollView(
         child: DataTable(
           headingRowColor: MaterialStateProperty.all(Colors.blue[50]),
           columns: [
-            const DataColumn(label: Text('Ações', style: TextStyle(fontWeight: FontWeight.bold))),
-            const DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold))),
-            const DataColumn(label: Text('Tarefa Vinculada', style: TextStyle(fontWeight: FontWeight.bold))),
-            const DataColumn(label: Text('Local', style: TextStyle(fontWeight: FontWeight.bold))),
-            const DataColumn(label: Text('Sala', style: TextStyle(fontWeight: FontWeight.bold))),
-            const DataColumn(label: Text('Ordem', style: TextStyle(fontWeight: FontWeight.bold))),
-            const DataColumn(label: Text('Tipo', style: TextStyle(fontWeight: FontWeight.bold))),
-            const DataColumn(label: Text('Texto Breve', style: TextStyle(fontWeight: FontWeight.bold))),
             DataColumn(
-              label: const Text('Tolerância', style: TextStyle(fontWeight: FontWeight.bold)),
-              onSort: (columnIndex, ascending) {
-                setState(() {
-                  _ordenacaoAscendente = ascending;
-                  _paginaAtual = 0;
-                });
-                _aplicarOrdenacaoEPaginacao();
-              },
+              label: Checkbox(
+                value: _ordensSelecionadas.length == _ordens.length && _ordens.isNotEmpty,
+                onChanged: (value) {
+                  setState(() {
+                    if (value == true) {
+                      _ordensSelecionadas = _ordens.map((o) => o.id).toSet();
+                    } else {
+                      _ordensSelecionadas.clear();
+                    }
+                  });
+                },
+              ),
             ),
-            const DataColumn(label: Text('Status Sistema', style: TextStyle(fontWeight: FontWeight.bold))),
-            const DataColumn(label: Text('Status Usuário', style: TextStyle(fontWeight: FontWeight.bold))),
-            const DataColumn(label: Text('Local Instalação', style: TextStyle(fontWeight: FontWeight.bold))),
-            const DataColumn(label: Text('Início Base', style: TextStyle(fontWeight: FontWeight.bold))),
-            const DataColumn(label: Text('Fim Base', style: TextStyle(fontWeight: FontWeight.bold))),
-            const DataColumn(label: Text('GPM', style: TextStyle(fontWeight: FontWeight.bold))),
+            DataColumn(label: Text('Ações', style: headerStyle)),
+            _sortableColumn('Status', 'Status', headerStyle),
+            _sortableColumn('Tarefa Vinculada', 'Tarefa Vinculada', headerStyle),
+            _sortableColumn('Local', 'Local', headerStyle),
+            _sortableColumn('Sala', 'Sala', headerStyle),
+            _sortableColumn('Álbum', 'Álbum', headerStyle),
+            _sortableColumn('Ordem', 'Ordem', headerStyle),
+            _sortableColumn('Tipo', 'Tipo', headerStyle),
+            _sortableColumn('Texto Breve', 'Texto Breve', headerStyle),
+            _sortableColumn('Tolerância', 'Tolerância', headerStyle),
+            _sortableColumn('Status Sistema', 'Status Sistema', headerStyle),
+            _sortableColumn('Status Usuário', 'Status Usuário', headerStyle),
+            _sortableColumn('Local Instalação', 'Local Instalação', headerStyle),
+            _sortableColumn('Início Base', 'Início Base', headerStyle),
+            _sortableColumn('Fim Base', 'Fim Base', headerStyle),
+            _sortableColumn('GPM', 'GPM', headerStyle),
           ],
           rows: _ordens.map((ordem) {
             final isProgramada = _ordensProgramadasIds.contains(ordem.id);
@@ -1928,11 +2805,27 @@ class _OrdemViewState extends State<OrdemView> {
             final statusColor = tarefaStatus != null ? _getTaskStatusColor(tarefaStatus) : null;
             final totalVinculacoes = programadasList?.length ?? 0;
             
+            final isSelected = _ordensSelecionadas.contains(ordem.id);
             return DataRow(
+              selected: isSelected,
               color: isProgramada && statusColor != null
                   ? MaterialStateProperty.all(statusColor.withOpacity(0.1))
                   : null,
               cells: [
+                DataCell(
+                  Checkbox(
+                    value: isSelected,
+                    onChanged: (value) {
+                      setState(() {
+                        if (value == true) {
+                          _ordensSelecionadas.add(ordem.id);
+                        } else {
+                          _ordensSelecionadas.remove(ordem.id);
+                        }
+                      });
+                    },
+                  ),
+                ),
                 DataCell(
                   Row(
                     mainAxisSize: MainAxisSize.min,
@@ -1942,7 +2835,7 @@ class _OrdemViewState extends State<OrdemView> {
                         child: Material(
                           color: Colors.transparent,
                           child: InkWell(
-                            onTap: () => _criarTarefaDaOrdem(ordem),
+                            onTap: _canEditTasks ? () => _criarTarefaDaOrdem(ordem) : null,
                             borderRadius: BorderRadius.circular(4),
                             child: Container(
                               padding: const EdgeInsets.all(8),
@@ -1962,16 +2855,30 @@ class _OrdemViewState extends State<OrdemView> {
                         child: Material(
                           color: Colors.transparent,
                           child: InkWell(
-                            onTap: () => _vincularOrdemATarefaExistente(ordem),
+                            onTap: _ordensVinculando.contains(ordem.id)
+                                ? null
+                                : () => _vincularOrdensSelecionadas(ordem),
                             borderRadius: BorderRadius.circular(4),
                             child: Container(
                               padding: const EdgeInsets.all(8),
                               decoration: BoxDecoration(
-                                color: Colors.blue[50],
+                                color: _ordensVinculando.contains(ordem.id)
+                                    ? Colors.grey[200]
+                                    : Colors.blue[50],
                                 borderRadius: BorderRadius.circular(4),
-                                border: Border.all(color: Colors.blue[300]!),
+                                border: Border.all(
+                                  color: _ordensVinculando.contains(ordem.id)
+                                      ? Colors.grey[300]!
+                                      : Colors.blue[300]!,
+                                ),
                               ),
-                              child: const Icon(Icons.link, size: 20, color: Colors.blue),
+                              child: _ordensVinculando.contains(ordem.id)
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(strokeWidth: 2),
+                                    )
+                                  : const Icon(Icons.link, size: 20, color: Colors.blue),
                             ),
                           ),
                         ),
@@ -2051,7 +2958,7 @@ class _OrdemViewState extends State<OrdemView> {
                               ? () => _mostrarTodasVinculacoes(ordem, programadasList!)
                               : () => _navegarParaTarefa(tarefa['id'] as String?),
                           child: SizedBox(
-                            width: 200,
+                            width: _wTarefaVinculada,
                             child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -2089,25 +2996,31 @@ class _OrdemViewState extends State<OrdemView> {
                             ),
                           ),
                         )
-                      : const Text('-', style: TextStyle(color: Colors.grey)),
+                      : Text('-', style: dataStyle.copyWith(color: Colors.grey)),
                 ),
-                DataCell(
-                      Text(
-                    ordem.local ?? '-',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                      ),
                 DataCell(
                   SizedBox(
-                    width: 89, // mesma largura usada em Notas
+                    width: _wLocal,
                     child: Text(
-                      ordem.sala ?? '-',
+                      _localParaExibicao(ordem),
+                      style: dataStyle,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
+                    ),
+                  ),
                 ),
+                DataCell(
+                  SizedBox(
+                    width: _wSala,
+                    child: Text(
+                      ordem.sala ?? '-',
+                      style: dataStyle,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
+                DataCell(_buildAlbumCell(ordem)),
                 DataCell(
                   Row(
                     mainAxisSize: MainAxisSize.min,
@@ -2116,8 +3029,8 @@ class _OrdemViewState extends State<OrdemView> {
                         onTap: () => _mostrarDetalhesOrdem(ordem),
                         child: Text(
                           ordem.ordem,
-                          style: const TextStyle(fontWeight: FontWeight.bold, decoration: TextDecoration.underline),
-                            ),
+                          style: dataStyle.copyWith(fontWeight: FontWeight.bold, decoration: TextDecoration.underline),
+                        ),
                       ),
                       const SizedBox(width: 8),
                       Material(
@@ -2137,14 +3050,15 @@ class _OrdemViewState extends State<OrdemView> {
                       color: Colors.grey[300],
                       borderRadius: BorderRadius.circular(4),
                     ),
-                    child: Text(ordem.tipo ?? '-'),
+                    child: Text(ordem.tipo ?? '-', style: dataStyle),
                   ),
                 ),
                 DataCell(
                   SizedBox(
-                    width: 300,
+                    width: _wTextoBreve,
                     child: Text(
                       ordem.textoBreve ?? '-',
+                      style: dataStyle,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -2160,31 +3074,32 @@ class _OrdemViewState extends State<OrdemView> {
                     ),
                     child: Text(
                       ordem.statusSistema ?? '-',
-                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                      style: TextStyle(color: Colors.white, fontSize: _kTableDataFontSize),
                     ),
                   ),
                 ),
                 DataCell(
-                  Text(ordem.statusUsuario ?? '-'),
-            ),
+                  Text(ordem.statusUsuario ?? '-', style: dataStyle),
+                ),
                 DataCell(
                   SizedBox(
-                    width: 200,
+                    width: _wLocalInstalacao,
                     child: Text(
                       ordem.localInstalacao ?? '-',
+                      style: dataStyle,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
                 ),
                 DataCell(
-                  Text(ordem.inicioBase != null ? _formatDate(ordem.inicioBase!) : '-'),
+                  Text(ordem.inicioBase != null ? _formatDate(ordem.inicioBase!) : '-', style: dataStyle),
                 ),
                 DataCell(
-                  Text(ordem.fimBase != null ? _formatDate(ordem.fimBase!) : '-'),
+                  Text(ordem.fimBase != null ? _formatDate(ordem.fimBase!) : '-', style: dataStyle),
                 ),
                 DataCell(
-                  Text(ordem.gpm ?? '-'),
+                  Text(ordem.gpm ?? '-', style: dataStyle),
                 ),
               ],
             );
@@ -2207,15 +3122,7 @@ class _OrdemViewState extends State<OrdemView> {
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: ordem.ordem));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Ordem copiada!'),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
-              },
+              onPressed: () => _copiarOrdem(ordem.ordem),
               tooltip: 'Copiar ordem',
             ),
           ],

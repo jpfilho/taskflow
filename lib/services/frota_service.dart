@@ -45,7 +45,6 @@ class FrotaService {
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar frota');
               return <Map<String, dynamic>>[];
             },
           );

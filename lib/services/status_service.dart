@@ -69,7 +69,6 @@ class StatusService {
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar status');
               return <Map<String, dynamic>>[];
             },
           );
@@ -104,7 +103,6 @@ class StatusService {
           .timeout(
             const Duration(seconds: 10),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar status por ID');
               return <String, dynamic>{};
             },
           );
@@ -129,7 +127,6 @@ class StatusService {
           .timeout(
             const Duration(seconds: 10),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar status por código');
               return <String, dynamic>{};
             },
           );
@@ -220,7 +217,6 @@ class StatusService {
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
-              print('⚠️ Timeout ao filtrar status');
               return <Map<String, dynamic>>[];
             },
           );
@@ -254,7 +250,6 @@ class StatusService {
           .timeout(
             const Duration(seconds: 30),
             onTimeout: () {
-              print('⚠️ Timeout ao buscar status');
               return <Map<String, dynamic>>[];
             },
           );

@@ -212,6 +212,21 @@ class _OrdemSelectionDialogState extends State<OrdemSelectionDialog> {
     return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
   }
 
+  Future<void> _copiarOrdem(String texto) async {
+    try {
+      await Clipboard.setData(ClipboardData(text: texto));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Ordem copiada!'), duration: Duration(seconds: 1)),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Não foi possível copiar: $e'), backgroundColor: Colors.red, duration: const Duration(seconds: 3)),
+      );
+    }
+  }
+
   Widget _buildPrazoWithDateBadge(Ordem ordem) {
     if (ordem.tolerancia == null) {
       return const Text('-', style: TextStyle(color: Colors.grey, fontSize: 11));
@@ -882,15 +897,7 @@ class _OrdemSelectionDialogState extends State<OrdemSelectionDialog> {
                         icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(),
-                        onPressed: () {
-                          Clipboard.setData(ClipboardData(text: ordem.ordem));
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Ordem copiada!'),
-                              duration: Duration(seconds: 1),
-                            ),
-                          );
-                        },
+                        onPressed: () => _copiarOrdem(ordem.ordem),
                         tooltip: 'Copiar ordem',
                       ),
                     ],
@@ -1091,15 +1098,7 @@ class _OrdemSelectionDialogState extends State<OrdemSelectionDialog> {
                       ),
                       const SizedBox(width: 8),
                       InkWell(
-                        onTap: () {
-                          Clipboard.setData(ClipboardData(text: ordem.ordem));
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Ordem copiada!'),
-                              duration: Duration(seconds: 1),
-                            ),
-                          );
-                        },
+                        onTap: () => _copiarOrdem(ordem.ordem),
                         child: const Icon(Icons.copy, size: 16, color: Colors.blue),
                       ),
                     ],

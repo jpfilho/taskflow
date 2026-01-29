@@ -1,0 +1,32 @@
+﻿# =========================================
+# VARIÃVEIS DE AMBIENTE - TELEGRAM
+# =========================================
+# Criado em: 2026-01-24 09:59:57
+# 
+# IMPORTANTE: Guarde estas variÃ¡veis com seguranÃ§a!
+# VocÃª precisarÃ¡ delas para configurar o webhook.
+
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_WEBHOOK_SECRET=
+SUPABASE_URL=
+
+# =========================================
+# PRÃ“XIMOS PASSOS:
+# =========================================
+# 
+# 1. Deploy das Edge Functions:
+#    supabase functions deploy telegram-webhook
+#    supabase functions deploy telegram-send
+# 
+# 2. Configurar webhook (copie o comando abaixo):
+#    
+curl -X POST "https://api.telegram.org/bot/setWebhook" `
+  -H "Content-Type: application/json" `
+  -d "{
+    \"url\": \"/functions/v1/telegram-webhook\",
+    \"secret_token\": \"\",
+    \"allowed_updates\": [\"message\", \"edited_message\", \"callback_query\"]
+  }"
+# 
+# 3. Verificar webhook:
+#    curl "https://api.telegram.org/bot/getWebhookInfo"

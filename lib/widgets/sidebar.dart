@@ -149,8 +149,7 @@ class _SidebarState extends State<Sidebar> {
                     endIndent: isMobile ? 8 : 12,
                     color: iconColor.withOpacity(0.2),
                   ),
-                  // Horas entre os dois dividers (apenas root)
-                  if (widget.isRoot)
+                  // Horas - disponível para todos os usuários
                   _buildSidebarIcon(Icons.access_time, 20, 'Horas', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
                   // Apenas para root
                   if (widget.isRoot) ...[
@@ -197,6 +196,16 @@ class _SidebarState extends State<Sidebar> {
                     _buildSidebarIcon(Icons.alt_route, 21, 'Linhas de Transmissão', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
                     _buildSidebarIcon(Icons.eco, 22, 'Supressão de Vegetação', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
                   ],
+                  // Divider antes de Álbuns de Mídia
+                  Divider(
+                    height: isMobile ? 16 : 24,
+                    thickness: 1,
+                    indent: isMobile ? 8 : 12,
+                    endIndent: isMobile ? 8 : 12,
+                    color: iconColor.withOpacity(0.2),
+                  ),
+                  // Álbuns de Mídia - disponível para todos
+                  _buildSidebarIcon(Icons.photo_library, 23, 'Álbuns de Imagens', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
                 ],
               ),
             ),
