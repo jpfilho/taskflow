@@ -93,19 +93,27 @@ class _TaskTableState extends State<TaskTable> {
 
   StreamSubscription<String>? _statusChangeSubscription;
   
-  // ScrollController para sincronizar scroll horizontal do cabeçalho com o corpo
-  late ScrollController _horizontalScrollController;
-  bool _ownsHorizontalController = true;
-  bool _isScrollingHeader = false;
-  bool _isScrollingBody = false;
-  double _lastHorizontalOffset = 0.0; // Último offset horizontal conhecido
+  // Controladores separados: corpo (rolagem principal) e cabeçalho (seguidor)
+  late ScrollController _bodyHorizontalController;
+  late ScrollController _headerHorizontalController;
+  bool _ownsBodyController = true;
 
   @override
   void initState() {
     super.initState();
     _startEmptyTimer();
-    _horizontalScrollController = widget.horizontalController ?? ScrollController();
-    _ownsHorizontalController = widget.horizontalController == null;
+    _bodyHorizontalController = widget.horizontalController ?? ScrollController();
+    _ownsBodyController = widget.horizontalController == null;
+    _headerHorizontalController = ScrollController();
+    // Corpo dirige o cabeçalho
+    _bodyHorizontalController.addListener(() {
+      if (!_headerHorizontalController.hasClients) return;
+      try {
+        final max = _headerHorizontalController.position.maxScrollExtent;
+        final target = _bodyHorizontalController.offset.clamp(0.0, max);
+        _headerHorizontalController.jumpTo(target);
+      } catch (_) {}
+    });
     _loadStatus();
     _loadCounts();
     _loadAllSubtasks();
@@ -119,9 +127,10 @@ class _TaskTableState extends State<TaskTable> {
   void dispose() {
     _emptyTimer?.cancel();
     _statusChangeSubscription?.cancel();
-    if (_ownsHorizontalController) {
-      _horizontalScrollController.dispose();
+    if (_ownsBodyController) {
+      _bodyHorizontalController.dispose();
     }
+    _headerHorizontalController.dispose();
     super.dispose();
   }
 
@@ -615,6 +624,9 @@ class _TaskTableState extends State<TaskTable> {
       }
     }
     
+    // Para mobile/tablet, alinhar topo com o Gantt: remover espaço de legenda e toggle.
+    final double legendHeight = (isMobile || isTablet) ? 0.0 : _getStatusLegendHeight();
+
     return Container(
       decoration: BoxDecoration(
         border: Border.all(color: Colors.grey[300]!),
@@ -626,14 +638,14 @@ class _TaskTableState extends State<TaskTable> {
           if (isLargeDesktop) 
             _buildStatusLegend(isMobile)
           else
-            SizedBox(
-              height: _getStatusLegendHeight(),
-            ),
-          // Botão de expandir/colapsar (apenas em mobile/tablet, quando legenda não é exibida)
-          if (isMobile || isTablet) _buildToggleButton(isMobile),
-          // Cabeçalho fixo com scroll horizontal - altura fixa de 25px para alinhar com Gantt
+            SizedBox(height: legendHeight),
+          // Botão de expandir/colapsar: não mostrar em mobile/tablet para alinhar o topo
+          if (!isMobile && !isTablet) _buildToggleButton(isMobile),
+          // Em mobile/tablet, adicionar espaço de 25px para alinhar com o cabeçalho de mês do Gantt
+          if (isMobile || isTablet) const SizedBox(height: 25),
+          // Cabeçalho fixo com scroll horizontal - altura 50px para alinhar com a linha de dias do Gantt
           Container(
-            height: 25,
+            height: 50,
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
@@ -651,52 +663,13 @@ class _TaskTableState extends State<TaskTable> {
                 ),
               ],
             ),
-            child: NotificationListener<ScrollNotification>(
-              onNotification: (notification) {
-                // Sincronizar scroll do cabeçalho com o corpo
-                if (_isScrollingBody || !_horizontalScrollController.hasClients) {
-                  return false;
-                }
-                
-                final newOffset = notification.metrics.pixels;
-                // Verificar se o offset realmente mudou (evitar loops)
-                if ((newOffset - _lastHorizontalOffset).abs() < 0.1) {
-                  return false;
-                }
-                
-                // Verificar novamente se o controller ainda está anexado antes de acessar offset
-                if (!_horizontalScrollController.hasClients) {
-                  return false;
-                }
-                
-                // Verificar se o controller já está na posição desejada (evitar jumpTo desnecessário)
-                try {
-                  if ((_horizontalScrollController.offset - newOffset).abs() < 0.1) {
-                    _lastHorizontalOffset = newOffset;
-                    return false;
-                  }
-                } catch (e) {
-                  // Controller pode ter sido desanexado, ignorar
-                  return false;
-                }
-                
-                _isScrollingHeader = true;
-                _lastHorizontalOffset = newOffset;
-                _horizontalScrollController.jumpTo(newOffset);
-                // Resetar flag de forma assíncrona para evitar loops
-                Future.microtask(() {
-                  _isScrollingHeader = false;
-                });
-                return false;
-              },
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                physics: const AlwaysScrollableScrollPhysics(),
-                controller: _horizontalScrollController,
-                child: SizedBox(
-                  width: _calculateTotalTableWidth(isMobile),
-                  child: _buildHeaderRow(isMobile),
-                ),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              physics: const AlwaysScrollableScrollPhysics(),
+              controller: _headerHorizontalController,
+              child: SizedBox(
+                width: _calculateTotalTableWidth(isMobile),
+                child: _buildHeaderRow(isMobile),
               ),
             ),
           ),
@@ -711,162 +684,104 @@ class _TaskTableState extends State<TaskTable> {
                 // Usar a mesma largura do cabeçalho (já inclui folga de segurança)
                 final minWidth = _calculateTotalTableWidth(isMobile);
                 
-                return NotificationListener<ScrollNotification>(
-                  onNotification: (notification) {
-                    // Sincronizar scroll do corpo com o cabeçalho
-                    if (_isScrollingHeader || !_horizontalScrollController.hasClients) {
-                      return false;
-                    }
-                    
-                    final newOffset = notification.metrics.pixels;
-                    // Verificar se o offset realmente mudou (evitar loops)
-                    if ((newOffset - _lastHorizontalOffset).abs() < 0.1) {
-                      return false;
-                    }
-                    
-                    // Verificar novamente se o controller ainda está anexado antes de acessar offset
-                    if (!_horizontalScrollController.hasClients) {
-                      return false;
-                    }
-                    
-                    // Verificar se o controller já está na posição desejada (evitar jumpTo desnecessário)
-                    try {
-                      if ((_horizontalScrollController.offset - newOffset).abs() < 0.1) {
-                        _lastHorizontalOffset = newOffset;
-                        return false;
-                      }
-                    } catch (e) {
-                      // Controller pode ter sido desanexado, ignorar
-                      return false;
-                    }
-                    
-                    _isScrollingBody = true;
-                    _lastHorizontalOffset = newOffset;
-                    _horizontalScrollController.jumpTo(newOffset);
-                    // Resetar flag de forma assíncrona para evitar loops
-                    Future.microtask(() {
-                      _isScrollingBody = false;
-                    });
-                    return false;
-                  },
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    controller: _horizontalScrollController,
-                    child: SizedBox(
-                      width: minWidth,
-                      child: ListView.builder(
-                        controller: widget.scrollController,
-                        shrinkWrap: false,
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        itemCount: hierarchicalTasks.length,
-                        itemBuilder: (context, index) {
-                          final task = hierarchicalTasks[index];
-                          final previousTask = index > 0 ? hierarchicalTasks[index - 1] : null;
-                          
-                          final isSubtask = task.parentId != null;
-                          final hasSubtasks = _loadedSubtasks.containsKey(task.id) 
-                              ? _loadedSubtasks[task.id]!.isNotEmpty
-                              : false;
-                          final isExecutorRow = task.id.contains('_executor_');
-                          final isFrotaRow = task.id.contains('_frota_');
-                          
-                          // Verificar se mudou o grupo (apenas se não for PERÍODO e se não for subtarefa/executor)
-                          bool mudouGrupo = false;
-                          
-                          // Debug inicial
-                          if (index == 0) {
+                return SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  controller: _bodyHorizontalController,
+                  child: SizedBox(
+                    width: minWidth,
+                    child: ListView.builder(
+                      controller: widget.scrollController,
+                      shrinkWrap: false,
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      itemCount: hierarchicalTasks.length,
+                      itemBuilder: (context, index) {
+                        final task = hierarchicalTasks[index];
+                        final previousTask = index > 0 ? hierarchicalTasks[index - 1] : null;
+                        
+                        final isSubtask = task.parentId != null;
+                        final hasSubtasks = _loadedSubtasks.containsKey(task.id) 
+                            ? _loadedSubtasks[task.id]!.isNotEmpty
+                            : false;
+                        final isExecutorRow = task.id.contains('_executor_');
+                        final isFrotaRow = task.id.contains('_frota_');
+                        
+                        // Verificar se mudou o grupo (apenas se não for PERÍODO e se não for subtarefa/executor)
+                        bool mudouGrupo = false;
+                        if (widget.sortColumn != null && 
+                            widget.sortColumn != 'PERÍODO' && 
+                            previousTask != null &&
+                            !previousTask.id.contains('_executor_') &&
+                            !previousTask.id.contains('_frota_') &&
+                            previousTask.parentId == null &&
+                            !isSubtask &&
+                            !isExecutorRow &&
+                            !isFrotaRow &&
+                            widget.getSortValue != null) {
+                          try {
+                            final previousValue = widget.getSortValue!(previousTask);
+                            final currentValue = widget.getSortValue!(task);
+                            mudouGrupo = previousValue.trim() != currentValue.trim();
+                          } catch (e, stackTrace) {
+                            print('❌ Erro ao verificar mudança de grupo: $e');
+                            print('Stack trace: $stackTrace');
+                            mudouGrupo = false;
                           }
-                          
-                          if (widget.sortColumn != null && 
-                              widget.sortColumn != 'PERÍODO' && 
-                              previousTask != null &&
-                              !previousTask.id.contains('_executor_') &&
-                              !previousTask.id.contains('_frota_') &&
-                              previousTask.parentId == null &&
-                              !isSubtask &&
-                              !isExecutorRow &&
-                              !isFrotaRow &&
-                              widget.getSortValue != null) {
-                            try {
-                              final previousValue = widget.getSortValue!(previousTask);
-                              final currentValue = widget.getSortValue!(task);
-                              mudouGrupo = previousValue.trim() != currentValue.trim();
-                              
-                              // Removido debug
-                            } catch (e, stackTrace) {
-                              // Se houver erro, não mostrar linha separadora
-                              print('❌ Erro ao verificar mudança de grupo: $e');
-                              print('Stack trace: $stackTrace');
-                              mudouGrupo = false;
-                            }
-                          }
-                          
-                          final hasExecutorPeriods = !isSubtask && !isExecutorRow && task.executorPeriods.isNotEmpty;
-                          final statusBackgroundColor = _getStatusBackgroundColor(task.status);
-                          
-                          return Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              // Linha separadora se mudou grupo (no topo)
-                              if (mudouGrupo)
-                                Container(
-                                  height: 1,
-                                  width: double.infinity,
-                                  color: const Color.fromARGB(255, 0, 0, 0),
-                                ),
-                              // Linha da tabela
-                              Material(
-                                color: Colors.transparent,
-                                child: InkWell(
-                                  onTap: () => widget.onTaskSelected?.call(task),
-                                  hoverColor: Colors.blue[100]!.withOpacity(0.3),
-                                  child: Container(
-                                    height: 50, // Altura fixa de 50px para alinhar com Gantt
-                                    decoration: BoxDecoration(
-                                      color: statusBackgroundColor, // Fundo com cor do status bem clarinha
-                                      border: Border(
-                                        bottom: BorderSide(
-                                          color: Colors.grey[200]!,
-                                          width: 0.5,
-                                        ),
-                                        left: isExecutorRow
-                                            ? BorderSide(
-                                                color: Colors.orange[400]!,
-                                                width: 3,
-                                              )
-                                            : isFrotaRow
-                                                ? BorderSide(
-                                                    color: Colors.green[400]!,
-                                                    width: 3,
-                                                  )
-                                                : isSubtask
-                                                    ? BorderSide(
-                                                        color: Colors.blue[300]!,
-                                                        width: 3,
-                                                      )
-                                                    : BorderSide.none,
+                        }
+                        
+                        final hasExecutorPeriods = !isSubtask && !isExecutorRow && task.executorPeriods.isNotEmpty;
+                        final statusBackgroundColor = _getStatusBackgroundColor(task.status);
+                        
+                        return Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (mudouGrupo)
+                              Container(
+                                height: 1,
+                                width: double.infinity,
+                                color: const Color.fromARGB(255, 0, 0, 0),
+                              ),
+                            Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: () => widget.onTaskSelected?.call(task),
+                                hoverColor: Colors.blue[100]!.withOpacity(0.3),
+                                child: Container(
+                                  height: 50, // Altura fixa de 50px para alinhar com Gantt
+                                  decoration: BoxDecoration(
+                                    color: statusBackgroundColor,
+                                    border: Border(
+                                      bottom: BorderSide(
+                                        color: Colors.grey[200]!,
+                                        width: 0.5,
                                       ),
+                                      left: isExecutorRow
+                                          ? BorderSide(color: Colors.orange[400]!, width: 3)
+                                          : isFrotaRow
+                                              ? BorderSide(color: Colors.green[400]!, width: 3)
+                                              : isSubtask
+                                                  ? BorderSide(color: Colors.blue[300]!, width: 3)
+                                                  : BorderSide.none,
                                     ),
-                                    child: _buildDataRow(
-                                      task,
-                                      isMobile,
-                                      index,
-                                      isSubtask,
-                                      hasSubtasks,
-                                      isExecutorRow,
-                                      isFrotaRow,
-                                      hasExecutorPeriods,
-                                      statusBackgroundColor,
-                                      minWidth,
-                                    ),
+                                  ),
+                                  child: _buildDataRow(
+                                    task,
+                                    isMobile,
+                                    index,
+                                    isSubtask,
+                                    hasSubtasks,
+                                    isExecutorRow,
+                                    isFrotaRow,
+                                    hasExecutorPeriods,
+                                    statusBackgroundColor,
+                                    minWidth,
                                   ),
                                 ),
                               ),
-                            ],
-                          );
-                        },
-                      ),
+                            ),
+                          ],
+                        );
+                      },
                     ),
                   ),
                 );

@@ -4,7 +4,8 @@ import '../services/hora_sap_service.dart';
 import 'multi_select_filter_dialog.dart';
 
 class HorasMetasView extends StatefulWidget {
-  const HorasMetasView({super.key});
+  final VoidCallback? onRefresh;
+  const HorasMetasView({super.key, this.onRefresh});
 
   @override
   State<HorasMetasView> createState() => _HorasMetasViewState();
@@ -158,232 +159,262 @@ class _HorasMetasViewState extends State<HorasMetasView> {
 
     return Scaffold(
       backgroundColor: Colors.grey[50],
-      body: Column(
-        children: [
-          // Dashboard Cards no topo
-          Container(
-            padding: const EdgeInsets.all(16),
-            color: Colors.white,
-            child: Column(
-              children: [
-                // Título
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      body: SafeArea(
+        child: SingleChildScrollView(
+          primary: true,
+          child: Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                color: Colors.white,
+                child: Column(
                   children: [
-                    const Text(
-                      'Dashboard de Horas',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
                     Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        IconButton(
-                          icon: const Icon(Icons.table_chart, color: Colors.blue),
-                          onPressed: () {},
-                          tooltip: 'Tabela',
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.show_chart),
-                          onPressed: () {},
-                          tooltip: 'Metas',
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.refresh),
-                          onPressed: _carregarDados,
-                          tooltip: 'Atualizar',
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                // 3 Cards de estatísticas
-                Row(
-                  children: [
-                    // Card 1: Total de Colaboradores
-                    Expanded(
-                      child: _buildStatCard(
-                        title: 'Total de Colaboradores',
-                        value: stats['totalColaboradores'].toString(),
-                        subtitle: '+3 desde mês',
-                        icon: Icons.people,
-                        iconColor: Colors.blue[600]!,
-                        backgroundColor: Colors.blue[50]!,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    // Card 2: Horas Totais Registradas
-                    Expanded(
-                      child: _buildStatCard(
-                        title: 'Horas Totais Registradas',
-                        value: stats['horasTotais'].toStringAsFixed(0),
-                        subtitle: 'Metas atingida/colaborador',
-                        icon: Icons.access_time,
-                        iconColor: Colors.orange[600]!,
-                        backgroundColor: Colors.orange[50]!,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    // Card 3: Status das Metas (com gráfico)
-                    Expanded(
-                      child: _buildMetasCard(
-                        metasAtingidas: stats['metasAtingidas'],
-                        metasPendentes: stats['metasPendentes'],
-                        percentual: stats['percentualAtingido'],
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          // Filtros (estilo Notas)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              border: Border(
-                bottom: BorderSide(
-                  color: Colors.grey[300]!,
-                  width: 1,
-                ),
-              ),
-            ),
-            child: Row(
-              children: [
-                // Filtro Ano
-                SizedBox(
-                  width: isMobile ? 70 : 80,
-                  child: DropdownButtonFormField<int>(
-                    value: _anoSelecionado,
-                    decoration: InputDecoration(
-                      labelText: 'Ano',
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      isDense: true,
-                    ),
-                    items: List.generate(5, (index) {
-                      final ano = DateTime.now().year - 2 + index;
-                      return DropdownMenuItem(
-                        value: ano,
-                        child: Text(ano.toString(), style: const TextStyle(fontSize: 13)),
-                      );
-                    }),
-                    onChanged: (value) {
-                      if (value != null) {
-                        setState(() {
-                          _anoSelecionado = value;
-                        });
-                        _carregarDados();
-                      }
-                    },
-                  ),
-                ),
-                const SizedBox(width: 6),
-                // Filtro Mês
-                SizedBox(
-                  width: isMobile ? 100 : 120,
-                  child: DropdownButtonFormField<int?>(
-                    value: _mesSelecionado,
-                    decoration: InputDecoration(
-                      labelText: 'Mês',
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      isDense: true,
-                    ),
-                    items: [
-                      const DropdownMenuItem<int?>(
-                        value: null,
-                        child: Text('Todos', style: TextStyle(fontSize: 13)),
-                      ),
-                      ...List.generate(12, (index) {
-                        final mes = index + 1;
-                        return DropdownMenuItem<int?>(
-                          value: mes,
-                          child: Text(_getNomeMes(mes), style: const TextStyle(fontSize: 13)),
-                        );
-                      }),
-                    ],
-                    onChanged: (value) {
-                      setState(() {
-                        _mesSelecionado = value;
-                      });
-                      _carregarDados();
-                    },
-                  ),
-                ),
-                const SizedBox(width: 6),
-                // Filtro Empregado (mesmo estilo de Ano e Mês)
-                Expanded(
-                  child: InkWell(
-                    onTap: () {
-                      showDialog(
-                        context: context,
-                        builder: (context) => MultiSelectFilterDialog(
-                          title: 'Empregado',
-                          options: _empregadosDisponiveis,
-                          selectedValues: _filtroEmpregados,
-                          onSelectionChanged: (values) {
-                            setState(() {
-                              _filtroEmpregados = values;
-                              _aplicarFiltros();
-                            });
-                          },
-                          searchHint: 'Pesquisar empregado...',
-                        ),
-                      );
-                    },
-                    child: InputDecorator(
-                      decoration: InputDecoration(
-                        labelText: 'Empregado',
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        isDense: true,
-                      ),
-                      child: Text(
-                        _filtroEmpregados.isEmpty
-                            ? 'Todos'
-                            : _filtroEmpregados.length == 1
-                                ? _filtroEmpregados.first
-                                : '${_filtroEmpregados.length} selecionados',
-                        style: const TextStyle(
-                          fontSize: 13,
-                          color: Colors.black87,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          // Conteúdo principal
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _dadosFiltrados.isEmpty
-                    ? Center(
-                        child: Text(
-                          'Nenhum dado encontrado',
+                        const Text(
+                          'Dashboard de Horas',
                           style: TextStyle(
-                            fontSize: 16,
-                            color: Colors.grey[600],
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
                           ),
                         ),
+                        if (widget.onRefresh != null)
+                          IconButton(
+                            icon: const Icon(Icons.refresh),
+                            onPressed: widget.onRefresh,
+                            tooltip: 'Atualizar',
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    if (isMobile)
+                      Column(
+                        children: [
+                          _buildStatCard(
+                            title: 'Total de Colaboradores',
+                            value: stats['totalColaboradores'].toString(),
+                            subtitle: null,
+                            icon: Icons.people,
+                            iconColor: Colors.blue[600]!,
+                            backgroundColor: Colors.blue[50]!,
+                          ),
+                          const SizedBox(height: 12),
+                          _buildStatCard(
+                            title: 'Horas Totais Registradas',
+                            value: stats['horasTotais'].toStringAsFixed(0),
+                            subtitle: null,
+                            icon: Icons.access_time,
+                            iconColor: Colors.orange[600]!,
+                            backgroundColor: Colors.orange[50]!,
+                          ),
+                          const SizedBox(height: 12),
+                          _buildMetasCard(
+                            metasAtingidas: stats['metasAtingidas'],
+                            metasPendentes: stats['metasPendentes'],
+                            percentual: stats['percentualAtingido'],
+                          ),
+                        ],
                       )
-                    : _buildTabelaCompacta(isMobile),
+                    else
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _buildStatCard(
+                              title: 'Total de Colaboradores',
+                              value: stats['totalColaboradores'].toString(),
+                              subtitle: null,
+                              icon: Icons.people,
+                              iconColor: Colors.blue[600]!,
+                              backgroundColor: Colors.blue[50]!,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _buildStatCard(
+                              title: 'Horas Totais Registradas',
+                              value: stats['horasTotais'].toStringAsFixed(0),
+                              subtitle: null,
+                              icon: Icons.access_time,
+                              iconColor: Colors.orange[600]!,
+                              backgroundColor: Colors.orange[50]!,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _buildMetasCard(
+                              metasAtingidas: stats['metasAtingidas'],
+                              metasPendentes: stats['metasPendentes'],
+                              percentual: stats['percentualAtingido'],
+                            ),
+                          ),
+                        ],
+                      ),
+                  ],
+                ),
+              ),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border(
+                    bottom: BorderSide(
+                      color: Colors.grey[300]!,
+                      width: 1,
+                    ),
+                  ),
+                ),
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  primary: false,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: isMobile ? 82 : 92,
+                        child: DropdownButtonFormField<int>(
+                          value: _anoSelecionado,
+                          decoration: InputDecoration(
+                            labelText: 'Ano',
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            isDense: true,
+                          ),
+                          items: List.generate(5, (index) {
+                            final ano = DateTime.now().year - 2 + index;
+                            return DropdownMenuItem(
+                              value: ano,
+                              child: Text(ano.toString(), style: const TextStyle(fontSize: 13)),
+                            );
+                          }).toList(),
+                          onChanged: (value) {
+                            if (value != null) {
+                              setState(() {
+                                _anoSelecionado = value;
+                              });
+                              _carregarDados();
+                            }
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: isMobile ? 100 : 118,
+                        child: DropdownButtonFormField<int?>(
+                          value: _mesSelecionado,
+                          decoration: InputDecoration(
+                            labelText: 'Mês',
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            isDense: true,
+                          ),
+                          items: [
+                            const DropdownMenuItem<int?>(
+                              value: null,
+                              child: Text('Todos', style: TextStyle(fontSize: 13)),
+                            ),
+                            ...List.generate(12, (index) {
+                              final mes = index + 1;
+                              return DropdownMenuItem<int?>(
+                                value: mes,
+                                child: Text(_getNomeMes(mes), style: const TextStyle(fontSize: 13)),
+                              );
+                            }),
+                          ],
+                          onChanged: (value) {
+                            setState(() {
+                              _mesSelecionado = value;
+                            });
+                            _carregarDados();
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: isMobile ? 190 : 240,
+                        child: GestureDetector(
+                          onTap: () async {
+                            final selecionados = await showDialog<Set<String>>(
+                              context: context,
+                              builder: (context) => MultiSelectFilterDialog(
+                                title: 'Selecionar Empregados',
+                                options: _empregadosDisponiveis,
+                                selectedValues: _filtroEmpregados,
+                                onSelectionChanged: (values) {
+                                  setState(() {
+                                    _filtroEmpregados = values;
+                                    _aplicarFiltros();
+                                  });
+                                },
+                                searchHint: 'Pesquisar empregado...',
+                              ),
+                            );
+                            if (selecionados != null) {
+                              setState(() {
+                                _filtroEmpregados = selecionados;
+                                _aplicarFiltros();
+                              });
+                            }
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+                            decoration: BoxDecoration(
+                              color: Colors.grey[100],
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.grey[300]!),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.people, size: 18, color: Colors.grey),
+                                const SizedBox(width: 8),
+                                Flexible(
+                                    child: Text(
+                                      _filtroEmpregados.isEmpty
+                                          ? 'Empregados'
+                                          : '${_filtroEmpregados.length} selecionado(s)',
+                                      style: const TextStyle(fontSize: 13, color: Colors.black87),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                ),
+                                const SizedBox(width: 6),
+                                const Icon(Icons.arrow_drop_down),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: _isLoading
+                    ? const Padding(
+                        padding: EdgeInsets.all(24),
+                        child: CircularProgressIndicator(),
+                      )
+                    : _dadosFiltrados.isEmpty
+                        ? Center(
+                            child: Text(
+                              'Nenhum dado encontrado',
+                              style: TextStyle(
+                                fontSize: 16,
+                                color: Colors.grey[600],
+                              ),
+                            ),
+                          )
+                        : _buildTabelaCompacta(isMobile),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -399,8 +430,10 @@ class _HorasMetasViewState extends State<HorasMetasView> {
     }
 
     return SingleChildScrollView(
+      primary: false,
       scrollDirection: Axis.horizontal,
       child: SingleChildScrollView(
+        primary: false,
         child: DataTable(
           headingRowHeight: 48,
           dataRowMinHeight: 56,
@@ -759,7 +792,7 @@ class _HorasMetasViewState extends State<HorasMetasView> {
   Widget _buildStatCard({
     required String title,
     required String value,
-    required String subtitle,
+    String? subtitle,
     required IconData icon,
     required Color iconColor,
     required Color backgroundColor,
@@ -811,14 +844,16 @@ class _HorasMetasViewState extends State<HorasMetasView> {
               color: Colors.black87,
             ),
           ),
-          const SizedBox(height: 4),
-          Text(
-            subtitle,
-            style: TextStyle(
-              fontSize: 11,
-              color: Colors.grey[600],
+          if (subtitle != null && subtitle.trim().isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              subtitle,
+              style: TextStyle(
+                fontSize: 11,
+                color: Colors.grey[600],
+              ),
             ),
-          ),
+          ],
         ],
       ),
     );

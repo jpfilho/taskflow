@@ -228,86 +228,96 @@ class AnnotationToolbar extends StatelessWidget {
   }
 
   Widget _buildCompact(BuildContext context) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: [
-          _toolChip(context, AnnotationTool.pan, Icons.pan_tool_rounded, 'Pan'),
-          _toolChip(context, AnnotationTool.select, Icons.touch_app_rounded, 'Selecionar'),
-          _toolChip(context, AnnotationTool.pencil, Icons.edit_rounded, 'Lápis'),
-          _toolChip(context, AnnotationTool.arrow, Icons.arrow_upward_rounded, 'Seta'),
-          _toolChip(context, AnnotationTool.polygon, Icons.hexagon_outlined, 'Polígono'),
-          _toolChip(context, AnnotationTool.text, Icons.text_fields_rounded, 'Texto'),
-          if (controller.hasSelection)
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 6,
+          runSpacing: 8,
+          children: [
+            _toolChip(context, AnnotationTool.pan, Icons.pan_tool_rounded, 'Pan'),
+            _toolChip(context, AnnotationTool.select, Icons.touch_app_rounded, 'Selecionar'),
+            _toolChip(context, AnnotationTool.pencil, Icons.edit_rounded, 'Lápis'),
+            _toolChip(context, AnnotationTool.arrow, Icons.arrow_upward_rounded, 'Seta'),
+            _toolChip(context, AnnotationTool.polygon, Icons.hexagon_outlined, 'Polígono'),
+            _toolChip(context, AnnotationTool.text, Icons.text_fields_rounded, 'Texto'),
+            if (controller.hasSelection)
+              IconButton(
+                icon: const Icon(Icons.delete_rounded),
+                onPressed: controller.deleteSelected,
+                tooltip: 'Excluir seleção',
+              ),
+            if (controller.hasSelection && controller.selectedIsText)
+              IconButton(
+                icon: const Icon(Icons.text_fields_rounded),
+                onPressed: () => _showEditTextDialog(context),
+                tooltip: 'Editar texto',
+              ),
             IconButton(
-              icon: const Icon(Icons.delete_rounded),
-              onPressed: controller.deleteSelected,
-              tooltip: 'Excluir seleção',
+              icon: const Icon(Icons.undo_rounded),
+              onPressed: controller.canUndo ? controller.undo : null,
             ),
-          if (controller.hasSelection && controller.selectedIsText)
             IconButton(
-              icon: const Icon(Icons.text_fields_rounded),
-              onPressed: () => _showEditTextDialog(context),
-              tooltip: 'Editar texto',
+              icon: const Icon(Icons.redo_rounded),
+              onPressed: controller.canRedo ? controller.redo : null,
             ),
-          const SizedBox(width: 8),
-          IconButton(
-            icon: const Icon(Icons.undo_rounded),
-            onPressed: controller.canUndo ? controller.undo : null,
-          ),
-          IconButton(
-            icon: const Icon(Icons.redo_rounded),
-            onPressed: controller.canRedo ? controller.redo : null,
-          ),
-          IconButton(
-            icon: const Icon(Icons.delete_outline_rounded),
-            onPressed: controller.items.isNotEmpty ? controller.clear : null,
-          ),
-          const SizedBox(width: 8),
-          SizedBox(
-            width: 100,
-            child: Slider(
-              value: controller.selectedIsText ? controller.fontSize : controller.strokeWidth,
-              min: controller.selectedIsText ? 8 : 1,
-              max: controller.selectedIsText ? 48 : 20,
-              onChanged: controller.selectedIsText ? controller.setFontSize : controller.setStrokeWidth,
+            IconButton(
+              icon: const Icon(Icons.delete_outline_rounded),
+              onPressed: controller.items.isNotEmpty ? controller.clear : null,
             ),
-          ),
-          ..._palette.take(8).map((c) => GestureDetector(
-                onTap: () => controller.setColor(c.value),
-                child: Container(
-                  width: 24,
-                  height: 24,
-                  margin: const EdgeInsets.only(right: 4),
-                  decoration: BoxDecoration(
-                    color: c,
-                    shape: BoxShape.circle,
-                    border: controller.colorValue == c.value
-                        ? Border.all(color: Colors.white, width: 2)
-                        : null,
-                  ),
-                ),
-              )),
-          const SizedBox(width: 16),
-          TextButton(
-            onPressed: isSaving ? null : onCancel,
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: isSaving ? null : onSave,
-            child: isSaving
-                ? SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Theme.of(context).colorScheme.onPrimary,
+          ],
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            SizedBox(
+              width: 140,
+              child: Slider(
+                value: controller.selectedIsText ? controller.fontSize : controller.strokeWidth,
+                min: controller.selectedIsText ? 8 : 1,
+                max: controller.selectedIsText ? 48 : 20,
+                onChanged: controller.selectedIsText ? controller.setFontSize : controller.setStrokeWidth,
+              ),
+            ),
+            ..._palette.take(8).map((c) => GestureDetector(
+                  onTap: () => controller.setColor(c.value),
+                  child: Container(
+                    width: 24,
+                    height: 24,
+                    margin: const EdgeInsets.only(right: 4),
+                    decoration: BoxDecoration(
+                      color: c,
+                      shape: BoxShape.circle,
+                      border: controller.colorValue == c.value
+                          ? Border.all(color: Colors.white, width: 2)
+                          : null,
                     ),
-                  )
-                : const Text('Salvar'),
-          ),
-        ],
-      ),
+                  ),
+                )),
+            TextButton(
+              onPressed: isSaving ? null : onCancel,
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: isSaving ? null : onSave,
+              child: isSaving
+                  ? SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Theme.of(context).colorScheme.onPrimary,
+                      ),
+                    )
+                  : const Text('Salvar'),
+            ),
+          ],
+        ),
+      ],
     );
   }
 

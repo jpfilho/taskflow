@@ -11,7 +11,7 @@ class LocalDatabaseService {
 
   static Database? _database;
   static const String _databaseName = 'taskflow_local.db';
-  static const int _databaseVersion = 1;
+  static const int _databaseVersion = 2;
 
   Future<Database> get database async {
     if (_database != null) return _database!;
@@ -51,7 +51,12 @@ class LocalDatabaseService {
         record_id TEXT NOT NULL,
         data TEXT NOT NULL,
         created_at INTEGER NOT NULL,
-        synced INTEGER DEFAULT 0
+        synced INTEGER DEFAULT 0,
+        status TEXT DEFAULT 'pending', -- pending, retrying, failed, done
+        retry_count INTEGER DEFAULT 0,
+        backoff_ms INTEGER DEFAULT 0,
+        next_retry_at INTEGER,
+        last_error TEXT
       )
     ''');
 
@@ -318,14 +323,45 @@ class LocalDatabaseService {
     await db.execute('CREATE INDEX idx_gantt_segments_local_task_id ON gantt_segments_local(task_id)');
     await db.execute('CREATE INDEX idx_sync_queue_synced ON sync_queue(synced)');
     await db.execute('CREATE INDEX idx_sync_queue_table ON sync_queue(table_name)');
+    await db.execute('CREATE INDEX idx_sync_queue_next_retry ON sync_queue(next_retry_at)');
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
-    // Implementar migrações futuras aqui
+    if (oldVersion < 2) {
+      // Adicionar colunas de backoff/retry na fila
+      try {
+        await db.execute("ALTER TABLE sync_queue ADD COLUMN status TEXT DEFAULT 'pending'");
+      } catch (_) {}
+      try {
+        await db.execute("ALTER TABLE sync_queue ADD COLUMN retry_count INTEGER DEFAULT 0");
+      } catch (_) {}
+      try {
+        await db.execute("ALTER TABLE sync_queue ADD COLUMN backoff_ms INTEGER DEFAULT 0");
+      } catch (_) {}
+      try {
+        await db.execute("ALTER TABLE sync_queue ADD COLUMN next_retry_at INTEGER");
+      } catch (_) {}
+      try {
+        await db.execute("ALTER TABLE sync_queue ADD COLUMN last_error TEXT");
+      } catch (_) {}
+      try {
+        await db.execute('CREATE INDEX idx_sync_queue_next_retry ON sync_queue(next_retry_at)');
+      } catch (_) {}
+    }
   }
 
   // Métodos para gerenciar fila de sincronização
-  Future<int> addToSyncQueue(String tableName, String operation, String recordId, Map<String, dynamic> data) async {
+  Future<int> addToSyncQueue(
+    String tableName,
+    String operation,
+    String recordId,
+    Map<String, dynamic> data, {
+    String status = 'pending',
+    int retryCount = 0,
+    int backoffMs = 0,
+    int? nextRetryAt,
+    String? lastError,
+  }) async {
     final db = await database;
     return await db.insert('sync_queue', {
       'table_name': tableName,
@@ -334,15 +370,21 @@ class LocalDatabaseService {
       'data': jsonEncode(data),
       'created_at': DateTime.now().millisecondsSinceEpoch,
       'synced': 0,
+      'status': status,
+      'retry_count': retryCount,
+      'backoff_ms': backoffMs,
+      'next_retry_at': nextRetryAt,
+      'last_error': lastError,
     });
   }
 
   Future<List<Map<String, dynamic>>> getPendingSyncItems() async {
     final db = await database;
+    final now = DateTime.now().millisecondsSinceEpoch;
     return await db.query(
       'sync_queue',
-      where: 'synced = ?',
-      whereArgs: [0],
+      where: 'synced = ? AND (status = ? OR status = ?) AND (next_retry_at IS NULL OR next_retry_at <= ?)',
+      whereArgs: [0, 'pending', 'retrying', now],
       orderBy: 'created_at ASC',
     );
   }
@@ -351,7 +393,37 @@ class LocalDatabaseService {
     final db = await database;
     await db.update(
       'sync_queue',
-      {'synced': 1},
+      {'synced': 1, 'status': 'done', 'last_error': null, 'retry_count': 0, 'backoff_ms': 0, 'next_retry_at': null},
+      where: 'id = ?',
+      whereArgs: [syncQueueId],
+    );
+  }
+
+  Future<void> markAsFailed(int syncQueueId, String error, int retryCount, int backoffMs, int? nextRetryAt) async {
+    final db = await database;
+    await db.update(
+      'sync_queue',
+      {
+        'status': 'retrying',
+        'last_error': error,
+        'retry_count': retryCount,
+        'backoff_ms': backoffMs,
+        'next_retry_at': nextRetryAt,
+      },
+      where: 'id = ?',
+      whereArgs: [syncQueueId],
+    );
+  }
+
+  Future<void> markAsPermanentlyFailed(int syncQueueId, String error) async {
+    final db = await database;
+    await db.update(
+      'sync_queue',
+      {
+        'status': 'failed',
+        'last_error': error,
+        'next_retry_at': null,
+      },
       where: 'id = ?',
       whereArgs: [syncQueueId],
     );
@@ -381,6 +453,33 @@ class LocalDatabaseService {
     } catch (e) {
       print('Erro ao atualizar status de sincronização: $e');
     }
+  }
+
+  /// Obtém o timestamp mais recente de last_synced de uma tabela local.
+  Future<int?> getMaxLastSynced(String localTable) async {
+    try {
+      final db = await database;
+      final result = await db.rawQuery(
+        'SELECT MAX(last_synced) as max_synced FROM $localTable WHERE last_synced IS NOT NULL',
+      );
+      if (result.isEmpty) return null;
+      final value = result.first['max_synced'];
+      if (value == null) return null;
+      if (value is int) return value;
+      if (value is num) return value.toInt();
+      return int.tryParse(value.toString());
+    } catch (e) {
+      print('Erro ao obter max(last_synced) de $localTable: $e');
+      return null;
+    }
+  }
+
+  /// Verifica se o cache está fresco considerando o TTL informado.
+  Future<bool> isCacheFresh(String localTable, Duration ttl) async {
+    final maxSynced = await getMaxLastSynced(localTable);
+    if (maxSynced == null) return false;
+    final ageMs = DateTime.now().millisecondsSinceEpoch - maxSynced;
+    return ageMs <= ttl.inMilliseconds;
   }
 
   // Limpar banco local (útil para testes ou reset)

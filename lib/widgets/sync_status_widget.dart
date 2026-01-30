@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import '../services/sync_service.dart';
 import '../services/connectivity_service.dart';
 import '../services/local_database_service.dart';
@@ -18,6 +19,7 @@ class _SyncStatusWidgetState extends State<SyncStatusWidget> {
   bool _isConnected = true;
   bool _isSyncing = false;
   int _pendingCount = -1; // -1 indica que ainda não foi verificado ou banco não disponível
+  StreamSubscription<bool>? _syncSub;
   
   @override
   void initState() {
@@ -35,8 +37,16 @@ class _SyncStatusWidgetState extends State<SyncStatusWidget> {
       }
     });
     
-    // Escutar mudanças de sincronização (se houver stream)
-    // Por enquanto, vamos verificar periodicamente
+    // Escutar mudanças de sincronização
+    _syncSub = _syncService.syncingStream.listen((syncing) {
+      if (mounted) {
+        setState(() => _isSyncing = syncing);
+        if (!syncing) {
+          _loadPendingCount();
+        }
+      }
+    });
+    // Periodicamente, garantir refresh
     _startPeriodicCheck();
   }
   
@@ -48,6 +58,12 @@ class _SyncStatusWidgetState extends State<SyncStatusWidget> {
       }
     });
   }
+
+  @override
+  void dispose() {
+    _syncSub?.cancel();
+    super.dispose();
+  }
   
   Future<void> _loadPendingCount() async {
     try {
@@ -56,8 +72,8 @@ class _SyncStatusWidgetState extends State<SyncStatusWidget> {
         final db = await _localDb.database;
         final pendingQueue = await db.query(
           'sync_queue',
-          where: 'synced = ?',
-          whereArgs: [0],
+          where: 'synced = ? AND (status = ? OR status = ? OR status = ?)',
+          whereArgs: [0, 'pending', 'retrying', 'failed'],
         );
         
         final pendingTasks = await db.query(

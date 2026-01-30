@@ -8,11 +8,13 @@ import '../../data/models/room.dart';
 import '../../data/models/status_album.dart';
 import '../../../../models/local.dart';
 import '../../../../services/auth_service_simples.dart';
+import '../../../../services/connectivity_service.dart';
 import '../../util/user_locais_helper.dart';
 
 class GalleryController extends ChangeNotifier {
   final SupabaseMediaRepository _repository = SupabaseMediaRepository();
   final StatusAlbumRepository _statusRepository = StatusAlbumRepository();
+  final ConnectivityService _connectivity = ConnectivityService();
 
   // Estado da galeria
   List<MediaImage> _images = [];
@@ -171,6 +173,18 @@ class GalleryController extends ChangeNotifier {
     notifyListeners();
 
     try {
+      // Offline: não buscar remoto; manter cache em memória
+      if (!_connectivity.isConnected) {
+        if (_images.isEmpty) {
+          _error = 'Offline: conecte-se para carregar álbuns';
+        } else {
+          _error = 'Offline: exibindo álbuns já carregados';
+        }
+        _isLoading = false;
+        notifyListeners();
+        return;
+      }
+
       final authService = AuthServiceSimples();
       final usuario = authService.currentUser;
       final userRegionalIds = (usuario?.isRoot ?? false) || (usuario?.regionalIds.isEmpty ?? true) ? null : usuario?.regionalIds;

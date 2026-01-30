@@ -2,6 +2,7 @@ import 'usuario_service.dart';
 import 'package:uuid/uuid.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'auth_cache_service.dart';
 
 // Classe simples para simular AuthResponse
 class AuthResponse {
@@ -29,6 +30,7 @@ class AuthServiceSimples {
       accessibility: KeychainAccessibility.first_unlock_this_device,
     ),
   );
+  final AuthCacheService _authCache = AuthCacheService();
 
   static const String _sessionEmailKey = 'session_email';
 
@@ -58,6 +60,9 @@ class AuthServiceSimples {
 
       _usuarioAtual = usuario;
       await _saveSession(usuario);
+      await _authCache.saveUser(usuario);
+      // Garantir credencial local para login offline
+      await _usuarioService.salvarUsuarioLocalComSenha(usuario, password);
       return AuthResponse(
         usuario: usuario,
         sucesso: true,
@@ -96,6 +101,8 @@ class AuthServiceSimples {
       // Fazer login automaticamente após cadastro
       _usuarioAtual = usuario;
       await _saveSession(usuario);
+      await _authCache.saveUser(usuario);
+      await _usuarioService.salvarUsuarioLocalComSenha(usuario, password);
       return AuthResponse(
         usuario: usuario,
         sucesso: true,
@@ -112,6 +119,7 @@ class AuthServiceSimples {
   Future<void> signOut() async {
     _usuarioAtual = null;
     await _clearSession();
+    await _authCache.clear();
   }
 
   // Atualizar usuário atual (usado após atualizar perfil)
@@ -158,6 +166,7 @@ class AuthServiceSimples {
       if (existente != null) {
         _usuarioAtual = existente;
         await _saveSession(existente);
+        await _authCache.saveUser(existente);
         return AuthResponse(usuario: existente, sucesso: true);
       }
 
@@ -170,6 +179,7 @@ class AuthServiceSimples {
       );
       _usuarioAtual = novo;
       await _saveSession(novo);
+      await _authCache.saveUser(novo);
       return AuthResponse(usuario: novo, sucesso: true);
     } catch (e) {
       return AuthResponse(sucesso: false, erro: e.toString());
@@ -218,15 +228,34 @@ class AuthServiceSimples {
 
   Future<bool> restoreSession() async {
     try {
+      // 1) Tentar cache seguro (não depende de rede)
+      final cached = await _authCache.loadUser();
+      if (cached != null) {
+        _usuarioAtual = cached;
+        return true;
+      }
+
+      // 2) Tentar email salvo
       final savedEmail = await _readSavedSessionEmail();
       if (savedEmail == null || savedEmail.isEmpty) return false;
 
+      // 2a) Buscar local (offline-first)
+      final localUser = await _usuarioService.obterUsuarioLocalPorEmail(savedEmail);
+      if (localUser != null) {
+        _usuarioAtual = localUser;
+        await _authCache.saveUser(localUser);
+        return true;
+      }
+
+      // 2b) Buscar remoto
       final usuario = await _usuarioService.obterUsuarioPorEmail(savedEmail);
       if (usuario == null) {
         await _clearSession();
+        await _authCache.clear();
         return false;
       }
       _usuarioAtual = usuario;
+      await _authCache.saveUser(usuario);
       return true;
     } catch (e) {
       return false;

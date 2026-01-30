@@ -351,15 +351,69 @@ class SupabaseMediaRepository {
     }
   }
 
-  // NOTA: createRoom não é mais necessário pois salas vêm de equipamentos_sap
-  // Mantido para compatibilidade, mas não faz nada útil
-  Future<Room> createRoom({
-    required String equipmentId,
-    required String name,
+  /// Insere sala em equipamentos_sap (upsert), para reaproveitar no dropdown.
+  Future<void> insertSalaEquipamentosSap({
+    required String localInstalacao,
+    required String sala,
+    String? localizacao,
   }) async {
-    // Como salas vêm de equipamentos_sap, precisamos da localização também
-    // Por enquanto, retornar um Room vazio (não deve ser usado)
-    throw Exception('createRoom não é suportado. Salas vêm de equipamentos_sap.');
+    final loc = localInstalacao.trim();
+    final salaTrim = sala.trim();
+    final locFinal = (localizacao ?? localInstalacao).trim();
+    if (loc.isEmpty || salaTrim.isEmpty) {
+      throw Exception('local_instalacao e sala são obrigatórios.');
+    }
+    // Campo equipamento é NOT NULL e único; gerar identificador determinístico
+    final equipamentoValue = 'ROOM-${loc.toLowerCase()}-${salaTrim.toLowerCase()}';
+    try {
+      await _supabase.from('equipamentos_sap').upsert(
+        {
+          'local_instalacao': loc,
+          'localizacao': locFinal.isNotEmpty ? locFinal : null,
+          'sala': salaTrim,
+          'equipamento': equipamentoValue,
+        },
+        onConflict: 'localizacao,sala',
+      );
+    } catch (e, stackTrace) {
+      debugPrint('❌ Erro ao inserir sala em equipamentos_sap: $e');
+      debugPrint('   Stack trace: $stackTrace');
+      rethrow;
+    }
+  }
+
+  /// Cria (ou upserta) uma sala manualmente.
+  /// Útil quando o usuário precisa cadastrar uma sala que não existe em equipamentos_sap.
+  Future<Room> createRoom(Room room) async {
+    try {
+      // Garantir que o equipment exista em 'equipments' (FK de rooms)
+      try {
+        final equipmentData = {
+          'id': room.equipmentId,
+          'name': room.localizacao ?? room.name,
+        };
+        await _supabase.from('equipments').upsert(equipmentData);
+      } catch (e) {
+        debugPrint('⚠️ Erro ao upsert equipment antes de criar sala: $e');
+      }
+
+      // Tabela rooms não possui coluna localizacao; enviar apenas campos suportados
+      final data = {
+        'id': room.id,
+        'equipment_id': room.equipmentId,
+        'name': room.name,
+      };
+      final response = await _supabase
+          .from('rooms')
+          .upsert(data)
+          .select()
+          .single();
+      return Room.fromMap(response as Map<String, dynamic>);
+    } catch (e, stackTrace) {
+      debugPrint('❌ Erro ao criar sala: $e');
+      debugPrint('   Stack trace: $stackTrace');
+      rethrow;
+    }
   }
 
   // ============================================

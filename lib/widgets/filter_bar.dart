@@ -297,89 +297,92 @@ class _FilterBarState extends State<FilterBar> {
                 });
               },
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                width: MediaQuery.of(context).size.width,
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
                 child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Icon(
-                      _isExpanded ? Icons.expand_less : Icons.expand_more,
-                      size: 20,
-                      color: Colors.grey[700],
+                    // Esquerda: ordenação e toggles (gaps uniformes)
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _buildSortSelector(isMobile: true),
+                        const SizedBox(width: 8),
+                        _buildMinhasTarefasToggle(label: false),
+                        if (widget.onToggleGantt != null && widget.currentViewMode == 'split') ...[
+                          const SizedBox(width: 8),
+                          _buildGanttToggle(),
+                        ],
+                      ],
                     ),
-                    const SizedBox(width: 8),
-                    Text(
-                      'Filtros',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.grey[800],
-                      ),
+                    // Direita: filtro, indicador e limpar (gaps uniformes)
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          _isExpanded ? Icons.expand_less : Icons.expand_more,
+                          size: 16,
+                          color: Colors.grey[700],
+                        ),
+                        const SizedBox(width: 8),
+                        const Icon(Icons.filter_list, size: 14, color: Colors.grey),
+                        if (activeFiltersCount > 0) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: Colors.blue,
+                              borderRadius: BorderRadius.circular(7),
+                            ),
+                            child: Text(
+                              '$activeFiltersCount',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                        const SizedBox(width: 8),
+                        if (widget.isFiltering)
+                          SizedBox(
+                            width: 12,
+                            height: 12,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
+                            ),
+                          ),
+                        const SizedBox(width: 8),
+                        if (activeFiltersCount > 0)
+                          TextButton(
+                            onPressed: () {
+                              setState(() {
+                                _selectedRegional = {};
+                                _selectedDivisao = {};
+                                _selectedStatus = {};
+                                _selectedLocal = {};
+                                _selectedTipo = {};
+                                _selectedExecutor = {};
+                                _selectedFrota = {};
+                                _selectedCoordenador = {};
+                                _minhasTarefas = false;
+                                _updateFilters();
+                              });
+                            },
+                            style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                              minimumSize: Size.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            child: Text(
+                              'Limpar',
+                              style: TextStyle(fontSize: 10, color: Colors.blue[700]),
+                            ),
+                          ),
+                      ],
                     ),
-                    if (activeFiltersCount > 0) ...[
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: Colors.blue,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Text(
-                          '$activeFiltersCount',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ],
-                    const Spacer(),
-                    // Indicador de loading (mobile)
-                    if (widget.isFiltering)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
-                          ),
-                        ),
-                      ),
-                    // Toggle Minhas Tarefas (sempre visível no mobile)
-                    _buildMinhasTarefasToggle(),
-                    // Botão para mostrar/ocultar Gantt (apenas quando o modo for 'split')
-                    if (widget.onToggleGantt != null && widget.currentViewMode == 'split') ...[
-                      const SizedBox(width: 8),
-                      _buildGanttToggle(),
-                    ],
-                    const SizedBox(width: 8),
-                    if (activeFiltersCount > 0)
-                      TextButton(
-                        onPressed: () {
-                          setState(() {
-                            _selectedRegional = {};
-                            _selectedDivisao = {};
-                            _selectedStatus = {};
-                            _selectedLocal = {};
-                            _selectedTipo = {};
-                            _selectedExecutor = {};
-                            _selectedFrota = {};
-                            _selectedCoordenador = {};
-                            _minhasTarefas = false;
-                            _updateFilters();
-                          });
-                        },
-                        style: TextButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          minimumSize: Size.zero,
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                        child: Text(
-                          'Limpar',
-                          style: TextStyle(fontSize: 11, color: Colors.blue[700]),
-                        ),
-                      ),
                   ],
                 ),
               ),
@@ -460,7 +463,7 @@ class _FilterBarState extends State<FilterBar> {
                     children: [
                       _buildSortSelector(isMobile: false),
                       const SizedBox(width: 16),
-                      _buildMinhasTarefasToggle(),
+                    _buildMinhasTarefasToggle(label: false),
                       const SizedBox(width: 16),
                       Expanded(
                         child: _buildMultiSelectFilterField(
@@ -624,16 +627,61 @@ class _FilterBarState extends State<FilterBar> {
   Widget _buildSortSelector({bool isMobile = false}) {
     final currentSortColumn = widget.currentSortColumn ?? 'PERÍODO';
     final currentSortAscending = widget.currentSortAscending ?? true;
-    final padH = isMobile ? 6.0 : 10.0;
-    final padV = isMobile ? 4.0 : 8.0;
-    final iconSz = isMobile ? 14.0 : 20.0;
-    final fontSz = isMobile ? 10.0 : 12.0;
+    if (isMobile) {
+      // Versão ultra-compacta: ícone abre popup com colunas e toggle de ordem.
+      return PopupMenuButton<String>(
+        icon: Icon(Icons.sort, size: 18, color: Colors.blue[700]),
+        padding: EdgeInsets.zero,
+        itemBuilder: (context) => [
+          ..._sortOptions.map(
+            (o) => PopupMenuItem<String>(
+              value: o,
+              child: Text(
+                o,
+                style: const TextStyle(fontSize: 12),
+              ),
+            ),
+          ),
+          const PopupMenuDivider(),
+          PopupMenuItem<String>(
+            value: '__toggle_order__',
+            child: Row(
+              children: [
+                Icon(
+                  currentSortAscending ? Icons.arrow_upward : Icons.arrow_downward,
+                  size: 16,
+                  color: Colors.blue[700],
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  currentSortAscending ? 'Ordem: Crescente' : 'Ordem: Decrescente',
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+        ],
+        onSelected: (value) {
+          if (value == '__toggle_order__') {
+            widget.onSortChanged?.call(currentSortColumn, !currentSortAscending);
+          } else {
+            widget.onSortChanged?.call(value, currentSortAscending);
+          }
+        },
+      );
+    }
+
+    // Versão desktop/tablet permanece mais completa.
+    final padH = 10.0;
+    final padV = 8.0;
+    const iconSz = 20.0;
+    const fontSz = 12.0;
     return Container(
       padding: EdgeInsets.symmetric(horizontal: padH, vertical: padV),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: Colors.blue, width: isMobile ? 1 : 1.2),
+        border: Border.all(color: Colors.blue, width: 1.2),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -642,7 +690,7 @@ class _FilterBarState extends State<FilterBar> {
           const SizedBox(width: 6),
           DropdownButton<String>(
             value: currentSortColumn,
-            isDense: !isMobile,
+            isDense: true,
             underline: const SizedBox.shrink(),
             style: TextStyle(
               fontSize: fontSz,
@@ -674,10 +722,7 @@ class _FilterBarState extends State<FilterBar> {
               }
             },
             padding: EdgeInsets.zero,
-            constraints: BoxConstraints(
-              minWidth: isMobile ? 20 : 28,
-              minHeight: isMobile ? 20 : 28,
-            ),
+            constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
             tooltip: currentSortAscending ? 'Crescente' : 'Decrescente',
           ),
         ],
@@ -685,12 +730,12 @@ class _FilterBarState extends State<FilterBar> {
     );
   }
 
-  Widget _buildMinhasTarefasToggle() {
+  Widget _buildMinhasTarefasToggle({bool label = true}) {
     final isCompact = Responsive.isMobile(context);
-    final padH = isCompact ? 8.0 : 12.0;
-    final padV = isCompact ? 4.0 : 8.0;
-    final iconSz = isCompact ? 16.0 : 20.0;
-    final fontSz = isCompact ? 11.0 : 12.0;
+    final padH = isCompact ? 6.0 : 10.0;
+    final padV = isCompact ? 3.0 : 6.0;
+    final iconSz = isCompact ? 14.0 : 18.0;
+    final fontSz = isCompact ? 10.0 : 11.0;
     return Container(
       padding: EdgeInsets.symmetric(horizontal: padH, vertical: padV),
       decoration: BoxDecoration(
@@ -709,16 +754,19 @@ class _FilterBarState extends State<FilterBar> {
             size: iconSz,
             color: _minhasTarefas ? Colors.blue[700] : Colors.grey[600],
           ),
-          SizedBox(width: isCompact ? 6 : 8),
-          Text(
-            'Minhas Tarefas',
-            style: TextStyle(
-              fontSize: fontSz,
-              fontWeight: _minhasTarefas ? FontWeight.bold : FontWeight.normal,
-              color: _minhasTarefas ? Colors.blue[700] : Colors.grey[700],
+          if (label) ...[
+            SizedBox(width: isCompact ? 6 : 8),
+            Text(
+              'Minhas Tarefas',
+              style: TextStyle(
+                fontSize: fontSz,
+                fontWeight: _minhasTarefas ? FontWeight.bold : FontWeight.normal,
+                color: _minhasTarefas ? Colors.blue[700] : Colors.grey[700],
+              ),
             ),
-          ),
-          SizedBox(width: isCompact ? 6 : 8),
+            SizedBox(width: isCompact ? 6 : 8),
+          ] else
+            SizedBox(width: isCompact ? 4 : 6),
           Switch(
             value: _minhasTarefas,
             onChanged: (value) {
@@ -736,7 +784,7 @@ class _FilterBarState extends State<FilterBar> {
 
   Widget _buildGanttToggle() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
       decoration: BoxDecoration(
         color: widget.showGantt == true ? Colors.blue[100] : Colors.white,
         borderRadius: BorderRadius.circular(4),
@@ -750,19 +798,10 @@ class _FilterBarState extends State<FilterBar> {
         children: [
           Icon(
             widget.showGantt == true ? Icons.timeline : Icons.timeline_outlined,
-            size: 16,
+            size: 14,
             color: widget.showGantt == true ? Colors.blue[700] : Colors.grey[600],
           ),
-          const SizedBox(width: 6),
-          Text(
-            widget.showGantt == true ? 'Gantt' : 'Gantt',
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: widget.showGantt == true ? FontWeight.bold : FontWeight.normal,
-              color: widget.showGantt == true ? Colors.blue[700] : Colors.grey[700],
-            ),
-          ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 4),
           Switch(
             value: widget.showGantt ?? false,
             onChanged: (value) {

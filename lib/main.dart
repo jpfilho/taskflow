@@ -365,6 +365,8 @@ class _MainScreenState extends State<MainScreen> {
   bool _canEditTasks = false; // Permissão para criar/editar tarefas
   bool _canEditTasksChecked = false; // Indica se a permissão já foi verificada
   bool _isCheckingTaskPermission = false; // Evita múltiplas verificações simultâneas
+  String _notasViewMode = 'cards'; // 'tabela', 'cards', 'calendario', 'dashboard'
+  String _horasViewMode = 'metas'; // 'tabela' ou 'metas' para a tela de Horas
   
   // Cache para executores do usuário (otimização de performance)
   Set<String>? _cachedExecutorIds;
@@ -2018,7 +2020,15 @@ class _MainScreenState extends State<MainScreen> {
       case 15: // Chat
         return const ChatView();
       case 16: // Notas SAP
-        return NotasSAPView(searchQuery: _searchQuery);
+        return NotasSAPView(
+          searchQuery: _searchQuery,
+          modoVisualizacao: _notasViewMode,
+          onModoChange: (mode) {
+            setState(() {
+              _notasViewMode = mode;
+            });
+          },
+        );
       case 17: // Ordens
         return OrdemView(searchQuery: _searchQuery);
       case 18: // ATs
@@ -2026,7 +2036,15 @@ class _MainScreenState extends State<MainScreen> {
       case 19: // SIs
         return const SIView();
       case 20: // Horas
-        return HorasSAPView(searchQuery: _searchQuery);
+        return HorasSAPView(
+          searchQuery: _searchQuery,
+          modoVisualizacao: _horasViewMode,
+          onModoChange: (mode) {
+            setState(() {
+              _horasViewMode = mode;
+            });
+          },
+        );
       case 21: // Linhas de Transmissão
         if (!(_authService.currentUser?.isRoot ?? false)) {
           return _rootOnlyPlaceholder('Linhas de Transmissão');
@@ -3262,11 +3280,19 @@ class _MainScreenState extends State<MainScreen> {
             _buildFootbarButton(Icons.dynamic_feed, 'Feed', 'feed', isMobile, isTablet, iconColor),
               _buildFootbarButton(Icons.dashboard, 'Dashboard', 'dashboard', isMobile, isTablet, iconColor),
           ]);
-        } else if (_sidebarSelectedIndex == 16 || _sidebarSelectedIndex == 20) {
-          // Telas de Notas SAP ou Horas - mostrar ambos os botões para navegação
+        } else if (_sidebarSelectedIndex == 16) {
+          // Notas SAP: modos Tabela/Cards/Calendário/Dashboard
           buttons.addAll([
-            _buildFootbarButton(Icons.description, 'Notas', 'notas', isMobile, isTablet, iconColor, sidebarIndex: 16),
-            _buildFootbarButton(Icons.access_time, 'Horas', 'horas', isMobile, isTablet, iconColor, sidebarIndex: 20),
+            _buildFootbarButton(Icons.table_chart, 'Tabela', 'notas_tabela', isMobile, isTablet, iconColor),
+            _buildFootbarButton(Icons.view_module, 'Cards', 'notas_cards', isMobile, isTablet, iconColor),
+            _buildFootbarButton(Icons.calendar_today, 'Calendário', 'notas_calendario', isMobile, isTablet, iconColor),
+            _buildFootbarButton(Icons.dashboard, 'Dashboard', 'notas_dashboard', isMobile, isTablet, iconColor),
+          ]);
+        } else if (_sidebarSelectedIndex == 20) {
+          // Horas: footbar troca Tabela/Metas
+          buttons.addAll([
+            _buildFootbarButton(Icons.table_chart, 'Tabela', 'horas_tabela', isMobile, isTablet, iconColor),
+            _buildFootbarButton(Icons.track_changes, 'Metas', 'horas_metas', isMobile, isTablet, iconColor),
           ]);
         }
         
@@ -3335,6 +3361,18 @@ class _MainScreenState extends State<MainScreen> {
       isSelected = _selectedTab == 4;
     } else if (mode == 'dashboard') {
       isSelected = _selectedTab == 5;
+    } else if (mode == 'notas_tabela') {
+      isSelected = _sidebarSelectedIndex == 16 && _notasViewMode == 'tabela';
+    } else if (mode == 'notas_cards') {
+      isSelected = _sidebarSelectedIndex == 16 && _notasViewMode == 'cards';
+    } else if (mode == 'notas_calendario') {
+      isSelected = _sidebarSelectedIndex == 16 && _notasViewMode == 'calendario';
+    } else if (mode == 'notas_dashboard') {
+      isSelected = _sidebarSelectedIndex == 16 && _notasViewMode == 'dashboard';
+    } else if (mode == 'horas_tabela') {
+      isSelected = _sidebarSelectedIndex == 20 && _horasViewMode == 'tabela';
+    } else if (mode == 'horas_metas') {
+      isSelected = _sidebarSelectedIndex == 20 && _horasViewMode == 'metas';
     } else {
       isSelected = _viewMode == mode;
     }
@@ -3352,6 +3390,21 @@ class _MainScreenState extends State<MainScreen> {
                 // Se for uma tela específica, apenas mudar o índice do sidebar
                 _sidebarSelectedIndex = sidebarIndex;
                 print('🔵 Footbar: Tela específica selecionada, _sidebarSelectedIndex = $sidebarIndex');
+              } else if (mode == 'notas_tabela' || mode == 'notas_cards' || mode == 'notas_calendario' || mode == 'notas_dashboard') {
+                _sidebarSelectedIndex = 16;
+                _notasViewMode = mode == 'notas_tabela'
+                    ? 'tabela'
+                    : mode == 'notas_cards'
+                        ? 'cards'
+                        : mode == 'notas_calendario'
+                            ? 'calendario'
+                            : 'dashboard';
+                print('🔵 Footbar: Notas modo selecionado = $_notasViewMode');
+              } else if (mode == 'horas_tabela' || mode == 'horas_metas') {
+                // Footbar da tela de Horas controla Tabela/Metas
+                _sidebarSelectedIndex = 20;
+                _horasViewMode = mode == 'horas_tabela' ? 'tabela' : 'metas';
+                print('🔵 Footbar: Horas modo selecionado = $_horasViewMode');
               } else {
                 // Para modos de visualização, sincronizar _viewMode e _selectedTab
                 _viewMode = mode;
@@ -3372,7 +3425,7 @@ class _MainScreenState extends State<MainScreen> {
                   print('🔵 Footbar: Split selecionado, _selectedTab = 0');
                 }
               }
-              print('🔵 Footbar: Após setState - _viewMode = $_viewMode, _selectedTab = $_selectedTab, _sidebarSelectedIndex = $_sidebarSelectedIndex');
+              print('🔵 Footbar: Após setState - _viewMode = $_viewMode, _selectedTab = $_selectedTab, _sidebarSelectedIndex = $_sidebarSelectedIndex, _horasViewMode = $_horasViewMode');
             });
           },
           child: Container(

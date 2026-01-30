@@ -7,8 +7,17 @@ import 'horas_metas_view.dart';
 
 class HorasSAPView extends StatefulWidget {
   final String? searchQuery;
+  final String? modoVisualizacao; // Controlado pelo Main para integrar com footbar
+  final ValueChanged<String>? onModoChange;
+  final VoidCallback? onRefresh; // Para acionar reload a partir de filhos (ex: HorasMetasView)
   
-  const HorasSAPView({super.key, this.searchQuery});
+  const HorasSAPView({
+    super.key,
+    this.searchQuery,
+    this.modoVisualizacao,
+    this.onModoChange,
+    this.onRefresh,
+  });
 
   @override
   State<HorasSAPView> createState() => _HorasSAPViewState();
@@ -29,6 +38,7 @@ class _HorasSAPViewState extends State<HorasSAPView> {
   void initState() {
     super.initState();
     _searchQuery = widget.searchQuery ?? '';
+    _modoVisualizacao = widget.modoVisualizacao ?? _modoVisualizacao;
     _loadHoras();
   }
 
@@ -41,6 +51,12 @@ class _HorasSAPViewState extends State<HorasSAPView> {
         _paginaAtual = 0;
       });
       _loadHoras();
+    }
+
+    if (widget.modoVisualizacao != null && widget.modoVisualizacao != _modoVisualizacao) {
+      setState(() {
+        _modoVisualizacao = widget.modoVisualizacao!;
+      });
     }
   }
 
@@ -200,71 +216,84 @@ class _HorasSAPViewState extends State<HorasSAPView> {
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = MediaQuery.of(context).size.width < 600;
     return Scaffold(
       body: Column(
         children: [
-          // Header com botão de atualizar
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.grey.withOpacity(0.1),
-                  spreadRadius: 1,
-                  blurRadius: 3,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: Row(
-              children: [
-                const Text(
-                  'Horas',
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
+          // Header (desktop/tablet). No mobile o refresh desce para a barra de ações interna.
+          if (!isMobile)
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.grey.withOpacity(0.1),
+                    spreadRadius: 1,
+                    blurRadius: 3,
+                    offset: const Offset(0, 2),
                   ),
-                ),
-                const SizedBox(width: 16),
-                // Botões de visualização
-                SegmentedButton<String>(
-                  segments: const [
-                    ButtonSegment(value: 'tabela', label: Text('Tabela'), icon: Icon(Icons.table_chart)),
-                    ButtonSegment(value: 'metas', label: Text('Metas'), icon: Icon(Icons.track_changes)),
-                  ],
-                  selected: {_modoVisualizacao},
-                  onSelectionChanged: (Set<String> newSelection) {
-                    setState(() {
-                      _modoVisualizacao = newSelection.first;
-                    });
-                  },
-                ),
-                const Spacer(),
-                ElevatedButton.icon(
-                  onPressed: () {
-                    setState(() {
-                      _paginaAtual = 0;
-                    });
-                    _loadHoras();
-                    // Se estiver na visualização de metas, também atualizar
-                    if (_modoVisualizacao == 'metas') {
-                      // Forçar rebuild do HorasMetasView usando uma key única
+                ],
+              ),
+              child: Row(
+                children: [
+                  const Text(
+                    'Horas',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  // Botões de visualização (desktop/tablet); no mobile fica no footbar
+                  SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment(value: 'tabela', label: Text('Tabela'), icon: Icon(Icons.table_chart)),
+                      ButtonSegment(value: 'metas', label: Text('Metas'), icon: Icon(Icons.track_changes)),
+                    ],
+                    selected: {_modoVisualizacao},
+                    onSelectionChanged: (Set<String> newSelection) {
                       setState(() {
-                        _metasViewKey = DateTime.now().millisecondsSinceEpoch;
+                        _modoVisualizacao = newSelection.first;
                       });
-                    }
-                  },
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Atualizar'),
-                ),
-              ],
+                      widget.onModoChange?.call(_modoVisualizacao);
+                    },
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    tooltip: 'Atualizar',
+                    onPressed: () {
+                      setState(() {
+                        _paginaAtual = 0;
+                      });
+                      _loadHoras();
+                      widget.onRefresh?.call();
+                      // Se estiver na visualização de metas, também atualizar
+                      if (_modoVisualizacao == 'metas') {
+                        // Forçar rebuild do HorasMetasView usando uma key única
+                        setState(() {
+                          _metasViewKey = DateTime.now().millisecondsSinceEpoch;
+                        });
+                      }
+                    },
+                    icon: const Icon(Icons.refresh),
+                  ),
+                ],
+              ),
             ),
-          ),
           // Conteúdo
           Expanded(
             child: _modoVisualizacao == 'metas'
-                ? HorasMetasView(key: ValueKey(_metasViewKey))
+                ? HorasMetasView(
+                    key: ValueKey(_metasViewKey),
+                    onRefresh: () {
+                      setState(() {
+                        _paginaAtual = 0;
+                      });
+                      _loadHoras();
+                      widget.onRefresh?.call();
+                    },
+                  )
                 : _isLoading
                     ? const Center(child: CircularProgressIndicator())
                     : _totalHoras == 0

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'package:sqflite/sqflite.dart';
 import '../config/supabase_config.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -14,8 +15,15 @@ class SyncService {
   final LocalDatabaseService _localDb = LocalDatabaseService();
   final ConnectivityService _connectivity = ConnectivityService();
   bool _isSyncing = false;
+  final StreamController<bool> _syncingController = StreamController<bool>.broadcast();
+
+  // Configuração de backoff
+  static const int _maxRetries = 5;
+  static const int _baseBackoffMs = 2000; // 2s
+  static const int _maxBackoffMs = 300000; // 5min
 
   bool get isSyncing => _isSyncing;
+  Stream<bool> get syncingStream => _syncingController.stream;
 
   // Inicializar serviço de sincronização
   Future<void> initialize() async {
@@ -37,6 +45,7 @@ class SyncService {
     }
 
     _isSyncing = true;
+    _syncingController.add(true);
     print('🔄 Iniciando sincronização...');
 
     try {
@@ -64,6 +73,7 @@ class SyncService {
       print('❌ Erro na sincronização: $e');
     } finally {
       _isSyncing = false;
+      _syncingController.add(false);
     }
   }
 
@@ -78,6 +88,7 @@ class SyncService {
         final recordId = item['record_id'] as String;
         final data = jsonDecode(item['data'] as String) as Map<String, dynamic>;
         final queueId = item['id'] as int;
+        final retryCount = (item['retry_count'] as int?) ?? 0;
 
         bool success = false;
 
@@ -95,6 +106,17 @@ class SyncService {
 
         if (success) {
           await _localDb.markAsSynced(queueId);
+        }
+        // Se não teve sucesso, registrar backoff
+        if (!success) {
+          final nextRetryCount = retryCount + 1;
+          if (nextRetryCount > _maxRetries) {
+            await _localDb.markAsPermanentlyFailed(queueId, 'Excedeu tentativas');
+            continue;
+          }
+          final backoff = (_baseBackoffMs * (1 << (nextRetryCount - 1))).clamp(_baseBackoffMs, _maxBackoffMs);
+          final nextRetryAt = DateTime.now().millisecondsSinceEpoch + backoff;
+          await _localDb.markAsFailed(queueId, 'Falha ao sincronizar', nextRetryCount, backoff, nextRetryAt);
         }
       } catch (e) {
         print('Erro ao sincronizar item da fila: $e');
@@ -309,6 +331,7 @@ class SyncService {
 
   void dispose() {
     _connectivity.dispose();
+    _syncingController.close();
   }
 }
 

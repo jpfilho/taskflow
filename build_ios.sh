@@ -21,8 +21,15 @@ echo ""
 
 # Ler a versão atual do pubspec.yaml
 CURRENT_VERSION=$(grep "^version:" pubspec.yaml | sed 's/version: //' | tr -d ' ')
-VERSION_NUMBER=$(echo $CURRENT_VERSION | cut -d'+' -f1)
-BUILD_NUMBER=$(echo $CURRENT_VERSION | cut -d'+' -f2)
+VERSION_NUMBER=$(echo "$CURRENT_VERSION" | cut -d'+' -f1)
+BUILD_NUMBER=$(echo "$CURRENT_VERSION" | cut -d'+' -f2)
+
+# Garantir que BUILD_NUMBER exista
+if [[ -z "$BUILD_NUMBER" ]]; then
+  BUILD_NUMBER=0
+fi
+
+IOS_DIR="ios"
 
 echo -e "${BLUE}Versão atual: ${CURRENT_VERSION}${NC}"
 echo -e "${BLUE}  - Versão: ${VERSION_NUMBER}${NC}"
@@ -54,6 +61,12 @@ flutter pub get
 echo -e "${GREEN}✅ Dependências obtidas${NC}"
 echo ""
 
+# Garantir pods atualizados e dSYM habilitado
+echo -e "${YELLOW}📦 Instalando pods (gera dSYM)...${NC}"
+(cd "$IOS_DIR" && pod install --repo-update)
+echo -e "${GREEN}✅ Pods instalados${NC}"
+echo ""
+
 # Verificar dispositivos iOS disponíveis
 echo -e "${YELLOW}📱 Verificando dispositivos iOS disponíveis...${NC}"
 flutter devices | grep -i ios || echo -e "${YELLOW}⚠️  Nenhum dispositivo iOS conectado${NC}"
@@ -72,21 +85,21 @@ read -p "Opção: " option
 case $option in
     1)
         echo -e "${YELLOW}🔨 Fazendo build Debug...${NC}"
-        flutter build ios --debug
+        flutter build ios --debug --build-number ${NEW_BUILD_NUMBER}
         echo -e "${GREEN}✅ Build Debug concluído!${NC}"
         echo -e "${BLUE}📱 Para executar no dispositivo:${NC}"
         echo -e "${BLUE}   flutter run -d <device-id>${NC}"
         ;;
     2)
-        echo -e "${YELLOW}🔨 Fazendo build Release...${NC}"
-        flutter build ios --release
+        echo -e "${YELLOW}🔨 Fazendo build Release (IPA)...${NC}"
+        flutter build ipa --release --build-number ${NEW_BUILD_NUMBER}
         echo -e "${GREEN}✅ Build Release concluído!${NC}"
-        echo -e "${BLUE}📦 Arquivo gerado em: build/ios/iphoneos/Runner.app${NC}"
-        echo -e "${BLUE}📱 Para gerar .ipa, abra o Xcode e faça Archive${NC}"
+        echo -e "${BLUE}📦 IPA gerado em: build/ios/ipa/${NC}"
+        echo -e "${BLUE}🧾 Build number usado: ${NEW_BUILD_NUMBER}${NC}"
         ;;
     3)
         echo -e "${YELLOW}🔨 Fazendo build e abrindo no Xcode...${NC}"
-        flutter build ios --release
+        flutter build ios --release --build-number ${NEW_BUILD_NUMBER}
         echo -e "${GREEN}✅ Build concluído!${NC}"
         echo -e "${YELLOW}📱 Abrindo Xcode...${NC}"
         open ios/Runner.xcworkspace

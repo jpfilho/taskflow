@@ -129,13 +129,12 @@ class _MediaCardState extends State<MediaCard> {
                 ),
               ),
               // Informações
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
                       // Título e botão
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -286,7 +285,7 @@ class _MediaCardState extends State<MediaCard> {
                           }).toList(),
                         ),
                       ],
-                      const Spacer(),
+                      const SizedBox(height: 12),
                       // Rodapé: Data e avatar
                       Container(
                         padding: const EdgeInsets.only(top: 12),
@@ -361,8 +360,7 @@ class _MediaCardState extends State<MediaCard> {
                           ],
                         ),
                       ),
-                    ],
-                  ),
+                  ],
                 ),
               ),
             ],

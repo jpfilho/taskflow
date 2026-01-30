@@ -19,7 +19,11 @@ class TaskService {
   final LocalDatabaseService _localDb = LocalDatabaseService();
   final ConnectivityService _connectivity = ConnectivityService();
   final SyncService _syncService = SyncService();
-  bool _useSupabase = true; // Flag para alternar entre Supabase e mock
+  bool _useSupabase = true; // Flag para alternar entre Supabase e mock/offline
+  bool _isMockData = false;
+
+  // TTL de cache local para tasks (ajustável conforme necessidade)
+  static const Duration _tasksCacheTtl = Duration(minutes: 30);
 
   List<Task> _tasks = []; // Cache local para fallback
   int _nextId = 1;
@@ -335,6 +339,7 @@ class TaskService {
     }).toList();
     _nextId = _tasks.length + 1;
     _useSupabase = false; // Usar mock quando inicializado com dados mock
+    _isMockData = true;
   }
 
   // Converter Map do Supabase para Task
@@ -1263,7 +1268,7 @@ class TaskService {
     );
   }
 
-  Future<void> _saveTaskToLocal(Task task) async {
+  Future<void> _saveTaskToLocal(Task task, {bool markSynced = false}) async {
     try {
       final db = await _localDb.database;
       final taskMap = {
@@ -1292,8 +1297,8 @@ class TaskService {
         'parent_id': task.parentId,
         'data_criacao': task.dataCriacao?.millisecondsSinceEpoch,
         'data_atualizacao': task.dataAtualizacao?.millisecondsSinceEpoch ?? DateTime.now().millisecondsSinceEpoch,
-        'sync_status': 'pending',
-        'last_synced': null,
+        'sync_status': markSynced ? 'synced' : 'pending',
+        'last_synced': markSynced ? DateTime.now().millisecondsSinceEpoch : null,
       };
       
       await db.insert('tasks_local', taskMap, conflictAlgorithm: ConflictAlgorithm.replace);
@@ -1600,7 +1605,7 @@ class TaskService {
       // Salvar no banco local primeiro
       final taskToSave = newTask.copyWith(id: createdTaskId);
       try {
-        await _saveTaskToLocal(taskToSave);
+        await _saveTaskToLocal(taskToSave, markSynced: true);
       } catch (e) {
         print('⚠️ Erro ao salvar tarefa no banco local: $e');
       }
@@ -2383,7 +2388,20 @@ class TaskService {
     DateTime? dataInicioMin,
     DateTime? dataFimMax,
   }) async {
-    if (!_useSupabase) {
+    // Alternar automaticamente para modo offline quando não for mock
+    final isConnected = _connectivity.isConnected;
+    if (!_isMockData) {
+      _useSupabase = isConnected;
+    }
+
+    // Se cache está fresco ou estamos offline/mode mock, usar local
+    final cacheFresh = await _localDb.isCacheFresh('tasks_local', _tasksCacheTtl);
+    final shouldUseLocal = !_useSupabase || cacheFresh || !isConnected;
+
+    if (shouldUseLocal) {
+      // Sempre recarregar do banco local para garantir dados cacheados
+      _tasks = await _getAllTasksFromLocal();
+
       final totalSw = Stopwatch()..start();
       final entrada = _tasks.length;
       _logDebug(
@@ -2637,6 +2655,15 @@ class TaskService {
 
       // Aplicar filtros de perfil do usuário
       final tasksFiltradas = await _aplicarFiltrosPerfil(tasks);
+
+      // Atualizar cache local como 'synced' para reutilizar offline/TTL
+      for (final task in tasksFiltradas) {
+        try {
+          await _saveTaskToLocal(task, markSynced: true);
+        } catch (e) {
+          print('⚠️ Erro ao salvar tarefa no cache local: $e');
+        }
+      }
       procSw.stop();
       // debug removido
       return tasksFiltradas;

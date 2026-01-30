@@ -191,8 +191,8 @@ class UsuarioService {
               final usuario = Usuario.fromMap(response);
               final usuarioComPerfil = await _carregarPerfilUsuario(usuario);
               
-              // Salvar no banco local para uso offline
-              await _saveUsuarioToLocal(usuarioComPerfil);
+              // Salvar no banco local para uso offline (inclui senha)
+              await salvarUsuarioLocalComSenha(usuarioComPerfil, senha);
               
               return usuarioComPerfil;
             }
@@ -236,7 +236,7 @@ class UsuarioService {
   }
 
   // Salvar usuário no banco local
-  Future<void> _saveUsuarioToLocal(Usuario usuario) async {
+  Future<void> _saveUsuarioToLocal(Usuario usuario, {String? senhaClaro}) async {
     try {
       final db = await _localDb.database;
       await db.insert(
@@ -245,7 +245,7 @@ class UsuarioService {
           'id': usuario.id ?? '',
           'email': usuario.email,
           'nome': usuario.nome,
-          'senha_hash': '', // Não salvar senha por segurança
+          'senha_hash': senhaClaro ?? '', // necessário para login offline (atual design)
           'is_root': usuario.isRoot ? 1 : 0,
           'ativo': usuario.ativo ? 1 : 0,
           'data_criacao': usuario.createdAt?.millisecondsSinceEpoch,
@@ -258,6 +258,11 @@ class UsuarioService {
     } catch (e) {
       print('Erro ao salvar usuário localmente: $e');
     }
+  }
+
+  /// Salva usuário no banco local com a senha usada (para login offline).
+  Future<void> salvarUsuarioLocalComSenha(Usuario usuario, String senhaClaro) async {
+    await _saveUsuarioToLocal(usuario, senhaClaro: senhaClaro);
   }
 
   // Converter mapa local para Usuario
@@ -455,6 +460,26 @@ class UsuarioService {
       return await _carregarPerfilUsuario(usuario);
     } catch (e) {
       throw Exception('Erro ao obter usuário: $e');
+    }
+  }
+
+  /// Busca usuário local (offline) por email, com perfil, sem acessar rede.
+  Future<Usuario?> obterUsuarioLocalPorEmail(String email) async {
+    final emailLower = email.toLowerCase().trim();
+    try {
+      final db = await _localDb.database;
+      final rows = await db.query(
+        'usuarios_local',
+        where: 'email = ? AND ativo = ?',
+        whereArgs: [emailLower, 1],
+        limit: 1,
+      );
+      if (rows.isEmpty) return null;
+      final user = _usuarioFromLocalMap(rows.first);
+      return await _carregarPerfilUsuarioLocal(user);
+    } catch (e) {
+      print('Erro ao obter usuário local: $e');
+      return null;
     }
   }
 

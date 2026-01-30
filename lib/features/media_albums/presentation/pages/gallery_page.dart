@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import '../../../../services/auth_service_simples.dart';
+import '../../../../services/connectivity_service.dart';
+import '../../../../widgets/sync_status_widget.dart';
 import '../../application/controllers/gallery_controller.dart';
 import '../../data/models/media_image.dart';
 import '../widgets/filter_bar.dart';
@@ -28,6 +31,9 @@ class _MediaAlbumsGalleryPageState extends State<MediaAlbumsGalleryPage> {
   late final GalleryController _controller;
   final ScrollController _scrollController = ScrollController();
   late final TextEditingController _searchController;
+  final ConnectivityService _connectivity = ConnectivityService();
+  StreamSubscription<bool>? _connSub;
+  bool _isConnected = true;
 
   @override
   void initState() {
@@ -35,6 +41,14 @@ class _MediaAlbumsGalleryPageState extends State<MediaAlbumsGalleryPage> {
     _controller = GalleryController();
     _searchController = TextEditingController(text: _controller.searchQuery);
     _controller.addListener(_onControllerChanged);
+    _isConnected = _connectivity.isConnected;
+    _connSub = _connectivity.connectionStream.listen((connected) {
+      if (mounted) {
+        setState(() {
+          _isConnected = connected;
+        });
+      }
+    });
 
     // Carregar referências; se houver filtros iniciais, aplicar após carregar e abrir filtrado
     final hasInitialFilters = widget.initialLocalId != null || widget.initialRoomId != null;
@@ -55,6 +69,7 @@ class _MediaAlbumsGalleryPageState extends State<MediaAlbumsGalleryPage> {
 
   @override
   void dispose() {
+    _connSub?.cancel();
     _searchController.dispose();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
@@ -144,40 +159,48 @@ class _MediaAlbumsGalleryPageState extends State<MediaAlbumsGalleryPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Header (responsivo: mobile empilha título + busca/botão; tablet/desktop em linha)
-              isMobile
-                  ? Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Text(
-                          'Álbuns de Imagens${_userProfileSubtitle()}',
-                          style: theme.textTheme.headlineSmall?.copyWith(
-                            fontWeight: FontWeight.bold,
-                            color: isDark ? Colors.white : const Color(0xFF0f172a),
-                            letterSpacing: -0.5,
-                            fontSize: 22,
-                          ),
+              if (!_isConnected)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.orange[100],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.cloud_off, color: Colors.orange[800], size: 18),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Offline: exibindo dados já carregados. Conecte-se para sincronizar novos álbuns.',
+                          style: TextStyle(color: Colors.orange[900], fontSize: 13, fontWeight: FontWeight.w600),
                         ),
-                        SizedBox(height: spacing),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: _buildSearchField(context, theme, isDark),
-                            ),
-                            const SizedBox(width: 8),
-                            ElevatedButton.icon(
-                              onPressed: _navigateToUpload,
-                              icon: const Icon(Icons.add, size: 20),
-                              label: const Text('Adicionar'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFF1e40af),
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                                elevation: 0,
-                              ),
-                            ),
-                          ],
+                      ),
+                      const SyncStatusWidget(),
+                    ],
+                  ),
+                ),
+              // Header (mobile sem título para economizar espaço; desktop/tablet com título)
+              isMobile
+                  ? Row(
+                      children: [
+                        Expanded(
+                          child: _buildSearchField(context, theme, isDark),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton.icon(
+                          onPressed: _navigateToUpload,
+                          icon: const Icon(Icons.add, size: 20),
+                          label: const Text('Adicionar'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF1e40af),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            elevation: 0,
+                          ),
                         ),
                       ],
                     )
@@ -365,13 +388,7 @@ class _MediaAlbumsGalleryPageState extends State<MediaAlbumsGalleryPage> {
           ),
         ),
       ),
-      floatingActionButton: isMobile
-          ? FloatingActionButton(
-              onPressed: _navigateToUpload,
-              backgroundColor: const Color(0xFF1e40af),
-              child: const Icon(Icons.add, color: Colors.white),
-            )
-          : null,
+      floatingActionButton: null,
     );
   }
 

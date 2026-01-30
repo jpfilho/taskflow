@@ -149,9 +149,13 @@ class _HeaderBarState extends State<HeaderBar> {
         final iconColor = snapshot.data?['icon'] ?? ThemeService.getBarIconColorSync(currentTheme);
         
         return Container(
-          height: isMobile ? 60 : 60,
+          // No mobile, deixe a altura se ajustar ao conteúdo para evitar overflow.
+          height: isMobile ? null : 60,
           color: backgroundColor,
-          padding: EdgeInsets.symmetric(horizontal: isMobile ? 8 : 16),
+          padding: EdgeInsets.symmetric(
+            horizontal: isMobile ? 8 : 16,
+            vertical: isMobile ? 8 : 0,
+          ),
           child: isMobile 
               ? _buildMobileHeader(context, textColor, iconColor)
               : _buildDesktopHeader(context, textColor, iconColor),
@@ -165,135 +169,155 @@ class _HeaderBarState extends State<HeaderBar> {
   Widget _buildMobileHeader(BuildContext context, Color textColor, Color iconColor) {
     final themeProvider = ThemeProvider();
     final currentTheme = themeProvider.currentTheme;
-    final backgroundColor = ThemeService.getBarBackgroundColorSync(currentTheme);
+    final barBackground = ThemeService.getBarBackgroundColorSync(currentTheme);
     
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // Primeira linha: Menu e Usuário
-        SizedBox(
-          height: 30,
+    // Mobile: linha compacta ocupando toda a largura, colada às laterais.
+    return SizedBox(
+      height: 44,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        physics: const BouncingScrollPhysics(),
+        child: Container(
+          width: MediaQuery.of(context).size.width,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              // Botão de menu para abrir drawer
-              IconButton(
-                icon: Icon(Icons.menu, color: iconColor, size: 18),
-                  onPressed: widget.onMenuPressed,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-              ),
-              Builder(
-                builder: (context) => PopupMenuButton<String>(
-                  offset: const Offset(0, 40),
-                  color: Colors.white,
-                  itemBuilder: (context) => [
-                    const PopupMenuItem(
-                      value: 'perfil',
-                      child: Row(
-                        children: [
-                          Icon(Icons.person, size: 18, color: Colors.blue),
-                          SizedBox(width: 8),
-                          Text('Meu Perfil', style: TextStyle(fontSize: 12)),
-                        ],
-                      ),
-                    ),
-                    if (widget.onLogout != null)
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: Icon(Icons.menu, color: iconColor, size: 20),
+                    onPressed: widget.onMenuPressed,
+                    padding: const EdgeInsets.symmetric(horizontal: 2),
+                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  ),
+                  const SizedBox(width: 6),
+                  PopupMenuButton<String>(
+                    offset: const Offset(0, 40),
+                    color: Colors.white,
+                    itemBuilder: (context) => [
                       const PopupMenuItem(
-                        value: 'logout',
+                        value: 'perfil',
                         child: Row(
                           children: [
-                            Icon(Icons.logout, size: 18, color: Colors.red),
+                            Icon(Icons.person, size: 18, color: Colors.blue),
                             SizedBox(width: 8),
-                            Text('Sair', style: TextStyle(fontSize: 12)),
+                            Text('Meu Perfil', style: TextStyle(fontSize: 12)),
                           ],
                         ),
                       ),
-                  ],
-                  onSelected: (value) async {
-                    if (value == 'perfil') {
-                      final resultado = await Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => const PerfilUsuarioView(),
+                      if (widget.onLogout != null)
+                        const PopupMenuItem(
+                          value: 'logout',
+                          child: Row(
+                            children: [
+                              Icon(Icons.logout, size: 18, color: Colors.red),
+                              SizedBox(width: 8),
+                              Text('Sair', style: TextStyle(fontSize: 12)),
+                            ],
+                          ),
                         ),
-                      );
-                      // Se o perfil foi atualizado (resultado == true), recarregar tarefas
-                      if (resultado == true && widget.onPerfilUpdated != null) {
-                        widget.onPerfilUpdated!();
-                        _carregarPerfilUsuario(); // Recarregar perfil após atualização
+                    ],
+                    onSelected: (value) async {
+                      if (value == 'perfil') {
+                        final resultado = await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const PerfilUsuarioView(),
+                          ),
+                        );
+                        if (resultado == true && widget.onPerfilUpdated != null) {
+                          widget.onPerfilUpdated!();
+                          _carregarPerfilUsuario();
+                        }
+                      } else if (value == 'logout') {
+                        widget.onLogout?.call();
                       }
-                    } else if (value == 'logout') {
-                      widget.onLogout?.call();
-                    }
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.only(right: 4),
+                    },
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         CircleAvatar(
-                          radius: 10,
+                          radius: 11,
                           backgroundColor: textColor,
-                          child: Icon(Icons.person, size: 14, color: backgroundColor),
+                          child: Icon(Icons.person, size: 13, color: barBackground),
                         ),
-                        const SizedBox(width: 4),
-                        Expanded(
+                        const SizedBox(width: 6),
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 120),
                           child: Text(
                             AuthServiceSimples().getUserName() ?? 'Usuário',
-                            style: TextStyle(color: textColor, fontSize: 11),
+                            style: TextStyle(color: textColor, fontSize: 12, fontWeight: FontWeight.w600),
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
                       ],
                     ),
                   ),
-                ),
+                ],
               ),
-            ],
-          ),
-        ),
-        // Segunda linha: Título e ações
-        SizedBox(
-          height: 38,
-          child: Row(
-            children: [
               Expanded(
-                child: Text(
-                  _perfilTexto.isNotEmpty
-                      ? 'Programação Mensal: $_perfilTexto'
-                      : 'Programação Mensal',
-                  style: TextStyle(color: textColor, fontSize: 11, fontWeight: FontWeight.bold),
-                  overflow: TextOverflow.ellipsis,
+                child: Center(
+                  child: InkWell(
+                    onTap: () async {
+                      final picked = await showDateRangePicker(
+                        context: context,
+                        initialDateRange: DateTimeRange(start: widget.startDate, end: widget.endDate),
+                        firstDate: DateTime(2020),
+                        lastDate: DateTime(2030),
+                        locale: const Locale('pt', 'BR'),
+                      );
+                      if (picked != null) {
+                        widget.onDateRangeChanged(picked.start, picked.end);
+                      }
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.calendar_today, size: 15, color: Colors.black87),
+                          const SizedBox(width: 6),
+                          Text(
+                            '${_formatShortDate(widget.startDate)}-${_formatShortDate(widget.endDate)}',
+                            style: const TextStyle(fontSize: 12, color: Colors.black87),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
               ),
-              const SyncStatusWidget(),
-              const SizedBox(width: 4),
-              IconButton(
-                icon: Icon(Icons.add, color: iconColor, size: 18),
-                onPressed: widget.canEditTasks ? widget.onCreate : null,
-                tooltip: 'Criar',
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: Icon(Icons.add, color: iconColor, size: 20),
+                    onPressed: widget.canEditTasks ? widget.onCreate : null,
+                    tooltip: 'Criar',
+                    padding: const EdgeInsets.symmetric(horizontal: 2),
+                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  ),
+                  const SizedBox(width: 6),
+                  if (widget.canEditTasks)
+                    IconButton(
+                      icon: Icon(Icons.settings, color: iconColor, size: 20),
+                      onPressed: widget.onConfig,
+                      tooltip: 'Configurações',
+                      padding: const EdgeInsets.symmetric(horizontal: 2),
+                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                    ),
+                ],
               ),
-              IconButton(
-                icon: Icon(Icons.chat, color: iconColor, size: 18),
-                onPressed: widget.onChat,
-                tooltip: 'Chat',
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-              ),
-              if (widget.canEditTasks)
-                IconButton(
-                  icon: Icon(Icons.settings, color: iconColor, size: 18),
-                  onPressed: widget.onConfig,
-                  tooltip: 'Configurações',
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-                ),
             ],
           ),
         ),
-      ],
+      ),
     );
   }
 
@@ -522,6 +546,10 @@ class _HeaderBarState extends State<HeaderBar> {
 
   String _formatDate(DateTime date) {
     return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year.toString().substring(2)}';
+  }
+
+  String _formatShortDate(DateTime date) {
+    return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}';
   }
 
   Widget _buildViewModeButton(IconData icon, String tooltip, String mode) {

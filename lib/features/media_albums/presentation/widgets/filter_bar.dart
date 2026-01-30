@@ -508,7 +508,7 @@ class FilterBar extends StatelessWidget {
 
   Widget _buildMobileFilterBar(BuildContext context, ThemeData theme) {
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
         color: theme.colorScheme.surface,
         borderRadius: BorderRadius.circular(12),
@@ -516,71 +516,58 @@ class FilterBar extends StatelessWidget {
           color: theme.colorScheme.outline.withOpacity(0.2),
         ),
       ),
-      child: Column(
+      child: Row(
         children: [
-          // Busca (usa controller quando fornecido para não reordenar texto ao digitar)
-          TextField(
-            controller: searchController,
-            decoration: InputDecoration(
-              hintText: 'Buscar por título, descrição ou tags...',
-              prefixIcon: const Icon(Icons.search),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  _buildFilterChip(
+                    context,
+                    'Segmento',
+                    selectedSegmentId != null
+                        ? segments.firstWhere((s) => s.id == selectedSegmentId).name
+                        : 'Todos',
+                    () => _showSegmentPicker(context),
+                  ),
+                  const SizedBox(width: 8),
+                  _buildFilterChip(
+                    context,
+                    'Local',
+                    selectedLocalId != null && locais.any((l) => l.id == selectedLocalId)
+                        ? _localDisplayName(selectedLocalId!, locais)
+                        : 'Todos',
+                    () => _showLocalPicker(context),
+                    enabled: selectedSegmentId != null,
+                  ),
+                  const SizedBox(width: 8),
+                  _buildFilterChip(
+                    context,
+                    'Sala',
+                    _roomDisplayName(selectedRoomId, rooms),
+                    () => _showRoomPicker(context),
+                    enabled: selectedLocalId != null,
+                  ),
+                  const SizedBox(width: 8),
+                  _buildFilterChip(
+                    context,
+                    'Status',
+                    selectedStatusAlbumId != null
+                        ? statusAlbums.firstWhere((s) => s.id == selectedStatusAlbumId, orElse: () => statusAlbums.isNotEmpty ? statusAlbums.first : StatusAlbum(id: '', nome: 'Todos')).nome
+                        : (selectedStatus?.displayName ?? 'Todos'),
+                    () => _showStatusPicker(context),
+                  ),
+                ],
               ),
-              filled: true,
-              fillColor: theme.colorScheme.surfaceContainerHighest,
             ),
-            onChanged: onSearchChanged,
-          ),
-          const SizedBox(height: 12),
-          // Filtros em chips
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _buildFilterChip(
-                context,
-                'Segmento',
-                selectedSegmentId != null
-                    ? segments.firstWhere((s) => s.id == selectedSegmentId).name
-                    : 'Todos',
-                () => _showSegmentPicker(context),
-              ),
-              _buildFilterChip(
-                context,
-                'Local',
-                selectedLocalId != null && locais.any((l) => l.id == selectedLocalId)
-                    ? _localDisplayName(selectedLocalId!, locais)
-                    : 'Todos',
-                () => _showLocalPicker(context),
-                enabled: selectedSegmentId != null,
-              ),
-              _buildFilterChip(
-                context,
-                'Sala',
-                _roomDisplayName(selectedRoomId, rooms),
-                () => _showRoomPicker(context),
-                enabled: selectedLocalId != null,
-              ),
-              _buildFilterChip(
-                context,
-                'Status',
-                selectedStatusAlbumId != null
-                    ? statusAlbums.firstWhere((s) => s.id == selectedStatusAlbumId, orElse: () => statusAlbums.isNotEmpty ? statusAlbums.first : StatusAlbum(id: '', nome: 'Todos')).nome
-                    : (selectedStatus?.displayName ?? 'Todos'),
-                () => _showStatusPicker(context),
-              ),
-            ],
           ),
           if (onRefresh != null) ...[
-            const SizedBox(height: 12),
-            Align(
-              alignment: Alignment.centerRight,
-              child: IconButton(
-                onPressed: onRefresh,
-                icon: const Icon(Icons.refresh_rounded, size: 22),
-                tooltip: 'Atualizar',
-              ),
+            const SizedBox(width: 8),
+            IconButton(
+              onPressed: onRefresh,
+              icon: const Icon(Icons.refresh_rounded, size: 22),
+              tooltip: 'Atualizar',
             ),
           ],
         ],

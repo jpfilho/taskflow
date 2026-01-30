@@ -19,8 +19,15 @@ import 'notas_sap_dashboard_view.dart';
 
 class NotasSAPView extends StatefulWidget {
   final String? searchQuery;
-  
-  const NotasSAPView({super.key, this.searchQuery});
+  final String? modoVisualizacao;
+  final ValueChanged<String>? onModoChange;
+
+  const NotasSAPView({
+    super.key,
+    this.searchQuery,
+    this.modoVisualizacao,
+    this.onModoChange,
+  });
 
   @override
   State<NotasSAPView> createState() => _NotasSAPViewState();
@@ -178,6 +185,10 @@ class _NotasSAPViewState extends State<NotasSAPView> {
   @override
   void initState() {
     super.initState();
+    if (widget.modoVisualizacao != null) {
+      _modoVisualizacao = widget.modoVisualizacao!;
+      _visualizacaoTabela = widget.modoVisualizacao == 'tabela';
+    }
     _searchQuery = widget.searchQuery ?? '';
     _loadTaskEditPermission();
     _verificarSegmentoLinhasTransmissao();
@@ -311,6 +322,13 @@ class _NotasSAPViewState extends State<NotasSAPView> {
       });
       _loadNotas();
       _loadTodasNotasParaEstatisticas();
+    }
+    if (widget.modoVisualizacao != oldWidget.modoVisualizacao &&
+        widget.modoVisualizacao != null) {
+      setState(() {
+        _modoVisualizacao = widget.modoVisualizacao!;
+        _visualizacaoTabela = widget.modoVisualizacao == 'tabela';
+      });
     }
   }
 
@@ -831,7 +849,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
     return Scaffold(
       body: Column(
         children: [
-          // Header com botões
+          // Header com filtros principais (visualização controlada pelo footbar no mobile)
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -845,19 +863,19 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                 ),
               ],
             ),
-            child: Row(
+            child: Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                if (!isCompact) ...[
-                const Text(
-                  'Notas SAP',
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
+                if (!isCompact)
+                  const Text(
+                    'Notas SAP',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
-                ),
-                const SizedBox(width: 16),
-                ],
-                // Filtro Tipo de Nota
                 SegmentedButton<String?>(
                   segments: tipoNotaSegments,
                   selected: {_filtroTipoNota},
@@ -868,7 +886,6 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                     });
                     _loadNotas();
                     _loadTodasNotasParaEstatisticas();
-                    // _loadFiltros() será chamado automaticamente no final de _loadNotas()
                   },
                   style: SegmentedButton.styleFrom(
                     backgroundColor: Colors.grey[200],
@@ -881,8 +898,6 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                     ),
                   ),
                 ),
-                const SizedBox(width: 16),
-                // Filtro Programação
                 SegmentedButton<String?>(
                   segments: programacaoSegments,
                   selected: {_filtroProgramacao},
@@ -893,7 +908,6 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                     });
                     _loadNotas();
                     _loadTodasNotasParaEstatisticas();
-                    // _loadFiltros() será chamado automaticamente no final de _loadNotas()
                   },
                   style: SegmentedButton.styleFrom(
                     backgroundColor: Colors.grey[200],
@@ -906,91 +920,8 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                     ),
                   ),
                 ),
-                const Spacer(),
-                // Opções de visualização
-                if (isCompact)
-                  PopupMenuButton<String>(
-                    onSelected: (value) {
-                      setState(() {
-                        _modoVisualizacao = value;
-                        _visualizacaoTabela = value == 'tabela';
-                      });
-                    },
-                    itemBuilder: (context) => viewOptions
-                        .map(
-                          (opt) => PopupMenuItem<String>(
-                            value: opt.$1,
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(opt.$2, size: 18),
-                                const SizedBox(width: 8),
-                                Text(opt.$3),
-                              ],
-                            ),
-                          ),
-                        )
-                        .toList(),
-                    child: OutlinedButton.icon(
-                      icon: const Icon(Icons.view_agenda),
-                      label: Text(
-                        viewOptions
-                            .firstWhere(
-                              (opt) => opt.$1 == _modoVisualizacao,
-                              orElse: () => viewOptions.first,
-                            )
-                            .$3,
-                      ),
-                      onPressed: null, // controlado pelo PopupMenuButton
-                    ),
-                  )
-                else
-                  Row(
-                    children: [
-                      // Toggle switch com 3 ícones (vegetação, trator, manutenção)
-                      // Só aparece se o usuário tiver o segmento "Linhas de Transmissão"
-                      _buildTipoToggle(),
-                      // Espaçamento só se o toggle estiver visível
-                      if (_temSegmentoLinhasTransmissao) const SizedBox(width: 16),
-                      // Container para os botões de visualização (estilo SegmentedButton)
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.grey[200],
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            _buildViewButton(
-                              'Tabela',
-                              Icons.table_chart,
-                              'tabela',
-                              _modoVisualizacao == 'tabela',
-                            ),
-                            _buildViewButton(
-                              'Cards',
-                              Icons.view_module,
-                              'cards',
-                              _modoVisualizacao == 'cards',
-                            ),
-                            _buildViewButton(
-                              'Calendário',
-                              Icons.calendar_today,
-                              'calendario',
-                              _modoVisualizacao == 'calendario',
-                            ),
-                            _buildViewButton(
-                              'Dashboard',
-                              Icons.dashboard,
-                              'dashboard',
-                              _modoVisualizacao == 'dashboard',
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                const SizedBox(width: 8),
+                if (!isCompact) _buildTipoToggle(),
+                // Nenhum controle de visualização no header (footbar assume no mobile)
                 ElevatedButton.icon(
                   onPressed: () {
                     setState(() {
@@ -1009,7 +940,6 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                     ),
                   ),
                 ),
-                const SizedBox(width: 12),
                 OutlinedButton.icon(
                   icon: const Icon(Icons.filter_list),
                   label: isCompact
@@ -1046,42 +976,40 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                     setState(() {
                       _filtrosExpandidos = willExpand;
                     });
-                    // No mobile, recarregar opções dos filtros ao expandir se ainda estiverem vazias
                     if (willExpand && _opcoesFiltrosEstaoVazias()) {
                       _loadFiltros();
                     }
                   },
                 ),
-                const SizedBox(width: 8),
                 if (!isCompact)
                   Text(
                     _filtrosExpandidos ? 'Ocultar' : 'Mostrar',
                     style: TextStyle(color: Colors.grey[600]),
-                ),
+                  ),
               ],
             ),
           ),
 
-          // Filtros
-      AnimatedCrossFade(
-        firstChild: const SizedBox.shrink(),
-        secondChild: Container(
-            padding: EdgeInsets.all(isMobile ? 8 : 16),
-            decoration: BoxDecoration(
-              color: Colors.grey[100],
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.grey.withOpacity(0.1),
-                  spreadRadius: 1,
-                  blurRadius: 2,
-                  offset: const Offset(0, 1),
-                ),
-              ],
-            ),
-          child: Wrap(
-            spacing: 16,
-            runSpacing: 16,
-                      children: [
+          // Filtros (versão revertida; pode gerar overflow no mobile)
+          AnimatedCrossFade(
+            firstChild: const SizedBox.shrink(),
+            secondChild: Container(
+              padding: EdgeInsets.all(isMobile ? 8 : 16),
+              decoration: BoxDecoration(
+                color: Colors.grey[100],
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.grey.withOpacity(0.1),
+                    spreadRadius: 1,
+                    blurRadius: 2,
+                    offset: const Offset(0, 1),
+                  ),
+                ],
+              ),
+              child: Wrap(
+                spacing: 16,
+                runSpacing: 16,
+                children: [
               SizedBox(
                 width: isMobile ? double.infinity : 220,
                 child: _buildMultiSelectFilterField(
@@ -1262,8 +1190,8 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         duration: const Duration(milliseconds: 200),
           ),
 
-          // Contador de resultados (não mostrar no dashboard)
-          if (_modoVisualizacao != 'dashboard')
+          // Contador de resultados (não mostrar no dashboard; ocultar no mobile)
+          if (_modoVisualizacao != 'dashboard' && !Responsive.isMobile(context))
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               color: Colors.blue[50],
@@ -1399,8 +1327,6 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                                 },
                               ),
           ),
-
-          if (isMobile) _buildMobileViewSwitcher(),
 
           // Paginação (não mostrar no dashboard)
           if (_modoVisualizacao != 'dashboard' && _totalNotas > _itensPorPagina)
@@ -1958,6 +1884,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
           _modoVisualizacao = value;
           _visualizacaoTabela = value == 'tabela';
         });
+        widget.onModoChange?.call(value);
       },
       borderRadius: BorderRadius.circular(8),
       child: Container(
@@ -2005,40 +1932,13 @@ class _NotasSAPViewState extends State<NotasSAPView> {
       ),
       child: Row(
         children: [
-          Expanded(child: _buildMobileViewButton('Tabela', Icons.table_chart, 'tabela')),
-          const SizedBox(width: 8),
-          Expanded(child: _buildMobileViewButton('Cards', Icons.view_module, 'cards')),
-          const SizedBox(width: 8),
-          Expanded(child: _buildMobileViewButton('Calendário', Icons.calendar_today, 'calendario')),
-          const SizedBox(width: 8),
-          Expanded(child: _buildMobileViewButton('Dashboard', Icons.dashboard, 'dashboard')),
+          // mobile view switcher removido (footbar global cuida no mobile)
         ],
       ),
     );
   }
 
-  Widget _buildMobileViewButton(String label, IconData icon, String value) {
-    final isSelected = _modoVisualizacao == value;
-    return ElevatedButton.icon(
-      onPressed: () {
-        setState(() {
-          _modoVisualizacao = value;
-          _visualizacaoTabela = value == 'tabela';
-        });
-      },
-      icon: Icon(icon, size: 16),
-      label: Text(label, style: const TextStyle(fontSize: 12)),
-      style: ElevatedButton.styleFrom(
-        backgroundColor: isSelected ? const Color(0xFF2196F3) : Colors.grey[200],
-        foregroundColor: isSelected ? Colors.white : Colors.grey[800],
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(10),
-        ),
-        elevation: isSelected ? 1 : 0,
-      ),
-    );
-  }
+  // _buildMobileViewButton removido
 
 
 

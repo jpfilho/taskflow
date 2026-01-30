@@ -6,6 +6,7 @@ import '../../application/controllers/upload_controller.dart';
 import '../../application/controllers/gallery_controller.dart';
 import '../../data/models/segment.dart';
 import '../../data/models/room.dart';
+import '../../data/models/equipment.dart';
 import '../../data/models/status_album.dart';
 import '../../data/repositories/supabase_media_repository.dart';
 import '../../util/user_locais_helper.dart';
@@ -31,6 +32,7 @@ class _UploadPageState extends State<UploadPage> {
   final _titleController = TextEditingController();
   final _descriptionController = TextEditingController();
   final _tagController = TextEditingController();
+  final SupabaseMediaRepository _mediaRepository = SupabaseMediaRepository();
 
   List<Regional> _regionais = [];
   List<Divisao> _divisoes = [];
@@ -88,6 +90,9 @@ class _UploadPageState extends State<UploadPage> {
       _regionais = isRootOrNoProfile || (userRegionalIds?.isEmpty ?? true)
           ? allRegionais
           : allRegionais.where((r) => userRegionalIds!.contains(r.id)).toList();
+      if (_regionais.length == 1) {
+        _uploadController.setRegionalId(_regionais.first.id);
+      }
       debugPrint('✅ Regionais carregadas: ${_regionais.length}');
 
       if (!mounted) return;
@@ -105,6 +110,9 @@ class _UploadPageState extends State<UploadPage> {
         _divisoes = isRootOrNoProfile || (userDivisaoIds?.isEmpty ?? true)
             ? allDivisoes
             : allDivisoes.where((d) => userDivisaoIds!.contains(d.id)).toList();
+      }
+      if (_divisoes.length == 1) {
+        _uploadController.setDivisaoId(_divisoes.first.id);
       }
       debugPrint('✅ Divisões carregadas: ${_divisoes.length}');
 
@@ -127,6 +135,9 @@ class _UploadPageState extends State<UploadPage> {
         _segments = await repository.getSegments(
           userSegmentoIds: isRootOrNoProfile || (segmentoIdsList?.isEmpty ?? true) ? null : segmentoIdsList,
         );
+      }
+      if (_segments.length == 1) {
+        _uploadController.setSegmentId(_segments.first.id);
       }
       debugPrint('✅ Segmentos carregados: ${_segments.length}');
 
@@ -861,17 +872,22 @@ class _UploadPageState extends State<UploadPage> {
               const SizedBox(height: 16),
               _buildLocalDropdownWithSearch(context, isDark),
               const SizedBox(height: 16),
+              // Sala e ação de nova sala na mesma linha; status na linha seguinte
               Row(
                 children: [
-                  Expanded(
-                    child: _buildSalaDropdownWithSearch(context, isDark),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: _buildStatusField(context, isDark),
-                  ),
+                  Expanded(child: _buildSalaDropdownWithSearch(context, isDark)),
+                  const SizedBox(width: 12),
+                  if (_uploadController.selectedLocalId != null)
+                    TextButton.icon(
+                      onPressed: _handleAddRoom,
+                      icon: const Icon(Icons.add),
+                      label: const Text('Nova sala'),
+                      style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8)),
+                    ),
                 ],
               ),
+              const SizedBox(height: 12),
+              _buildStatusField(context, isDark),
             ],
           ),
           const SizedBox(height: 24),
@@ -1117,109 +1133,178 @@ class _UploadPageState extends State<UploadPage> {
     final selectedRoom = _uploadController.selectedRoomId != null
         ? _rooms.where((r) => r.id == _uploadController.selectedRoomId).firstOrNull
         : null;
-    final widget = Stack(
-      clipBehavior: Clip.none,
+
+    Widget content = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        DropdownSearch<Room>(
-          popupProps: PopupProps.menu(
-            showSearchBox: true,
-            searchFieldProps: TextFieldProps(
-              decoration: InputDecoration(
-                hintText: 'Digite para buscar sala...',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: BorderSide(
-                    color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
+        Stack(
+          clipBehavior: Clip.none,
+          children: [
+            DropdownSearch<Room>(
+              popupProps: PopupProps.menu(
+                showSearchBox: true,
+                searchFieldProps: TextFieldProps(
+                  decoration: InputDecoration(
+                    hintText: 'Digite para buscar sala...',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(
+                        color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
+                      ),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    filled: true,
+                    fillColor: isDark ? const Color(0xFF1e293b) : Colors.white,
                   ),
                 ),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                filled: true,
-                fillColor: isDark ? const Color(0xFF1e293b) : Colors.white,
-              ),
-            ),
-            menuProps: MenuProps(
-              elevation: 4,
-              color: isDark ? const Color(0xFF1e293b) : Colors.white,
-            ),
-            constraints: BoxConstraints(
-              maxHeight: MediaQuery.of(context).size.height * 0.5,
-              minHeight: 200,
-            ),
-          ),
-          items: (String filter, LoadProps? loadProps) async => _rooms,
-          selectedItem: selectedRoom,
-          onChanged: enabled ? (Room? value) => _uploadController.setRoomId(value?.id) : null,
-          itemAsString: (Room r) => r.name,
-          compareFn: (Room a, Room b) => a.id == b.id,
-          filterFn: (Room item, String filter) {
-            if (filter.isEmpty || filter.trim().isEmpty) return true;
-            final lower = filter.toLowerCase().trim();
-            return item.name.toLowerCase().contains(lower) ||
-                (item.localizacao?.toLowerCase().contains(lower) ?? false);
-          },
-          decoratorProps: DropDownDecoratorProps(
-            decoration: InputDecoration(
-              contentPadding: const EdgeInsets.only(top: 20, bottom: 8, left: 12, right: 32),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-                borderSide: BorderSide(
-                  color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
+                menuProps: MenuProps(
+                  elevation: 4,
+                  color: isDark ? const Color(0xFF1e293b) : Colors.white,
+                ),
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.5,
+                  minHeight: 200,
                 ),
               ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-                borderSide: BorderSide(
-                  color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
+              items: (String filter, LoadProps? loadProps) async => _rooms,
+              selectedItem: selectedRoom,
+              onChanged: enabled ? (Room? value) => _uploadController.setRoomId(value?.id) : null,
+              itemAsString: (Room r) => r.name,
+              compareFn: (Room a, Room b) => a.id == b.id,
+              filterFn: (Room item, String filter) {
+                if (filter.isEmpty || filter.trim().isEmpty) return true;
+                final lower = filter.toLowerCase().trim();
+                return item.name.toLowerCase().contains(lower) ||
+                    (item.localizacao?.toLowerCase().contains(lower) ?? false);
+              },
+              decoratorProps: DropDownDecoratorProps(
+                decoration: InputDecoration(
+                  contentPadding: const EdgeInsets.only(top: 20, bottom: 8, left: 12, right: 12),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(
+                      color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
+                    ),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(
+                      color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
+                    ),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: const BorderSide(
+                      color: Color(0xFF2563eb),
+                      width: 2,
+                    ),
+                  ),
+                  filled: false,
+                  suffixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                  suffixIcon: enabled
+                      ? IconButton(
+                          tooltip: 'Nova sala',
+                          icon: const Icon(Icons.add, size: 20),
+                          padding: const EdgeInsets.all(8),
+                          onPressed: () async {
+                            final controller = TextEditingController();
+                            final newName = await showDialog<String>(
+                              context: context,
+                              builder: (context) {
+                                return AlertDialog(
+                                  title: const Text('Adicionar nova sala'),
+                                  content: TextField(
+                                    controller: controller,
+                                    decoration: const InputDecoration(
+                                      hintText: 'Nome da sala',
+                                    ),
+                                    autofocus: true,
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.pop(context),
+                                      child: const Text('Cancelar'),
+                                    ),
+                                    ElevatedButton(
+                                      onPressed: () => Navigator.pop(context, controller.text.trim()),
+                                      child: const Text('Adicionar'),
+                                    ),
+                                  ],
+                                );
+                              },
+                            );
+                            if (newName != null && newName.isNotEmpty) {
+                              final trimmed = newName.trim();
+                              if (_locais.isEmpty) return;
+                              final selectedLocal = _locais.firstWhere(
+                                (l) => l.id == _uploadController.selectedLocalId,
+                                orElse: () => _locais.first,
+                              );
+                              final localInst = selectedLocal.localInstalacaoSap ?? selectedLocal.local ?? '';
+                              final equipmentId = Equipment.generateDeterministicUuid('equipment:$localInst');
+                              final roomId = Room.generateDeterministicUuid('room:$trimmed:$localInst');
+                              final newRoom = Room(
+                                id: roomId,
+                                equipmentId: equipmentId,
+                                name: trimmed,
+                                localizacao: localInst,
+                              );
+                              setState(() {
+                                _rooms = [..._rooms, newRoom];
+                              });
+                              _uploadController.setRoomId(newRoom.id);
+                              try {
+                                await _mediaRepository.createRoom(newRoom);
+                              } catch (e) {
+                                debugPrint('Erro ao criar sala: $e');
+                              }
+                            }
+                          },
+                        )
+                      : null,
                 ),
               ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-                borderSide: const BorderSide(
-                  color: Color(0xFF2563eb),
-                  width: 2,
-                ),
-              ),
-              filled: false,
+              dropdownBuilder: (context, selectedItem) {
+                return Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    selectedItem?.name ?? 'Nenhuma',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: isDark ? Colors.white : const Color(0xFF1e293b),
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                );
+              },
             ),
-          ),
-          dropdownBuilder: (context, selectedItem) {
-            return Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                selectedItem?.name ?? 'Nenhuma',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: isDark ? Colors.white : const Color(0xFF1e293b),
+            Positioned(
+              left: 12,
+              top: 0,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                color: isDark ? const Color(0xFF1e293b) : Colors.white,
+                child: Text(
+                  'SALA',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: isDark ? Colors.grey[500] : Colors.grey[500],
+                  ),
                 ),
-                overflow: TextOverflow.ellipsis,
-              ),
-            );
-          },
-        ),
-        Positioned(
-          left: 12,
-          top: 0,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            color: isDark ? const Color(0xFF1e293b) : Colors.white,
-            child: Text(
-              'SALA',
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
-                color: isDark ? Colors.grey[500] : Colors.grey[500],
               ),
             ),
-          ),
+          ],
         ),
       ],
     );
+
     if (!enabled) {
       return IgnorePointer(
-        child: Opacity(opacity: 0.6, child: widget),
+        child: Opacity(opacity: 0.6, child: content),
       );
     }
-    return widget;
+    return content;
   }
 
   Widget _buildFloatingLabelDropdown<T>(
@@ -1681,5 +1766,77 @@ class _UploadPageState extends State<UploadPage> {
     Future.delayed(const Duration(seconds: 3), () {
       overlayEntry.remove();
     });
+  }
+
+  Future<void> _handleAddRoom() async {
+    if (_uploadController.selectedLocalId == null) return;
+    final controller = TextEditingController();
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Adicionar nova sala'),
+          content: TextField(
+            controller: controller,
+            decoration: const InputDecoration(
+              hintText: 'Nome da sala',
+            ),
+            autofocus: true,
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancelar'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, controller.text.trim()),
+              child: const Text('Adicionar'),
+            ),
+          ],
+        );
+      },
+    );
+    if (newName != null && newName.trim().isNotEmpty) {
+      if (_locais.isEmpty) return;
+      final trimmed = newName.trim();
+      final selectedLocal = _locais.firstWhere(
+        (l) => l.id == _uploadController.selectedLocalId,
+        orElse: () => _locais.first,
+      );
+      final localInst = selectedLocal.localInstalacaoSap ?? selectedLocal.local ?? '';
+      try {
+        await _mediaRepository.insertSalaEquipamentosSap(
+          localInstalacao: localInst,
+          sala: trimmed,
+          localizacao: localInst,
+        );
+        final created = Room.fromEquipamentosSap(trimmed, localInst);
+        if (!mounted) return;
+        setState(() {
+          // evita duplicar se a sala já existir
+          _rooms = [
+            ..._rooms.where((r) => r.id != created.id),
+            created,
+          ]..sort((a, b) => a.name.compareTo(b.name));
+        });
+        _uploadController.setRoomId(created.id);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Sala adicionada em equipamentos_sap.'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      } catch (e) {
+        debugPrint('Erro ao criar sala: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Erro ao salvar sala: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    }
   }
 }

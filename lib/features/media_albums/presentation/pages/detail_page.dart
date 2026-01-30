@@ -14,6 +14,7 @@ import '../widgets/status_badge.dart';
 import 'edit_dialog.dart';
 import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
 class DetailPage extends StatefulWidget {
@@ -292,6 +293,22 @@ class _DetailPageState extends State<DetailPage> {
     try {
       if (Theme.of(context).platform == TargetPlatform.iOS ||
           Theme.of(context).platform == TargetPlatform.android) {
+        // Baixar bytes e compartilhar como arquivo para apps que não pré-visualizam links
+        try {
+          final resp = await http.get(Uri.parse(_displayImageUrl!));
+          if (resp.statusCode == 200 && resp.bodyBytes.isNotEmpty) {
+            final file = XFile.fromData(
+              resp.bodyBytes,
+              mimeType: 'image/jpeg',
+              name: 'imagem.jpg',
+            );
+            await Share.shareXFiles([file], text: widget.imageId);
+            return;
+          }
+        } catch (_) {
+          // fallback abaixo
+        }
+        // Fallback: compartilhar link se não conseguir baixar
         await Share.share(_displayImageUrl!);
       } else {
         // Web: abrir URL
@@ -364,17 +381,26 @@ class _DetailPageState extends State<DetailPage> {
       return _buildAnnotationView(context, theme, isDark, isMobile);
     }
 
+    if (_isFullscreen) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: _buildFullscreenViewer(theme, isDark),
+      );
+    }
+
     return Scaffold(
       backgroundColor: isDark ? const Color(0xFF0f172a) : const Color(0xFFf8fafc),
-      body: Column(
-        children: [
-          _buildHeader(context, theme, isDark, isMobile),
-          Expanded(
-            child: isMobile
-                ? _buildMobileLayout(context, theme, isDark)
-                : _buildDesktopLayout(context, theme, isDark),
-          ),
-        ],
+      body: SafeArea(
+        child: Column(
+          children: [
+            _buildHeader(context, theme, isDark, isMobile),
+            Expanded(
+              child: isMobile
+                  ? _buildMobileLayout(context, theme, isDark)
+                  : _buildDesktopLayout(context, theme, isDark),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -683,22 +709,24 @@ class _DetailPageState extends State<DetailPage> {
   }
 
   Widget _buildFullscreenViewer(ThemeData theme, bool isDark) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
-        children: [
-          Listener(
-            onPointerSignal: (event) {
-              if (event is PointerScrollEvent) {
-                if (event.scrollDelta.dy < 0) {
-                  _zoomIn();
-                  setState(() {});
-                } else if (event.scrollDelta.dy > 0) {
-                  _zoomOut();
-                  setState(() {});
-                }
+    return Stack(
+      children: [
+        Listener(
+          onPointerSignal: (event) {
+            if (event is PointerScrollEvent) {
+              if (event.scrollDelta.dy < 0) {
+                _zoomIn();
+                setState(() {});
+              } else if (event.scrollDelta.dy > 0) {
+                _zoomOut();
+                setState(() {});
               }
-            },
+            }
+          },
+          child: Container(
+            color: Colors.black,
+            width: double.infinity,
+            height: double.infinity,
             child: PhotoView(
               imageProvider: CachedNetworkImageProvider(_displayImageUrl!),
               controller: _photoViewController,
@@ -712,47 +740,47 @@ class _DetailPageState extends State<DetailPage> {
               enablePanAlways: true,
             ),
           ),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.close_rounded, color: Colors.white),
-                    onPressed: _exitFullscreen,
-                  ),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _zoomButton(
-                        context,
-                        Icons.zoom_in_rounded,
-                        true,
-                        () => _zoomIn(),
-                      ),
-                      const SizedBox(width: 8),
-                      _zoomButton(
-                        context,
-                        Icons.zoom_out_rounded,
-                        true,
-                        () => _zoomOut(),
-                      ),
-                      const SizedBox(width: 8),
-                      _zoomButton(
-                        context,
-                        Icons.fullscreen_exit_rounded,
-                        true,
-                        () => _exitFullscreen(),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+        ),
+        SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.close_rounded, color: Colors.white),
+                  onPressed: _exitFullscreen,
+                ),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _zoomButton(
+                      context,
+                      Icons.zoom_in_rounded,
+                      true,
+                      () => _zoomIn(),
+                    ),
+                    const SizedBox(width: 8),
+                    _zoomButton(
+                      context,
+                      Icons.zoom_out_rounded,
+                      true,
+                      () => _zoomOut(),
+                    ),
+                    const SizedBox(width: 8),
+                    _zoomButton(
+                      context,
+                      Icons.fullscreen_exit_rounded,
+                      true,
+                      () => _exitFullscreen(),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
