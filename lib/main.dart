@@ -52,6 +52,7 @@ import 'utils/responsive.dart';
 
 import 'services/local_database_service.dart';
 import 'services/sync_service.dart';
+import 'services/sync_scheduler_service.dart';
 import 'services/connectivity_service.dart';
 import 'services/version_check_service.dart';
 import 'providers/theme_provider.dart';
@@ -107,6 +108,14 @@ void main() async {
     print('✅ Serviço de sincronização inicializado!');
   } catch (e) {
     print('⚠️ Erro ao inicializar sincronização: $e');
+  }
+
+  // Iniciar scheduler da fila de sincronização
+  try {
+    SyncSchedulerService().start();
+    print('✅ Scheduler de sincronização iniciado!');
+  } catch (e) {
+    print('⚠️ Erro ao iniciar scheduler de sincronização: $e');
   }
 
   // Verificação de nova versão (web: consulta version.txt; outras plataformas: no-op)

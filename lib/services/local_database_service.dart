@@ -11,7 +11,7 @@ class LocalDatabaseService {
 
   static Database? _database;
   static const String _databaseName = 'taskflow_local.db';
-  static const int _databaseVersion = 2;
+  static const int _databaseVersion = 3;
 
   Future<Database> get database async {
     if (_database != null) return _database!;
@@ -126,6 +126,26 @@ class LocalDatabaseService {
         task_id TEXT NOT NULL,
         executor_id TEXT NOT NULL,
         PRIMARY KEY (task_id, executor_id),
+        FOREIGN KEY (task_id) REFERENCES tasks_local(id) ON DELETE CASCADE
+      )
+    ''');
+
+    // Tabela de relacionamentos tasks_equipes
+    await db.execute('''
+      CREATE TABLE tasks_equipes_local (
+        task_id TEXT NOT NULL,
+        equipe_id TEXT NOT NULL,
+        PRIMARY KEY (task_id, equipe_id),
+        FOREIGN KEY (task_id) REFERENCES tasks_local(id) ON DELETE CASCADE
+      )
+    ''');
+
+    // Tabela de relacionamentos tasks_frotas
+    await db.execute('''
+      CREATE TABLE tasks_frotas_local (
+        task_id TEXT NOT NULL,
+        frota_id TEXT NOT NULL,
+        PRIMARY KEY (task_id, frota_id),
         FOREIGN KEY (task_id) REFERENCES tasks_local(id) ON DELETE CASCADE
       )
     ''');
@@ -321,6 +341,8 @@ class LocalDatabaseService {
     await db.execute('CREATE INDEX idx_tasks_local_status ON tasks_local(status)');
     await db.execute('CREATE INDEX idx_tasks_local_regional ON tasks_local(regional)');
     await db.execute('CREATE INDEX idx_gantt_segments_local_task_id ON gantt_segments_local(task_id)');
+    await db.execute('CREATE INDEX idx_tasks_equipes_local_task_id ON tasks_equipes_local(task_id)');
+    await db.execute('CREATE INDEX idx_tasks_frotas_local_task_id ON tasks_frotas_local(task_id)');
     await db.execute('CREATE INDEX idx_sync_queue_synced ON sync_queue(synced)');
     await db.execute('CREATE INDEX idx_sync_queue_table ON sync_queue(table_name)');
     await db.execute('CREATE INDEX idx_sync_queue_next_retry ON sync_queue(next_retry_at)');
@@ -346,6 +368,34 @@ class LocalDatabaseService {
       } catch (_) {}
       try {
         await db.execute('CREATE INDEX idx_sync_queue_next_retry ON sync_queue(next_retry_at)');
+      } catch (_) {}
+    }
+    if (oldVersion < 3) {
+      try {
+        await db.execute('''
+          CREATE TABLE tasks_equipes_local (
+            task_id TEXT NOT NULL,
+            equipe_id TEXT NOT NULL,
+            PRIMARY KEY (task_id, equipe_id),
+            FOREIGN KEY (task_id) REFERENCES tasks_local(id) ON DELETE CASCADE
+          )
+        ''');
+      } catch (_) {}
+      try {
+        await db.execute('''
+          CREATE TABLE tasks_frotas_local (
+            task_id TEXT NOT NULL,
+            frota_id TEXT NOT NULL,
+            PRIMARY KEY (task_id, frota_id),
+            FOREIGN KEY (task_id) REFERENCES tasks_local(id) ON DELETE CASCADE
+          )
+        ''');
+      } catch (_) {}
+      try {
+        await db.execute('CREATE INDEX idx_tasks_equipes_local_task_id ON tasks_equipes_local(task_id)');
+      } catch (_) {}
+      try {
+        await db.execute('CREATE INDEX idx_tasks_frotas_local_task_id ON tasks_frotas_local(task_id)');
       } catch (_) {}
     }
   }
@@ -378,7 +428,7 @@ class LocalDatabaseService {
     });
   }
 
-  Future<List<Map<String, dynamic>>> getPendingSyncItems() async {
+  Future<List<Map<String, dynamic>>> getPendingSyncItems({int? limit}) async {
     final db = await database;
     final now = DateTime.now().millisecondsSinceEpoch;
     return await db.query(
@@ -386,7 +436,87 @@ class LocalDatabaseService {
       where: 'synced = ? AND (status = ? OR status = ?) AND (next_retry_at IS NULL OR next_retry_at <= ?)',
       whereArgs: [0, 'pending', 'retrying', now],
       orderBy: 'created_at ASC',
+      limit: limit,
     );
+  }
+
+  Future<void> coalesceSyncQueueItem(
+    String tableName,
+    String operation,
+    String recordId,
+    Map<String, dynamic> data,
+  ) async {
+    final db = await database;
+    final pending = await db.query(
+      'sync_queue',
+      where: 'synced = ? AND table_name = ? AND record_id = ? AND (status = ? OR status = ?)',
+      whereArgs: [0, tableName, recordId, 'pending', 'retrying'],
+      orderBy: 'created_at DESC',
+    );
+
+    Map<String, dynamic>? keep;
+    if (pending.isNotEmpty) {
+      if (operation == 'delete') {
+        // Remover pendencias anteriores e inserir delete
+        await db.delete(
+          'sync_queue',
+          where: 'synced = ? AND table_name = ? AND record_id = ?',
+          whereArgs: [0, tableName, recordId],
+        );
+        await addToSyncQueue(tableName, operation, recordId, data);
+        return;
+      }
+
+      // Preferir insert quando existe (para evitar update de registro inexistente)
+      keep = pending.firstWhere(
+        (row) => row['operation'] == 'insert',
+        orElse: () => pending.firstWhere(
+          (row) => row['operation'] == 'update',
+          orElse: () => pending.first,
+        ),
+      );
+
+      if (keep['operation'] == 'delete') {
+        // Se ja existe delete pendente, nao sobrescrever
+        return;
+      }
+    }
+
+    if (keep != null && keep['id'] != null) {
+      final keepId = keep['id'] as int;
+      final keepOperation = keep['operation'] as String?;
+      String effectiveOperation = operation;
+      if (keepOperation == 'insert' || operation == 'insert') {
+        effectiveOperation = 'insert';
+      } else if (keepOperation == 'update' || operation == 'update') {
+        effectiveOperation = 'update';
+      } else {
+        effectiveOperation = keepOperation ?? operation;
+      }
+      await db.update(
+        'sync_queue',
+        {
+          'data': jsonEncode(data),
+          'operation': effectiveOperation,
+          'created_at': DateTime.now().millisecondsSinceEpoch,
+          'status': 'pending',
+          'retry_count': 0,
+          'backoff_ms': 0,
+          'next_retry_at': null,
+          'last_error': null,
+        },
+        where: 'id = ?',
+        whereArgs: [keepId],
+      );
+      // Remover duplicados pendentes do mesmo registro
+      await db.delete(
+        'sync_queue',
+        where: 'synced = ? AND table_name = ? AND record_id = ? AND id != ?',
+        whereArgs: [0, tableName, recordId, keepId],
+      );
+    } else {
+      await addToSyncQueue(tableName, operation, recordId, data);
+    }
   }
 
   Future<void> markAsSynced(int syncQueueId) async {
@@ -432,6 +562,56 @@ class LocalDatabaseService {
   Future<void> clearSyncedItems() async {
     final db = await database;
     await db.delete('sync_queue', where: 'synced = ?', whereArgs: [1]);
+  }
+
+  Future<List<String>> _getRelationIds({
+    required String tableName,
+    required String taskId,
+    required String relationColumn,
+  }) async {
+    final db = await database;
+    final rows = await db.query(
+      tableName,
+      columns: [relationColumn],
+      where: 'task_id = ?',
+      whereArgs: [taskId],
+    );
+    return rows
+        .map((row) => row[relationColumn])
+        .whereType<String>()
+        .toList();
+  }
+
+  Future<List<String>> getTaskLocalIds(String taskId) async {
+    return _getRelationIds(
+      tableName: 'tasks_locais_local',
+      taskId: taskId,
+      relationColumn: 'local_id',
+    );
+  }
+
+  Future<List<String>> getTaskExecutorIds(String taskId) async {
+    return _getRelationIds(
+      tableName: 'tasks_executores_local',
+      taskId: taskId,
+      relationColumn: 'executor_id',
+    );
+  }
+
+  Future<List<String>> getTaskEquipeIds(String taskId) async {
+    return _getRelationIds(
+      tableName: 'tasks_equipes_local',
+      taskId: taskId,
+      relationColumn: 'equipe_id',
+    );
+  }
+
+  Future<List<String>> getTaskFrotaIds(String taskId) async {
+    return _getRelationIds(
+      tableName: 'tasks_frotas_local',
+      taskId: taskId,
+      relationColumn: 'frota_id',
+    );
   }
 
 
@@ -489,6 +669,8 @@ class LocalDatabaseService {
     await db.delete('gantt_segments_local');
     await db.delete('tasks_locais_local');
     await db.delete('tasks_executores_local');
+    await db.delete('tasks_equipes_local');
+    await db.delete('tasks_frotas_local');
     await db.delete('anexos_local');
     await db.delete('tasks_local');
     await db.delete('usuarios_regionais_local');

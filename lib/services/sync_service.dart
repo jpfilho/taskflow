@@ -15,12 +15,20 @@ class SyncService {
   final LocalDatabaseService _localDb = LocalDatabaseService();
   final ConnectivityService _connectivity = ConnectivityService();
   bool _isSyncing = false;
+  bool _isQueueProcessing = false;
   final StreamController<bool> _syncingController = StreamController<bool>.broadcast();
 
   // Configuração de backoff
   static const int _maxRetries = 5;
   static const int _baseBackoffMs = 2000; // 2s
   static const int _maxBackoffMs = 300000; // 5min
+
+  static const Map<String, List<String>> _joinTableKeys = {
+    'tasks_locais': ['task_id', 'local_id'],
+    'tasks_executores': ['task_id', 'executor_id'],
+    'tasks_equipes': ['task_id', 'equipe_id'],
+    'tasks_frotas': ['task_id', 'frota_id'],
+  };
 
   bool get isSyncing => _isSyncing;
   Stream<bool> get syncingStream => _syncingController.stream;
@@ -77,9 +85,21 @@ class SyncService {
     }
   }
 
+  Future<void> processDueQueue({int limit = 20}) async {
+    if (!_connectivity.isConnected || _isSyncing || _isQueueProcessing) {
+      return;
+    }
+    _isQueueProcessing = true;
+    try {
+      await _syncQueue(limit: limit);
+    } finally {
+      _isQueueProcessing = false;
+    }
+  }
+
   // Sincronizar fila de operações
-  Future<void> _syncQueue() async {
-    final pendingItems = await _localDb.getPendingSyncItems();
+  Future<void> _syncQueue({int? limit}) async {
+    final pendingItems = await _localDb.getPendingSyncItems(limit: limit);
 
     for (var item in pendingItems) {
       try {
@@ -100,7 +120,7 @@ class SyncService {
             success = await _updateInSupabase(tableName, recordId, data);
             break;
           case 'delete':
-            success = await _deleteFromSupabase(tableName, recordId);
+            success = await _deleteFromSupabase(tableName, recordId, data);
             break;
         }
 
@@ -224,9 +244,25 @@ class SyncService {
   // Inserir no Supabase
   Future<bool> _insertToSupabase(String tableName, Map<String, dynamic> data) async {
     try {
+      if (_joinTableKeys.containsKey(tableName)) {
+        final conflictKeys = _joinTableKeys[tableName]!;
+        try {
+          await _supabase
+              .from(tableName)
+              .upsert(data, onConflict: conflictKeys.join(','));
+          return true;
+        } catch (_) {
+          // fallback para insert simples
+        }
+      }
       await _supabase.from(tableName).insert(data);
       return true;
     } catch (e) {
+      final msg = e.toString().toLowerCase();
+      if (_joinTableKeys.containsKey(tableName) &&
+          (msg.contains('duplicate') || msg.contains('unique') || msg.contains('23505'))) {
+        return true;
+      }
       print('Erro ao inserir no Supabase: $e');
       return false;
     }
@@ -244,8 +280,25 @@ class SyncService {
   }
 
   // Deletar do Supabase
-  Future<bool> _deleteFromSupabase(String tableName, String recordId) async {
+  Future<bool> _deleteFromSupabase(
+    String tableName,
+    String recordId,
+    Map<String, dynamic> data,
+  ) async {
     try {
+      if (_joinTableKeys.containsKey(tableName)) {
+        final keys = _joinTableKeys[tableName]!;
+        var query = _supabase.from(tableName).delete();
+        for (final key in keys) {
+          final value = data[key];
+          if (value == null) {
+            throw Exception('Chave ausente para delete: $key');
+          }
+          query = query.eq(key, value);
+        }
+        await query;
+        return true;
+      }
       await _supabase.from(tableName).delete().eq('id', recordId);
       return true;
     } catch (e) {
@@ -303,7 +356,13 @@ class SyncService {
   }
 
   // Adicionar operação à fila de sincronização
-  Future<void> queueOperation(String tableName, String operation, String recordId, Map<String, dynamic> data) async {
+  Future<void> queueOperation(
+    String tableName,
+    String operation,
+    String recordId,
+    Map<String, dynamic> data, {
+    bool coalesce = false,
+  }) async {
     if (_connectivity.isConnected) {
       // Tentar sincronizar imediatamente
       bool success = false;
@@ -315,17 +374,25 @@ class SyncService {
           success = await _updateInSupabase(tableName, recordId, data);
           break;
         case 'delete':
-          success = await _deleteFromSupabase(tableName, recordId);
+          success = await _deleteFromSupabase(tableName, recordId, data);
           break;
       }
 
       if (!success) {
         // Se falhar, adicionar à fila
-        await _localDb.addToSyncQueue(tableName, operation, recordId, data);
+        if (coalesce) {
+          await _localDb.coalesceSyncQueueItem(tableName, operation, recordId, data);
+        } else {
+          await _localDb.addToSyncQueue(tableName, operation, recordId, data);
+        }
       }
     } else {
       // Se offline, adicionar à fila
-      await _localDb.addToSyncQueue(tableName, operation, recordId, data);
+      if (coalesce) {
+        await _localDb.coalesceSyncQueueItem(tableName, operation, recordId, data);
+      } else {
+        await _localDb.addToSyncQueue(tableName, operation, recordId, data);
+      }
     }
   }
 

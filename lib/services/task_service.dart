@@ -1205,6 +1205,20 @@ class TaskService {
       whereArgs: [taskId],
     );
     final executorIds = executorIdsRows.map((r) => r['executor_id'] as String).toList();
+
+    final equipeIdsRows = await db.query(
+      'tasks_equipes_local',
+      where: 'task_id = ?',
+      whereArgs: [taskId],
+    );
+    final equipeIds = equipeIdsRows.map((r) => r['equipe_id'] as String).toList();
+
+    final frotaIdsRows = await db.query(
+      'tasks_frotas_local',
+      where: 'task_id = ?',
+      whereArgs: [taskId],
+    );
+    final frotaIds = frotaIdsRows.map((r) => r['frota_id'] as String).toList();
     
     // Carregar segmentos
     final segmentsRows = await db.query(
@@ -1231,7 +1245,8 @@ class TaskService {
       segmentoId: map['segmento_id'] as String?,
       localIds: localIds,
       executorIds: executorIds,
-      equipeIds: [], // TODO: Implementar equipes no banco local
+      equipeIds: equipeIds,
+      frotaIds: frotaIds,
       status: map['status'] as String? ?? 'PROG',
       statusNome: map['status'] as String? ?? 'Programado',
       regional: map['regional'] as String? ?? '',
@@ -1319,6 +1334,22 @@ class TaskService {
           'executor_id': executorId,
         });
       }
+
+      await db.delete('tasks_equipes_local', where: 'task_id = ?', whereArgs: [task.id]);
+      for (var equipeId in task.equipeIds) {
+        await db.insert('tasks_equipes_local', {
+          'task_id': task.id,
+          'equipe_id': equipeId,
+        });
+      }
+
+      await db.delete('tasks_frotas_local', where: 'task_id = ?', whereArgs: [task.id]);
+      for (var frotaId in task.frotaIds) {
+        await db.insert('tasks_frotas_local', {
+          'task_id': task.id,
+          'frota_id': frotaId,
+        });
+      }
       
       // Salvar segmentos
       await db.delete('gantt_segments_local', where: 'task_id = ?', whereArgs: [task.id]);
@@ -1339,6 +1370,115 @@ class TaskService {
       print('Erro ao salvar tarefa no banco local: $e');
       rethrow;
     }
+  }
+
+  Future<_TaskLocalRelations> _getLocalRelations(String taskId) async {
+    return _TaskLocalRelations(
+      localIds: await _localDb.getTaskLocalIds(taskId),
+      executorIds: await _localDb.getTaskExecutorIds(taskId),
+      equipeIds: await _localDb.getTaskEquipeIds(taskId),
+      frotaIds: await _localDb.getTaskFrotaIds(taskId),
+    );
+  }
+
+  List<String> _effectiveLocalIds(Task task) {
+    if (task.localIds.isNotEmpty) return task.localIds;
+    if (task.localId != null && task.localId!.isNotEmpty) {
+      return [task.localId!];
+    }
+    return [];
+  }
+
+  List<String> _effectiveEquipeIds(Task task) {
+    if (task.equipeIds.isNotEmpty) return task.equipeIds;
+    if (task.equipeId != null && task.equipeId!.isNotEmpty) {
+      return [task.equipeId!];
+    }
+    return [];
+  }
+
+  String _relationRecordId(String taskId, String relationId) {
+    return '$taskId:$relationId';
+  }
+
+  Future<void> _queueRelationDiff({
+    required String tableName,
+    required String relationColumn,
+    required String taskId,
+    required List<String> previousIds,
+    required List<String> currentIds,
+  }) async {
+    final previous = previousIds.toSet();
+    final current = currentIds.toSet();
+
+    final toAdd = current.difference(previous);
+    final toRemove = previous.difference(current);
+
+    for (final relationId in toAdd) {
+      if (relationId.isEmpty) continue;
+      await _syncService.queueOperation(
+        tableName,
+        'insert',
+        _relationRecordId(taskId, relationId),
+        {
+          'task_id': taskId,
+          relationColumn: relationId,
+        },
+        coalesce: true,
+      );
+    }
+
+    for (final relationId in toRemove) {
+      if (relationId.isEmpty) continue;
+      await _syncService.queueOperation(
+        tableName,
+        'delete',
+        _relationRecordId(taskId, relationId),
+        {
+          'task_id': taskId,
+          relationColumn: relationId,
+        },
+        coalesce: true,
+      );
+    }
+  }
+
+  Future<void> _queueTaskRelationsChanges({
+    required String taskId,
+    required _TaskLocalRelations previous,
+    required Task task,
+  }) async {
+    await _queueRelationDiff(
+      tableName: 'tasks_locais',
+      relationColumn: 'local_id',
+      taskId: taskId,
+      previousIds: previous.localIds,
+      currentIds: _effectiveLocalIds(task),
+    );
+
+    await _queueRelationDiff(
+      tableName: 'tasks_executores',
+      relationColumn: 'executor_id',
+      taskId: taskId,
+      previousIds: previous.executorIds,
+      currentIds: task.executorIds,
+    );
+
+    await _queueRelationDiff(
+      tableName: 'tasks_equipes',
+      relationColumn: 'equipe_id',
+      taskId: taskId,
+      previousIds: previous.equipeIds,
+      currentIds: _effectiveEquipeIds(task),
+    );
+
+    await _queueRelationDiff(
+      tableName: 'tasks_frotas',
+      relationColumn: 'frota_id',
+      taskId: taskId,
+      previousIds: previous.frotaIds,
+      currentIds: task.frotaIds,
+    );
   }
 
   // CRUD Operations
@@ -1794,7 +1934,19 @@ class TaskService {
       try {
         await _saveTaskToLocal(taskWithId);
         // Adicionar à fila de sincronização
-        await _syncService.queueOperation('tasks', 'insert', taskId, _taskToMap(taskWithId));
+        final taskMap = _taskToMap(taskWithId);
+        await _syncService.queueOperation(
+          'tasks',
+          'insert',
+          taskId,
+          taskMap,
+          coalesce: true,
+        );
+        await _queueTaskRelationsChanges(
+          taskId: taskId,
+          previous: const _TaskLocalRelations(),
+          task: taskWithId,
+        );
       } catch (e2) {
         print('❌ Erro ao salvar tarefa no banco local: $e2');
       }
@@ -1824,6 +1976,41 @@ class TaskService {
 
       _tasks[index] = task;
       return task;
+    }
+
+    if (!_connectivity.isConnected) {
+      try {
+        final previousRelations = await _getLocalRelations(id);
+        await _saveTaskToLocal(task);
+        final taskMap = _taskToMap(task);
+        taskMap.remove('id');
+        await _syncService.queueOperation(
+          'tasks',
+          'update',
+          id,
+          taskMap,
+          coalesce: true,
+        );
+        await _queueTaskRelationsChanges(
+          taskId: id,
+          previous: previousRelations,
+          task: task,
+        );
+
+        final index = _tasks.indexWhere((t) => t.id == id);
+        if (index != -1) {
+          _tasks[index] = task;
+        }
+        return task;
+      } catch (e) {
+        print('⚠️ Erro ao atualizar tarefa offline: $e');
+        final index = _tasks.indexWhere((t) => t.id == id);
+        if (index != -1) {
+          _tasks[index] = task;
+          return task;
+        }
+        return null;
+      }
     }
 
     try {
@@ -3130,4 +3317,18 @@ class TaskService {
     print('✅ TaskService: Subscription Realtime ativada para tabela tasks');
     return channel;
   }
+}
+
+class _TaskLocalRelations {
+  final List<String> localIds;
+  final List<String> executorIds;
+  final List<String> equipeIds;
+  final List<String> frotaIds;
+
+  const _TaskLocalRelations({
+    this.localIds = const [],
+    this.executorIds = const [],
+    this.equipeIds = const [],
+    this.frotaIds = const [],
+  });
 }
