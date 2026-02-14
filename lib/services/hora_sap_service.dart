@@ -2,16 +2,16 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/hora_sap.dart';
 import '../models/executor.dart';
 import '../models/horas_empregado_mes.dart';
+import '../models/ordem_programada_empregado_mes.dart';
+import '../models/horas_apontadas_ordem_mes.dart';
 import 'auth_service_simples.dart';
 import 'centro_trabalho_service.dart';
 import 'executor_service.dart';
-import 'feriado_service.dart';
 
 class HoraSAPService {
   final SupabaseClient _supabase = Supabase.instance.client;
   final AuthServiceSimples _authService = AuthServiceSimples();
   final CentroTrabalhoService _centroTrabalhoService = CentroTrabalhoService();
-  final FeriadoService _feriadoService = FeriadoService();
   String _formatDate(DateTime date) {
     return '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
   }
@@ -53,21 +53,15 @@ class HoraSAPService {
     }
   }
 
-  // Calcula dias úteis entre duas datas, excluindo sábados, domingos e feriados
-  Future<int> _calcularDiasUteisEntreDatas(DateTime inicio, DateTime fim) async {
-    final feriados = await _feriadoService.getFeriadosByDateRange(inicio, fim);
-    final feriadosSet = feriados.map((f) => DateTime(f.data.year, f.data.month, f.data.day)).toSet();
-
+  // Calcula dias úteis entre duas datas, desconsiderando apenas sábado e domingo
+  int _calcularDiasUteisEntreDatas(DateTime inicio, DateTime fim) {
     int diasUteis = 0;
     DateTime data = DateTime(inicio.year, inicio.month, inicio.day);
     final fimNormalizado = DateTime(fim.year, fim.month, fim.day);
 
     while (data.isBefore(fimNormalizado) || data.isAtSameMomentAs(fimNormalizado)) {
       if (data.weekday != DateTime.saturday && data.weekday != DateTime.sunday) {
-        final dataNormalizada = DateTime(data.year, data.month, data.day);
-        if (!feriadosSet.contains(dataNormalizada)) {
-          diasUteis++;
-        }
+        diasUteis++;
       }
       data = data.add(const Duration(days: 1));
     }
@@ -75,13 +69,11 @@ class HoraSAPService {
     return diasUteis;
   }
 
-  // Calcular dias úteis de um mês (excluindo sábados, domingos e feriados)
-  Future<int> _calcularDiasUteis(int ano, int mes) async {
-    // Primeiro e último dia do mês
+  // Calcular dias úteis de um mês (desconsiderando apenas sábado e domingo)
+  int _calcularDiasUteis(int ano, int mes) {
     final primeiroDia = DateTime(ano, mes, 1);
     final ultimoDia = DateTime(ano, mes + 1, 0);
-    
-    return await _calcularDiasUteisEntreDatas(primeiroDia, ultimoDia);
+    return _calcularDiasUteisEntreDatas(primeiroDia, ultimoDia);
   }
 
   // Obter centros de trabalho do usuário
@@ -139,6 +131,57 @@ class HoraSAPService {
     return centrosComGPM.map((ct) => ct['centro'] ?? '').where((c) => c.isNotEmpty).toList();
   }
 
+  /// Matrículas dos executores que têm o mesmo perfil do usuário logado (REGIONAL & DIVISÃO & SEGMENTO).
+  /// Retorna lista vazia para root ou quando não há perfil. Usado para filtrar horas_sap por numero_pessoa.
+  Future<List<String>> _obterMatriculasPerfilUsuario() async {
+    final usuario = _authService.currentUser;
+    if (usuario == null || usuario.isRoot || !usuario.temPerfilConfigurado()) {
+      return [];
+    }
+    final executorService = ExecutorService();
+    Set<Executor> executoresUnicos = {};
+    if (usuario.segmentoIds.isNotEmpty) {
+      for (final segmentoId in usuario.segmentoIds) {
+        final list = await executorService.getExecutoresPorSegmento(segmentoId);
+        executoresUnicos.addAll(list);
+      }
+    } else if (usuario.divisaoIds.isNotEmpty) {
+      for (final divisaoId in usuario.divisaoIds) {
+        final list = await executorService.getExecutoresPorDivisao(divisaoId);
+        executoresUnicos.addAll(list);
+      }
+    } else if (usuario.regionalIds.isNotEmpty) {
+      final divisoesRows = await _supabase.from('divisoes').select('id').inFilter('regional_id', usuario.regionalIds);
+      final divisaoIdsDaRegional = (divisoesRows as List).map((d) => d['id'] as String).toList();
+      for (final divisaoId in divisaoIdsDaRegional) {
+        final list = await executorService.getExecutoresPorDivisao(divisaoId);
+        executoresUnicos.addAll(list);
+      }
+    } else {
+      executoresUnicos.addAll(await executorService.getExecutoresAtivos());
+    }
+    var listaFiltrada = executoresUnicos.toList();
+    if (usuario.regionalIds.isNotEmpty) {
+      final divisoesDaRegional = await _supabase.from('divisoes').select('id').inFilter('regional_id', usuario.regionalIds);
+      final idsDivisaoRegional = (divisoesDaRegional as List).map((d) => d['id'] as String).toSet();
+      listaFiltrada = listaFiltrada.where((e) => e.divisaoId != null && idsDivisaoRegional.contains(e.divisaoId)).toList();
+    }
+    if (usuario.divisaoIds.isNotEmpty) {
+      listaFiltrada = listaFiltrada.where((e) => e.divisaoId != null && usuario.divisaoIds.contains(e.divisaoId)).toList();
+    }
+    if (usuario.segmentoIds.isNotEmpty) {
+      listaFiltrada = listaFiltrada.where((e) => e.segmentoIds.any((id) => usuario.segmentoIds.contains(id))).toList();
+    }
+    final matriculas = <String>[];
+    for (var e in listaFiltrada) {
+      if (e.ativo && e.matricula != null && e.matricula!.trim().isNotEmpty) {
+        final isProprio = await _isEmpresaPropria(e.empresaId);
+        if (isProprio) matriculas.add(e.matricula!.trim());
+      }
+    }
+    return matriculas;
+  }
+
   // Buscar todas as horas (com limites e janela padrão para evitar timeouts)
   Future<List<HoraSAP>> getAllHoras({
     String? filtroTipoOrdem,
@@ -169,37 +212,28 @@ class HoraSAPService {
 
       dynamic query = _supabase.from('horas_sap').select();
 
-      // Aplicar filtros por perfil do usuário
+      // Aplicar filtros por perfil: só horas dos empregados/executores com mesmo REGIONAL & DIVISÃO & SEGMENTO do usuário
       final usuario = _authService.currentUser;
-      bool temFiltro = false;
-      List<String> centrosTrabalhoUsuario = [];
-
-      // Se o usuário é root, não aplicar filtros de perfil
       if (usuario != null && usuario.isRoot) {
-        print('🔓 Usuário root - sem filtros de perfil aplicados');
-      } else {
-        // Obter centros de trabalho do usuário
-        centrosTrabalhoUsuario = await _obterCentrosTrabalhoUsuario();
-        
-        // Aplicar filtros APENAS pelo centro de trabalho
-        if (centrosTrabalhoUsuario.isNotEmpty) {
-          final centrosCompletos = centrosTrabalhoUsuario.map((c) => c.trim()).toList();
-          
-          // Usar ilike com % para buscar qualquer valor que contenha o centro
-          if (centrosCompletos.length == 1) {
-            query = query.ilike('centro_trabalho_real', '%${centrosCompletos[0]}%');
-          } else {
-            final orConditions = centrosCompletos.map((centro) => 'centro_trabalho_real.ilike.%$centro%').join(',');
-            query = query.or(orConditions);
-          }
-          
-          temFiltro = true;
-        }
-
-        // Se o usuário tem perfil mas não tem filtros aplicados, retornar lista vazia
-        if (!temFiltro && usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
-          print('⚠️ Usuário com perfil mas sem centros de trabalho - retornando lista vazia');
+        // Root: sem filtro de perfil
+      } else if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
+        final matriculasPerfil = await _obterMatriculasPerfilUsuario();
+        if (matriculasPerfil.isEmpty) {
           return [];
+        }
+        query = query.inFilter('numero_pessoa', matriculasPerfil);
+      } else {
+        // Sem perfil: manter filtro por centro de trabalho (comportamento legado)
+        final centrosTrabalhoUsuario = await _obterCentrosTrabalhoUsuario();
+        if (centrosTrabalhoUsuario.isEmpty) {
+          return [];
+        }
+        final centrosCompletos = centrosTrabalhoUsuario.map((c) => c.trim()).toList();
+        if (centrosCompletos.length == 1) {
+          query = query.ilike('centro_trabalho_real', '%${centrosCompletos[0]}%');
+        } else {
+          final orConditions = centrosCompletos.map((centro) => 'centro_trabalho_real.ilike.%$centro%').join(',');
+          query = query.or(orConditions);
         }
       }
 
@@ -318,31 +352,23 @@ class HoraSAPService {
       // Com os índices criados, buscar apenas IDs é rápido (PostgreSQL usa índices)
       dynamic query = _supabase.from('horas_sap').select('id');
 
-      // Aplicar filtros por perfil do usuário (mesma lógica do getAllHoras)
+      // Mesmo critério de perfil do getAllHoras: só empregados com REGIONAL & DIVISÃO & SEGMENTO do usuário
       final usuario = _authService.currentUser;
-      bool temFiltro = false;
-      List<String> centrosTrabalhoUsuario = [];
-
       if (usuario != null && usuario.isRoot) {
-        // Sem filtros de perfil para root
+        // Root: sem filtro
+      } else if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
+        final matriculasPerfil = await _obterMatriculasPerfilUsuario();
+        if (matriculasPerfil.isEmpty) return 0;
+        query = query.inFilter('numero_pessoa', matriculasPerfil);
       } else {
-        centrosTrabalhoUsuario = await _obterCentrosTrabalhoUsuario();
-        
-        if (centrosTrabalhoUsuario.isNotEmpty) {
-          final centrosCompletos = centrosTrabalhoUsuario.map((c) => c.trim()).toList();
-          
-          if (centrosCompletos.length == 1) {
-            query = query.ilike('centro_trabalho_real', '%${centrosCompletos[0]}%');
-          } else {
-            final orConditions = centrosCompletos.map((centro) => 'centro_trabalho_real.ilike.%$centro%').join(',');
-            query = query.or(orConditions);
-          }
-          
-          temFiltro = true;
-        }
-
-        if (!temFiltro && usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
-          return 0;
+        final centrosTrabalhoUsuario = await _obterCentrosTrabalhoUsuario();
+        if (centrosTrabalhoUsuario.isEmpty) return 0;
+        final centrosCompletos = centrosTrabalhoUsuario.map((c) => c.trim()).toList();
+        if (centrosCompletos.length == 1) {
+          query = query.ilike('centro_trabalho_real', '%${centrosCompletos[0]}%');
+        } else {
+          final orConditions = centrosCompletos.map((centro) => 'centro_trabalho_real.ilike.%$centro%').join(',');
+          query = query.or(orConditions);
         }
       }
 
@@ -583,23 +609,22 @@ class HoraSAPService {
         
         dynamic campoQuery = _supabase.from('horas_sap').select('tipo_ordem, ordem, operacao, tipo_atividade_real, numero_pessoa, nome_empregado, status_sistema, centro_trabalho_real');
         
-        // Aplicar filtros de perfil (mesma lógica do query principal)
+        // Mesmo critério de perfil: só empregados REGIONAL & DIVISÃO & SEGMENTO do usuário
         if (usuario != null && usuario.isRoot) {
-          // Sem filtros de perfil para root
+          // Sem filtro para root
+        } else if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
+          final matriculasPerfil = await _obterMatriculasPerfilUsuario();
+          if (matriculasPerfil.isEmpty) continue;
+          campoQuery = campoQuery.inFilter('numero_pessoa', matriculasPerfil);
         } else {
           final centrosTrabalhoUsuario = await _obterCentrosTrabalhoUsuario();
-          if (centrosTrabalhoUsuario.isNotEmpty) {
-            final centrosCompletos = centrosTrabalhoUsuario.map((c) => c.trim()).toList();
-            if (centrosCompletos.length == 1) {
-              campoQuery = campoQuery.ilike('centro_trabalho_real', '%${centrosCompletos[0]}%');
-            } else {
-              final orConditions = centrosCompletos.map((centro) => 'centro_trabalho_real.ilike.%$centro%').join(',');
-              campoQuery = campoQuery.or(orConditions);
-            }
+          if (centrosTrabalhoUsuario.isEmpty) continue;
+          final centrosCompletos = centrosTrabalhoUsuario.map((c) => c.trim()).toList();
+          if (centrosCompletos.length == 1) {
+            campoQuery = campoQuery.ilike('centro_trabalho_real', '%${centrosCompletos[0]}%');
           } else {
-            if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
-              continue; // Pular este campo se não há filtros de perfil
-            }
+            final orConditions = centrosCompletos.map((centro) => 'centro_trabalho_real.ilike.%$centro%').join(',');
+            campoQuery = campoQuery.or(orConditions);
           }
         }
         
@@ -653,9 +678,8 @@ class HoraSAPService {
       List<Executor> executores = [];
       
       if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
-        // Buscar executores por segmento (mais específico)
+        // Buscar executores da REGIONAL & DIVISÃO & SEGMENTO do usuário logado (AND entre os três quando configurados)
         Set<Executor> executoresUnicos = {};
-        
         if (usuario.segmentoIds.isNotEmpty) {
           for (final segmentoId in usuario.segmentoIds) {
             final executoresSegmento = await executorService.getExecutoresPorSegmento(segmentoId);
@@ -666,13 +690,38 @@ class HoraSAPService {
             final executoresDivisao = await executorService.getExecutoresPorDivisao(divisaoId);
             executoresUnicos.addAll(executoresDivisao);
           }
+        } else if (usuario.regionalIds.isNotEmpty) {
+          final divisoesRows = await _supabase
+              .from('divisoes')
+              .select('id')
+              .inFilter('regional_id', usuario.regionalIds);
+          final divisaoIdsDaRegional = (divisoesRows as List).map((d) => d['id'] as String).toList();
+          for (final divisaoId in divisaoIdsDaRegional) {
+            final executoresDivisao = await executorService.getExecutoresPorDivisao(divisaoId);
+            executoresUnicos.addAll(executoresDivisao);
+          }
         } else {
           executoresUnicos.addAll(await executorService.getExecutoresAtivos());
         }
-        
+        // Aplicar filtro AND: manter só quem está na regional E na divisão E no segmento (quando cada um estiver configurado)
+        var listaFiltrada = executoresUnicos.toList();
+        if (usuario.regionalIds.isNotEmpty) {
+          final divisoesDaRegional = await _supabase
+              .from('divisoes')
+              .select('id')
+              .inFilter('regional_id', usuario.regionalIds);
+          final idsDivisaoRegional = (divisoesDaRegional as List).map((d) => d['id'] as String).toSet();
+          listaFiltrada = listaFiltrada.where((e) => e.divisaoId != null && idsDivisaoRegional.contains(e.divisaoId)).toList();
+        }
+        if (usuario.divisaoIds.isNotEmpty) {
+          listaFiltrada = listaFiltrada.where((e) => e.divisaoId != null && usuario.divisaoIds.contains(e.divisaoId)).toList();
+        }
+        if (usuario.segmentoIds.isNotEmpty) {
+          listaFiltrada = listaFiltrada.where((e) => e.segmentoIds.any((id) => usuario.segmentoIds.contains(id))).toList();
+        }
         // Filtrar executores: ativos, com matrícula e próprios
         final executoresFiltrados = <Executor>[];
-        for (var e in executoresUnicos) {
+        for (var e in listaFiltrada) {
           if (e.ativo && e.matricula != null && e.matricula!.isNotEmpty) {
             final isProprio = await _isEmpresaPropria(e.empresaId);
             if (isProprio) {
@@ -712,8 +761,8 @@ class HoraSAPService {
 
       // Buscar todas as horas do perfil do usuário
       final centrosTrabalhoUsuario = await _obterCentrosTrabalhoUsuario();
-      // Selecionar apenas os campos necessários, incluindo id para evitar erro e tipo_atividade_real
-      dynamic query = _supabase.from('horas_sap').select('id, numero_pessoa, nome_empregado, trabalho_real, data_lancamento, tipo_atividade_real');
+      // Selecionar campos necessários; tipo_ordem para separar investimento (PROJ) e custeio (demais)
+      dynamic query = _supabase.from('horas_sap').select('id, numero_pessoa, nome_empregado, trabalho_real, data_lancamento, tipo_atividade_real, tipo_ordem');
 
       // Aplicar filtros de perfil
       if (usuario != null && !usuario.isRoot && centrosTrabalhoUsuario.isNotEmpty) {
@@ -782,7 +831,9 @@ class HoraSAPService {
 
       // Agrupar horas por empregado e mês
       final Map<String, Map<String, double>> horasPorEmpregadoMes = {};
-      final Map<String, Map<String, double>> horasExtrasPorEmpregadoMes = {}; // Horas extras (HHE)
+      final Map<String, Map<String, double>> horasExtrasPorEmpregadoMes = {}; // tipo_atividade_real começa com HH
+      final Map<String, Map<String, double>> horasInvestimentoPorEmpregadoMes = {}; // tipo_ordem = PROJ
+      final Map<String, Map<String, double>> horasCusteioPorEmpregadoMes = {}; // todos os demais tipos de ordem (PREV, INSP, ANOM, PRED, etc.)
       final Map<String, Map<String, Set<String>>> tiposAtividadePorEmpregadoMes = {}; // Tipos de atividade
       final Map<String, String> nomesEmpregados = {};
 
@@ -795,10 +846,11 @@ class HoraSAPService {
           print('⚠️ Hora sem data de lançamento - pulando');
           continue;
         }
-        if (hora.trabalhoReal == null || hora.trabalhoReal! <= 0) {
-          print('⚠️ Hora sem trabalho real válido - pulando');
+        if (hora.trabalhoReal == null) {
+          print('⚠️ Hora sem trabalho real - pulando');
           continue;
         }
+        // Incluir na soma tanto valores positivos quanto negativos (horas alocadas com sinal negativo)
 
         // Garantir que numeroPessoa seja tratado como string para comparação com matrícula
         final numeroPessoa = hora.numeroPessoa?.trim() ?? '';
@@ -815,9 +867,21 @@ class HoraSAPService {
         horasPorEmpregadoMes[numeroPessoa]!.putIfAbsent(anoMes, () => 0.0);
         horasPorEmpregadoMes[numeroPessoa]![anoMes] = horasPorEmpregadoMes[numeroPessoa]![anoMes]! + hora.trabalhoReal!;
         
-        // Horas extras (começam com HHE)
+        // Custeio = todos os tipos de ordem (PREV, INSP, ANOM, PRED, etc.). Investimento = apenas tipo_ordem PROJ.
+        final tipoOrd = (hora.tipoOrdem ?? '').trim().toUpperCase();
+        if (tipoOrd == 'PROJ') {
+          horasInvestimentoPorEmpregadoMes.putIfAbsent(numeroPessoa, () => {});
+          horasInvestimentoPorEmpregadoMes[numeroPessoa]!.putIfAbsent(anoMes, () => 0.0);
+          horasInvestimentoPorEmpregadoMes[numeroPessoa]![anoMes] = horasInvestimentoPorEmpregadoMes[numeroPessoa]![anoMes]! + hora.trabalhoReal!;
+        } else {
+          horasCusteioPorEmpregadoMes.putIfAbsent(numeroPessoa, () => {});
+          horasCusteioPorEmpregadoMes[numeroPessoa]!.putIfAbsent(anoMes, () => 0.0);
+          horasCusteioPorEmpregadoMes[numeroPessoa]![anoMes] = horasCusteioPorEmpregadoMes[numeroPessoa]![anoMes]! + hora.trabalhoReal!;
+        }
+        
+        // Horas extras: tipo_atividade_real que inicia com HH
         final tipoAtividade = hora.tipoAtividadeReal?.trim().toUpperCase() ?? '';
-        if (tipoAtividade.startsWith('HHE')) {
+        if (tipoAtividade.startsWith('HH')) {
           horasExtrasPorEmpregadoMes.putIfAbsent(numeroPessoa, () => {});
           horasExtrasPorEmpregadoMes[numeroPessoa]!.putIfAbsent(anoMes, () => 0.0);
           horasExtrasPorEmpregadoMes[numeroPessoa]![anoMes] = horasExtrasPorEmpregadoMes[numeroPessoa]![anoMes]! + hora.trabalhoReal!;
@@ -877,12 +941,10 @@ class HoraSAPService {
         
         final matricula = executor.matricula!.trim();
         final nomeExecutor = executor.nomeCompleto ?? executor.nome;
-        print('🔍 Processando executor: $nomeExecutor (matrícula: $matricula)');
-        
+
         // Verificar se há horas para este executor (por número de pessoa = matrícula)
         final horasDoExecutor = horasPorEmpregadoMes[matricula] ?? {};
-        print('   Horas encontradas: ${horasDoExecutor.length} meses');
-        
+
         if (horasDoExecutor.isEmpty) {
           // Sem apontamento - criar entrada apenas para meses que têm data de lançamento
           // (mas não para este empregado específico)
@@ -906,7 +968,7 @@ class HoraSAPService {
               if (mes != null && mesMes != mes) continue;
               
               // Calcular meta mensal baseada em dias úteis
-              final diasUteis = await _calcularDiasUteis(anoMes, mesMes);
+              final diasUteis = _calcularDiasUteis(anoMes, mesMes);
               final metaMensal = diasUteis * 8.0;
               
               resultados.add(HorasEmpregadoMes(
@@ -920,6 +982,8 @@ class HoraSAPService {
                 semApontamento: true,
                 metaMensal: metaMensal,
                 horasProgramadas: horasProgramadasPorEmpregadoMes[matricula]?[anoMesStr] ?? 0.0,
+                horasInvestimento: 0.0,
+                horasCusteio: 0.0,
               ));
             } catch (e) {
               print('❌ Erro ao processar mês $anoMesStr: $e');
@@ -947,7 +1011,7 @@ class HoraSAPService {
               if (mes != null && mesMes != mes) continue;
               
               // Calcular meta mensal baseada em dias úteis
-              final diasUteis = await _calcularDiasUteis(anoMes, mesMes);
+              final diasUteis = _calcularDiasUteis(anoMes, mesMes);
               final metaMensal = diasUteis * 8.0;
               
               final horasApontadas = entry.value;
@@ -981,6 +1045,8 @@ class HoraSAPService {
                 tiposAtividade: tiposAtividade,
                 metaMensal: metaMensal,
                 horasProgramadas: horasProgramadasPorEmpregadoMes[matricula]?[entry.key] ?? 0.0,
+                horasInvestimento: horasInvestimentoPorEmpregadoMes[matricula]?[entry.key] ?? 0.0,
+                horasCusteio: horasCusteioPorEmpregadoMes[matricula]?[entry.key] ?? 0.0,
               ));
             } catch (e) {
               print('❌ Erro ao processar entrada ${entry.key}: $e');
@@ -988,8 +1054,6 @@ class HoraSAPService {
           }
         }
       }
-      
-      print('✅ Total de resultados criados: ${resultados.length}');
 
       // Ordenar por nome do empregado, depois por ano e mês
       resultados.sort((a, b) {
@@ -1000,7 +1064,6 @@ class HoraSAPService {
         return a.mes.compareTo(b.mes);
       });
 
-      print('✅ Total de resultados criados: ${resultados.length}');
       return resultados;
     } catch (e, stackTrace) {
       print('❌ Erro ao buscar horas por empregado e mês: $e');
@@ -1021,23 +1084,26 @@ class HoraSAPService {
       print('📋 ============================================');
       print('📋 DEBUG: Buscando horas programadas via VIEW');
       
-      // Buscar da VIEW horas_programadas_por_empregado_mes
+      // VIEW horas_programadas_por_empregado_mes (sobre MV): matricula, mes_ref, total_trabalho_planejado
       dynamic query = _supabase
           .from('horas_programadas_por_empregado_mes')
-          // restringe ano/mes para evitar varredura grande
-          .select('matricula, ano, mes, ano_mes, regional_id, divisao_id, segmento_id, horas_programadas');
+          .select('matricula, mes_ref, total_trabalho_planejado');
       
-      // Aplicar filtros de ano e mês se especificados; caso não informados, limitar ao último ano
-      if (ano != null) {
-        query = query.eq('ano', ano);
-      if (mes != null) {
-        query = query.eq('mes', mes);
-        }
+      // mes_ref é date: usar comparações de data (like não funciona em date)
+      if (ano != null && mes != null) {
+        final primeiroDia = '${ano.toString()}-${mes.toString().padLeft(2, '0')}-01';
+        query = query.eq('mes_ref', primeiroDia);
+      } else if (ano != null) {
+        query = query
+            .gte('mes_ref', '$ano-01-01')
+            .lte('mes_ref', '$ano-12-31');
       } else {
         final now = DateTime.now();
         final anoAtual = now.year;
         final anoAnterior = anoAtual - 1;
-        query = query.or('ano.eq.$anoAtual,ano.eq.$anoAnterior');
+        query = query
+            .gte('mes_ref', '$anoAnterior-01-01')
+            .lte('mes_ref', '$anoAtual-12-31');
       }
 
       // Filtrar pelas matrículas do perfil (mesmo conjunto já usado nas horas apontadas)
@@ -1048,107 +1114,28 @@ class HoraSAPService {
         return {};
       }
       
-      // Aplicar filtros de perfil do usuário diretamente na VIEW
-      final usuario = _authService.currentUser;
-      if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
-        print('📋 DEBUG: Aplicando filtros de perfil na VIEW');
-        print('   Regional IDs: ${usuario.regionalIds}');
-        print('   Divisão IDs: ${usuario.divisaoIds}');
-        print('   Segmento IDs: ${usuario.segmentoIds}');
-        
-        // Filtrar por regional_id
-        if (usuario.regionalIds.isNotEmpty) {
-          if (usuario.regionalIds.length == 1) {
-            query = query.eq('regional_id', usuario.regionalIds.first);
-          } else {
-            final regionalConditions = usuario.regionalIds.map((id) => 'regional_id.eq.$id').join(',');
-            query = query.or(regionalConditions);
-          }
-        }
-        
-        // Filtrar por divisao_id
-        if (usuario.divisaoIds.isNotEmpty) {
-          if (usuario.divisaoIds.length == 1) {
-            query = query.eq('divisao_id', usuario.divisaoIds.first);
-          } else {
-            final divisaoConditions = usuario.divisaoIds.map((id) => 'divisao_id.eq.$id').join(',');
-            query = query.or(divisaoConditions);
-          }
-        }
-        
-        // Filtrar por segmento_id
-        if (usuario.segmentoIds.isNotEmpty) {
-          if (usuario.segmentoIds.length == 1) {
-            query = query.eq('segmento_id', usuario.segmentoIds.first);
-          } else {
-            final segmentoConditions = usuario.segmentoIds.map((id) => 'segmento_id.eq.$id').join(',');
-            query = query.or(segmentoConditions);
-          }
-        }
-      }
-      
       print('📋 DEBUG: Executando query na VIEW...');
       final response = await query;
-      var resultados = response as List;
+      final resultados = response as List;
       
-      print('📋 DEBUG: Total de registros encontrados na VIEW antes do filtro: ${resultados.length}');
+      print('📋 DEBUG: Total de registros encontrados na VIEW: ${resultados.length}');
       
-      // Aplicar filtros adicionais no código se necessário (para garantir AND entre tipos)
-      // No Supabase, múltiplos .or() são combinados com AND implicitamente
-      // Mas vamos garantir que todos os filtros sejam aplicados corretamente
-      if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
-        resultados = resultados.where((row) {
-          final regionalId = row['regional_id'] as String?;
-          final divisaoId = row['divisao_id'] as String?;
-          final segmentoId = row['segmento_id'] as String?;
-          
-          bool passaRegional = true;
-          bool passaDivisao = true;
-          bool passaSegmento = true;
-          
-          // Verificar regional
-          if (usuario.regionalIds.isNotEmpty) {
-            passaRegional = regionalId != null && usuario.regionalIds.contains(regionalId);
-          }
-          
-          // Verificar divisão
-          if (usuario.divisaoIds.isNotEmpty) {
-            passaDivisao = divisaoId != null && usuario.divisaoIds.contains(divisaoId);
-          }
-          
-          // Verificar segmento
-          if (usuario.segmentoIds.isNotEmpty) {
-            passaSegmento = segmentoId != null && usuario.segmentoIds.contains(segmentoId);
-          }
-          
-          return passaRegional && passaDivisao && passaSegmento;
-        }).toList();
-        
-        print('📋 DEBUG: Total de registros após filtro de perfil: ${resultados.length}');
-      }
-      
-      // Processar resultados da VIEW
+      // Processar: mes_ref (YYYY-MM ou date) -> total_trabalho_planejado
       for (var row in resultados) {
         final matricula = row['matricula'] as String?;
-        final anoMes = row['ano'] as int?;
-        final mesMes = row['mes'] as int?;
-        final anoMesStr = row['ano_mes'] as String?;
-        final horas = (row['horas_programadas'] as num?)?.toDouble() ?? 0.0;
-        
-        if (matricula == null || matricula.isEmpty || anoMesStr == null) {
+        final mesRef = row['mes_ref'];
+        final horas = (row['total_trabalho_planejado'] as num?)?.toDouble() ?? 0.0;
+        if (matricula == null || matricula.isEmpty) continue;
+        String anoMesStr;
+        if (mesRef is String) {
+          anoMesStr = mesRef.length >= 7 ? mesRef.substring(0, 7) : mesRef;
+        } else if (mesRef is DateTime) {
+          anoMesStr = '${mesRef.year}-${mesRef.month.toString().padLeft(2, '0')}';
+        } else {
           continue;
         }
-        
         horasProgramadas.putIfAbsent(matricula, () => {});
         horasProgramadas[matricula]![anoMesStr] = horas;
-        
-        // Debug específico para matrícula 264259
-        if (matricula == '264259') {
-          print('🎯 DEBUG ESPECÍFICO: Horas programadas para matrícula 264259:');
-          print('   Ano: $anoMes, Mês: $mesMes');
-          print('   Ano-Mês: $anoMesStr');
-          print('   Horas: $horas');
-        }
       }
       
       print('📋 DEBUG: ============================================');
@@ -1165,6 +1152,176 @@ class HoraSAPService {
     } catch (e, stackTrace) {
       print('❌ Erro ao buscar horas programadas: $e');
       print('   Stack trace: $stackTrace');
+      return {};
+    }
+  }
+
+  /// Horas alocadas por dia no mês (agrupadas por data_lancamento), para uso no gráfico acumulado.
+  /// [matriculas] lista de matrículas a considerar (ex.: da view Metas). Se vazia, retorna {}.
+  Future<Map<String, double>> getHorasAlocadasPorDiaNoMes(int ano, int mes, List<String> matriculas) async {
+    if (matriculas.isEmpty) return {};
+    try {
+      final mesStr = mes.toString().padLeft(2, '0');
+      final firstDay = '$ano-$mesStr-01';
+      final lastDay = mes == 12
+          ? '$ano-12-31'
+          : '${mes < 12 ? ano : ano + 1}-${(mes + 1).toString().padLeft(2, '0')}-01';
+      dynamic query = _supabase
+          .from('horas_sap')
+          .select('data_lancamento, trabalho_real, numero_pessoa')
+          .gte('data_lancamento', firstDay)
+          .lt('data_lancamento', mes == 12 ? '${ano + 1}-01-01' : '$ano-${(mes + 1).toString().padLeft(2, '0')}-01');
+      final usuario = _authService.currentUser;
+      if (usuario != null && !usuario.isRoot) {
+        final centrosTrabalhoUsuario = await _obterCentrosTrabalhoUsuario();
+        if (centrosTrabalhoUsuario.isNotEmpty) {
+          final centrosCompletos = centrosTrabalhoUsuario.map((c) => c.trim()).toList();
+          if (centrosCompletos.length == 1) {
+            query = query.ilike('centro_trabalho_real', '%${centrosCompletos[0]}%');
+          } else {
+            final orConditions = centrosCompletos.map((c) => 'centro_trabalho_real.ilike.%$c%').join(',');
+            query = query.or(orConditions);
+          }
+        }
+      }
+      if (matriculas.length == 1) {
+        query = query.eq('numero_pessoa', matriculas.first.trim());
+      } else {
+        final orConditions = matriculas.map((m) => 'numero_pessoa.eq.${m.trim()}').join(',');
+        query = query.or(orConditions);
+      }
+      final response = await query as List<dynamic>;
+      final Map<String, double> porDia = {};
+      for (var row in response) {
+        final r = row as Map<String, dynamic>;
+        final dataLanc = r['data_lancamento'];
+        final trabalho = (r['trabalho_real'] as num?)?.toDouble();
+        if (dataLanc == null || trabalho == null) continue;
+        DateTime? dt;
+        if (dataLanc is String) {
+          dt = DateTime.tryParse(dataLanc);
+        } else if (dataLanc is DateTime) {
+          dt = dataLanc;
+        }
+        if (dt == null) continue;
+        final key = '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+        porDia[key] = (porDia[key] ?? 0) + trabalho;
+      }
+      return porDia;
+    } catch (e) {
+      print('❌ Erro ao buscar horas por dia: $e');
+      return {};
+    }
+  }
+
+  /// Ordens em que cada empregado está programado (tarefas) por ano/mês.
+  /// Opcionalmente restringe a uma lista de matrículas.
+  Future<List<OrdemProgramadaEmpregadoMes>> getOrdensProgramadasPorEmpregadoMes({
+    required int ano,
+    int? mes,
+    List<String>? matriculas,
+  }) async {
+    try {
+      dynamic query = _supabase
+          .from('ordens_programadas_por_empregado_mes')
+          .select('matricula, ano, mes, ano_mes, ordem, tipo, sala, texto_breve, task_id, task_tarefa, task_status, local_detalhe, regional_id, divisao_id, segmento_id')
+          .eq('ano', ano);
+      if (mes != null) {
+        query = query.eq('mes', mes);
+      }
+      if (matriculas != null && matriculas.isNotEmpty) {
+        if (matriculas.length == 1) {
+          query = query.eq('matricula', matriculas.first.trim());
+        } else {
+          final orConditions = matriculas.map((m) => 'matricula.eq.${m.trim()}').join(',');
+          query = query.or(orConditions);
+        }
+      }
+
+      final response = await query as List<dynamic>;
+      final usuario = _authService.currentUser;
+      List<dynamic> rows = response;
+      if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
+        rows = rows.where((row) {
+          final r = row as Map<String, dynamic>;
+          final regionalId = r['regional_id'] as String?;
+          final divisaoId = r['divisao_id'] as String?;
+          final segmentoId = r['segmento_id'] as String?;
+          bool okRegional = usuario.regionalIds.isEmpty || (regionalId != null && usuario.regionalIds.contains(regionalId));
+          bool okDivisao = usuario.divisaoIds.isEmpty || (divisaoId != null && usuario.divisaoIds.contains(divisaoId));
+          bool okSegmento = usuario.segmentoIds.isEmpty || (segmentoId != null && usuario.segmentoIds.contains(segmentoId));
+          return okRegional && okDivisao && okSegmento;
+        }).toList();
+      }
+      return rows.map((e) => OrdemProgramadaEmpregadoMes.fromMap(e as Map<String, dynamic>)).toList();
+    } catch (e) {
+      print('❌ Erro ao buscar ordens programadas: $e');
+      return [];
+    }
+  }
+
+  /// Horas apontadas por empregado, ordem e mês (VIEW horas_apontadas_por_empregado_ordem_mes).
+  /// [matriculas] opcional: restringe às matrículas informadas.
+  Future<List<HorasApontadasOrdemMes>> getHorasApontadasPorEmpregadoOrdemMes({
+    required int ano,
+    int? mes,
+    List<String>? matriculas,
+  }) async {
+    try {
+      dynamic query = _supabase
+          .from('horas_apontadas_por_empregado_ordem_mes')
+          .select('matricula, ordem, ano, mes, ano_mes, horas_apontadas')
+          .eq('ano', ano);
+      if (mes != null) {
+        query = query.eq('mes', mes);
+      }
+      if (matriculas != null && matriculas.isNotEmpty) {
+        if (matriculas.length == 1) {
+          query = query.eq('matricula', matriculas.first.trim());
+        } else {
+          final orConditions = matriculas.map((m) => 'matricula.eq.${m.trim()}').join(',');
+          query = query.or(orConditions);
+        }
+      }
+      final response = await query;
+      return (response as List).map((e) => HorasApontadasOrdemMes.fromMap(e as Map<String, dynamic>)).toList();
+    } catch (e) {
+      print('❌ Erro ao buscar horas apontadas por ordem: $e');
+      return [];
+    }
+  }
+
+  /// Detalhes (tipo, sala, texto_breve, local) de ordens a partir dos números. Retorna mapa ordem -> {tipo, sala, texto_breve, local}.
+  Future<Map<String, Map<String, String?>>> getDetalhesOrdensByNumeros(List<String> numerosOrdem) async {
+    if (numerosOrdem.isEmpty) return {};
+    try {
+      final list = numerosOrdem.map((o) => o.trim()).where((o) => o.isNotEmpty).toList();
+      if (list.isEmpty) return {};
+      dynamic query = _supabase.from('ordens').select('ordem, tipo, sala, texto_breve, denominacao_local_instalacao, local_instalacao');
+      if (list.length == 1) {
+        query = query.eq('ordem', list.first);
+      } else {
+        query = query.inFilter('ordem', list);
+      }
+      final response = await query as List<dynamic>;
+      final map = <String, Map<String, String?>>{};
+      for (var row in response) {
+        final r = row as Map<String, dynamic>;
+        final ordem = (r['ordem'] as String?)?.trim() ?? '';
+        if (ordem.isEmpty) continue;
+        final denom = (r['denominacao_local_instalacao'] as String?)?.trim();
+        final localInst = (r['local_instalacao'] as String?)?.trim();
+        final local = (denom != null && denom.isNotEmpty) ? denom : localInst;
+        map[ordem] = {
+          'tipo': (r['tipo'] as String?)?.trim(),
+          'sala': (r['sala'] as String?)?.trim(),
+          'texto_breve': (r['texto_breve'] as String?)?.trim(),
+          'local': local,
+        };
+      }
+      return map;
+    } catch (e) {
+      print('❌ Erro ao buscar detalhes das ordens: $e');
       return {};
     }
   }

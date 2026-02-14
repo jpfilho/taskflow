@@ -1,11 +1,12 @@
-import 'dart:io';
-import 'dart:typed_data';
-
+// Não importar dart:io aqui: quebra Flutter Web. Leitura de arquivo via platform_file_io.
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../services/supressao_vegetacao_service.dart';
+import '../utils/platform_file_io.dart';
+import '../utils/web_download.dart';
 
 class SupressaoVegetacaoView extends StatefulWidget {
   const SupressaoVegetacaoView({super.key});
@@ -116,6 +117,91 @@ class _SupressaoVegetacaoViewState extends State<SupressaoVegetacaoView> {
     return match.first['nome'] as String?;
   }
 
+  /// Exporta vãos para XLSX. Web: download via Blob URL (Safari/iOS compatível).
+  /// Mobile/desktop: compartilha via share_plus (Salvar em arquivos / enviar).
+  Future<void> _exportarXlsx() async {
+    if (_vaos.isEmpty) return;
+    const mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    try {
+      final bytes = await _service.exportarXlsx(_vaos);
+      final linhaLabel = _selectedLinhaNomeTabela.trim().isEmpty
+          ? 'todas'
+          : _selectedLinhaNomeTabela.replaceAll(RegExp(r'[^\w\s-]'), '_').replaceAll(RegExp(r'\s+'), '_');
+      final filename = 'supressao_vegetacao_${linhaLabel}_${DateTime.now().millisecondsSinceEpoch}.xlsx';
+
+      if (kDebugMode) {
+        // ignore: avoid_print
+        print('Exportar XLSX: $filename, ${bytes.length} bytes');
+      }
+
+      if (kIsWeb) {
+        try {
+          downloadBytesWeb(bytes, filename, mime);
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Exportado: $filename (${bytes.length} bytes)'),
+                backgroundColor: Colors.green,
+              ),
+            );
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            // ignore: avoid_print
+            print('downloadBytesWeb falhou: $e');
+          }
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Falha no download. Tente outro navegador ou salve pelo menu do navegador.'),
+                backgroundColor: Colors.orange,
+              ),
+            );
+          }
+        }
+      } else {
+        try {
+          final xFile = XFile.fromData(
+            bytes,
+            name: filename,
+            mimeType: mime,
+          );
+          await Share.shareXFiles([xFile], text: 'Supressão de vegetação - $linhaLabel');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Compartilhar: $filename (${bytes.length} bytes)'),
+                backgroundColor: Colors.green,
+              ),
+            );
+          }
+        } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Exportação indisponível neste dispositivo. Use a versão web para baixar o arquivo.'),
+                backgroundColor: Colors.orange,
+              ),
+            );
+          }
+        }
+      }
+    } catch (e, st) {
+      if (kDebugMode) {
+        // ignore: avoid_print
+        print('Erro ao exportar XLSX: $e\n$st');
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erro ao exportar: ${e.toString().length > 80 ? 'falha ao gerar planilha.' : e}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _importar() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -127,9 +213,11 @@ class _SupressaoVegetacaoViewState extends State<SupressaoVegetacaoView> {
         _erros = [];
       });
 
+      // withData: true para ter PlatformFile.bytes em todas as plataformas (evita dart:io na view).
       FilePickerResult? result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['xlsx'],
+        withData: true,
       );
 
       if (result == null || result.files.isEmpty) {
@@ -140,18 +228,20 @@ class _SupressaoVegetacaoViewState extends State<SupressaoVegetacaoView> {
       }
 
       final file = result.files.single;
-      Uint8List? bytes;
-      if (kIsWeb) {
-        bytes = file.bytes;
-      } else {
-        if (file.path == null) {
-          throw Exception('Caminho do arquivo não disponível.');
-        }
-        bytes = await File(file.path!).readAsBytes();
-      }
-
+      final bytes = await readFileBytes(file);
       if (bytes == null || bytes.isEmpty) {
-        throw Exception('Arquivo vazio ou não foi possível ler.');
+        setState(() {
+          _isImporting = false;
+        });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Arquivo vazio ou não foi possível ler. Tente novamente com withData.'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
       }
 
       final res = await _service.importarXlsx(
@@ -373,6 +463,11 @@ class _SupressaoVegetacaoViewState extends State<SupressaoVegetacaoView> {
                           icon: const Icon(Icons.refresh),
                           label: Text(_isLoadingTabela ? 'Carregando...' : 'Atualizar'),
                         ),
+                        FilledButton.icon(
+                          onPressed: (_vaos.isEmpty || _isLoadingTabela) ? null : _exportarXlsx,
+                          icon: const Icon(Icons.download),
+                          label: const Text('Exportar XLSX'),
+                        ),
                           ],
                         ),
                         const SizedBox(height: 12),
@@ -550,18 +645,49 @@ class _VaosTable extends StatefulWidget {
 class _VaosTableState extends State<_VaosTable> {
   final ScrollController _leftV = ScrollController();
   final ScrollController _rightV = ScrollController();
+  final ScrollController _horizontalScroll = ScrollController();
   final TextEditingController _inlineController = TextEditingController();
+  // Visibilidade dos grupos de colunas (cabeçalho único com 2+ colunas)
+  bool _mapMecVisible = true;
+  bool _mapManVisible = true;
+  bool _execMecVisible = true;
+  bool _execManVisible = true;
+  bool _execucaoMecVisible = true;
+  bool _execucaoManVisible = true;
+
+  /// Bloco fixo (VÃO): 110/140/80/90/90; área rolável 60% (90 por coluna).
+  static const double _widthRight = 90.0;
+  static final Map<String, double> _colWidths = {
+    '__actions__': 110.0,
+    'linhas_transmissao.nome': 140.0,
+    'est_codigo': 80.0,
+    'vao_frente_m': 90.0,
+    'vao_largura_m': 90.0,
+  };
+  double _colWidth(String key) => _colWidths[key] ?? _widthRight;
+
+  /// Fonte menor nas células de data para caber na coluna
+  static const double _dateCellFontSize = 10.0;
+
+  /// Altura fixa das linhas do body para evitar células com tamanhos diferentes
+  static const double bodyRowHeight = 52.0;
+
   final Set<String> _editableKeys = {
     'est_codigo',
     'vao_frente_m',
     'vao_largura_m',
     'map_mec_extensao_m',
     'map_mec_largura_m',
+    'map_data',
     'map_man_extensao_m',
     'map_man_largura_m',
     'exec_mec_extensao_m',
     'exec_mec_largura_m',
     'exec_mec_data',
+    'execucao_mec_data_inicio',
+    'execucao_mec_data_fim',
+    'execucao_man_data_inicio',
+    'execucao_man_data_fim',
     'exec_man_extensao_m',
     'exec_man_largura_m',
     'exec_man_data',
@@ -616,8 +742,32 @@ class _VaosTableState extends State<_VaosTable> {
     _rightV.removeListener(_syncLeft);
     _leftV.dispose();
     _rightV.dispose();
+    _horizontalScroll.dispose();
     _inlineController.dispose();
     super.dispose();
+  }
+
+  Widget _buildCellForColumn(Map<String, String> c, Map<String, dynamic> row, String linhaNome) {
+    final key = c['key']!;
+    final w = _colWidth(key);
+    dynamic val = key == 'linhas_transmissao.nome' ? linhaNome : row[key];
+    final label = c['label'] ?? key;
+    final isDate = key.contains('_data') || key.contains('conclusao');
+    final isNumber = key.contains('_m');
+    if (key == 'roco_concluido') return _cell(val == true ? 'Sim' : 'Não', w, height: bodyRowHeight);
+    if (widget.onQuickEdit != null && _editableKeys.contains(key)) {
+      return _editableCell(
+        row: row,
+        key: key,
+        label: label,
+        width: w,
+        isNumber: isNumber,
+        isDate: isDate,
+      );
+    }
+    if (isDate) return _cell(_fmtDate(val), w, height: bodyRowHeight, fontSize: _dateCellFontSize);
+    if (isNumber) return _cell(_fmtNum(val), w, height: bodyRowHeight);
+    return _cell(_fmt(val), w, height: bodyRowHeight);
   }
 
   void _startInlineEdit(Map<String, dynamic> row, String key, String displayValue) {
@@ -627,6 +777,37 @@ class _VaosTableState extends State<_VaosTable> {
       _editingField = key;
       _inlineController.text = displayValue;
     });
+  }
+
+  Future<void> _startDateEdit(Map<String, dynamic> row, String key) async {
+    if (widget.onQuickEdit == null) return;
+    final current = row[key];
+    DateTime? initial = current is DateTime ? current : DateTime.tryParse(current?.toString() ?? '');
+    initial ??= DateTime.now();
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(now.year - 10),
+      lastDate: DateTime(now.year + 10),
+    );
+    if (picked != null) await _submitInlineEditWithValue(row, key, picked.toIso8601String().split('T').first);
+  }
+
+  Future<void> _submitInlineEditWithValue(Map<String, dynamic> row, String key, dynamic newValue) async {
+    if (widget.onQuickEdit == null) return;
+    try {
+      row[key] = newValue;
+      await widget.onQuickEdit!(row, key, newValue);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _editingRowKey = null;
+          _editingField = null;
+          _inlineController.clear();
+        });
+      }
+    }
   }
 
   Future<void> _submitInlineEdit(Map<String, dynamic> row, String key) async {
@@ -655,7 +836,7 @@ class _VaosTableState extends State<_VaosTable> {
   String _fmt(dynamic v) => v == null ? '' : v.toString();
   String _fmtNum(dynamic v) {
     if (v == null) return '';
-    if (v is num) return v.toStringAsFixed(2);
+    if (v is num) return v.round().toString();
     return v.toString();
   }
 
@@ -673,11 +854,12 @@ class _VaosTableState extends State<_VaosTable> {
     bool isHeader = false,
     Color? background,
     double? height,
+    double? fontSize,
   }) {
     final bg = background ??
         (isHeader ? Colors.grey.shade100 : Colors.white);
     return Container(
-      alignment: Alignment.centerLeft,
+      alignment: Alignment.center,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
       width: width,
       height: height,
@@ -688,7 +870,8 @@ class _VaosTableState extends State<_VaosTable> {
       child: Text(
         text,
         overflow: TextOverflow.ellipsis,
-        style: TextStyle(fontWeight: fontWeight),
+        style: TextStyle(fontWeight: fontWeight, fontSize: fontSize),
+        textAlign: TextAlign.center,
       ),
     );
   }
@@ -709,27 +892,37 @@ class _VaosTableState extends State<_VaosTable> {
             ? _fmtNum(row[key])
             : _fmt(row[key]);
 
+    if (isDate) {
+      return GestureDetector(
+        onTap: (widget.onQuickEdit != null && _editableKeys.contains(key))
+            ? () => _startDateEdit(row, key)
+            : null,
+        child: _cell(displayText, width, height: bodyRowHeight, fontSize: _dateCellFontSize),
+      );
+    }
+
     if (!isEditing) {
       return GestureDetector(
         onTap: (widget.onQuickEdit != null && _editableKeys.contains(key))
             ? () => _startInlineEdit(row, key, displayText)
             : null,
-        child: _cell(displayText, width),
+        child: _cell(displayText, width, height: bodyRowHeight),
       );
     }
 
     return Container(
       width: width,
-      height: 52,
+      height: bodyRowHeight,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
       decoration: BoxDecoration(
         color: Colors.white,
         border: Border.all(color: Colors.blue.shade200, width: 1.5),
       ),
-      alignment: Alignment.centerLeft,
+      alignment: Alignment.center,
       child: TextField(
         controller: _inlineController,
         autofocus: true,
+        textAlign: TextAlign.center,
         onSubmitted: (_) => _submitInlineEdit(row, key),
         onEditingComplete: () => _submitInlineEdit(row, key),
         decoration: InputDecoration(
@@ -747,37 +940,35 @@ class _VaosTableState extends State<_VaosTable> {
   Widget build(BuildContext context) {
     const double headerGroupHeight = 36;
     const double headerCellHeight = 44;
+    const double headerRow3FontSize = 11;
     if (widget.vaos.isEmpty) {
       return const Text('Nenhum vão encontrado.');
     }
     final start = widget.currentPage * widget.pageSize;
     final end = (start + widget.pageSize) > widget.vaos.length ? widget.vaos.length : (start + widget.pageSize);
     final pageItems = widget.vaos.sublist(start, end);
-    const double rowHeight = 52;
-    final double bodyHeight = pageItems.length * rowHeight;
+    final double bodyHeight = pageItems.length * bodyRowHeight;
 
-    final fixedCols = <Map<String, dynamic>>[
-      {'key': '__actions__', 'label': 'Ações', 'width': 110.0},
-      {'key': 'linhas_transmissao.nome', 'label': 'Linha', 'width': 140.0},
-      {'key': 'est_codigo', 'label': 'EST.', 'width': 80.0},
-      {'key': 'vao_frente_m', 'label': 'Vão Frente (m)', 'width': 130.0},
-      {'key': 'vao_largura_m', 'label': 'Largura (m)', 'width': 120.0},
-    ];
     final cols = <Map<String, String>>[
       {'key': 'linhas_transmissao.nome', 'label': 'Linha'},
       {'key': 'est_codigo', 'label': 'EST.'},
-      {'key': 'vao_frente_m', 'label': 'Vão Frente (m)'},
-      {'key': 'vao_largura_m', 'label': 'Largura (m)'},
+      {'key': 'vao_frente_m', 'label': 'Extensão'},
+      {'key': 'vao_largura_m', 'label': 'Largura'},
       {'key': 'map_mec_extensao_m', 'label': 'Extensão'},
       {'key': 'map_mec_largura_m', 'label': 'Largura'},
       {'key': 'map_man_extensao_m', 'label': 'Extensão'},
       {'key': 'map_man_largura_m', 'label': 'Largura'},
-      {'key': 'exec_mec_extensao_m', 'label': 'Exec. Mec Ext (m)'},
-      {'key': 'exec_mec_largura_m', 'label': 'Exec. Mec Larg (m)'},
-      {'key': 'exec_mec_data', 'label': 'Exec. Mec Data'},
-      {'key': 'exec_man_extensao_m', 'label': 'Exec. Man Ext (m)'},
-      {'key': 'exec_man_largura_m', 'label': 'Exec. Man Larg (m)'},
-      {'key': 'exec_man_data', 'label': 'Exec. Man Data'},
+      {'key': 'map_data', 'label': 'Data'},
+      {'key': 'execucao_mec_data_inicio', 'label': 'Data Início'},
+      {'key': 'execucao_mec_data_fim', 'label': 'Data Fim'},
+      {'key': 'execucao_man_data_inicio', 'label': 'Data Início'},
+      {'key': 'execucao_man_data_fim', 'label': 'Data Fim'},
+      {'key': 'exec_mec_extensao_m', 'label': 'Extensão'},
+      {'key': 'exec_mec_largura_m', 'label': 'Largura'},
+      {'key': 'exec_mec_data', 'label': 'Data'},
+      {'key': 'exec_man_extensao_m', 'label': 'Extensão'},
+      {'key': 'exec_man_largura_m', 'label': 'Largura'},
+      {'key': 'exec_man_data', 'label': 'Data'},
       {'key': 'vao_data_conclusao', 'label': 'Conclusão Vão'},
       {'key': 'roco_concluido', 'label': 'Roço Concluído'},
       {'key': 'numeracao_ggt', 'label': 'Numeração GGT'},
@@ -798,6 +989,29 @@ class _VaosTableState extends State<_VaosTable> {
     final dynamicCols =
         cols.where((c) => !['linhas_transmissao.nome', 'est_codigo', 'vao_frente_m', 'vao_largura_m'].contains(c['key'])).toList();
 
+    final fixedCols = <Map<String, dynamic>>[
+      {'key': '__actions__', 'label': 'Ações', 'width': _colWidth('__actions__')},
+      {'key': 'linhas_transmissao.nome', 'label': 'Linha', 'width': _colWidth('linhas_transmissao.nome')},
+      {'key': 'est_codigo', 'label': 'EST.', 'width': _colWidth('est_codigo')},
+      {'key': 'vao_frente_m', 'label': 'Extensão', 'width': _colWidth('vao_frente_m')},
+      {'key': 'vao_largura_m', 'label': 'Largura', 'width': _colWidth('vao_largura_m')},
+    ];
+
+    // Colunas visíveis conforme toggles dos grupos (Mapeamento Mec/Man, Execução Mec/Man)
+    final mapMecKeys = ['map_mec_extensao_m', 'map_mec_largura_m'];
+    final mapManKeys = ['map_man_extensao_m', 'map_man_largura_m'];
+    const mapDataKey = 'map_data';
+    final execucaoMecKeys = ['execucao_mec_data_inicio', 'execucao_mec_data_fim'];
+    final execucaoManKeys = ['execucao_man_data_inicio', 'execucao_man_data_fim'];
+    final execMecKeys = ['exec_mec_extensao_m', 'exec_mec_largura_m', 'exec_mec_data'];
+    final execManKeys = ['exec_man_extensao_m', 'exec_man_largura_m', 'exec_man_data'];
+    const double iconGroupWidth = 31.0;
+    final totalMapeamentoW = (_mapMecVisible ? mapMecKeys.fold<double>(0, (s, k) => s + _colWidth(k)) : iconGroupWidth) +
+        (_mapManVisible ? mapManKeys.fold<double>(0, (s, k) => s + _colWidth(k)) : iconGroupWidth) +
+        _colWidth(mapDataKey);
+    final totalExecucaoMidW = (_execucaoMecVisible ? execucaoMecKeys.fold<double>(0, (s, k) => s + _colWidth(k)) : iconGroupWidth) +
+        (_execucaoManVisible ? execucaoManKeys.fold<double>(0, (s, k) => s + _colWidth(k)) : iconGroupWidth);
+
     Widget buildFixedHeader() {
       final totalWidth =
           fixedCols.fold<double>(0, (sum, c) => sum + (c['width'] as double));
@@ -809,12 +1023,29 @@ class _VaosTableState extends State<_VaosTable> {
                   fontWeight: FontWeight.bold,
                   isHeader: true,
                   height: headerCellHeight,
+                  fontSize: headerRow3FontSize,
                 ))
             .toList(),
       );
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Linha 1: mesclado "Lista de Estruturas"
+          Container(
+            width: totalWidth,
+            alignment: Alignment.center,
+            height: headerGroupHeight,
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade200,
+              border: Border.all(color: Colors.grey.shade300, width: 1),
+            ),
+            child: const Text(
+              'Lista de Estruturas',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          // Linha 2: mesclado "VÃO"
           Container(
             width: totalWidth,
             alignment: Alignment.center,
@@ -835,134 +1066,272 @@ class _VaosTableState extends State<_VaosTable> {
     }
 
     Widget buildRightHeader() {
-      // Mesclar cabeçalhos:
-      // - Mapeamento Mecanizado (2 colunas)
-      // - Mapeamento Manual (2 colunas)
-      // - Execução Mecanizado (3 colunas)
-      // - Execução Manual (3 colunas)
-      final mapMecKeys = ['map_mec_extensao_m', 'map_mec_largura_m'];
-      final mapManKeys = ['map_man_extensao_m', 'map_man_largura_m'];
-      final execMecKeys = ['exec_mec_extensao_m', 'exec_mec_largura_m', 'exec_mec_data'];
-      final execManKeys = ['exec_man_extensao_m', 'exec_man_largura_m', 'exec_man_data'];
+      // Cabeçalhos agrupados com ícone de visibilidade (mostrar/ocultar as colunas do grupo)
+      const double iconGroupWidth = 31.0;
 
+      final headerRow0 = <Widget>[]; // Nova linha acima: mesmos mesclados, mesmo conteúdo (só texto)
       final headerRow1 = <Widget>[];
       final headerRow2 = <Widget>[];
+
+      Widget simpleGroupCell(String label, double width) {
+        return Container(
+          width: width,
+          decoration: BoxDecoration(
+            color: Colors.grey.shade100,
+            border: Border.all(color: Colors.grey.shade300, width: 1),
+          ),
+          height: headerGroupHeight,
+          alignment: Alignment.center,
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Text(label, style: const TextStyle(fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+        );
+      }
+
+      Widget groupHeaderCell({
+        required String label,
+        required bool visible,
+        required VoidCallback onToggle,
+        required double totalWidth,
+      }) {
+        return Container(
+          width: visible ? totalWidth : iconGroupWidth,
+          decoration: BoxDecoration(
+            color: Colors.grey.shade100,
+            border: Border.all(color: Colors.grey.shade300, width: 1),
+          ),
+          height: headerGroupHeight,
+          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (visible) Expanded(child: Text(label, style: const TextStyle(fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis, textAlign: TextAlign.center)),
+              IconButton(
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                icon: Icon(visible ? Icons.visibility : Icons.visibility_off, size: 20),
+                tooltip: visible ? 'Ocultar colunas' : 'Mostrar colunas',
+                onPressed: onToggle,
+              ),
+            ],
+          ),
+        );
+      }
+
+      final totalExecucaoW = (_execMecVisible ? execMecKeys.fold<double>(0, (s, k) => s + _colWidth(k)) : iconGroupWidth) +
+          (_execManVisible ? execManKeys.fold<double>(0, (s, k) => s + _colWidth(k)) : iconGroupWidth);
+      var headerRow0MapeamentoAdded = false;
+      var headerRow0ExecucaoMidAdded = false;
+      var headerRow0ExecucaoAdded = false;
 
       for (final c in dynamicCols) {
         final key = c['key']!;
         if (mapMecKeys.contains(key)) {
           if (!headerRow1.any((w) => (w.key as ValueKey?)?.value == 'map-mec-span')) {
-            headerRow1.add(Container(
+            final totalW = mapMecKeys.fold<double>(0, (s, k) => s + _colWidth(k));
+            if (!headerRow0MapeamentoAdded) {
+              headerRow0.add(simpleGroupCell('Mapeamento', totalMapeamentoW));
+              headerRow0MapeamentoAdded = true;
+            }
+            headerRow1.add(KeyedSubtree(
               key: const ValueKey('map-mec-span'),
-              width: 150.0 * mapMecKeys.length,
-              decoration: BoxDecoration(
-                color: Colors.grey.shade100,
-                border: Border.all(color: Colors.grey.shade300, width: 1),
-              ),
-              alignment: Alignment.center,
-              height: headerGroupHeight,
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: const Text(
-                'Mapeamento Mecanizado',
-                style: TextStyle(fontWeight: FontWeight.bold),
+              child: groupHeaderCell(
+                label: 'Mecanizado',
+                visible: _mapMecVisible,
+                onToggle: () => setState(() => _mapMecVisible = !_mapMecVisible),
+                totalWidth: totalW,
               ),
             ));
           }
-          headerRow2.add(_cell(
-            c['label']!,
-            150,
-            fontWeight: FontWeight.bold,
-            isHeader: true,
-            height: headerCellHeight,
-          ));
+          if (_mapMecVisible) {
+            headerRow2.add(_cell(
+              c['label']!,
+              _colWidth(key),
+              fontWeight: FontWeight.bold,
+              isHeader: true,
+              height: headerCellHeight,
+              fontSize: headerRow3FontSize,
+            ));
+          } else if (key == mapMecKeys.first) {
+            headerRow2.add(_cell('', iconGroupWidth, isHeader: true, height: headerCellHeight, fontSize: headerRow3FontSize));
+          }
         } else if (mapManKeys.contains(key)) {
           if (!headerRow1.any((w) => (w.key as ValueKey?)?.value == 'map-man-span')) {
-            headerRow1.add(Container(
+            final totalW = mapManKeys.fold<double>(0, (s, k) => s + _colWidth(k));
+            headerRow1.add(KeyedSubtree(
               key: const ValueKey('map-man-span'),
-              width: 150.0 * mapManKeys.length,
+              child: groupHeaderCell(
+                label: 'Manual',
+                visible: _mapManVisible,
+                onToggle: () => setState(() => _mapManVisible = !_mapManVisible),
+                totalWidth: totalW,
+              ),
+            ));
+          }
+          if (_mapManVisible) {
+            headerRow2.add(_cell(
+              c['label']!,
+              _colWidth(key),
+              fontWeight: FontWeight.bold,
+              isHeader: true,
+              height: headerCellHeight,
+              fontSize: headerRow3FontSize,
+            ));
+          } else if (key == mapManKeys.first) {
+            headerRow2.add(_cell('', iconGroupWidth, isHeader: true, height: headerCellHeight, fontSize: headerRow3FontSize));
+          }
+        } else if (key == mapDataKey) {
+          // Coluna Data após Manual, com ícone de calendário acima
+          final w = _colWidth(mapDataKey);
+          headerRow1.add(
+            Container(
+              width: w,
               decoration: BoxDecoration(
                 color: Colors.grey.shade100,
                 border: Border.all(color: Colors.grey.shade300, width: 1),
               ),
-              alignment: Alignment.center,
               height: headerGroupHeight,
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: const Text(
-                'Mapeamento Manual',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ));
-          }
+              alignment: Alignment.center,
+              child: Icon(Icons.calendar_today, size: 20, color: Colors.grey.shade700),
+            ),
+          );
           headerRow2.add(_cell(
-            c['label']!,
-            150,
+            'Data',
+            w,
             fontWeight: FontWeight.bold,
             isHeader: true,
             height: headerCellHeight,
+            fontSize: headerRow3FontSize,
           ));
+        } else if (execucaoMecKeys.contains(key)) {
+          if (!headerRow1.any((w) => (w.key as ValueKey?)?.value == 'execucao-mec-span')) {
+            final totalW = execucaoMecKeys.fold<double>(0, (s, k) => s + _colWidth(k));
+            if (!headerRow0ExecucaoMidAdded) {
+              headerRow0.add(simpleGroupCell('Execução', totalExecucaoMidW));
+              headerRow0ExecucaoMidAdded = true;
+            }
+            headerRow1.add(KeyedSubtree(
+              key: const ValueKey('execucao-mec-span'),
+              child: groupHeaderCell(
+                label: 'Mecanizado',
+                visible: _execucaoMecVisible,
+                onToggle: () => setState(() => _execucaoMecVisible = !_execucaoMecVisible),
+                totalWidth: totalW,
+              ),
+            ));
+          }
+          if (_execucaoMecVisible) {
+            headerRow2.add(_cell(
+              c['label']!,
+              _colWidth(key),
+              fontWeight: FontWeight.bold,
+              isHeader: true,
+              height: headerCellHeight,
+              fontSize: headerRow3FontSize,
+            ));
+          } else if (key == execucaoMecKeys.first) {
+            headerRow2.add(_cell('', iconGroupWidth, isHeader: true, height: headerCellHeight, fontSize: headerRow3FontSize));
+          }
+        } else if (execucaoManKeys.contains(key)) {
+          if (!headerRow1.any((w) => (w.key as ValueKey?)?.value == 'execucao-man-span')) {
+            final totalW = execucaoManKeys.fold<double>(0, (s, k) => s + _colWidth(k));
+            headerRow1.add(KeyedSubtree(
+              key: const ValueKey('execucao-man-span'),
+              child: groupHeaderCell(
+                label: 'Manual',
+                visible: _execucaoManVisible,
+                onToggle: () => setState(() => _execucaoManVisible = !_execucaoManVisible),
+                totalWidth: totalW,
+              ),
+            ));
+          }
+          if (_execucaoManVisible) {
+            headerRow2.add(_cell(
+              c['label']!,
+              _colWidth(key),
+              fontWeight: FontWeight.bold,
+              isHeader: true,
+              height: headerCellHeight,
+              fontSize: headerRow3FontSize,
+            ));
+          } else if (key == execucaoManKeys.first) {
+            headerRow2.add(_cell('', iconGroupWidth, isHeader: true, height: headerCellHeight, fontSize: headerRow3FontSize));
+          }
         } else if (execMecKeys.contains(key)) {
           if (!headerRow1.any((w) => (w.key as ValueKey?)?.value == 'exec-mec-span')) {
-            headerRow1.add(Container(
+            final totalW = execMecKeys.fold<double>(0, (s, k) => s + _colWidth(k));
+            if (!headerRow0ExecucaoAdded) {
+              headerRow0.add(simpleGroupCell('Fiscalização da Execução', totalExecucaoW));
+              headerRow0ExecucaoAdded = true;
+            }
+            headerRow1.add(KeyedSubtree(
               key: const ValueKey('exec-mec-span'),
-              width: 150.0 * execMecKeys.length,
-              decoration: BoxDecoration(
-                color: Colors.grey.shade100,
-                border: Border.all(color: Colors.grey.shade300, width: 1),
-              ),
-              alignment: Alignment.center,
-              height: headerGroupHeight,
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: const Text(
-                'Execução Mecanizado',
-                style: TextStyle(fontWeight: FontWeight.bold),
+              child: groupHeaderCell(
+                label: 'Mecanizado',
+                visible: _execMecVisible,
+                onToggle: () => setState(() => _execMecVisible = !_execMecVisible),
+                totalWidth: totalW,
               ),
             ));
           }
-          headerRow2.add(_cell(
-            c['label']!,
-            150,
-            fontWeight: FontWeight.bold,
-            isHeader: true,
-            height: headerCellHeight,
-          ));
+          if (_execMecVisible) {
+            headerRow2.add(_cell(
+              c['label']!,
+              _colWidth(key),
+              fontWeight: FontWeight.bold,
+              isHeader: true,
+              height: headerCellHeight,
+              fontSize: headerRow3FontSize,
+            ));
+          } else if (key == execMecKeys.first) {
+            headerRow2.add(_cell('', iconGroupWidth, isHeader: true, height: headerCellHeight, fontSize: headerRow3FontSize));
+          }
         } else if (execManKeys.contains(key)) {
           if (!headerRow1.any((w) => (w.key as ValueKey?)?.value == 'exec-man-span')) {
-            headerRow1.add(Container(
+            final totalW = execManKeys.fold<double>(0, (s, k) => s + _colWidth(k));
+            headerRow1.add(KeyedSubtree(
               key: const ValueKey('exec-man-span'),
-              width: 150.0 * execManKeys.length,
-              decoration: BoxDecoration(
-                color: Colors.grey.shade100,
-                border: Border.all(color: Colors.grey.shade300, width: 1),
-              ),
-              alignment: Alignment.center,
-              height: headerGroupHeight,
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: const Text(
-                'Execução Manual',
-                style: TextStyle(fontWeight: FontWeight.bold),
+              child: groupHeaderCell(
+                label: 'Manual',
+                visible: _execManVisible,
+                onToggle: () => setState(() => _execManVisible = !_execManVisible),
+                totalWidth: totalW,
               ),
             ));
           }
-          headerRow2.add(_cell(
-            c['label']!,
-            150,
-            fontWeight: FontWeight.bold,
-            isHeader: true,
-            height: headerCellHeight,
-          ));
+          if (_execManVisible) {
+            headerRow2.add(_cell(
+              c['label']!,
+              _colWidth(key),
+              fontWeight: FontWeight.bold,
+              isHeader: true,
+              height: headerCellHeight,
+              fontSize: headerRow3FontSize,
+            ));
+          } else if (key == execManKeys.first) {
+            headerRow2.add(_cell('', iconGroupWidth, isHeader: true, height: headerCellHeight, fontSize: headerRow3FontSize));
+          }
         } else {
+          final w = _colWidth(key);
+          headerRow0.add(_cell(
+            '',
+            w,
+            isHeader: true,
+            height: headerGroupHeight,
+          ));
           headerRow1.add(_cell(
             '',
-            150,
+            w,
             isHeader: true,
             height: headerGroupHeight,
           ));
           headerRow2.add(_cell(
             c['label']!,
-            150,
+            w,
             fontWeight: FontWeight.bold,
             isHeader: true,
             height: headerCellHeight,
+            fontSize: headerRow3FontSize,
           ));
         }
       }
@@ -970,6 +1339,7 @@ class _VaosTableState extends State<_VaosTable> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Row(children: headerRow0),
           Row(children: headerRow1),
           Row(children: headerRow2),
         ],
@@ -983,12 +1353,16 @@ class _VaosTableState extends State<_VaosTable> {
           children: [
             Container(
               width: fixedCols.first['width'] as double,
+              height: bodyRowHeight,
               padding: const EdgeInsets.symmetric(horizontal: 4),
+              alignment: Alignment.center,
               decoration: BoxDecoration(
                 color: Colors.white,
                 border: Border.all(color: Colors.grey.shade300, width: 1),
               ),
               child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
                 children: [
                   IconButton(
                     icon: const Icon(Icons.visibility),
@@ -1003,7 +1377,7 @@ class _VaosTableState extends State<_VaosTable> {
                 ],
               ),
             ),
-            _cell(linhaNome.toString(), fixedCols[1]['width'] as double),
+            _cell(linhaNome.toString(), fixedCols[1]['width'] as double, height: bodyRowHeight),
             _editableCell(
               row: row,
               key: 'est_codigo',
@@ -1013,14 +1387,14 @@ class _VaosTableState extends State<_VaosTable> {
             _editableCell(
               row: row,
               key: 'vao_frente_m',
-              label: 'Vão Frente (m)',
+              label: 'Extensão',
               width: fixedCols[3]['width'] as double,
               isNumber: true,
             ),
             _editableCell(
               row: row,
               key: 'vao_largura_m',
-              label: 'Largura (m)',
+              label: 'Largura',
               width: fixedCols[4]['width'] as double,
               isNumber: true,
             ),
@@ -1030,108 +1404,159 @@ class _VaosTableState extends State<_VaosTable> {
     }
 
     List<Widget> buildRightRows() {
+      const double iconGroupWidth = 31.0;
       return pageItems.map((row) {
         final linhaNome = row['linhas_transmissao']?['nome'] ?? row['lt'] ?? '';
-        return Row(
-          children: dynamicCols.map((c) {
-            final key = c['key']!;
-            dynamic val;
-            if (key == 'linhas_transmissao.nome') {
-              val = linhaNome;
+        final cells = <Widget>[];
+        for (final c in dynamicCols) {
+          final key = c['key']!;
+          if (mapMecKeys.contains(key)) {
+            if (!_mapMecVisible) {
+              if (key == mapMecKeys.first) cells.add(_cell('', iconGroupWidth, height: bodyRowHeight));
             } else {
-              val = row[key];
+              cells.add(_buildCellForColumn(c, row, linhaNome));
             }
-            final label = c['label'] ?? key;
-            final isDate = key.contains('_data') || key.contains('conclusao');
-            final isNumber = key.contains('_m');
-            if (key == 'roco_concluido') {
-              return _cell(val == true ? 'Sim' : 'Não', 150);
+          } else if (mapManKeys.contains(key)) {
+            if (!_mapManVisible) {
+              if (key == mapManKeys.first) cells.add(_cell('', iconGroupWidth, height: bodyRowHeight));
+            } else {
+              cells.add(_buildCellForColumn(c, row, linhaNome));
             }
-            if (widget.onQuickEdit != null && _editableKeys.contains(key)) {
-              return _editableCell(
-                row: row,
-                key: key,
-                label: label,
-                width: 150,
-                isNumber: isNumber,
-                isDate: isDate,
-              );
+          } else if (execucaoMecKeys.contains(key)) {
+            if (!_execucaoMecVisible) {
+              if (key == execucaoMecKeys.first) cells.add(_cell('', iconGroupWidth, height: bodyRowHeight));
+            } else {
+              cells.add(_buildCellForColumn(c, row, linhaNome));
             }
-            if (isDate) return _cell(_fmtDate(val), 150);
-            if (isNumber) return _cell(_fmtNum(val), 150);
-            return _cell(_fmt(val), 150);
-          }).toList(),
-        );
+          } else if (execucaoManKeys.contains(key)) {
+            if (!_execucaoManVisible) {
+              if (key == execucaoManKeys.first) cells.add(_cell('', iconGroupWidth, height: bodyRowHeight));
+            } else {
+              cells.add(_buildCellForColumn(c, row, linhaNome));
+            }
+          } else if (execMecKeys.contains(key)) {
+            if (!_execMecVisible) {
+              if (key == execMecKeys.first) cells.add(_cell('', iconGroupWidth, height: bodyRowHeight));
+            } else {
+              cells.add(_buildCellForColumn(c, row, linhaNome));
+            }
+          } else if (execManKeys.contains(key)) {
+            if (!_execManVisible) {
+              if (key == execManKeys.first) cells.add(_cell('', iconGroupWidth, height: bodyRowHeight));
+            } else {
+              cells.add(_buildCellForColumn(c, row, linhaNome));
+            }
+          } else {
+            cells.add(_buildCellForColumn(c, row, linhaNome));
+          }
+        }
+        return Row(children: cells);
       }).toList();
     }
 
     final totalPages = (widget.vaos.length / widget.pageSize).ceil();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
+    final fixedWidth = fixedCols.fold<double>(0, (sum, c) => sum + (c['width'] as double));
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availableWidth = constraints.maxWidth.isFinite
+            ? constraints.maxWidth
+            : MediaQuery.sizeOf(context).width;
+        final horizontalScrollWidth = (availableWidth - fixedWidth - 8).clamp(200.0, double.infinity);
+
+        return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Column(
+            Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                buildFixedHeader(),
-                SizedBox(
-                  height: bodyHeight,
-                  child: Scrollbar(
-                    controller: _leftV,
-                    thumbVisibility: true,
-                    child: SingleChildScrollView(
-                      controller: _leftV,
-                      scrollDirection: Axis.vertical,
-                      child: Column(children: buildFixedRows()),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Column(
+                Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                buildRightHeader(),
+                    buildFixedHeader(),
                     SizedBox(
                       height: bodyHeight,
                       child: Scrollbar(
-                        controller: _rightV,
+                        controller: _leftV,
                         thumbVisibility: true,
                         child: SingleChildScrollView(
-                          controller: _rightV,
+                          controller: _leftV,
                           scrollDirection: Axis.vertical,
-                          child: Column(children: buildRightRows()),
+                          child: Column(children: buildFixedRows()),
                         ),
                       ),
                     ),
                   ],
                 ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: horizontalScrollWidth,
+                  child: Scrollbar(
+                controller: _horizontalScroll,
+                thumbVisibility: true,
+                child: SingleChildScrollView(
+                  controller: _horizontalScroll,
+                  scrollDirection: Axis.horizontal,
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        buildRightHeader(),
+                        SizedBox(
+                          height: bodyHeight,
+                          child: Scrollbar(
+                            controller: _rightV,
+                            thumbVisibility: true,
+                            child: SingleChildScrollView(
+                              controller: _rightV,
+                              scrollDirection: Axis.vertical,
+                              child: Column(children: buildRightRows()),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    Positioned(
+                      left: totalMapeamentoW - 1,
+                      top: 0,
+                      bottom: 0,
+                      width: 2,
+                      child: Container(color: Colors.grey.shade700),
+                    ),
+                    Positioned(
+                      left: totalMapeamentoW + totalExecucaoMidW - 1,
+                      top: 0,
+                      bottom: 0,
+                      width: 2,
+                      child: Container(color: Colors.grey.shade700),
+                    ),
+                    ],
+                  ),
+                ),
               ),
             ),
           ],
         ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            Text('Página ${widget.currentPage + 1} de $totalPages'),
-            const SizedBox(width: 12),
-            IconButton(
-              icon: const Icon(Icons.chevron_left),
-              onPressed: widget.currentPage > 0 ? () => widget.onPageChanged(widget.currentPage - 1) : null,
-            ),
-            IconButton(
-              icon: const Icon(Icons.chevron_right),
-              onPressed: (widget.currentPage + 1) < totalPages ? () => widget.onPageChanged(widget.currentPage + 1) : null,
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Text('Página ${widget.currentPage + 1} de $totalPages'),
+                const SizedBox(width: 12),
+                IconButton(
+                  icon: const Icon(Icons.chevron_left),
+                  onPressed: widget.currentPage > 0 ? () => widget.onPageChanged(widget.currentPage - 1) : null,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.chevron_right),
+                  onPressed: (widget.currentPage + 1) < totalPages ? () => widget.onPageChanged(widget.currentPage + 1) : null,
+                ),
+              ],
             ),
           ],
-        ),
-      ],
+        );
+      },
     );
   }
 }
@@ -1169,6 +1594,11 @@ class _EditarVaoDialogState extends State<_EditarVaoDialog> {
   late TextEditingController _pendManualExtraController;
   late TextEditingController _pendMecanizadoExtraController;
   late TextEditingController _pendSeletivoExtraController;
+  DateTime? _mapData;
+  DateTime? _execucaoMecDataInicio;
+  DateTime? _execucaoMecDataFim;
+  DateTime? _execucaoManDataInicio;
+  DateTime? _execucaoManDataFim;
   DateTime? _execMecData;
   DateTime? _execManData;
   DateTime? _vaoConclusao;
@@ -1215,6 +1645,11 @@ class _EditarVaoDialogState extends State<_EditarVaoDialog> {
     _pendSeletivoExtraController =
         TextEditingController(text: widget.vao['pend_seletivo_extra']?.toString() ?? '');
     _rocoConcluido = (widget.vao['roco_concluido'] == true);
+    _mapData = _parseDate(widget.vao['map_data']);
+    _execucaoMecDataInicio = _parseDate(widget.vao['execucao_mec_data_inicio']);
+    _execucaoMecDataFim = _parseDate(widget.vao['execucao_mec_data_fim']);
+    _execucaoManDataInicio = _parseDate(widget.vao['execucao_man_data_inicio']);
+    _execucaoManDataFim = _parseDate(widget.vao['execucao_man_data_fim']);
     _execMecData = _parseDate(widget.vao['exec_mec_data']);
     _execManData = _parseDate(widget.vao['exec_man_data']);
     _vaoConclusao = _parseDate(widget.vao['vao_data_conclusao']);
@@ -1290,12 +1725,37 @@ class _EditarVaoDialogState extends State<_EditarVaoDialog> {
               onChanged: (v) => setState(() => _rocoConcluido = v),
             ),
             _txt(_estController, 'EST.'),
-            _txt(_vaoFrenteController, 'Vão Frente (m)', isNumber: true),
-            _txt(_vaoLarguraController, 'Largura (m)', isNumber: true),
+            _txt(_vaoFrenteController, 'Extensão', isNumber: true),
+            _txt(_vaoLarguraController, 'Largura', isNumber: true),
             _txt(_mapMecExtController, 'Map. Mec Extensão (m)', isNumber: true),
             _txt(_mapMecLargController, 'Map. Mec Largura (m)', isNumber: true),
             _txt(_mapManExtController, 'Map. Man Extensão (m)', isNumber: true),
             _txt(_mapManLargController, 'Map. Man Largura (m)', isNumber: true),
+            _DateField(
+              label: 'Data do mapeamento',
+              value: _mapData,
+              onPick: () => _pickDate(_mapData, (v) => _mapData = v),
+            ),
+            _DateField(
+              label: 'Execução Mec. Data Início',
+              value: _execucaoMecDataInicio,
+              onPick: () => _pickDate(_execucaoMecDataInicio, (v) => _execucaoMecDataInicio = v),
+            ),
+            _DateField(
+              label: 'Execução Mec. Data Fim',
+              value: _execucaoMecDataFim,
+              onPick: () => _pickDate(_execucaoMecDataFim, (v) => _execucaoMecDataFim = v),
+            ),
+            _DateField(
+              label: 'Execução Man. Data Início',
+              value: _execucaoManDataInicio,
+              onPick: () => _pickDate(_execucaoManDataInicio, (v) => _execucaoManDataInicio = v),
+            ),
+            _DateField(
+              label: 'Execução Man. Data Fim',
+              value: _execucaoManDataFim,
+              onPick: () => _pickDate(_execucaoManDataFim, (v) => _execucaoManDataFim = v),
+            ),
             _txt(_execMecExtController, 'Exec. Mec Extensão (m)', isNumber: true),
             _txt(_execMecLargController, 'Exec. Mec Largura (m)', isNumber: true),
             _txt(_execManExtController, 'Exec. Man Extensão (m)', isNumber: true),
@@ -1346,6 +1806,11 @@ class _EditarVaoDialogState extends State<_EditarVaoDialog> {
               'map_mec_largura_m': _toDouble(_mapMecLargController.text),
               'map_man_extensao_m': _toDouble(_mapManExtController.text),
               'map_man_largura_m': _toDouble(_mapManLargController.text),
+              'map_data': _mapData != null ? _mapData!.toIso8601String() : null,
+              'execucao_mec_data_inicio': _execucaoMecDataInicio != null ? _execucaoMecDataInicio!.toIso8601String() : null,
+              'execucao_mec_data_fim': _execucaoMecDataFim != null ? _execucaoMecDataFim!.toIso8601String() : null,
+              'execucao_man_data_inicio': _execucaoManDataInicio != null ? _execucaoManDataInicio!.toIso8601String() : null,
+              'execucao_man_data_fim': _execucaoManDataFim != null ? _execucaoManDataFim!.toIso8601String() : null,
               'exec_mec_extensao_m': _toDouble(_execMecExtController.text),
               'exec_mec_largura_m': _toDouble(_execMecLargController.text),
               'exec_man_extensao_m': _toDouble(_execManExtController.text),
@@ -1426,7 +1891,7 @@ class _VerVaoDialog extends StatelessWidget {
   String _fmt(dynamic v) => v == null ? '' : v.toString();
   String _fmtNum(dynamic v) {
     if (v == null) return '';
-    if (v is num) return v.toStringAsFixed(2);
+    if (v is num) return v.round().toString();
     return v.toString();
   }
 
@@ -1455,10 +1920,15 @@ class _VerVaoDialog extends StatelessWidget {
       'geo_lat': 'Geo Lat',
       'geo_lon': 'Geo Lon',
       'numeracao_antiga': 'Numeração antiga',
-      'vao_frente_m': 'Vão frente (m)',
-      'vao_largura_m': 'Largura (m)',
+      'vao_frente_m': 'Extensão',
+      'vao_largura_m': 'Largura',
       'map_mec_extensao_m': 'Map. Mec Ext (m)',
       'map_mec_largura_m': 'Map. Mec Larg (m)',
+      'map_data': 'Data do mapeamento',
+      'execucao_mec_data_inicio': 'Exec. Mec. Data Início',
+      'execucao_mec_data_fim': 'Exec. Mec. Data Fim',
+      'execucao_man_data_inicio': 'Exec. Man. Data Início',
+      'execucao_man_data_fim': 'Exec. Man. Data Fim',
       'map_man_extensao_m': 'Map. Man Ext (m)',
       'map_man_largura_m': 'Map. Man Larg (m)',
       'exec_mec_extensao_m': 'Exec. Mec Ext (m)',
@@ -1561,6 +2031,11 @@ class _VerVaoDialog extends StatelessWidget {
                 'vao_largura_m',
                 'map_mec_extensao_m',
                 'map_mec_largura_m',
+                'map_data',
+                'execucao_mec_data_inicio',
+                'execucao_mec_data_fim',
+                'execucao_man_data_inicio',
+                'execucao_man_data_fim',
                 'map_man_extensao_m',
                 'map_man_largura_m',
                 'exec_mec_extensao_m',

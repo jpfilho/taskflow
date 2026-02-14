@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -19,6 +20,7 @@ class BiometricService {
 
   // Verificar se o dispositivo suporta autenticação biométrica
   Future<bool> isDeviceSupported() async {
+    if (kIsWeb) return false;
     try {
       return await _localAuth.isDeviceSupported();
     } catch (e) {
@@ -29,6 +31,7 @@ class BiometricService {
 
   // Verificar se há biometria disponível
   Future<bool> canCheckBiometrics() async {
+    if (kIsWeb) return false;
     try {
       return await _localAuth.canCheckBiometrics;
     } catch (e) {
@@ -39,6 +42,7 @@ class BiometricService {
 
   // Obter tipos de biometria disponíveis
   Future<List<BiometricType>> getAvailableBiometrics() async {
+    if (kIsWeb) return [];
     try {
       return await _localAuth.getAvailableBiometrics();
     } catch (e) {

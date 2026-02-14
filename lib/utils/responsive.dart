@@ -5,9 +5,23 @@ class Responsive {
   static const double mobileBreakpoint = 600;
   static const double tabletBreakpoint = 1024;
 
+  /// Altura da faixa acima do cabeçalho de colunas (tabela de atividades e linha de mês do Gantt).
+  /// Deve ser igual em ambos os lados para o cabeçalho da tabela e o cabeçalho dos dias do Gantt
+  /// iniciarem e terminarem exatamente na mesma altura.
+  static const double kActivitiesHeaderTopHeight = 25.0;
+
+  /// Altura do cabeçalho de colunas da tabela de atividades e da linha de dias do Gantt.
+  static const double kActivitiesHeaderRowHeight = 50.0;
+
   // Verifica se é mobile
   static bool isMobile(BuildContext context) {
     return MediaQuery.of(context).size.width < mobileBreakpoint;
+  }
+
+  /// Usado para decisão pós-login: abrir tela de atalhos em vez da Programação.
+  /// Breakpoint 768px (mobile/tablet estreito) vs desktop.
+  static bool isMobileForHome(BuildContext context) {
+    return MediaQuery.of(context).size.width < 768;
   }
 
   // Verifica se é tablet

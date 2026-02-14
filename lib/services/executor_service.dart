@@ -625,6 +625,53 @@ class ExecutorService {
     }
   }
 
+  /// Coordenadores que pertencem à MESMA regional E divisão E segmento do perfil do usuário.
+  /// Usado nas telas de criar/editar tarefa para restringir o dropdown de coordenador.
+  Future<List<Executor>> getCoordenadoresPorPerfilUsuario({
+    required List<String> regionalIds,
+    required List<String> divisaoIds,
+    required List<String> segmentoIds,
+  }) async {
+    try {
+      if (regionalIds.isEmpty && divisaoIds.isEmpty && segmentoIds.isEmpty) {
+        return await getCoordenadores();
+      }
+
+      // Divisões permitidas: da mesma regional E (se informado) da mesma divisão
+      List<String>? allowedDivisaoIds;
+      if (_connectivity.isConnected && (regionalIds.isNotEmpty || divisaoIds.isNotEmpty)) {
+        var query = _supabase.from('divisoes').select('id');
+        if (regionalIds.isNotEmpty) query = query.inFilter('regional_id', regionalIds);
+        if (divisaoIds.isNotEmpty) query = query.inFilter('id', divisaoIds);
+        final rows = await query;
+        allowedDivisaoIds = rows.isNotEmpty
+            ? (rows as List).map((r) => r['id'] as String).toList()
+            : <String>[];
+      }
+
+      // Buscar todos os coordenadores e filtrar por divisão e segmento
+      final todos = await getCoordenadores();
+      final divisoesPermitidas = allowedDivisaoIds;
+      final filtrados = todos.where((e) {
+        if (divisoesPermitidas != null) {
+          if (divisoesPermitidas.isEmpty) return false;
+          if (e.divisaoId == null || !divisoesPermitidas.contains(e.divisaoId)) return false;
+        }
+        if (segmentoIds.isNotEmpty) {
+          final temSegmento = e.segmentoIds.any((s) => segmentoIds.contains(s));
+          if (!temSegmento) return false;
+        }
+        return true;
+      }).toList();
+
+      print('👔 getCoordenadoresPorPerfilUsuario: ${filtrados.length} coordenadores (regional+divisão+segmento)');
+      return filtrados;
+    } catch (e) {
+      print('❌ Erro getCoordenadoresPorPerfilUsuario: $e');
+      return [];
+    }
+  }
+
   // Buscar coordenadores filtrados por regional, divisão e segmento (mesma lógica dos executores)
   Future<List<Executor>> getCoordenadoresFiltrados({
     String? regionalId,

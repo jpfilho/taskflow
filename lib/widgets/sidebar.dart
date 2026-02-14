@@ -11,6 +11,8 @@ class Sidebar extends StatefulWidget {
   final int? selectedIndex;
   final VoidCallback? onExport;
   final bool isRoot; // Indica se o usuário é root
+  final bool showGtd; // Módulo GTD (root ou jpfilho@axia.com.br)
+  final bool showGtdAndSupressao; // GTD e Supressão de Vegetação (root ou jpfilho@axia.com.br)
 
   const Sidebar({
     super.key,
@@ -20,6 +22,8 @@ class Sidebar extends StatefulWidget {
     this.selectedIndex,
     this.onExport,
     this.isRoot = false,
+    this.showGtd = false,
+    this.showGtdAndSupressao = false,
   });
 
   @override
@@ -185,7 +189,7 @@ class _SidebarState extends State<Sidebar> {
                   ),
                   if (widget.isRoot)
                     _buildSidebarIcon(Icons.checklist_rtl, 3, 'Demandas', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
-                  if (widget.isRoot) ...[
+                  if (widget.isRoot || widget.showGtdAndSupressao) ...[
                     Divider(
                       height: isMobile ? 16 : 24,
                       thickness: 1,
@@ -193,10 +197,12 @@ class _SidebarState extends State<Sidebar> {
                       endIndent: isMobile ? 8 : 12,
                       color: iconColor.withOpacity(0.2),
                     ),
-                    _buildSidebarIcon(Icons.alt_route, 21, 'Linhas de Transmissão', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
-                    _buildSidebarIcon(Icons.eco, 22, 'Supressão de Vegetação', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
+                    if (widget.isRoot)
+                      _buildSidebarIcon(Icons.alt_route, 21, 'Linhas de Transmissão', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
+                    if (widget.showGtdAndSupressao)
+                      _buildSidebarIcon(Icons.eco, 22, 'Supressão de Vegetação', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
                   ],
-                  // Divider antes de Álbuns de Mídia
+                  // Divider antes de Documentos/Álbuns
                   Divider(
                     height: isMobile ? 16 : 24,
                     thickness: 1,
@@ -204,8 +210,29 @@ class _SidebarState extends State<Sidebar> {
                     endIndent: isMobile ? 8 : 12,
                     color: iconColor.withOpacity(0.2),
                   ),
+                  // Documentos - apenas root (como demais restritos)
+                  if (widget.isRoot)
+                    _buildSidebarIcon(Icons.folder, 24, 'Documentos', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
                   // Álbuns de Mídia - disponível para todos
                   _buildSidebarIcon(Icons.photo_library, 23, 'Álbuns de Imagens', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
+                  if (widget.showGtd) ...[
+                    Divider(
+                      height: isMobile ? 16 : 24,
+                      thickness: 1,
+                      indent: isMobile ? 8 : 12,
+                      endIndent: isMobile ? 8 : 12,
+                      color: iconColor.withOpacity(0.2),
+                    ),
+                    _buildSidebarIcon(Icons.check_circle_outline, 25, 'GTD', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
+                  ],
+                  Divider(
+                    height: isMobile ? 16 : 24,
+                    thickness: 1,
+                    indent: isMobile ? 8 : 12,
+                    endIndent: isMobile ? 8 : 12,
+                    color: iconColor.withOpacity(0.2),
+                  ),
+                  _buildSidebarIcon(Icons.bug_report, 26, 'Melhorias e Bugs', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
                 ],
               ),
             ),

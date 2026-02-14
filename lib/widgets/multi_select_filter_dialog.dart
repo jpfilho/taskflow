@@ -167,7 +167,7 @@ class _MultiSelectFilterDialogState extends State<MultiSelectFilterDialog> {
                 ElevatedButton(
                   onPressed: () {
                     widget.onSelectionChanged(_selectedValues);
-                    Navigator.of(context).pop();
+                    Navigator.of(context).pop(_selectedValues);
                   },
                   child: const Text('Aplicar'),
                 ),

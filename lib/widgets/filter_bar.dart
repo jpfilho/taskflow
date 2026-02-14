@@ -17,6 +17,22 @@ class FilterBar extends StatefulWidget {
   final bool? showGantt; // Se o Gantt está visível
   final String? currentViewMode; // Modo de visualização atual
   final List<Task>? visibleTasks; // Tarefas já carregadas para preencher opções localmente
+  /// Quando true, mostra apenas filtros da tela de Frota: REGIONAL, DIVISAO, SEGMENTO, FROTA.
+  final bool fleetMode;
+  /// Opções dos dropdowns na tela Frota (mesmos valores da tabela): regionais, divisoes, frotas, locais.
+  final Map<String, List<String>>? fleetFilterOptions;
+  /// Quando true, mostra apenas filtros da tela de Equipes: DIVISAO, EMPRESA, FUNÇÃO, MATRÍCULA, NOME.
+  final bool teamMode;
+  /// Opções dos dropdowns na tela Equipes (mesmos valores da tabela).
+  final Map<String, List<String>>? teamFilterOptions;
+  /// Toggle "Mostrar apenas tarefas com alerta" (tela Atividades).
+  final bool? filterOnlyWithWarnings;
+  /// Callback ao alterar o toggle de alertas.
+  final ValueChanged<bool>? onFilterOnlyWithWarnings;
+  /// Quantidade de tarefas com alerta na lista atual (exibida ao lado do toggle).
+  final int? warningsCountInTable;
+  /// Total de tarefas com alerta retornadas pelo RPC (para exibir "7 de 19" e deixar coerente).
+  final int? warningsTotalCount;
 
   const FilterBar({
     super.key,
@@ -32,6 +48,14 @@ class FilterBar extends StatefulWidget {
     this.showGantt,
     this.currentViewMode,
     this.visibleTasks,
+    this.fleetMode = false,
+    this.fleetFilterOptions,
+    this.teamMode = false,
+    this.teamFilterOptions,
+    this.filterOnlyWithWarnings,
+    this.onFilterOnlyWithWarnings,
+    this.warningsCountInTable,
+    this.warningsTotalCount,
   });
 
   @override
@@ -46,6 +70,11 @@ class _FilterBarState extends State<FilterBar> {
   Set<String> _selectedTipo = {};
   Set<String> _selectedExecutor = {};
   Set<String> _selectedFrota = {};
+  Set<String> _selectedSegmento = {}; // Modo Frota
+  Set<String> _selectedEmpresa = {}; // Modo Equipes
+  Set<String> _selectedFuncao = {}; // Modo Equipes
+  Set<String> _selectedMatricula = {}; // Modo Equipes
+  Set<String> _selectedNome = {}; // Modo Equipes
   Set<String> _selectedCoordenador = {};
   Map<String, String?> _lastSentFilters = {};
   Timer? _debounceTimer;
@@ -71,6 +100,11 @@ class _FilterBarState extends State<FilterBar> {
   List<String> _tiposTotais = [];
   List<String> _executoresTotais = [];
   List<String> _frotasTotais = [];
+  List<String> _segmentosTotais = []; // Usado no modo Frota (após DIVISAO)
+  List<String> _empresasTotais = []; // Modo Equipes
+  List<String> _funcoesTotais = []; // Modo Equipes
+  List<String> _matriculasTotais = []; // Modo Equipes
+  List<String> _nomesTotais = []; // Modo Equipes
   List<String> _coordenadoresTotais = [];
   
   void _loadFromVisibleTasks() {
@@ -169,14 +203,25 @@ class _FilterBarState extends State<FilterBar> {
     final current = <String, String?>{
       'regional': _selectedRegional.isEmpty ? null : _selectedRegional.join(','),
       'divisao': _selectedDivisao.isEmpty ? null : _selectedDivisao.join(','),
-      'status': _selectedStatus.isEmpty ? null : _selectedStatus.join(','),
-      'local': _selectedLocal.isEmpty ? null : _selectedLocal.join(','),
-      'tipo': _selectedTipo.isEmpty ? null : _selectedTipo.join(','),
-      'executor': _selectedExecutor.isEmpty ? null : _selectedExecutor.join(','),
+      'empresa': widget.teamMode ? (_selectedEmpresa.isEmpty ? null : _selectedEmpresa.join(',')) : null,
+      'funcao': widget.teamMode ? (_selectedFuncao.isEmpty ? null : _selectedFuncao.join(',')) : null,
+      'matricula': widget.teamMode ? (_selectedMatricula.isEmpty ? null : _selectedMatricula.join(',')) : null,
+      'nome': widget.teamMode ? (_selectedNome.isEmpty ? null : _selectedNome.join(',')) : null,
+      'segmento': widget.fleetMode ? (_selectedSegmento.isEmpty ? null : _selectedSegmento.join(',')) : null,
+      'status': widget.fleetMode ? null : (_selectedStatus.isEmpty ? null : _selectedStatus.join(',')),
+      'local': widget.fleetMode ? null : (_selectedLocal.isEmpty ? null : _selectedLocal.join(',')),
+      'tipo': widget.fleetMode ? null : (_selectedTipo.isEmpty ? null : _selectedTipo.join(',')),
+      'executor': widget.fleetMode ? null : (_selectedExecutor.isEmpty ? null : _selectedExecutor.join(',')),
       'frota': _selectedFrota.isEmpty ? null : _selectedFrota.join(','),
-      'coordenador': _selectedCoordenador.isEmpty ? null : _selectedCoordenador.join(','),
-      'minhasTarefas': _minhasTarefas ? 'true' : null,
+      'coordenador': widget.fleetMode ? null : (_selectedCoordenador.isEmpty ? null : _selectedCoordenador.join(',')),
+      'minhasTarefas': widget.fleetMode ? null : (_minhasTarefas ? 'true' : null),
     };
+    if (widget.fleetMode) {
+      current.removeWhere((k, v) => !['regional', 'divisao', 'segmento', 'frota'].contains(k));
+    }
+    if (widget.teamMode) {
+      current.removeWhere((k, v) => !['divisao', 'empresa', 'funcao', 'matricula', 'nome'].contains(k));
+    }
 
     // Evitar disparar processamento se nada mudou
     bool changed = false;
@@ -197,14 +242,222 @@ class _FilterBarState extends State<FilterBar> {
     });
   }
 
+  Widget _buildFleetFilterRow(bool isMobile) {
+    final activeCount = [
+      _selectedRegional.isNotEmpty,
+      _selectedDivisao.isNotEmpty,
+      _selectedSegmento.isNotEmpty,
+      _selectedFrota.isNotEmpty,
+    ].where((f) => f).length;
+    const double fieldWidth = 140.0;
+    const double barHeight = 72.0;
+    return Container(
+      width: double.infinity,
+      height: barHeight,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      color: Colors.grey[200],
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SizedBox(
+              width: fieldWidth,
+              child: _buildMultiSelectFilterField(
+                'REGIONAL', _regionaisTotais, _selectedRegional, (v) {
+                  setState(() { _selectedRegional = v; _updateFilters(); });
+                },
+                isMobile: false,
+              ),
+            ),
+            const SizedBox(width: 12),
+            SizedBox(
+              width: fieldWidth,
+              child: _buildMultiSelectFilterField(
+                'DIVISAO', _divisoesTotais, _selectedDivisao, (v) {
+                  setState(() { _selectedDivisao = v; _updateFilters(); });
+                },
+                isMobile: false,
+              ),
+            ),
+            const SizedBox(width: 12),
+            SizedBox(
+              width: fieldWidth,
+              child: _buildMultiSelectFilterField(
+                'SEGMENTO', _segmentosTotais, _selectedSegmento, (v) {
+                  setState(() { _selectedSegmento = v; _updateFilters(); });
+                },
+                isMobile: false,
+              ),
+            ),
+            const SizedBox(width: 12),
+            SizedBox(
+              width: fieldWidth,
+              child: _buildMultiSelectFilterField(
+                'FROTA', _frotasTotais, _selectedFrota, (v) {
+                  setState(() { _selectedFrota = v; _updateFilters(); });
+                },
+                isMobile: false,
+              ),
+            ),
+            if (activeCount > 0) ...[
+              const SizedBox(width: 12),
+              Center(
+                child: TextButton(
+                  onPressed: () {
+                    setState(() {
+                      _selectedRegional = {};
+                      _selectedDivisao = {};
+                      _selectedSegmento = {};
+                      _selectedFrota = {};
+                      _updateFilters();
+                    });
+                  },
+                  child: Text('Limpar', style: TextStyle(fontSize: 12, color: Colors.blue[700])),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTeamFilterRow(bool isMobile) {
+    final activeCount = [
+      _selectedDivisao.isNotEmpty,
+      _selectedEmpresa.isNotEmpty,
+      _selectedFuncao.isNotEmpty,
+      _selectedMatricula.isNotEmpty,
+      _selectedNome.isNotEmpty,
+    ].where((f) => f).length;
+    const double fieldWidth = 140.0;
+    const double barHeight = 72.0;
+    return Container(
+      width: double.infinity,
+      height: barHeight,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      color: Colors.grey[200],
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SizedBox(
+              width: fieldWidth,
+              child: _buildMultiSelectFilterField(
+                'DIVISÃO', _divisoesTotais, _selectedDivisao, (v) {
+                  setState(() { _selectedDivisao = v; _updateFilters(); });
+                },
+                isMobile: false,
+              ),
+            ),
+            const SizedBox(width: 12),
+            SizedBox(
+              width: fieldWidth,
+              child: _buildMultiSelectFilterField(
+                'EMPRESA', _empresasTotais, _selectedEmpresa, (v) {
+                  setState(() { _selectedEmpresa = v; _updateFilters(); });
+                },
+                isMobile: false,
+              ),
+            ),
+            const SizedBox(width: 12),
+            SizedBox(
+              width: fieldWidth,
+              child: _buildMultiSelectFilterField(
+                'FUNÇÃO', _funcoesTotais, _selectedFuncao, (v) {
+                  setState(() { _selectedFuncao = v; _updateFilters(); });
+                },
+                isMobile: false,
+              ),
+            ),
+            const SizedBox(width: 12),
+            SizedBox(
+              width: fieldWidth,
+              child: _buildMultiSelectFilterField(
+                'MATRÍCULA', _matriculasTotais, _selectedMatricula, (v) {
+                  setState(() { _selectedMatricula = v; _updateFilters(); });
+                },
+                isMobile: false,
+              ),
+            ),
+            const SizedBox(width: 12),
+            SizedBox(
+              width: fieldWidth,
+              child: _buildMultiSelectFilterField(
+                'NOME', _nomesTotais, _selectedNome, (v) {
+                  setState(() { _selectedNome = v; _updateFilters(); });
+                },
+                isMobile: false,
+              ),
+            ),
+            if (activeCount > 0) ...[
+              const SizedBox(width: 12),
+              Center(
+                child: TextButton(
+                  onPressed: () {
+                    setState(() {
+                      _selectedDivisao = {};
+                      _selectedEmpresa = {};
+                      _selectedFuncao = {};
+                      _selectedMatricula = {};
+                      _selectedNome = {};
+                      _updateFilters();
+                    });
+                  },
+                  child: Text('Limpar', style: TextStyle(fontSize: 12, color: Colors.blue[700])),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _debounceTimer?.cancel();
     super.dispose();
   }
 
+  void _applyFleetFilterOptions() {
+    final opts = widget.fleetFilterOptions;
+    if (opts == null) return;
+    _regionaisTotais = List.from(opts['regionals'] ?? [])..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    _divisoesTotais = List.from(opts['divisoes'] ?? [])..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    _segmentosTotais = List.from(opts['segmentos'] ?? [])..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    _frotasTotais = List.from(opts['frotas'] ?? [])..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+  }
+
+  void _applyTeamFilterOptions() {
+    final opts = widget.teamFilterOptions;
+    if (opts == null) return;
+    _divisoesTotais = List.from(opts['divisoes'] ?? [])..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    _empresasTotais = List.from(opts['empresas'] ?? [])..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    _funcoesTotais = List.from(opts['funcoes'] ?? [])..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    _matriculasTotais = List.from(opts['matriculas'] ?? [])..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    _nomesTotais = List.from(opts['nomes'] ?? [])..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+  }
+
   Future<void> _loadFilterValues({bool loadTotais = false}) async {
-    // Sempre que possível, use somente as tarefas visíveis (evita chamadas ao Supabase)
+    if (widget.fleetMode) {
+      if (widget.fleetFilterOptions != null) {
+        _applyFleetFilterOptions();
+      }
+      if (mounted) setState(() {});
+      return;
+    }
+    if (widget.teamMode) {
+      if (widget.teamFilterOptions != null) {
+        _applyTeamFilterOptions();
+      }
+      if (mounted) setState(() {});
+      return;
+    }
     _loadFromVisibleTasks();
   }
 
@@ -215,6 +468,11 @@ class _FilterBarState extends State<FilterBar> {
     if (widget.initialFilters != null) {
       _selectedRegional = _parseFilterSet(widget.initialFilters!['regional']);
       _selectedDivisao = _parseFilterSet(widget.initialFilters!['divisao']);
+      _selectedSegmento = _parseFilterSet(widget.initialFilters!['segmento']);
+      _selectedEmpresa = _parseFilterSet(widget.initialFilters!['empresa']);
+      _selectedFuncao = _parseFilterSet(widget.initialFilters!['funcao']);
+      _selectedMatricula = _parseFilterSet(widget.initialFilters!['matricula']);
+      _selectedNome = _parseFilterSet(widget.initialFilters!['nome']);
       _selectedStatus = _parseFilterSet(widget.initialFilters!['status']);
       _selectedLocal = _parseFilterSet(widget.initialFilters!['local']);
       _selectedTipo = _parseFilterSet(widget.initialFilters!['tipo']);
@@ -230,17 +488,25 @@ class _FilterBarState extends State<FilterBar> {
   @override
   void didUpdateWidget(FilterBar oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // Recalcular sempre que props mudarem (garante sincronização com tabela atual)
+    if (widget.fleetMode && widget.fleetFilterOptions != null) {
+      _applyFleetFilterOptions();
+    }
+    if (widget.teamMode && widget.teamFilterOptions != null) {
+      _applyTeamFilterOptions();
+    }
     _loadFilterValues(loadTotais: true);
-    // Se o período mudou, recarregar (ainda assim apenas localmente)
     if (oldWidget.startDate != widget.startDate || oldWidget.endDate != widget.endDate) {
       _loadFilterValues(loadTotais: true);
     }
-    // Se os filtros iniciais mudaram, restaurar os valores
     if (widget.initialFilters != null && oldWidget.initialFilters != widget.initialFilters) {
       setState(() {
         _selectedRegional = _parseFilterSet(widget.initialFilters!['regional']);
         _selectedDivisao = _parseFilterSet(widget.initialFilters!['divisao']);
+        _selectedSegmento = _parseFilterSet(widget.initialFilters!['segmento']);
+        _selectedEmpresa = _parseFilterSet(widget.initialFilters!['empresa']);
+        _selectedFuncao = _parseFilterSet(widget.initialFilters!['funcao']);
+        _selectedMatricula = _parseFilterSet(widget.initialFilters!['matricula']);
+        _selectedNome = _parseFilterSet(widget.initialFilters!['nome']);
         _selectedStatus = _parseFilterSet(widget.initialFilters!['status']);
         _selectedLocal = _parseFilterSet(widget.initialFilters!['local']);
         _selectedTipo = _parseFilterSet(widget.initialFilters!['tipo']);
@@ -256,13 +522,20 @@ class _FilterBarState extends State<FilterBar> {
   Widget build(BuildContext context) {
     final isMobile = Responsive.isMobile(context);
     // Apenas mobile usa layout compacto (expandível); tablet e desktop usam barra completa
-    final isCompact = isMobile;
+    final isCompact = isMobile && !widget.fleetMode;
+
+    if (widget.fleetMode) {
+      return _buildFleetFilterRow(isMobile);
+    }
+    if (widget.teamMode) {
+      return _buildTeamFilterRow(isMobile);
+    }
     
     // Sempre mostrar os filtros, mesmo durante o carregamento
     // Os dados serão atualizados em background quando chegarem
     
     if (isCompact) {
-      // Contar quantos filtros estão ativos (multiseleção: conjunto não vazio)
+      // Contar quantos filtros estão ativos (multiseleção: conjunto não vazio; não inclui Minhas Tarefas)
       final activeFiltersCount = [
         _selectedRegional.isNotEmpty,
         _selectedDivisao.isNotEmpty,
@@ -272,7 +545,7 @@ class _FilterBarState extends State<FilterBar> {
         _selectedExecutor.isNotEmpty,
         _selectedFrota.isNotEmpty,
         _selectedCoordenador.isNotEmpty,
-        _minhasTarefas,
+        widget.filterOnlyWithWarnings == true,
       ].where((f) => f).length;
 
       return Container(
@@ -309,6 +582,10 @@ class _FilterBarState extends State<FilterBar> {
                         _buildSortSelector(isMobile: true),
                         const SizedBox(width: 8),
                         _buildMinhasTarefasToggle(label: false),
+                        if (widget.onFilterOnlyWithWarnings != null) ...[
+                          const SizedBox(width: 8),
+                          _buildAlertasToggle(label: false),
+                        ],
                         if (widget.onToggleGantt != null && widget.currentViewMode == 'split') ...[
                           const SizedBox(width: 8),
                           _buildGanttToggle(),
@@ -368,6 +645,7 @@ class _FilterBarState extends State<FilterBar> {
                                 _selectedFrota = {};
                                 _selectedCoordenador = {};
                                 _minhasTarefas = false;
+                                widget.onFilterOnlyWithWarnings?.call(false);
                                 _updateFilters();
                               });
                             },
@@ -464,6 +742,10 @@ class _FilterBarState extends State<FilterBar> {
                       _buildSortSelector(isMobile: false),
                       const SizedBox(width: 16),
                     _buildMinhasTarefasToggle(label: false),
+                      if (widget.onFilterOnlyWithWarnings != null) ...[
+                        const SizedBox(width: 16),
+                        _buildAlertasToggle(label: false),
+                      ],
                       const SizedBox(width: 16),
                       Expanded(
                         child: _buildMultiSelectFilterField(
@@ -775,6 +1057,55 @@ class _FilterBarState extends State<FilterBar> {
                 _updateFilters();
               });
             },
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Apenas a quantidade (número) de tarefas com alerta na tabela.
+  Widget _buildAlertasCountText({required bool value, required double fontSz}) {
+    final count = widget.warningsCountInTable ?? 0;
+    final textStyle = TextStyle(
+      fontSize: fontSz,
+      fontWeight: value ? FontWeight.bold : FontWeight.normal,
+      color: value ? Colors.orange[700] : Colors.grey[700],
+    );
+    return Text('$count', style: textStyle);
+  }
+
+  Widget _buildAlertasToggle({bool label = true}) {
+    final isCompact = Responsive.isMobile(context);
+    final padH = isCompact ? 6.0 : 10.0;
+    final padV = isCompact ? 3.0 : 6.0;
+    final iconSz = isCompact ? 14.0 : 18.0;
+    final fontSz = isCompact ? 10.0 : 11.0;
+    final value = widget.filterOnlyWithWarnings ?? false;
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: padH, vertical: padV),
+      decoration: BoxDecoration(
+        color: value ? Colors.orange[100] : Colors.white,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(
+          color: value ? Colors.orange : Colors.grey[300]!,
+          width: value ? 2 : 1.2,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.warning_amber_rounded,
+            size: iconSz,
+            color: value ? Colors.orange[700] : Colors.grey[600],
+          ),
+          SizedBox(width: isCompact ? 4 : 6),
+          _buildAlertasCountText(value: value, fontSz: fontSz),
+          SizedBox(width: isCompact ? 6 : 8),
+          Switch(
+            value: value,
+            onChanged: (v) => widget.onFilterOnlyWithWarnings?.call(v),
             materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
           ),
         ],

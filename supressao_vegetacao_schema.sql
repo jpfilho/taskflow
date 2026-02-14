@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS public.vaos_supressao (
   vao_largura_m NUMERIC(14,3), -- Largura (m)
   map_mec_extensao_m NUMERIC(14,3), -- Mapeamento Mec. Extensão
   map_mec_largura_m NUMERIC(14,3), -- Largura
+  map_data DATE, -- Data do mapeamento (manual e mecanizado, mesmo dia)
   map_man_extensao_m NUMERIC(14,3), -- Mapeamento Man. Extensão
   map_man_largura_m NUMERIC(14,3), -- Largura .1
   exec_mec_extensao_m NUMERIC(14,3), -- Execução Mec. Extensão

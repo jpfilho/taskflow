@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode;
+import 'dart:async';
 import 'dart:convert' show utf8;
 import 'dart:typed_data' show Uint8List;
 import 'package:excel/excel.dart';
@@ -10,6 +11,7 @@ import 'html_stub.dart' as html if (dart.library.html) 'dart:html';
 import 'data/mock_data.dart';
 import 'models/task.dart';
 import 'services/task_service.dart';
+import 'services/conflict_service.dart';
 import 'config/supabase_config.dart';
 import 'widgets/header_bar.dart';
 import 'widgets/filter_bar.dart';
@@ -46,9 +48,12 @@ import 'widgets/supressao_vegetacao_view.dart';
 import 'widgets/horas_sap_view.dart';
 import 'widgets/demandas_view.dart';
 import 'widgets/login_screen.dart';
+import 'widgets/home_shortcuts_screen.dart';
+import 'features/warnings/warnings.dart';
 import 'widgets/resizable_panel.dart';
 import 'services/auth_service_simples.dart';
 import 'utils/responsive.dart';
+import 'config/app_menu_config.dart';
 
 import 'services/local_database_service.dart';
 import 'services/sync_service.dart';
@@ -58,21 +63,29 @@ import 'providers/theme_provider.dart';
 import 'services/theme_service.dart';
 import 'dart:async';
 import 'features/media_albums/presentation/pages/gallery_page.dart';
-// sqflite FFI para desktop
+import 'features/documents/presentation/pages/documents_page.dart';
+import 'modules/gtd/domain/gtd_session.dart';
+import 'modules/gtd/presentation/screens/gtd_home_page.dart';
+import 'modules/melhorias_bugs/presentation/screens/melhorias_bugs_home_screen.dart';
+// sqflite: factory obrigatória antes de qualquer openDatabase (web e desktop)
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Inicializar FFI do sqflite para plataformas desktop (não-web)
-  if (!kIsWeb) {
-    try {
+  // Obrigatório: databaseFactory antes de qualquer openDatabase (evita "databaseFactory not initialized")
+  try {
+    if (kIsWeb) {
+      databaseFactory = databaseFactoryFfiWeb;
+      print('✅ SQLite (web) inicializado!');
+    } else {
       sqfliteFfiInit();
       databaseFactory = databaseFactoryFfi;
-      print('✅ SQLite FFI inicializado!');
-    } catch (e) {
-      print('⚠️ Erro ao inicializar SQLite FFI: $e');
+      print('✅ SQLite FFI (desktop/mobile) inicializado!');
     }
+  } catch (e) {
+    print('⚠️ Erro ao inicializar SQLite: $e');
   }
   
   // Inicializar Supabase ANTES do banco local
@@ -309,6 +322,19 @@ class _AuthWrapperState extends State<AuthWrapper> {
       );
     }
 
+    // Mobile (largura < 768): tela de atalhos primeiro; desktop/web: Programação direto.
+    if (Responsive.isMobileForHome(context)) {
+      return _AuthenticatedMobileShell(
+        themeProvider: widget.themeProvider,
+        onLogout: () {
+          _authService.signOut();
+          setState(() {
+            _isAuthenticated = false;
+          });
+        },
+      );
+    }
+
     return MainScreen(
       themeProvider: widget.themeProvider,
       onLogout: () {
@@ -321,11 +347,72 @@ class _AuthWrapperState extends State<AuthWrapper> {
   }
 }
 
+/// Shell pós-login no mobile: mostra atalhos ou MainScreen conforme navegação.
+class _AuthenticatedMobileShell extends StatefulWidget {
+  final ThemeProvider? themeProvider;
+  final VoidCallback onLogout;
+
+  const _AuthenticatedMobileShell({
+    this.themeProvider,
+    required this.onLogout,
+  });
+
+  @override
+  State<_AuthenticatedMobileShell> createState() => _AuthenticatedMobileShellState();
+}
+
+class _AuthenticatedMobileShellState extends State<_AuthenticatedMobileShell> {
+  bool _showShortcuts = true;
+  int _selectedSidebarIndex = 0;
+
+  void _onShortcutTap(int index) {
+    setState(() {
+      _showShortcuts = false;
+      _selectedSidebarIndex = index;
+    });
+  }
+
+  void _onBackToShortcuts() {
+    setState(() {
+      _showShortcuts = true;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_showShortcuts) {
+      return HomeShortcutsScreen(
+        onShortcutTap: _onShortcutTap,
+      );
+    }
+    return MainScreen(
+      themeProvider: widget.themeProvider,
+      onLogout: widget.onLogout,
+      initialSidebarIndex: _selectedSidebarIndex,
+      onBackToShortcuts: _onBackToShortcuts,
+      isMobileFromShortcuts: true,
+    );
+  }
+}
+
 class MainScreen extends StatefulWidget {
   final ThemeProvider? themeProvider;
   final VoidCallback? onLogout;
-  
-  const MainScreen({super.key, this.themeProvider, this.onLogout});
+  /// Índice inicial da sidebar (usado ao abrir a partir da tela de atalhos no mobile).
+  final int? initialSidebarIndex;
+  /// Callback para voltar à tela de atalhos (mobile); evita back para login.
+  final VoidCallback? onBackToShortcuts;
+  /// True quando foi aberto a partir da tela de atalhos no mobile.
+  final bool isMobileFromShortcuts;
+
+  const MainScreen({
+    super.key,
+    this.themeProvider,
+    this.onLogout,
+    this.initialSidebarIndex,
+    this.onBackToShortcuts,
+    this.isMobileFromShortcuts = false,
+  });
 
   @override
   State<MainScreen> createState() => _MainScreenState();
@@ -340,7 +427,9 @@ class _MainScreenState extends State<MainScreen> {
   double? _savedTableScrollPosition; // Posição do scroll salva antes de operações que podem resetar
   double? _savedGanttScrollPosition; // Posição do scroll do Gantt salva antes de operações que podem resetar
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final GlobalKey<HorasSAPViewState> _horasViewKey = GlobalKey<HorasSAPViewState>();
   final TaskService _taskService = TaskService();
+  final ConflictService _conflictService = ConflictService();
   final ExecutorService _executorService = ExecutorService();
   final FrotaService _frotaService = FrotaService();
   final AuthServiceSimples _authService = AuthServiceSimples();
@@ -348,7 +437,11 @@ class _MainScreenState extends State<MainScreen> {
   List<Task> _tasks = []; // Tarefas filtradas (para telas gerais)
   List<Task> _tasksSemFiltros = []; // Tarefas sem filtros (para tela de equipes)
   Task? _selectedTask; // Tarefa selecionada para edição/deleção
-  Map<String, String?> _currentFilters = {}; // Filtros ativos
+  Map<String, String?> _currentFilters = {}; // Filtros ativos (tela Atividades)
+  Map<String, String?> _fleetFilters = {}; // Filtros da tela Frota (Regional, Divisão, Frota, Local)
+  Map<String, List<String>>? _fleetFilterOptions; // Opções dos dropdowns da Frota (regionais, divisoes, frotas, locais)
+  Map<String, String?> _teamFilters = {}; // Filtros da tela Equipes (divisao, empresa, funcao, matricula, nome)
+  Map<String, List<String>>? _teamFilterOptions; // Opções dos dropdowns da Equipes
   String _searchQuery = ''; // Termo de busca atual
   // Inicializar com primeiro e último dia do mês/ano atual
   late DateTime _startDate;
@@ -361,17 +454,24 @@ class _MainScreenState extends State<MainScreen> {
   Set<String> _expandedTasks = {}; // IDs das tarefas expandidas (compartilhado entre tabela e Gantt)
   int _tasksVersion = 0; // Versão das tarefas para forçar rebuild quando necessário
   bool _showGantt = true; // Controla se o Gantt está visível
-  bool _isFiltering = false; // Estado de processamento de filtros
+  GanttScale _ganttScale = GanttScale.daily; // Escala do eixo temporal do Gantt
+  bool _isAtividadesRefreshing = false; // Botão "Atualizar" na tela de Atividades
   bool _canEditTasks = false; // Permissão para criar/editar tarefas
   bool _canEditTasksChecked = false; // Indica se a permissão já foi verificada
   bool _isCheckingTaskPermission = false; // Evita múltiplas verificações simultâneas
   String _notasViewMode = 'cards'; // 'tabela', 'cards', 'calendario', 'dashboard'
   String _horasViewMode = 'metas'; // 'tabela' ou 'metas' para a tela de Horas
+  bool _filterOnlyWithWarnings = false; // Toggle "Mostrar apenas tarefas com alerta"
+  /// Alertas por task_id (Supabase get_task_warnings_for_user). null = ainda não carregou.
+  Map<String, List<TaskWarning>>? _warningsByTaskId;
   
   // Cache para executores do usuário (otimização de performance)
   Set<String>? _cachedExecutorIds;
   Set<String>? _cachedExecutorNomes;
   String? _cachedLoginUsuario;
+
+  /// Uma vez por sessão: após carregar tarefas do Supabase, disparar sync automático (rede com acesso ao BD).
+  bool _autoSyncTriggeredAfterLoad = false;
 
   void _toggleAllSubtasks() {
     setState(() {
@@ -637,6 +737,9 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void initState() {
     super.initState();
+    if (widget.initialSidebarIndex != null) {
+      _sidebarSelectedIndex = widget.initialSidebarIndex!;
+    }
     // Inicializar datas com primeiro e último dia do mês/ano atual
     final now = DateTime.now();
     _startDate = DateTime(now.year, now.month, 1);
@@ -833,6 +936,50 @@ class _MainScreenState extends State<MainScreen> {
   List<Task> get _sortedTasks {
     if (_tasks.isEmpty) return [];
     return _sortTasks(_tasks);
+  }
+
+  /// Tarefas para tabela/Gantt: se filtro "Com alerta" ativo, apenas tarefas com pelo menos um warning.
+  List<Task> get _tasksForTable {
+    final base = _sortedTasks;
+    if (!_filterOnlyWithWarnings || base.isEmpty) return base;
+    final warningsMap = _warningsByTaskIdForTable;
+    final idsWithWarnings = warningsMap.keys.where((id) => (warningsMap[id] ?? []).isNotEmpty).toSet();
+    return base.where((t) => idsWithWarnings.contains(t.id)).toList();
+  }
+
+  /// Mapa taskId -> warnings (Supabase). Retorna mapa vazio se ainda não carregou.
+  Map<String, List<TaskWarning>> get _warningsByTaskIdForTable =>
+      _warningsByTaskId ?? {};
+
+  /// Quantidade de tarefas PAI (parentId == null) com alerta = mesmo número de linhas na tabela.
+  int get _tasksWithWarningsCount {
+    final w = _warningsByTaskIdForTable;
+    final base = _sortedTasks;
+    return base.where((t) => t.parentId == null && (w[t.id] ?? []).isNotEmpty).length;
+  }
+
+  /// Total de tarefas com alerta retornadas pelo RPC (para exibir "7 de 19").
+  int get _warningsTotalCount => _warningsByTaskId?.length ?? 0;
+
+  Future<void> _loadWarnings() async {
+    const bool _debugWarnings = true; // DEBUG: por que warnings não refletem no Flutter
+    try {
+      final map = await TaskWarningsService.getWarningsByTaskId();
+      if (kDebugMode && _debugWarnings) {
+        final totalW = map.values.fold<int>(0, (s, l) => s + l.length);
+        final taskIdsInList = _tasks.map((t) => t.id).toSet();
+        final warningTaskIds = map.keys.toSet();
+        final intersection = warningTaskIds.intersection(taskIdsInList);
+        debugPrint('[WARNINGS DEBUG] main: ${map.length} tarefas c/ warnings ($totalW alertas); ${_tasks.length} tarefas na lista; interseção=${intersection.length} (warnings c/ tarefa na tabela)');
+        if (map.isNotEmpty && intersection.isEmpty) {
+          debugPrint('[WARNINGS DEBUG] ⚠️ Nenhum task_id dos warnings está na lista de tarefas exibidas. Possível causa: RPC get_task_warnings_for_user filtra por usuário (root/gerente/executor); ou período/filtros excluem essas tarefas.');
+        }
+      }
+      if (mounted) setState(() => _warningsByTaskId = map);
+    } catch (e) {
+      if (kDebugMode && _debugWarnings) debugPrint('[WARNINGS DEBUG] main _loadWarnings erro: $e');
+      if (mounted) setState(() => _warningsByTaskId = {});
+    }
   }
   
   // Método para atualizar ordenação
@@ -1152,7 +1299,10 @@ class _MainScreenState extends State<MainScreen> {
           }
         }
       });
-      
+
+      // Recarregar alertas para refletir correção de warning (ex.: status PROG→CONC)
+      await _loadWarnings();
+
       print('✅ Tarefa $taskId atualizada na lista local (versão: $_tasksVersion)');
     } catch (e) {
       print('❌ Erro ao atualizar tarefa na lista: $e');
@@ -1161,6 +1311,40 @@ class _MainScreenState extends State<MainScreen> {
       if (_currentFilters.isNotEmpty) {
         await _applyFilters(_currentFilters);
       }
+    }
+  }
+
+  /// Recarrega tarefas na tela de Atividades (botão Atualizar). Reaplica filtros se houver.
+  Future<void> _refreshAtividades() async {
+    if (_isAtividadesRefreshing) return;
+    if (!mounted) return;
+    setState(() => _isAtividadesRefreshing = true);
+    try {
+      await _loadTasks();
+      if (mounted && _currentFilters.isNotEmpty) {
+        await _applyFilters(_currentFilters);
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Dados atualizados'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erro ao atualizar: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isAtividadesRefreshing = false);
     }
   }
 
@@ -1205,6 +1389,12 @@ class _MainScreenState extends State<MainScreen> {
           _tasks = filtered;
           _tasksVersion++; // Incrementar versão para forçar rebuild dos widgets
         });
+        await _loadWarnings();
+        // Sincronização automática quando há rede e acesso ao Supabase (uma vez por sessão após carregar)
+        if (!_autoSyncTriggeredAfterLoad) {
+          _autoSyncTriggeredAfterLoad = true;
+          SyncService().syncAll();
+        }
       }
     } catch (e) {
       // Se falhar, usar dados mock
@@ -1229,7 +1419,9 @@ class _MainScreenState extends State<MainScreen> {
       final isMobile = Responsive.isMobile(context);
       final isTablet = Responsive.isTablet(context);
       final isDesktop = Responsive.isDesktop(context);
-      
+      // Regras de visibilidade do menu (Sidebar): mesma fonte que a tela de atalhos
+      final menuVisibility = MenuVisibility.getForCurrentUser();
+
       // Detectar tablet em landscape (largura >= 1024 mas altura < 1024)
       final screenWidth = MediaQuery.of(context).size.width;
       final screenHeight = MediaQuery.of(context).size.height;
@@ -1281,10 +1473,15 @@ class _MainScreenState extends State<MainScreen> {
                       });
                     },
                     canEditTasks: _canEditTasks,
-                    onPerfilUpdated: () {
-                      // Recarregar tarefas quando o perfil for atualizado
-                      _applyFilters(_currentFilters);
+                    onPerfilUpdated: () async {
+                      _cachedLoginUsuario = null;
+                      _cachedExecutorIds = null;
+                      _cachedExecutorNomes = null;
+                      await _loadTasks();
+                      await _applyFilters(_currentFilters);
                     },
+                    ganttScale: _ganttScale,
+                    onGanttScaleChanged: (v) => setState(() => _ganttScale = v),
                     onViewModeChanged: (mode) {
                       setState(() {
                         _viewMode = mode;
@@ -1308,41 +1505,76 @@ class _MainScreenState extends State<MainScreen> {
                     },
                     showGantt: _showGantt,
                     isAtividadesScreen: _sidebarSelectedIndex == 0,
+                    onRefreshAtividades: _refreshAtividades,
+                    isAtividadesRefreshing: _isAtividadesRefreshing,
+                    isHorasScreen: _sidebarSelectedIndex == 20,
+                    horasViewMode: _horasViewMode,
+                    onHorasViewModeChanged: (mode) {
+                      setState(() {
+                        _horasViewMode = mode;
+                      });
+                    },
+                    onRefreshHoras: () => _horasViewKey.currentState?.refresh(),
                   ),
-                  // Filter Bar (mobile - ocultar em Configurações, Chat, Notas, Ordens, ATs, SIs e Álbuns)
-                  if (_sidebarSelectedIndex != 1 &&
-                      _sidebarSelectedIndex != 2 &&
-                      _sidebarSelectedIndex != 14 && 
-                      _sidebarSelectedIndex != 15 && 
-                      _sidebarSelectedIndex != 16 && 
-                      _sidebarSelectedIndex != 17 && 
-                      _sidebarSelectedIndex != 18 && 
+                  // Filter Bar (mobile): Frota usa filtros específicos; demais telas barra completa
+                  if (_sidebarSelectedIndex == 2)
+                    FilterBar(
+                      fleetMode: true,
+                      fleetFilterOptions: _fleetFilterOptions,
+                      onFiltersChanged: (f) {
+                        setState(() { _fleetFilters = f; });
+                      },
+                      initialFilters: _fleetFilters,
+                      startDate: _startDate,
+                      endDate: _endDate,
+                      visibleTasks: _tasksSemFiltros,
+                    )
+                  else if (_sidebarSelectedIndex == 1)
+                    FilterBar(
+                      teamMode: true,
+                      teamFilterOptions: _teamFilterOptions,
+                      onFiltersChanged: (f) {
+                        setState(() { _teamFilters = f; });
+                      },
+                      initialFilters: _teamFilters,
+                      startDate: _startDate,
+                      endDate: _endDate,
+                      visibleTasks: _tasksSemFiltros,
+                    )
+                  else if (_sidebarSelectedIndex != 14 &&
+                      _sidebarSelectedIndex != 14 &&
+                      _sidebarSelectedIndex != 15 &&
+                      _sidebarSelectedIndex != 16 &&
+                      _sidebarSelectedIndex != 17 &&
+                      _sidebarSelectedIndex != 18 &&
                       _sidebarSelectedIndex != 19 &&
                       _sidebarSelectedIndex != 20 &&
                       _sidebarSelectedIndex != 21 &&
                       _sidebarSelectedIndex != 22 &&
-                      _sidebarSelectedIndex != 23)
+                      _sidebarSelectedIndex != 23 &&
+                      _sidebarSelectedIndex != 25 &&
+                      _sidebarSelectedIndex != 26)
                     FilterBar(
                       onFiltersChanged: _applyFilters,
                       initialFilters: _currentFilters,
                       startDate: _startDate,
                       endDate: _endDate,
-                      visibleTasks: _tasks, // usar tarefas já carregadas para preencher filtros rapidamente
+                      visibleTasks: _tasks,
                       onSortChanged: _updateSorting,
                       currentSortColumn: _sortColumn,
                       currentSortAscending: _sortAscending,
-                      isFiltering: _isFiltering,
+                      isFiltering: false,
+                      filterOnlyWithWarnings: _filterOnlyWithWarnings,
+                      onFilterOnlyWithWarnings: (v) => setState(() => _filterOnlyWithWarnings = v),
+                      warningsCountInTable: _tasksWithWarningsCount,
+                      warningsTotalCount: _warningsTotalCount,
                       onToggleGantt: () {
                         setState(() {
                           final newShowGantt = !_showGantt;
                           _showGantt = newShowGantt;
-                          // Sincronizar _selectedTab no mobile quando toggle for clicado
                           if (isMobile) {
-                            if (newShowGantt) {
-                              _selectedTab = 1; // Mostrar Gantt
-                            } else {
-                              _selectedTab = 0; // Mostrar apenas Tabela
-                            }
+                            if (newShowGantt) _selectedTab = 1;
+                            else _selectedTab = 0;
                           }
                         });
                       },
@@ -1382,7 +1614,9 @@ class _MainScreenState extends State<MainScreen> {
                     });
                   },
                   onExport: _exportData,
-                  isRoot: _authService.currentUser?.isRoot ?? false,
+                  isRoot: menuVisibility.isRoot,
+                  showGtd: menuVisibility.showGtd,
+                  showGtdAndSupressao: menuVisibility.showGtdAndSupressao,
                 ),
                 // Conteúdo principal (Header, Filter, Main Content)
                 Expanded(
@@ -1418,14 +1652,18 @@ class _MainScreenState extends State<MainScreen> {
                           });
                         },
                         canEditTasks: _canEditTasks,
-                        onPerfilUpdated: () {
-                          // Recarregar tarefas quando o perfil for atualizado
-                          _applyFilters(_currentFilters);
+                        onPerfilUpdated: () async {
+                          _cachedLoginUsuario = null;
+                          _cachedExecutorIds = null;
+                          _cachedExecutorNomes = null;
+                          await _loadTasks();
+                          await _applyFilters(_currentFilters);
                         },
+                        ganttScale: _ganttScale,
+                        onGanttScaleChanged: (v) => setState(() => _ganttScale = v),
                         onViewModeChanged: (mode) {
                           setState(() {
                             _viewMode = mode;
-                            // Sincronizar _selectedTab com _viewMode para mobile
                             if (mode == 'planner') {
                               _selectedTab = 2;
                             } else if (mode == 'calendar') {
@@ -1435,7 +1673,7 @@ class _MainScreenState extends State<MainScreen> {
                             } else if (mode == 'dashboard') {
                               _selectedTab = 5;
                             } else if (mode == 'split') {
-                              _selectedTab = 0; // Default para tabela
+                              _selectedTab = 0;
                             }
                           });
                         },
@@ -1447,34 +1685,71 @@ class _MainScreenState extends State<MainScreen> {
                         },
                         showGantt: _showGantt,
                         isAtividadesScreen: _sidebarSelectedIndex == 0,
+                        onRefreshAtividades: _refreshAtividades,
+                        isAtividadesRefreshing: _isAtividadesRefreshing,
+                        isHorasScreen: _sidebarSelectedIndex == 20,
+                        horasViewMode: _horasViewMode,
+                        onHorasViewModeChanged: (mode) {
+                          setState(() {
+                            _horasViewMode = mode;
+                          });
+                        },
+                        onRefreshHoras: () => _horasViewKey.currentState?.refresh(),
                       ),
-                      // Filter Bar (ocultar em Configurações, Chat, Notas, Ordens, ATs, SIs e Álbuns)
-                      if (_sidebarSelectedIndex != 1 &&
-                          _sidebarSelectedIndex != 2 &&
-                          _sidebarSelectedIndex != 14 && 
-                          _sidebarSelectedIndex != 15 && 
-                          _sidebarSelectedIndex != 16 && 
-                          _sidebarSelectedIndex != 17 && 
-                          _sidebarSelectedIndex != 18 && 
+                      // Filter Bar: na Frota (2) usa filtros específicos; ocultar em Configurações, Chat, etc.
+                      if (_sidebarSelectedIndex == 2)
+                        FilterBar(
+                          fleetMode: true,
+                          fleetFilterOptions: _fleetFilterOptions,
+                          onFiltersChanged: (f) {
+                            setState(() { _fleetFilters = f; });
+                          },
+                          initialFilters: _fleetFilters,
+                          startDate: _startDate,
+                          endDate: _endDate,
+                          visibleTasks: _tasksSemFiltros,
+                        )
+                      else if (_sidebarSelectedIndex == 1)
+                        FilterBar(
+                          teamMode: true,
+                          teamFilterOptions: _teamFilterOptions,
+                          onFiltersChanged: (f) {
+                            setState(() { _teamFilters = f; });
+                          },
+                          initialFilters: _teamFilters,
+                          startDate: _startDate,
+                          endDate: _endDate,
+                          visibleTasks: _tasksSemFiltros,
+                        )
+                      else if (_sidebarSelectedIndex != 14 &&
+                          _sidebarSelectedIndex != 14 &&
+                          _sidebarSelectedIndex != 15 &&
+                          _sidebarSelectedIndex != 16 &&
+                          _sidebarSelectedIndex != 17 &&
+                          _sidebarSelectedIndex != 18 &&
                           _sidebarSelectedIndex != 19 &&
                           _sidebarSelectedIndex != 20 &&
                           _sidebarSelectedIndex != 21 &&
                           _sidebarSelectedIndex != 22 &&
-                          _sidebarSelectedIndex != 23)
+                          _sidebarSelectedIndex != 23 &&
+                          _sidebarSelectedIndex != 25 &&
+                          _sidebarSelectedIndex != 26)
                         FilterBar(
                           onFiltersChanged: _applyFilters,
                           initialFilters: _currentFilters,
                           startDate: _startDate,
                           endDate: _endDate,
-                      visibleTasks: _tasks, // usar tarefas já carregadas para preencher filtros rapidamente
+                          visibleTasks: _tasks,
                           onSortChanged: _updateSorting,
                           currentSortColumn: _sortColumn,
                           currentSortAscending: _sortAscending,
-                          isFiltering: _isFiltering,
+                          isFiltering: false,
+                          filterOnlyWithWarnings: _filterOnlyWithWarnings,
+                          onFilterOnlyWithWarnings: (v) => setState(() => _filterOnlyWithWarnings = v),
+                          warningsCountInTable: _tasksWithWarningsCount,
+                          warningsTotalCount: _warningsTotalCount,
                           onToggleGantt: () {
-                            setState(() {
-                              _showGantt = !_showGantt;
-                            });
+                            setState(() { _showGantt = !_showGantt; });
                           },
                           showGantt: _showGantt,
                           currentViewMode: _viewMode,
@@ -1573,6 +1848,7 @@ class _MainScreenState extends State<MainScreen> {
           return Dashboard(
             taskService: _taskService,
             filteredTasks: _sortedTasks,
+            warningsByTaskId: _warningsByTaskIdForTable,
           );
         }
         // Se o modo for 'planner', mostrar apenas o PlannerView
@@ -1642,7 +1918,8 @@ class _MainScreenState extends State<MainScreen> {
         if (!_showGantt) {
           return TaskTable(
             key: ValueKey('task_table_$_tasksVersion'),
-            tasks: _sortedTasks,
+            tasks: _tasksForTable,
+            warningsByTaskId: _warningsByTaskIdForTable,
             scrollController: _tableScrollController,
             taskService: _taskService,
             allSubtasksExpanded: _allSubtasksExpanded,
@@ -1683,7 +1960,8 @@ class _MainScreenState extends State<MainScreen> {
                   width: tableWidth,
                   child: TaskTable(
                     key: ValueKey('task_table_$_tasksVersion'),
-                    tasks: _sortedTasks,
+                    tasks: _tasksForTable,
+                    warningsByTaskId: _warningsByTaskIdForTable,
                     scrollController: _tableScrollController,
                     taskService: _taskService,
                     allSubtasksExpanded: _allSubtasksExpanded,
@@ -1709,9 +1987,11 @@ class _MainScreenState extends State<MainScreen> {
                 Expanded(
                   child: GanttChart(
                     key: ValueKey('gantt_chart_${_tasksVersion}_${_expandedTasks.length}_${_expandedTasks.toList()..sort()}'),
-                    tasks: _sortedTasks,
+                    tasks: _tasksForTable,
                     startDate: _startDate,
                     endDate: _endDate,
+                    scale: _ganttScale,
+                    onScaleChanged: (v) => setState(() => _ganttScale = v),
                     scrollController: _ganttScrollController,
                     taskService: _taskService,
                     allSubtasksExpanded: _allSubtasksExpanded,
@@ -1720,6 +2000,8 @@ class _MainScreenState extends State<MainScreen> {
                     onTaskExpanded: _onTaskExpanded,
                     sortColumn: _sortColumn,
                     getSortValue: _getSortValue,
+                    tasksForConflictDetection: _tasksSemFiltros.isNotEmpty ? _tasksSemFiltros : _tasks,
+                    conflictService: _conflictService,
                     onTasksUpdated: () async {
                       // Não fazer nada aqui - a atualização será feita via onTaskUpdated específico
                       print('🔄 GanttChart onTasksUpdated: Atualização otimizada (sem reload completo)');
@@ -1779,7 +2061,8 @@ class _MainScreenState extends State<MainScreen> {
         if (!_showGantt) {
           return TaskTable(
             key: ValueKey('task_table_$_tasksVersion'),
-            tasks: _sortedTasks,
+            tasks: _tasksForTable,
+            warningsByTaskId: _warningsByTaskIdForTable,
             scrollController: _tableScrollController,
             taskService: _taskService,
             allSubtasksExpanded: _allSubtasksExpanded,
@@ -1801,7 +2084,8 @@ class _MainScreenState extends State<MainScreen> {
           minRightWidth: 200,
           leftChild: TaskTable(
             key: ValueKey('task_table_$_tasksVersion'),
-            tasks: _sortedTasks,
+            tasks: _tasksForTable,
+            warningsByTaskId: _warningsByTaskIdForTable,
             scrollController: _tableScrollController,
             taskService: _taskService,
             allSubtasksExpanded: _allSubtasksExpanded,
@@ -1818,15 +2102,19 @@ class _MainScreenState extends State<MainScreen> {
           ),
           rightChild: GanttChart(
             key: ValueKey('gantt_chart_${_tasksVersion}_${_expandedTasks.length}_${_expandedTasks.toList()..sort()}'),
-            tasks: _sortedTasks,
+            tasks: _tasksForTable,
             startDate: _startDate,
             endDate: _endDate,
+            scale: _ganttScale,
+            onScaleChanged: (v) => setState(() => _ganttScale = v),
             scrollController: _ganttScrollController,
             taskService: _taskService,
             allSubtasksExpanded: _allSubtasksExpanded,
             onToggleAllSubtasks: _toggleAllSubtasks,
             sortColumn: _sortColumn,
             getSortValue: _getSortValue,
+            tasksForConflictDetection: _tasksSemFiltros.isNotEmpty ? _tasksSemFiltros : _tasks,
+            conflictService: _conflictService,
             onEdit: (task) => _editTaskById(task.id),
             onDelete: (task) => _deleteTaskById(task.id),
             onDuplicate: (task) => _duplicateTask(task),
@@ -1837,13 +2125,20 @@ class _MainScreenState extends State<MainScreen> {
             },
           ),
         );
-      case 1: // Pessoas
+      case 1: // Pessoas / Equipes
         return TeamScheduleView(
           taskService: _taskService,
           executorService: _executorService,
+          conflictService: _conflictService,
           startDate: _startDate,
           endDate: _endDate,
           filteredTasks: _tasksSemFiltros, // Equipes deve usar lista sem filtros
+          teamFilters: _teamFilters,
+          onTeamDataLoaded: (opts) {
+            if (opts != null) {
+              setState(() { _teamFilterOptions = opts; });
+            }
+          },
           onEdit: (task) => _editTaskById(task.id),
           onDelete: (task) => _deleteTaskById(task.id),
           onDuplicate: (task) => _duplicateTask(task),
@@ -1872,9 +2167,16 @@ class _MainScreenState extends State<MainScreen> {
         return FleetScheduleView(
           taskService: _taskService,
           frotaService: _frotaService,
+          conflictService: _conflictService,
           startDate: _startDate,
           endDate: _endDate,
-          filteredTasks: _tasksSemFiltros, // Frota deve usar lista sem filtros
+          filteredTasks: _tasksSemFiltros,
+          fleetFilters: _fleetFilters,
+          onFleetDataLoaded: (opts) {
+            if (opts != null) {
+              setState(() { _fleetFilterOptions = opts; });
+            }
+          },
           onTasksUpdated: () async {
             print('🔄 FleetScheduleView onTasksUpdated: Recarregando tarefas...');
             await _loadTasks();
@@ -1922,7 +2224,8 @@ class _MainScreenState extends State<MainScreen> {
           if (!_showGantt) {
             return TaskTable(
               key: ValueKey('task_table_$_tasksVersion'),
-              tasks: _sortedTasks,
+              tasks: _tasksForTable,
+              warningsByTaskId: _warningsByTaskIdForTable,
               scrollController: _tableScrollController,
               taskService: _taskService,
               allSubtasksExpanded: _allSubtasksExpanded,
@@ -1944,7 +2247,8 @@ class _MainScreenState extends State<MainScreen> {
             minRightWidth: 200,
             leftChild: TaskTable(
               key: ValueKey('task_table_$_tasksVersion'),
-              tasks: _sortedTasks,
+              tasks: _tasksForTable,
+              warningsByTaskId: _warningsByTaskIdForTable,
               scrollController: _tableScrollController,
               taskService: _taskService,
               allSubtasksExpanded: _allSubtasksExpanded,
@@ -1961,15 +2265,19 @@ class _MainScreenState extends State<MainScreen> {
             ),
             rightChild: GanttChart(
               key: ValueKey('gantt_chart_${_tasksVersion}_${_expandedTasks.length}_${_expandedTasks.toList()..sort()}'),
-              tasks: _sortedTasks,
+              tasks: _tasksForTable,
               startDate: _startDate,
               endDate: _endDate,
+              scale: _ganttScale,
+              onScaleChanged: (v) => setState(() => _ganttScale = v),
               scrollController: _ganttScrollController,
               taskService: _taskService,
               allSubtasksExpanded: _allSubtasksExpanded,
               onToggleAllSubtasks: _toggleAllSubtasks,
               sortColumn: _sortColumn,
               getSortValue: _getSortValue,
+              tasksForConflictDetection: _tasksSemFiltros.isNotEmpty ? _tasksSemFiltros : _tasks,
+              conflictService: _conflictService,
               onEdit: (task) => _editTaskById(task.id),
               onDelete: (task) => _deleteTaskById(task.id),
               onDuplicate: (task) => _duplicateTask(task),
@@ -2037,6 +2345,7 @@ class _MainScreenState extends State<MainScreen> {
         return const SIView();
       case 20: // Horas
         return HorasSAPView(
+          key: _horasViewKey,
           searchQuery: _searchQuery,
           modoVisualizacao: _horasViewMode,
           onModoChange: (mode) {
@@ -2050,18 +2359,28 @@ class _MainScreenState extends State<MainScreen> {
           return _rootOnlyPlaceholder('Linhas de Transmissão');
         }
         return const LinhasTransmissaoView();
-      case 22: // Supressão de Vegetação
-        if (!(_authService.currentUser?.isRoot ?? false)) {
+      case 22: // Supressão de Vegetação (root ou jpfilho@axia.com.br)
+        if (!GtdSession.canAccessGtd) {
           return _rootOnlyPlaceholder('Supressão de Vegetação');
         }
         return const SupressaoVegetacaoView();
       case 23: // Álbuns de Imagens
         return const MediaAlbumsGalleryPage();
+      case 24: // Documentos
+        return const DocumentsPage();
+      case 25: // GTD
+        if (!GtdSession.canAccessGtd) {
+          return _rootOnlyPlaceholder('GTD');
+        }
+        return const GtdHomePage();
+      case 26: // Melhorias e Bugs
+        return const MelhoriasBugsHomeScreen();
       default:
         if (!_showGantt) {
           return TaskTable(
             key: ValueKey('task_table_$_tasksVersion'),
-            tasks: _sortedTasks,
+            tasks: _tasksForTable,
+            warningsByTaskId: _warningsByTaskIdForTable,
             scrollController: _tableScrollController,
             taskService: _taskService,
             allSubtasksExpanded: _allSubtasksExpanded,
@@ -2089,7 +2408,8 @@ class _MainScreenState extends State<MainScreen> {
               flex: 1,
               child: TaskTable(
                 key: ValueKey('task_table_$_tasksVersion'),
-                tasks: _sortedTasks,
+                tasks: _tasksForTable,
+                warningsByTaskId: _warningsByTaskIdForTable,
                 scrollController: _tableScrollController,
                 taskService: _taskService,
                 allSubtasksExpanded: _allSubtasksExpanded,
@@ -2115,9 +2435,11 @@ class _MainScreenState extends State<MainScreen> {
               flex: 1,
               child: GanttChart(
                 key: ValueKey('gantt_chart_${_tasksVersion}_${_expandedTasks.length}_${_expandedTasks.toList()..sort()}'),
-                tasks: _sortedTasks,
+                tasks: _tasksForTable,
                 startDate: _startDate,
                 endDate: _endDate,
+                scale: _ganttScale,
+                onScaleChanged: (v) => setState(() => _ganttScale = v),
                 scrollController: _ganttScrollController,
                 taskService: _taskService,
                 allSubtasksExpanded: _allSubtasksExpanded,
@@ -2126,6 +2448,8 @@ class _MainScreenState extends State<MainScreen> {
                 onTaskExpanded: _onTaskExpanded,
                 sortColumn: _sortColumn,
                 getSortValue: _getSortValue,
+                tasksForConflictDetection: _tasksSemFiltros.isNotEmpty ? _tasksSemFiltros : _tasks,
+                conflictService: _conflictService,
                 onTasksUpdated: () async {
                   print('🔄 GanttChart onTasksUpdated: Recarregando tarefas...');
                   await _loadTasks();
@@ -2157,23 +2481,60 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Widget _buildDrawer() {
+    final showBackToShortcuts = widget.onBackToShortcuts != null;
+    final menuVisibility = MenuVisibility.getForCurrentUser();
     return Drawer(
       child: SafeArea(
-        child: Sidebar(
-          isExpanded: true,
-          onToggle: () {
-            Navigator.of(context).pop();
-          },
-          selectedIndex: _sidebarSelectedIndex,
-          onItemSelected: (index) {
-            setState(() {
-              _sidebarSelectedIndex = index;
-            });
-            Navigator.of(context).pop();
-          },
-          onExport: _exportData,
-          isRoot: _authService.currentUser?.isRoot ?? false,
-        ),
+        child: showBackToShortcuts
+            ? Column(
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.home),
+                    title: const Text('Início'),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      widget.onBackToShortcuts!();
+                    },
+                  ),
+                  const Divider(height: 1),
+                  Expanded(
+                    child: Sidebar(
+                      isExpanded: true,
+                      onToggle: () {
+                        Navigator.of(context).pop();
+                      },
+                      selectedIndex: _sidebarSelectedIndex,
+                      onItemSelected: (index) {
+                        setState(() {
+                          _sidebarSelectedIndex = index;
+                        });
+                        Navigator.of(context).pop();
+                      },
+                      onExport: _exportData,
+                      isRoot: menuVisibility.isRoot,
+                      showGtd: menuVisibility.showGtd,
+                      showGtdAndSupressao: menuVisibility.showGtdAndSupressao,
+                    ),
+                  ),
+                ],
+              )
+            : Sidebar(
+                isExpanded: true,
+                onToggle: () {
+                  Navigator.of(context).pop();
+                },
+                selectedIndex: _sidebarSelectedIndex,
+                onItemSelected: (index) {
+                  setState(() {
+                    _sidebarSelectedIndex = index;
+                  });
+                  Navigator.of(context).pop();
+                },
+                onExport: _exportData,
+                isRoot: menuVisibility.isRoot,
+                showGtd: menuVisibility.showGtd,
+                showGtdAndSupressao: menuVisibility.showGtdAndSupressao,
+              ),
       ),
     );
   }
@@ -2193,7 +2554,8 @@ class _MainScreenState extends State<MainScreen> {
             key: const ValueKey('table_boundary'),
             child: TaskTable(
               key: const ValueKey('table'),
-              tasks: _sortedTasks,
+              tasks: _tasksForTable,
+              warningsByTaskId: _warningsByTaskIdForTable,
               scrollController: _tableScrollController,
               taskService: _taskService,
               allSubtasksExpanded: _allSubtasksExpanded,
@@ -2234,7 +2596,8 @@ class _MainScreenState extends State<MainScreen> {
                     key: const ValueKey('table_boundary'),
                     child: TaskTable(
                       key: const ValueKey('table'),
-                      tasks: _sortedTasks,
+                      tasks: _tasksForTable,
+                      warningsByTaskId: _warningsByTaskIdForTable,
                       scrollController: _tableScrollController,
                       taskService: _taskService,
                       allSubtasksExpanded: _allSubtasksExpanded,
@@ -2263,9 +2626,11 @@ class _MainScreenState extends State<MainScreen> {
                     key: const ValueKey('gantt_boundary'),
                     child: GanttChart(
                       key: const ValueKey('gantt'),
-                      tasks: _sortedTasks,
+                      tasks: _tasksForTable,
                       startDate: _startDate,
                       endDate: _endDate,
+                      scale: _ganttScale,
+                      onScaleChanged: (v) => setState(() => _ganttScale = v),
                       scrollController: _ganttScrollController,
                       taskService: _taskService,
                       allSubtasksExpanded: _allSubtasksExpanded,
@@ -2274,6 +2639,8 @@ class _MainScreenState extends State<MainScreen> {
                       onTaskExpanded: _onTaskExpanded,
                       sortColumn: _sortColumn,
                       getSortValue: _getSortValue,
+                      tasksForConflictDetection: _tasksSemFiltros.isNotEmpty ? _tasksSemFiltros : _tasks,
+                      conflictService: _conflictService,
                 onTasksUpdated: () async {
                   // Não fazer nada aqui - a atualização será feita via onTaskUpdated específico
                   print('🔄 GanttChart onTasksUpdated: Atualização otimizada (sem reload completo)');
@@ -2306,7 +2673,8 @@ class _MainScreenState extends State<MainScreen> {
           key: const ValueKey('table_boundary'),
           child: TaskTable(
             key: const ValueKey('table'),
-            tasks: _sortedTasks,
+            tasks: _tasksForTable,
+            warningsByTaskId: _warningsByTaskIdForTable,
             scrollController: _tableScrollController,
             taskService: _taskService,
             allSubtasksExpanded: _allSubtasksExpanded,
@@ -2333,15 +2701,19 @@ class _MainScreenState extends State<MainScreen> {
           key: const ValueKey('gantt_boundary'),
           child: GanttChart(
             key: const ValueKey('gantt'),
-            tasks: _sortedTasks,
+            tasks: _tasksForTable,
             startDate: _startDate,
             endDate: _endDate,
+            scale: _ganttScale,
+            onScaleChanged: (v) => setState(() => _ganttScale = v),
             scrollController: _ganttScrollController,
             taskService: _taskService,
             allSubtasksExpanded: _allSubtasksExpanded,
             onToggleAllSubtasks: _toggleAllSubtasks,
             sortColumn: _sortColumn,
             getSortValue: _getSortValue,
+            tasksForConflictDetection: _tasksSemFiltros.isNotEmpty ? _tasksSemFiltros : _tasks,
+            conflictService: _conflictService,
             onTasksUpdated: () async {
               print('🔄 GanttChart onTasksUpdated: Recarregando tarefas...');
               await _loadTasks();
@@ -2439,6 +2811,7 @@ class _MainScreenState extends State<MainScreen> {
           child: Dashboard(
             taskService: _taskService,
             filteredTasks: _sortedTasks,
+            warningsByTaskId: _warningsByTaskIdForTable,
           ),
         );
       }
@@ -2774,11 +3147,6 @@ class _MainScreenState extends State<MainScreen> {
 
   // Aplicar filtros
   Future<void> _applyFilters(Map<String, String?> filters) async {
-    // Mostrar indicador de loading
-    setState(() {
-      _isFiltering = true;
-    });
-    
     try {
       _currentFilters = filters;
 
@@ -2946,13 +3314,9 @@ class _MainScreenState extends State<MainScreen> {
         _tasksSemFiltros = baseTasks;
         _tasks = filtered;
         _tasksVersion++; // Incrementar versão para forçar rebuild dos widgets
-        _isFiltering = false; // Ocultar indicador de loading
       });
     } catch (e) {
       print('❌ Erro ao aplicar filtros: $e');
-      setState(() {
-        _isFiltering = false; // Ocultar indicador mesmo em caso de erro
-      });
     }
   }
 

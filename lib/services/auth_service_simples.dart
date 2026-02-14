@@ -37,6 +37,23 @@ class AuthServiceSimples {
   // Obter usuário atual
   Usuario? get currentUser => _usuarioAtual;
 
+  /// Recarrega o usuário atual do backend (com perfil: regionais, divisões, segmentos).
+  /// Útil quando a aba Frota ou outras telas dependem de regionalIds/segmentoIds atualizados.
+  Future<Usuario?> refreshCurrentUser() async {
+    if (_usuarioAtual?.id == null) return _usuarioAtual;
+    try {
+      final usuario = await _usuarioService.obterUsuarioPorId(_usuarioAtual!.id!);
+      if (usuario != null) {
+        _usuarioAtual = usuario;
+        await _authCache.saveUser(usuario);
+        return usuario;
+      }
+    } catch (e) {
+      // Manter usuário atual em caso de erro (ex.: offline)
+    }
+    return _usuarioAtual;
+  }
+
   // Verificar se está autenticado
   bool get isAuthenticated => _usuarioAtual != null;
 
@@ -122,9 +139,11 @@ class AuthServiceSimples {
     await _authCache.clear();
   }
 
-  // Atualizar usuário atual (usado após atualizar perfil)
-  void atualizarUsuarioAtual(Usuario usuario) {
+  /// Atualizar usuário atual (usado após atualizar perfil).
+  /// Também persiste no cache para que, ao reabrir o app ou restaurar sessão, o perfil atualizado seja usado.
+  Future<void> atualizarUsuarioAtual(Usuario usuario) async {
     _usuarioAtual = usuario;
+    await _authCache.saveUser(usuario);
   }
 
   // Obter nome do usuário

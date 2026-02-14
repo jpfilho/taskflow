@@ -13,7 +13,7 @@ WHERE UPPER(tipo_periodo::text) IN ('EXECUCAO', 'PLANEJAMENTO', 'DESLOCAMENTO');
 
 CREATE INDEX IF NOT EXISTS idx_tasks_status_dates 
 ON public.tasks(status, data_inicio, data_fim) 
-WHERE UPPER(status::text) <> 'CANC';
+WHERE UPPER(TRIM(COALESCE(status, ''))) NOT IN ('CANC', 'REPR');
 
 -- 2. Índice adicional para melhorar joins com tasks
 -- NOTA: Não podemos usar subquery em índice parcial, então criamos índice simples
@@ -31,7 +31,7 @@ ANALYZE public.tasks_locais;
 -- COMENTÁRIOS
 -- ============================================
 -- Esses índices ajudam o PostgreSQL a:
--- 1. Filtrar tarefas canceladas mais cedo
+-- 1. Filtrar tarefas canceladas/reprogramadas (CANC, REPR) mais cedo
 -- 2. Usar índices para ranges de datas
 -- 3. Otimizar joins e filtros por tipo_periodo
 -- 4. Melhorar performance do generate_series

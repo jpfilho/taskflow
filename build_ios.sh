@@ -67,6 +67,24 @@ echo -e "${YELLOW}📦 Instalando pods (gera dSYM)...${NC}"
 echo -e "${GREEN}✅ Pods instalados${NC}"
 echo ""
 
+# Remove frameworks de simulador do bundle (evita erro de validação na App Store:
+# "sqlite3arm64ios_sim.framework does not support the minimum OS Version")
+remove_simulator_frameworks() {
+  local app_path="$1"
+  local frameworks_dir="${app_path}/Frameworks"
+  if [[ -d "$frameworks_dir" ]]; then
+    local count=0
+    for fw in "$frameworks_dir"/*_sim*.framework; do
+      [[ -d "$fw" ]] || continue
+      rm -rf "$fw"
+      ((count++)) || true
+    done
+    if [[ $count -gt 0 ]]; then
+      echo -e "${GREEN}✅ Removidos ${count} framework(s) de simulador do bundle${NC}"
+    fi
+  fi
+}
+
 # Verificar dispositivos iOS disponíveis
 echo -e "${YELLOW}📱 Verificando dispositivos iOS disponíveis...${NC}"
 flutter devices | grep -i ios || echo -e "${YELLOW}⚠️  Nenhum dispositivo iOS conectado${NC}"
@@ -93,6 +111,9 @@ case $option in
     2)
         echo -e "${YELLOW}🔨 Fazendo build Release (IPA)...${NC}"
         flutter build ipa --release --build-number ${NEW_BUILD_NUMBER}
+        # Remover frameworks de simulador do bundle (evita rejeição na App Store)
+        RUNNER_APP="build/ios/Release-iphoneos/Runner.app"
+        [[ -d "$RUNNER_APP" ]] && remove_simulator_frameworks "$RUNNER_APP"
         echo -e "${GREEN}✅ Build Release concluído!${NC}"
         echo -e "${BLUE}📦 IPA gerado em: build/ios/ipa/${NC}"
         echo -e "${BLUE}🧾 Build number usado: ${NEW_BUILD_NUMBER}${NC}"
@@ -100,6 +121,9 @@ case $option in
     3)
         echo -e "${YELLOW}🔨 Fazendo build e abrindo no Xcode...${NC}"
         flutter build ios --release --build-number ${NEW_BUILD_NUMBER}
+        # Remover frameworks de simulador do bundle (evita rejeição na App Store)
+        RUNNER_APP="build/ios/Release-iphoneos/Runner.app"
+        [[ -d "$RUNNER_APP" ]] && remove_simulator_frameworks "$RUNNER_APP"
         echo -e "${GREEN}✅ Build concluído!${NC}"
         echo -e "${YELLOW}📱 Abrindo Xcode...${NC}"
         open ios/Runner.xcworkspace

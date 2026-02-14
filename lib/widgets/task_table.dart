@@ -19,6 +19,7 @@ import '../models/at.dart';
 import '../models/si.dart';
 import 'chat_screen.dart';
 import '../utils/responsive.dart';
+import '../features/warnings/warnings.dart';
 
 class TaskTable extends StatefulWidget {
   final List<Task> tasks;
@@ -36,7 +37,11 @@ class TaskTable extends StatefulWidget {
   final Function(String, bool)? onTaskExpanded; // Callback quando uma tarefa é expandida/colapsada
   final String? sortColumn; // Coluna de ordenação atual
   final Function(Task)? getSortValue; // Função para obter valor de ordenação
-  
+  /// Chamado quando o carregamento de contagens (notas, ordens, ícones etc.) termina (para feedback visual de loading na tela de Atividades).
+  final VoidCallback? onCountsLoaded;
+  /// Mapa taskId -> lista de alertas. Se null, usa mock para UI.
+  final Map<String, List<TaskWarning>>? warningsByTaskId;
+
   const TaskTable({
     super.key,
     required this.tasks,
@@ -54,6 +59,8 @@ class TaskTable extends StatefulWidget {
     this.onTaskExpanded,
     this.sortColumn,
     this.getSortValue,
+    this.onCountsLoaded,
+    this.warningsByTaskId,
   });
 
   @override
@@ -87,6 +94,9 @@ class _TaskTableState extends State<TaskTable> {
   Map<String, int> _ordensCount = {}; // Mapa de taskId -> quantidade de ordens
   Map<String, int> _atsCount = {}; // Mapa de taskId -> quantidade de ATs
   Map<String, int> _sisCount = {}; // Mapa de taskId -> quantidade de SIs
+  Map<String, int> _notasNaoEncerradas = {}; // taskId -> qtd notas com status não encerrado
+  Map<String, int> _ordensNaoEncerradas = {}; // taskId -> qtd ordens não encerradas
+  Map<String, int> _atsNaoEncerradas = {}; // taskId -> qtd ATs não encerradas
   Map<String, int> _frotasCount = {}; // Mapa de taskId -> quantidade de frotas
   Map<String, String> _frotasNomes = {}; // Mapa de taskId -> nome da frota
   bool get _allSubtasksExpanded => widget.allSubtasksExpanded ?? false; // Estado compartilhado ou local
@@ -256,7 +266,10 @@ class _TaskTableState extends State<TaskTable> {
   }
 
   Future<void> _loadCounts() async {
-    if (widget.tasks.isEmpty || !mounted) return;
+    if (widget.tasks.isEmpty || !mounted) {
+      if (mounted) widget.onCountsLoaded?.call();
+      return;
+    }
 
     try {
       final taskIds = widget.tasks.map((t) => t.id).toList();
@@ -269,6 +282,13 @@ class _TaskTableState extends State<TaskTable> {
       final atsFuture = _atService.contarATsPorTarefas(taskIds);
       final sisFuture = _siService.contarSIsPorTarefas(taskIds);
       final frotasFuture = _frotaService.contarFrotasPorTarefas(taskIds);
+      final encerramentoFuture = widget.taskService != null
+          ? widget.taskService!.getEncerramentoSapPorTarefas(taskIds)
+          : Future.value((
+              notasNaoEncerradas: <String, int>{},
+              ordensNaoEncerradas: <String, int>{},
+              atsNaoEncerradas: <String, int>{},
+            ));
       
       final results = await Future.wait([
         mensagensFuture,
@@ -278,33 +298,49 @@ class _TaskTableState extends State<TaskTable> {
         atsFuture,
         sisFuture,
         frotasFuture,
+        encerramentoFuture,
       ]);
       
-      // Carregar nomes das frotas
+      // Carregar nomes das frotas (nome - placa - modelo): preferir task.frota das tasks já carregadas (inclui marca)
+      final frotasCountMap = results[6] as Map<String, int>;
       final frotasNomesMap = <String, String>{};
-      for (var taskId in taskIds) {
-        if (results[6][taskId] != null && results[6][taskId]! > 0) {
-          final frotaNome = await _frotaService.getFrotaNomePorTarefa(taskId);
-          if (frotaNome != null) {
-            frotasNomesMap[taskId] = frotaNome;
+      for (var task in widget.tasks) {
+        if (frotasCountMap[task.id] != null && frotasCountMap[task.id]! > 0) {
+          if (task.frota.isNotEmpty && task.frota != '-N/A-') {
+            frotasNomesMap[task.id] = task.frota;
+          } else {
+            final frotaNome = await _frotaService.getFrotaNomePorTarefa(task.id);
+            if (frotaNome != null) {
+              frotasNomesMap[task.id] = frotaNome;
+            }
           }
         }
       }
       
+      final enc = results.length > 7 ? results[7] : null;
+      final notasNaoEnc = enc != null ? Map<String, int>.from((enc as dynamic).notasNaoEncerradas as Map) : <String, int>{};
+      final ordensNaoEnc = enc != null ? Map<String, int>.from((enc as dynamic).ordensNaoEncerradas as Map) : <String, int>{};
+      final atsNaoEnc = enc != null ? Map<String, int>.from((enc as dynamic).atsNaoEncerradas as Map) : <String, int>{};
+
       if (mounted) {
         setState(() {
-          _mensagensCount = results[0];
-          _anexosCount = results[1];
-          _notasSAPCount = results[2];
-          _ordensCount = results[3];
-          _atsCount = results[4];
-          _sisCount = results[5];
-          _frotasCount = results[6];
+          _mensagensCount = results[0] as Map<String, int>;
+          _anexosCount = results[1] as Map<String, int>;
+          _notasSAPCount = results[2] as Map<String, int>;
+          _ordensCount = results[3] as Map<String, int>;
+          _atsCount = results[4] as Map<String, int>;
+          _sisCount = results[5] as Map<String, int>;
+          _frotasCount = frotasCountMap;
           _frotasNomes = frotasNomesMap;
+          _notasNaoEncerradas = notasNaoEnc;
+          _ordensNaoEncerradas = ordensNaoEnc;
+          _atsNaoEncerradas = atsNaoEnc;
         });
+        widget.onCountsLoaded?.call();
       }
     } catch (e) {
       print('Erro ao carregar contagens: $e');
+      if (mounted) widget.onCountsLoaded?.call();
     }
   }
 
@@ -587,11 +623,6 @@ class _TaskTableState extends State<TaskTable> {
   @override
   Widget build(BuildContext context) {
     final isMobile = Responsive.isMobile(context);
-    final isTablet = Responsive.isTablet(context);
-    final isDesktop = Responsive.isDesktop(context);
-    final screenWidth = MediaQuery.of(context).size.width;
-    // Apenas desktops grandes (>= 1280px) mostram a legenda
-    final isLargeDesktop = isDesktop && screenWidth >= 1280;
     
     final hierarchicalTasks = _buildHierarchicalTasks();
     
@@ -624,28 +655,18 @@ class _TaskTableState extends State<TaskTable> {
       }
     }
     
-    // Para mobile/tablet, alinhar topo com o Gantt: remover espaço de legenda e toggle.
-    final double legendHeight = (isMobile || isTablet) ? 0.0 : _getStatusLegendHeight();
-
+    // Em qualquer dispositivo: faixa superior fixa (mesma altura da linha de mês do Gantt)
+    // para o cabeçalho da tabela e o cabeçalho dos dias do Gantt iniciarem e terminarem na mesma altura.
     return Container(
       decoration: BoxDecoration(
         border: Border.all(color: Colors.grey[300]!),
       ),
       child: Column(
         children: [
-          // Legenda de status (apenas em desktops grandes >= 1280px)
-          // Se não for desktop grande, manter espaço reservado para manter altura consistente
-          if (isLargeDesktop) 
-            _buildStatusLegend(isMobile)
-          else
-            SizedBox(height: legendHeight),
-          // Botão de expandir/colapsar: não mostrar em mobile/tablet para alinhar o topo
-          if (!isMobile && !isTablet) _buildToggleButton(isMobile),
-          // Em mobile/tablet, adicionar espaço de 25px para alinhar com o cabeçalho de mês do Gantt
-          if (isMobile || isTablet) const SizedBox(height: 25),
-          // Cabeçalho fixo com scroll horizontal - altura 50px para alinhar com a linha de dias do Gantt
+          SizedBox(height: Responsive.kActivitiesHeaderTopHeight),
+          // Cabeçalho da tabela: mesma altura que a linha de dias do Gantt (kActivitiesHeaderRowHeight)
           Container(
-            height: 50,
+            height: Responsive.kActivitiesHeaderRowHeight,
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
@@ -683,6 +704,7 @@ class _TaskTableState extends State<TaskTable> {
                 }
                 // Usar a mesma largura do cabeçalho (já inclui folga de segurança)
                 final minWidth = _calculateTotalTableWidth(isMobile);
+                final effectiveWarnings = widget.warningsByTaskId ?? {};
                 
                 return SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
@@ -775,6 +797,7 @@ class _TaskTableState extends State<TaskTable> {
                                     hasExecutorPeriods,
                                     statusBackgroundColor,
                                     minWidth,
+                                    effectiveWarnings,
                                   ),
                                 ),
                               ),
@@ -800,14 +823,15 @@ class _TaskTableState extends State<TaskTable> {
     final tipoWidth = isMobile ? 90.0 : 100.0;
     final tarefaWidth = isMobile ? 150.0 : 184.0;
     final executorWidth = isMobile ? 120.0 : 150.0;
-    final coordenadorWidth = isMobile ? 100.0 : 130.0;
+    final coordenadorWidth = isMobile ? 85.0 : 110.0;
     final frotaWidth = isMobile ? 45.0 : 50.0;
     final chatWidth = isMobile ? 45.0 : 50.0;
     final anexosWidth = isMobile ? 45.0 : 50.0;
     final notasSAPWidth = isMobile ? 45.0 : 50.0;
     final ordensWidth = isMobile ? 45.0 : 50.0;
-    final atsWidth = isMobile ? 45.0 : 50.0;
-    final sisWidth = isMobile ? 45.0 : 50.0;
+    final atsWidth = isMobile ? 38.0 : 42.0;
+    final sisWidth = isMobile ? 38.0 : 42.0;
+    final alertasWidth = isMobile ? 45.0 : 50.0;
     // Botão foi movido para a legenda, não precisa mais incluir aqui
     // Adiciona uma margem de segurança maior para evitar overflow por arredondamentos/paddings
     const double safetyPadding = 32.0;
@@ -825,6 +849,7 @@ class _TaskTableState extends State<TaskTable> {
         ordensWidth +
         atsWidth +
         sisWidth +
+        alertasWidth +
         safetyPadding;
   }
 
@@ -836,14 +861,15 @@ class _TaskTableState extends State<TaskTable> {
     final tipoWidth = isMobile ? 90.0 : 100.0;
     final tarefaWidth = isMobile ? 150.0 : 184.0;
     final executorWidth = isMobile ? 120.0 : 150.0;
-    final coordenadorWidth = isMobile ? 100.0 : 130.0;
+    final coordenadorWidth = isMobile ? 85.0 : 110.0;
     final frotaWidth = isMobile ? 45.0 : 50.0;
     final chatWidth = isMobile ? 45.0 : 50.0;
     final anexosWidth = isMobile ? 45.0 : 50.0;
     final notasSAPWidth = isMobile ? 45.0 : 50.0;
     final ordensWidth = isMobile ? 45.0 : 50.0;
-    final atsWidth = isMobile ? 45.0 : 50.0;
-    final sisWidth = isMobile ? 45.0 : 50.0;
+    final atsWidth = isMobile ? 38.0 : 42.0;
+    final sisWidth = isMobile ? 38.0 : 42.0;
+    final alertasWidth = isMobile ? 45.0 : 50.0;
     
     return Row(
       children: [
@@ -861,6 +887,7 @@ class _TaskTableState extends State<TaskTable> {
         _buildHeaderCell('ORDEM', ordensWidth, isMobile),
         _buildHeaderCell('AT', atsWidth, isMobile),
         _buildHeaderCell('SI', sisWidth, isMobile),
+        _buildHeaderCell('ALERTAS', alertasWidth, isMobile),
       ],
     );
   }
@@ -876,9 +903,10 @@ class _TaskTableState extends State<TaskTable> {
     bool hasExecutorPeriods,
     Color statusBackgroundColor,
     double rowMinWidth,
+    Map<String, List<TaskWarning>> effectiveWarnings,
   ) {
-    // Criar tooltip com informações adicionais
-    final tooltipText = _buildTooltipText(task);
+    final baseTaskId = task.id.split('_executor_').first.split('_frota_').first;
+    final taskWarnings = effectiveWarnings[baseTaskId] ?? const <TaskWarning>[];
     
     // Usar as mesmas larguras fixas do cabeçalho
     final acoesWidth = isMobile ? 50.0 : 60.0;
@@ -887,24 +915,23 @@ class _TaskTableState extends State<TaskTable> {
     final tipoWidth = isMobile ? 90.0 : 100.0;
     final tarefaWidth = isMobile ? 150.0 : 184.0;
     final executorWidth = isMobile ? 120.0 : 150.0;
-    final coordenadorWidth = isMobile ? 100.0 : 130.0;
+    final coordenadorWidth = isMobile ? 85.0 : 110.0;
     final frotaWidth = isMobile ? 45.0 : 50.0;
     final chatWidth = isMobile ? 45.0 : 50.0;
     final anexosWidth = isMobile ? 45.0 : 50.0;
     final notasSAPWidth = isMobile ? 45.0 : 50.0;
     final ordensWidth = isMobile ? 45.0 : 50.0;
-    final atsWidth = isMobile ? 45.0 : 50.0;
-    final sisWidth = isMobile ? 45.0 : 50.0;
+    final atsWidth = isMobile ? 38.0 : 42.0;
+    final sisWidth = isMobile ? 38.0 : 42.0;
+    final alertasWidth = isMobile ? 45.0 : 50.0;
     // Botão foi movido para a legenda, não precisa mais incluir aqui
 
-    return Tooltip(
-      message: tooltipText,
-      preferBelow: false,
+    return SizedBox(
+      width: rowMinWidth,
+      height: 50,
       child: ClipRect(
-        child: SizedBox(
-          width: rowMinWidth,
-          child: Row(
-            children: [
+        child: Row(
+          children: [
           // Coluna de AÇÕES (primeira coluna)
           _buildActionsCell(task, acoesWidth, isMobile),
           // Coluna de STATUS com ícone de expansão
@@ -985,9 +1012,43 @@ class _TaskTableState extends State<TaskTable> {
           _buildATCell(task, atsWidth, isMobile, statusBackgroundColor),
           // Coluna de SIs (clicável)
           _buildSICell(task, sisWidth, isMobile, statusBackgroundColor),
-            ],
-          ),
+          // Coluna de ALERTAS (badge + drawer/bottom sheet)
+          _buildAlertasCell(task, alertasWidth, isMobile, statusBackgroundColor, taskWarnings),
+          ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildAlertasCell(Task task, double width, bool isMobile, Color rowBackgroundColor, List<TaskWarning> taskWarnings) {
+    return SizedBox(
+      width: width,
+      height: 50,
+      child: WarningsBadge(
+        warnings: taskWarnings,
+        isMobile: isMobile,
+        rowBackgroundColor: rowBackgroundColor,
+        onTap: () {
+          if (taskWarnings.isEmpty) return;
+          showWarningsPanel(
+            context: context,
+            taskTarefaLabel: task.tarefa,
+            warnings: taskWarnings,
+            debugTaskId: task.id,
+            debugTaskStatus: task.status,
+            debugTaskStatusId: task.statusId,
+            onUpdateStatus: () {
+              if (!context.mounted) return;
+              Navigator.of(context).pop();
+              widget.onEdit?.call(task);
+            },
+            onAdjustDates: () {
+              if (!context.mounted) return;
+              Navigator.of(context).pop();
+              widget.onEdit?.call(task);
+            },
+          );
+        },
       ),
     );
   }
@@ -1476,7 +1537,15 @@ class _TaskTableState extends State<TaskTable> {
   Widget _buildNotaSAPCell(Task task, double width, bool isMobile, Color statusBackgroundColor) {
     final notasCount = _notasSAPCount[task.id] ?? 0;
     final hasNotas = notasCount > 0;
-    final notaColor = hasNotas ? Colors.green : Colors.grey[400];
+    final isConc = task.status.toUpperCase().trim() == 'CONC';
+    final notasNaoEnc = _notasNaoEncerradas[task.id] ?? 0;
+    final notaColor = !isConc
+        ? (hasNotas ? Colors.black87 : Colors.grey[400]!)
+        : (!hasNotas
+            ? Colors.grey[400]!
+            : notasNaoEnc > 0
+                ? Colors.red
+                : Colors.green);
     
     return SizedBox(
       width: width,
@@ -1521,7 +1590,15 @@ class _TaskTableState extends State<TaskTable> {
   Widget _buildOrdemCell(Task task, double width, bool isMobile, Color statusBackgroundColor) {
     final ordensCount = _ordensCount[task.id] ?? 0;
     final hasOrdens = ordensCount > 0;
-    final ordemColor = hasOrdens ? Colors.green : Colors.grey[400];
+    final isConc = task.status.toUpperCase().trim() == 'CONC';
+    final ordensNaoEnc = _ordensNaoEncerradas[task.id] ?? 0;
+    final ordemColor = !isConc
+        ? (hasOrdens ? Colors.black87 : Colors.grey[400]!)
+        : (!hasOrdens
+            ? Colors.grey[400]!
+            : ordensNaoEnc > 0
+                ? Colors.red
+                : Colors.green);
     
     return SizedBox(
       width: width,
@@ -1566,7 +1643,15 @@ class _TaskTableState extends State<TaskTable> {
   Widget _buildATCell(Task task, double width, bool isMobile, Color statusBackgroundColor) {
     final atsCount = _atsCount[task.id] ?? 0;
     final hasATs = atsCount > 0;
-    final atColor = hasATs ? Colors.green : Colors.grey[400];
+    final isConc = task.status.toUpperCase().trim() == 'CONC';
+    final atsNaoEnc = _atsNaoEncerradas[task.id] ?? 0;
+    final atColor = !isConc
+        ? (hasATs ? Colors.black87 : Colors.grey[400]!)
+        : (!hasATs
+            ? Colors.grey[400]!
+            : atsNaoEnc > 0
+                ? Colors.red
+                : Colors.green);
     
     return SizedBox(
       width: width,

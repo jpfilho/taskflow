@@ -11,7 +11,7 @@ class LocalDatabaseService {
 
   static Database? _database;
   static const String _databaseName = 'taskflow_local.db';
-  static const int _databaseVersion = 2;
+  static const int _databaseVersion = 6;
 
   Future<Database> get database async {
     if (_database != null) return _database!;
@@ -60,14 +60,21 @@ class LocalDatabaseService {
       )
     ''');
 
-    // Tabela de tarefas local
+    // Tabela de tarefas local (local_id, equipe_id, precisa_si alinhados ao Supabase)
     await db.execute('''
       CREATE TABLE tasks_local (
         id TEXT PRIMARY KEY,
         status TEXT NOT NULL,
+        status_id TEXT,
         regional TEXT,
+        regional_id TEXT,
         divisao TEXT,
+        divisao_id TEXT,
         local TEXT,
+        local_id TEXT,
+        segmento TEXT,
+        segmento_id TEXT,
+        equipe_id TEXT,
         tipo TEXT,
         ordem TEXT,
         tarefa TEXT NOT NULL,
@@ -82,19 +89,17 @@ class LocalDatabaseService {
         horas_executadas REAL,
         prioridade TEXT,
         parent_id TEXT,
-        segmento_id TEXT,
-        regional_id TEXT,
-        divisao_id TEXT,
         data_criacao INTEGER,
         data_atualizacao INTEGER,
         created_at INTEGER,
         updated_at INTEGER,
+        precisa_si INTEGER,
         sync_status TEXT DEFAULT 'pending',
         last_synced INTEGER
       )
     ''');
 
-    // Tabela de segmentos Gantt local
+    // Tabela de segmentos Gantt local (created_at/updated_at alinhados ao Supabase)
     await db.execute('''
       CREATE TABLE gantt_segments_local (
         id TEXT PRIMARY KEY,
@@ -103,6 +108,8 @@ class LocalDatabaseService {
         data_fim INTEGER NOT NULL,
         label TEXT,
         tipo TEXT NOT NULL,
+        created_at INTEGER,
+        updated_at INTEGER,
         tipo_periodo TEXT DEFAULT 'EXECUCAO',
         sync_status TEXT DEFAULT 'pending',
         last_synced INTEGER,
@@ -316,6 +323,44 @@ class LocalDatabaseService {
       )
     ''');
 
+    // Tabela versoes (módulo Melhorias e Bugs)
+    await db.execute('''
+      CREATE TABLE versoes_local (
+        id TEXT PRIMARY KEY,
+        nome TEXT NOT NULL,
+        descricao TEXT,
+        data_prevista_lancamento INTEGER,
+        data_lancamento INTEGER,
+        ordem INTEGER DEFAULT 0,
+        created_at INTEGER,
+        updated_at INTEGER,
+        sync_status TEXT DEFAULT 'pending',
+        last_synced INTEGER
+      )
+    ''');
+
+    // Tabela melhorias_bugs (módulo Melhorias e Bugs)
+    await db.execute('''
+      CREATE TABLE melhorias_bugs_local (
+        id TEXT PRIMARY KEY,
+        tipo TEXT NOT NULL,
+        titulo TEXT NOT NULL,
+        descricao TEXT,
+        status TEXT NOT NULL DEFAULT 'BACKLOG',
+        versao_id TEXT,
+        prioridade TEXT,
+        created_by TEXT,
+        created_at INTEGER,
+        updated_at INTEGER,
+        concluido_em INTEGER,
+        reaberto_em INTEGER,
+        versao_corrigida TEXT,
+        sync_status TEXT DEFAULT 'pending',
+        last_synced INTEGER,
+        FOREIGN KEY (versao_id) REFERENCES versoes_local(id) ON DELETE SET NULL
+      )
+    ''');
+
     // Índices para melhor performance
     await db.execute('CREATE INDEX idx_tasks_local_parent_id ON tasks_local(parent_id)');
     await db.execute('CREATE INDEX idx_tasks_local_status ON tasks_local(status)');
@@ -324,6 +369,8 @@ class LocalDatabaseService {
     await db.execute('CREATE INDEX idx_sync_queue_synced ON sync_queue(synced)');
     await db.execute('CREATE INDEX idx_sync_queue_table ON sync_queue(table_name)');
     await db.execute('CREATE INDEX idx_sync_queue_next_retry ON sync_queue(next_retry_at)');
+    await db.execute('CREATE INDEX idx_melhorias_bugs_local_status ON melhorias_bugs_local(status)');
+    await db.execute('CREATE INDEX idx_melhorias_bugs_local_versao_id ON melhorias_bugs_local(versao_id)');
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -346,6 +393,82 @@ class LocalDatabaseService {
       } catch (_) {}
       try {
         await db.execute('CREATE INDEX idx_sync_queue_next_retry ON sync_queue(next_retry_at)');
+      } catch (_) {}
+    }
+    if (oldVersion < 3) {
+      // tasks_local: colunas usadas pelo task_service (status_id, segmento; garantir ordem das colunas de ID)
+      try {
+        await db.execute('ALTER TABLE tasks_local ADD COLUMN status_id TEXT');
+      } catch (_) {}
+      try {
+        await db.execute('ALTER TABLE tasks_local ADD COLUMN segmento TEXT');
+      } catch (_) {}
+    }
+    if (oldVersion < 4) {
+      // gantt_segments_local: colunas criadas pelo Supabase (created_at, updated_at)
+      try {
+        await db.execute('ALTER TABLE gantt_segments_local ADD COLUMN created_at INTEGER');
+      } catch (_) {}
+      try {
+        await db.execute('ALTER TABLE gantt_segments_local ADD COLUMN updated_at INTEGER');
+      } catch (_) {}
+    }
+    if (oldVersion < 5) {
+      // tasks_local: colunas retornadas pelo Supabase (local_id, equipe_id, precisa_si)
+      try {
+        await db.execute('ALTER TABLE tasks_local ADD COLUMN local_id TEXT');
+      } catch (_) {}
+      try {
+        await db.execute('ALTER TABLE tasks_local ADD COLUMN equipe_id TEXT');
+      } catch (_) {}
+      try {
+        await db.execute('ALTER TABLE tasks_local ADD COLUMN precisa_si INTEGER');
+      } catch (_) {}
+    }
+    if (oldVersion < 6) {
+      // Módulo Melhorias e Bugs: versoes_local, melhorias_bugs_local
+      try {
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS versoes_local (
+            id TEXT PRIMARY KEY,
+            nome TEXT NOT NULL,
+            descricao TEXT,
+            data_prevista_lancamento INTEGER,
+            data_lancamento INTEGER,
+            ordem INTEGER DEFAULT 0,
+            created_at INTEGER,
+            updated_at INTEGER,
+            sync_status TEXT DEFAULT 'pending',
+            last_synced INTEGER
+          )
+        ''');
+      } catch (_) {}
+      try {
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS melhorias_bugs_local (
+            id TEXT PRIMARY KEY,
+            tipo TEXT NOT NULL,
+            titulo TEXT NOT NULL,
+            descricao TEXT,
+            status TEXT NOT NULL DEFAULT 'BACKLOG',
+            versao_id TEXT,
+            prioridade TEXT,
+            created_by TEXT,
+            created_at INTEGER,
+            updated_at INTEGER,
+            concluido_em INTEGER,
+            reaberto_em INTEGER,
+            versao_corrigida TEXT,
+            sync_status TEXT DEFAULT 'pending',
+            last_synced INTEGER
+          )
+        ''');
+      } catch (_) {}
+      try {
+        await db.execute('CREATE INDEX IF NOT EXISTS idx_melhorias_bugs_local_status ON melhorias_bugs_local(status)');
+      } catch (_) {}
+      try {
+        await db.execute('CREATE INDEX IF NOT EXISTS idx_melhorias_bugs_local_versao_id ON melhorias_bugs_local(versao_id)');
       } catch (_) {}
     }
   }
@@ -376,6 +499,37 @@ class LocalDatabaseService {
       'next_retry_at': nextRetryAt,
       'last_error': lastError,
     });
+  }
+
+  /// Retorna a quantidade total de itens pendentes de sync (sync_queue + tasks_local + gantt_segments_local).
+  Future<int> getPendingSyncCount() async {
+    final db = await database;
+    final queue = await db.query(
+      'sync_queue',
+      where: 'synced = ? AND (status = ? OR status = ? OR status = ?)',
+      whereArgs: [0, 'pending', 'retrying', 'failed'],
+    );
+    final tasks = await db.query(
+      'tasks_local',
+      where: 'sync_status = ?',
+      whereArgs: ['pending'],
+    );
+    final segments = await db.query(
+      'gantt_segments_local',
+      where: 'sync_status = ?',
+      whereArgs: ['pending'],
+    );
+    final melhoriasBugs = await db.query(
+      'melhorias_bugs_local',
+      where: 'sync_status = ?',
+      whereArgs: ['pending'],
+    );
+    final versoes = await db.query(
+      'versoes_local',
+      where: 'sync_status = ?',
+      whereArgs: ['pending'],
+    );
+    return queue.length + tasks.length + segments.length + melhoriasBugs.length + versoes.length;
   }
 
   Future<List<Map<String, dynamic>>> getPendingSyncItems() async {
@@ -482,6 +636,23 @@ class LocalDatabaseService {
     return ageMs <= ttl.inMilliseconds;
   }
 
+  /// Corrige segmentos que estão 'pending' mas cuja tarefa já está 'synced' (ex.: cache após filterTasks).
+  /// Evita que o banner "X pendentes" fique sempre aparecendo por causa desse bug antigo.
+  Future<void> markSegmentsSyncedWhereTaskSynced() async {
+    try {
+      final db = await database;
+      final now = DateTime.now().millisecondsSinceEpoch;
+      await db.rawUpdate('''
+        UPDATE gantt_segments_local
+        SET sync_status = 'synced', last_synced = ?
+        WHERE sync_status = 'pending'
+          AND task_id IN (SELECT id FROM tasks_local WHERE sync_status = 'synced')
+      ''', [now]);
+    } catch (e) {
+      // Ignorar; não quebrar o fluxo
+    }
+  }
+
   // Limpar banco local (útil para testes ou reset)
   Future<void> clearLocalDatabase() async {
     final db = await database;
@@ -503,6 +674,8 @@ class LocalDatabaseService {
     await db.delete('tipos_atividade_local');
     await db.delete('status_local');
     await db.delete('feriados_local');
+    await db.delete('melhorias_bugs_local');
+    await db.delete('versoes_local');
   }
 
   // Fechar banco

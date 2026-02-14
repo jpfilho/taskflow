@@ -40,20 +40,31 @@ class VersionCheckService {
       );
 
       if (response.statusCode != 200) return;
-      final serverVersion = response.body.trim();
+      final raw = response.body.trim();
+      if (raw.isEmpty) return;
+      // Servidor pode devolver index.html (SPA fallback) quando version.txt não existe
+      final lower = raw.toLowerCase();
+      if (lower.startsWith('<!doctype') || lower.startsWith('<html')) return;
+
+      // Usar só a primeira linha e trim para evitar diferenças de quebra de linha/cache
+      final serverVersion = raw.split(RegExp(r'[\r\n]+')).first.trim();
       if (serverVersion.isEmpty) return;
 
       if (_currentVersion == null) {
         _currentVersion = serverVersion;
         if (kDebugMode) {
-          print('📌 Versão atual da aplicação: $serverVersion');
+          final logVersion = serverVersion.length > 80 ? '${serverVersion.substring(0, 80)}...' : serverVersion;
+          print('📌 Versão atual da aplicação: $logVersion');
         }
         return;
       }
 
       if (_currentVersion != serverVersion) {
         _currentVersion = serverVersion;
-        hasNewVersion.value = true;
+        // Em debug (ex.: flutter run) não mostrar banner para não atrapalhar desenvolvimento
+        if (!kDebugMode) {
+          hasNewVersion.value = true;
+        }
         if (kDebugMode) {
           print('🆕 Nova versão disponível: $serverVersion');
         }

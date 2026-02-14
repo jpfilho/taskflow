@@ -1,6 +1,6 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'dart:async';
 import '../models/task.dart';
 import '../models/status.dart';
 import '../models/anexo.dart';
@@ -61,7 +61,8 @@ class _TaskCardsViewState extends State<TaskCardsView> {
   final SIService _siService = SIService();
   final TipoAtividadeService _tipoService = TipoAtividadeService();
   Map<String, Status> _statusMap = {}; // Mapa de código de status -> Status
-  Map<String, int> _notasSAPCount = {}; // Mapa de taskId -> quantidade de notas SAP
+  Map<String, int> _notasSAPCount =
+      {}; // Mapa de taskId -> quantidade de notas SAP
   Map<String, int> _ordensCount = {}; // Mapa de taskId -> quantidade de ordens
   Map<String, int> _atsCount = {}; // Mapa de taskId -> quantidade de ATs
   Map<String, int> _sisCount = {}; // Mapa de taskId -> quantidade de SIs
@@ -79,6 +80,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
   final Map<String, List<Mensagem>> _mensagensPorTarefa = {};
   // Mapa para armazenar grupos de chat por tarefa (taskId -> grupoId)
   final Map<String, String?> _grupoIdPorTarefa = {};
+  // Alertas geoespaciais por tarefa (id -> mapa de tipo+janela)
   // Controllers para campos de comentário (taskId -> TextEditingController)
   final Map<String, TextEditingController> _commentControllers = {};
   // Lista ordenada de tarefas
@@ -92,7 +94,17 @@ class _TaskCardsViewState extends State<TaskCardsView> {
     final raw = t.si.trim();
     if (raw.isEmpty) return [];
     final lower = raw.toLowerCase();
-    const invalids = {'n/a', '-n/a-', '-n/a', 'n/a-', 'na', 'sem', '-', 's/i', 's.i'};
+    const invalids = {
+      'n/a',
+      '-n/a-',
+      '-n/a',
+      'n/a-',
+      'na',
+      'sem',
+      '-',
+      's/i',
+      's.i',
+    };
     if (invalids.contains(lower)) return [];
     return raw
         .split(RegExp(r'[;,]'))
@@ -100,8 +112,10 @@ class _TaskCardsViewState extends State<TaskCardsView> {
         .where((e) => e.isNotEmpty && !invalids.contains(e.toLowerCase()))
         .toList();
   }
+
   // Subscriptions de streams de mensagens (grupoId -> StreamSubscription)
-  final Map<String, StreamSubscription<List<Mensagem>>> _mensagensSubscriptions = {};
+  final Map<String, StreamSubscription<List<Mensagem>>>
+  _mensagensSubscriptions = {};
   StreamSubscription<String>? _statusChangeSubscription;
 
   Color _getStatusBadgeColor(String status) {
@@ -111,7 +125,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
       // Usar a cor do status para o badge
       return statusObj.color;
     }
-    
+
     // Fallback para cores padrão se não encontrar
     switch (status) {
       case 'ANDA':
@@ -131,7 +145,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
     if (statusObj != null) {
       return statusObj.status; // Retornar o nome do status
     }
-    
+
     // Fallback para labels padrão se não encontrar
     switch (status) {
       case 'ANDA':
@@ -300,19 +314,19 @@ class _TaskCardsViewState extends State<TaskCardsView> {
     if (widget.tasks.isEmpty || !mounted) return;
     try {
       final taskIds = widget.tasks.map((t) => t.id).toList();
-      
+
       final notasSAPFuture = _notaSAPService.contarNotasPorTarefas(taskIds);
       final ordensFuture = _ordemService.contarOrdensPorTarefas(taskIds);
       final atsFuture = _atService.contarATsPorTarefas(taskIds);
       final sisFuture = _siService.contarSIsPorTarefas(taskIds);
-      
+
       final results = await Future.wait([
         notasSAPFuture,
         ordensFuture,
         atsFuture,
         sisFuture,
       ]);
-      
+
       if (mounted) {
         setState(() {
           _notasSAPCount = results[0];
@@ -367,9 +381,13 @@ class _TaskCardsViewState extends State<TaskCardsView> {
             _anexosPorTarefa[task.id] = anexos;
             // Encontrar todas as imagens
             if (anexos.isNotEmpty) {
-              final imagens = anexos.where((anexo) => anexo.tipoArquivo == 'imagem').toList();
+              final imagens = anexos
+                  .where((anexo) => anexo.tipoArquivo == 'imagem')
+                  .toList();
               if (imagens.isNotEmpty) {
-                final urls = imagens.map((img) => _anexoService.getPublicUrl(img)).toList();
+                final urls = imagens
+                    .map((img) => _anexoService.getPublicUrl(img))
+                    .toList();
                 _imagensPorTarefa[task.id] = urls;
                 // Inicializar índice apenas se houver múltiplas imagens
                 if (imagens.length > 1) {
@@ -424,9 +442,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
     try {
       final statusList = await _statusService.getAllStatus();
       setState(() {
-        _statusMap = {
-          for (var status in statusList) status.codigo: status
-        };
+        _statusMap = {for (var status in statusList) status.codigo: status};
       });
     } catch (e) {
       print('Erro ao carregar status: $e');
@@ -467,10 +483,12 @@ class _TaskCardsViewState extends State<TaskCardsView> {
                     .order('created_at', ascending: false)
                     .limit(1)
                     .maybeSingle();
-                
+
                 if (response != null && response['created_at'] != null) {
                   setState(() {
-                    _ultimaMensagemPorTarefa[task.id] = DateTime.parse(response['created_at'] as String);
+                    _ultimaMensagemPorTarefa[task.id] = DateTime.parse(
+                      response['created_at'] as String,
+                    );
                   });
                 } else {
                   setState(() {
@@ -495,7 +513,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
           });
         }
       }
-      
+
       _applySorting();
       setState(() {});
     } catch (e) {
@@ -510,7 +528,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
     try {
       // Cancelar subscriptions antigas de grupos que não pertencem mais a nenhuma tarefa atual
       final gruposAtuais = <String>{};
-      
+
       // Primeiro, coletar todos os grupos das tarefas atuais
       for (var task in widget.tasks) {
         final grupoId = _grupoIdPorTarefa[task.id];
@@ -518,7 +536,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
           gruposAtuais.add(grupoId);
         }
       }
-      
+
       // Remover subscriptions de grupos que não estão mais nas tarefas atuais
       final gruposParaRemover = <String>[];
       for (var entry in _mensagensSubscriptions.entries) {
@@ -527,12 +545,12 @@ class _TaskCardsViewState extends State<TaskCardsView> {
           gruposParaRemover.add(grupoId);
         }
       }
-      
+
       for (var grupoId in gruposParaRemover) {
         _mensagensSubscriptions[grupoId]?.cancel();
         _mensagensSubscriptions.remove(grupoId);
       }
-      
+
       // Carregar mensagens para todas as tarefas
       for (var task in widget.tasks) {
         try {
@@ -542,14 +560,14 @@ class _TaskCardsViewState extends State<TaskCardsView> {
             setState(() {
               _grupoIdPorTarefa[task.id] = grupoId;
             });
-            
+
             // Carregar mensagens do grupo inicialmente
             try {
               final mensagens = await _chatService.listarMensagens(grupoId);
               setState(() {
                 _mensagensPorTarefa[task.id] = mensagens;
               });
-              
+
               // Configurar stream de mensagens em tempo real para refletir edições/exclusões
               if (!_mensagensSubscriptions.containsKey(grupoId)) {
                 _setupMensagensStream(grupoId, task.id);
@@ -582,33 +600,36 @@ class _TaskCardsViewState extends State<TaskCardsView> {
   void _setupMensagensStream(String grupoId, String taskId) {
     // Cancelar subscription anterior se existir
     _mensagensSubscriptions[grupoId]?.cancel();
-    
+
     // Criar nova subscription para o stream de mensagens
     final subscription = _chatService
         .streamMensagens(grupoId)
-        .listen((mensagens) {
-      // Atualizar mensagens da tarefa quando houver mudanças (edições/exclusões)
-      if (mounted) {
-        setState(() {
-          _mensagensPorTarefa[taskId] = mensagens;
-          
-          // Atualizar data da última mensagem se houver mensagens
-          if (mensagens.isNotEmpty) {
-            final ultimaMensagem = mensagens.last;
-            _ultimaMensagemPorTarefa[taskId] = ultimaMensagem.createdAt;
-          } else {
-            // Se não há mais mensagens, limpar a data
-            _ultimaMensagemPorTarefa[taskId] = null;
-          }
-        });
-        
-        // Reordenar tarefas após atualização
-        _applySorting();
-      }
-    }, onError: (error) {
-      print('Erro no stream de mensagens do grupo $grupoId: $error');
-    });
-    
+        .listen(
+          (mensagens) {
+            // Atualizar mensagens da tarefa quando houver mudanças (edições/exclusões)
+            if (mounted) {
+              setState(() {
+                _mensagensPorTarefa[taskId] = mensagens;
+
+                // Atualizar data da última mensagem se houver mensagens
+                if (mensagens.isNotEmpty) {
+                  final ultimaMensagem = mensagens.last;
+                  _ultimaMensagemPorTarefa[taskId] = ultimaMensagem.createdAt;
+                } else {
+                  // Se não há mais mensagens, limpar a data
+                  _ultimaMensagemPorTarefa[taskId] = null;
+                }
+              });
+
+              // Reordenar tarefas após atualização
+              _applySorting();
+            }
+          },
+          onError: (error) {
+            print('Erro no stream de mensagens do grupo $grupoId: $error');
+          },
+        );
+
     _mensagensSubscriptions[grupoId] = subscription;
   }
 
@@ -624,22 +645,24 @@ class _TaskCardsViewState extends State<TaskCardsView> {
     try {
       // Obter ou criar grupo
       var grupo = await _chatService.obterGrupoPorTarefaId(task.id);
-      
+
       if (grupo == null) {
         // Criar grupo se não existir
         if (task.divisaoId == null || task.segmentoId == null) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Não é possível comentar: tarefa sem divisão ou segmento'),
+              content: Text(
+                'Não é possível comentar: tarefa sem divisão ou segmento',
+              ),
               backgroundColor: Colors.orange,
             ),
           );
           return;
         }
-        
+
         final divisaoService = DivisaoService();
         final divisao = await divisaoService.getDivisaoById(task.divisaoId!);
-        
+
         if (divisao == null) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -649,7 +672,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
           );
           return;
         }
-        
+
         if (!divisao.segmentoIds.contains(task.segmentoId)) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -659,12 +682,13 @@ class _TaskCardsViewState extends State<TaskCardsView> {
           );
           return;
         }
-        
+
         final segmentoIndex = divisao.segmentoIds.indexOf(task.segmentoId!);
-        final segmentoNome = segmentoIndex >= 0 && segmentoIndex < divisao.segmentos.length
+        final segmentoNome =
+            segmentoIndex >= 0 && segmentoIndex < divisao.segmentos.length
             ? divisao.segmentos[segmentoIndex]
             : 'Segmento';
-        
+
         final comunidade = await _chatService.criarOuObterComunidade(
           task.regionalId ?? '',
           task.regional,
@@ -673,7 +697,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
           task.segmentoId!,
           segmentoNome,
         );
-        
+
         if (comunidade.id == null) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -683,7 +707,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
           );
           return;
         }
-        
+
         grupo = await _chatService.criarOuObterGrupo(
           task.id,
           task.tarefa,
@@ -705,7 +729,8 @@ class _TaskCardsViewState extends State<TaskCardsView> {
       // Obter nome do usuário atual
       final authService = AuthServiceSimples();
       final usuario = authService.currentUser;
-      final usuarioNome = usuario?.nome ?? usuario?.email.split('@').first ?? 'Usuário';
+      final usuarioNome =
+          usuario?.nome ?? usuario?.email.split('@').first ?? 'Usuário';
 
       // Enviar mensagem
       final mensagem = await _chatService.enviarMensagem(
@@ -724,7 +749,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
         // Atualizar data da última mensagem para reordenar
         _ultimaMensagemPorTarefa[task.id] = mensagem.createdAt;
       });
-      
+
       // Garantir que o stream está configurado para esta tarefa
       if (!_mensagensSubscriptions.containsKey(grupoId)) {
         _setupMensagensStream(grupoId, task.id);
@@ -748,7 +773,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
   Widget build(BuildContext context) {
     final isMobile = Responsive.isMobile(context);
     final isTablet = Responsive.isTablet(context);
-    
+
     // Calcular largura máxima do card (centralizado)
     double maxWidth;
     if (isMobile) {
@@ -778,7 +803,10 @@ class _TaskCardsViewState extends State<TaskCardsView> {
               child: ConstrainedBox(
                 constraints: BoxConstraints(maxWidth: maxWidth),
                 child: ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 16,
+                  ),
                   itemCount: _sortedTasks.length,
                   cacheExtent: 500,
                   itemBuilder: (context, index) {
@@ -794,18 +822,30 @@ class _TaskCardsViewState extends State<TaskCardsView> {
     );
   }
 
+  /// URLs de imagens a exibir no feed: anexos da tarefa + imagens enviadas no chat.
+  List<String> _imagensParaCard(Task task) {
+    final anexos = _imagensPorTarefa[task.id] ?? [];
+    final mensagens = _mensagensPorTarefa[task.id] ?? [];
+    final urlsChat = mensagens
+        .where((m) =>
+            (m.tipo == 'imagem' || m.tipo == 'image') &&
+            m.arquivoUrl != null &&
+            m.arquivoUrl!.trim().isNotEmpty)
+        .map((m) => m.arquivoUrl!)
+        .toList();
+    if (urlsChat.isEmpty) return anexos;
+    return [...anexos, ...urlsChat];
+  }
+
   Widget _buildTaskCard(Task task, bool isMobile) {
-    // Obter lista de URLs das imagens dos anexos, se houver
-    final imagens = _imagensPorTarefa[task.id] ?? [];
-    
+    // Imagens: anexos da tarefa + imagens enviadas no chat
+    final imagens = _imagensParaCard(task);
+
     return Card(
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(0),
-        side: BorderSide(
-          color: Colors.grey[200]!,
-          width: 1,
-        ),
+        side: BorderSide(color: Colors.grey[200]!, width: 1),
       ),
       color: Colors.white,
       margin: EdgeInsets.zero,
@@ -822,47 +862,50 @@ class _TaskCardsViewState extends State<TaskCardsView> {
                   radius: 20,
                   backgroundColor: _getStatusBadgeColor(task.status),
                   child: const Icon(
-            Icons.assignment,
+                    Icons.assignment,
                     size: 20,
                     color: Colors.white,
                   ),
                 ),
                 const SizedBox(width: 12),
-        // Título (tarefa) e coordenador
+                // Título (tarefa) e coordenador
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                task.tarefa,
+                        task.tarefa,
                         style: const TextStyle(
                           fontSize: 14,
-                  fontWeight: FontWeight.w700,
+                          fontWeight: FontWeight.w700,
                           color: Colors.black87,
                         ),
-                maxLines: 2,
+                        maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       ),
                       if (task.coordenador.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 2),
-                  child: Text(
-                          task.coordenador,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey[600],
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Text(
+                            task.coordenador,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey[600],
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                  ),
                         ),
                     ],
                   ),
                 ),
                 // Badge de status
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: _getStatusBadgeColor(task.status),
                     borderRadius: BorderRadius.circular(12),
@@ -879,7 +922,11 @@ class _TaskCardsViewState extends State<TaskCardsView> {
                 const SizedBox(width: 4),
                 // Menu de ações
                 PopupMenuButton<String>(
-                  icon: const Icon(Icons.more_vert, size: 20, color: Colors.black87),
+                  icon: const Icon(
+                    Icons.more_vert,
+                    size: 20,
+                    color: Colors.black87,
+                  ),
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(),
                   onSelected: (value) {
@@ -1023,9 +1070,9 @@ class _TaskCardsViewState extends State<TaskCardsView> {
                     if (execText.isEmpty) return const SizedBox.shrink();
                     return Text(
                       execText,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      color: Colors.black87,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Colors.black87,
                         fontWeight: FontWeight.w600,
                       ),
                       maxLines: 2,
@@ -1034,7 +1081,8 @@ class _TaskCardsViewState extends State<TaskCardsView> {
                   },
                 ),
                 // Observações (como legenda do post)
-                if (task.observacoes != null && task.observacoes!.isNotEmpty) ...[
+                if (task.observacoes != null &&
+                    task.observacoes!.isNotEmpty) ...[
                   const SizedBox(height: 8),
                   Text(
                     task.observacoes!,
@@ -1055,7 +1103,11 @@ class _TaskCardsViewState extends State<TaskCardsView> {
                       Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.location_on, size: 14, color: Colors.grey[600]),
+                          Icon(
+                            Icons.location_on,
+                            size: 14,
+                            color: Colors.grey[600],
+                          ),
                           const SizedBox(width: 4),
                           Text(
                             task.locais.join(', '),
@@ -1098,7 +1150,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
 
   Widget _buildComentariosSection(Task task, bool isMobile) {
     final mensagens = _mensagensPorTarefa[task.id] ?? [];
-    
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1126,62 +1178,71 @@ class _TaskCardsViewState extends State<TaskCardsView> {
                     ),
                   ),
                 // Mostrar últimos 2 comentários
-                ...mensagens.reversed.take(2).map((mensagem) => Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Avatar pequeno
-                      CircleAvatar(
-                        radius: 12,
-                        backgroundColor: Colors.grey[300],
-                        child: Text(
-                          mensagem.usuarioNome?.substring(0, 1).toUpperCase() ?? 'U',
-                          style: const TextStyle(
-                            fontSize: 10,
-                            color: Colors.black87,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      // Comentário
-                      Expanded(
-                        child: Column(
+                ...mensagens.reversed
+                    .take(2)
+                    .map(
+                      (mensagem) => Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            RichText(
-                              text: TextSpan(
+                            // Avatar pequeno
+                            CircleAvatar(
+                              radius: 12,
+                              backgroundColor: Colors.grey[300],
+                              child: Text(
+                                mensagem.usuarioNome
+                                        ?.substring(0, 1)
+                                        .toUpperCase() ??
+                                    'U',
                                 style: const TextStyle(
-                                  fontSize: 14,
+                                  fontSize: 10,
                                   color: Colors.black87,
+                                  fontWeight: FontWeight.w600,
                                 ),
-                                children: [
-                                  TextSpan(
-                                    text: mensagem.usuarioNome ?? 'Usuário',
-                                    style: const TextStyle(fontWeight: FontWeight.w600),
-                                  ),
-                                  const TextSpan(text: ' '),
-                                  TextSpan(
-                                    text: mensagem.conteudo,
-                                  ),
-                                ],
                               ),
                             ),
-                            const SizedBox(height: 4),
-                            Text(
-                              _formatTime(mensagem.createdAt),
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.grey[500],
+                            const SizedBox(width: 8),
+                            // Comentário
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  RichText(
+                                    text: TextSpan(
+                                      style: const TextStyle(
+                                        fontSize: 14,
+                                        color: Colors.black87,
+                                      ),
+                                      children: [
+                                        TextSpan(
+                                          text:
+                                              mensagem.usuarioNome ?? 'Usuário',
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                        const TextSpan(text: ' '),
+                                        TextSpan(text: mensagem.conteudo),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    _formatTime(mensagem.createdAt),
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.grey[500],
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                           ],
                         ),
                       ),
-                    ],
-                  ),
-                )).toList(),
+                    )
+                    .toList(),
               ],
             ),
           ),
@@ -1190,9 +1251,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
-            border: Border(
-              top: BorderSide(color: Colors.grey[200]!, width: 1),
-            ),
+            border: Border(top: BorderSide(color: Colors.grey[200]!, width: 1)),
           ),
           child: Row(
             children: [
@@ -1201,9 +1260,12 @@ class _TaskCardsViewState extends State<TaskCardsView> {
                 builder: (context) {
                   final authService = AuthServiceSimples();
                   final usuario = authService.currentUser;
-                  final usuarioNome = usuario?.nome ?? usuario?.email.split('@').first ?? 'U';
-                  final inicial = usuarioNome.isNotEmpty ? usuarioNome.substring(0, 1).toUpperCase() : 'U';
-                  
+                  final usuarioNome =
+                      usuario?.nome ?? usuario?.email.split('@').first ?? 'U';
+                  final inicial = usuarioNome.isNotEmpty
+                      ? usuarioNome.substring(0, 1).toUpperCase()
+                      : 'U';
+
                   return CircleAvatar(
                     radius: 16,
                     backgroundColor: Colors.grey[300],
@@ -1228,10 +1290,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
                   ),
                   decoration: InputDecoration(
                     hintText: 'Adicione um comentário...',
-                    hintStyle: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey[500],
-                    ),
+                    hintStyle: TextStyle(fontSize: 14, color: Colors.grey[500]),
                     border: InputBorder.none,
                     contentPadding: const EdgeInsets.symmetric(
                       horizontal: 12,
@@ -1286,7 +1345,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
     VoidCallback onTap,
   ) {
     final isLiked = label == 'Curtir' && isActive;
-    
+
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
@@ -1302,11 +1361,12 @@ class _TaskCardsViewState extends State<TaskCardsView> {
   }
 
   Widget _buildSAPActionButton(Task task, bool isMobile) {
-    final totalSAP = (_notasSAPCount[task.id] ?? 0) +
+    final totalSAP =
+        (_notasSAPCount[task.id] ?? 0) +
         (_ordensCount[task.id] ?? 0) +
         (_atsCount[task.id] ?? 0) +
         (_sisCount[task.id] ?? 0);
-    
+
     return PopupMenuButton<String>(
       icon: Stack(
         children: [
@@ -1321,10 +1381,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
                   color: Colors.blue,
                   shape: BoxShape.circle,
                 ),
-                constraints: const BoxConstraints(
-                  minWidth: 14,
-                  minHeight: 14,
-                ),
+                constraints: const BoxConstraints(minWidth: 14, minHeight: 14),
                 child: Text(
                   totalSAP > 9 ? '9+' : '$totalSAP',
                   style: const TextStyle(
@@ -1439,20 +1496,20 @@ class _TaskCardsViewState extends State<TaskCardsView> {
     try {
       final notas = await _notaSAPService.getNotasPorTarefa(task.id);
       if (!mounted) return;
-      
+
       if (notas.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Nenhuma nota SAP vinculada')),
         );
         return;
       }
-      
+
       _mostrarDialogNotasSAP(notas, task);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erro ao carregar notas: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Erro ao carregar notas: $e')));
       }
     }
   }
@@ -1461,20 +1518,20 @@ class _TaskCardsViewState extends State<TaskCardsView> {
     try {
       final ordens = await _ordemService.getOrdensPorTarefa(task.id);
       if (!mounted) return;
-      
+
       if (ordens.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Nenhuma ordem vinculada')),
         );
         return;
       }
-      
+
       _mostrarDialogOrdens(ordens, task);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erro ao carregar ordens: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Erro ao carregar ordens: $e')));
       }
     }
   }
@@ -1483,20 +1540,20 @@ class _TaskCardsViewState extends State<TaskCardsView> {
     try {
       final ats = await _atService.getATsPorTarefa(task.id);
       if (!mounted) return;
-      
+
       if (ats.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Nenhuma AT vinculada')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Nenhuma AT vinculada')));
         return;
       }
-      
+
       _mostrarDialogATs(ats, task);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erro ao carregar ATs: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Erro ao carregar ATs: $e')));
       }
     }
   }
@@ -1505,20 +1562,20 @@ class _TaskCardsViewState extends State<TaskCardsView> {
     try {
       final sis = await _siService.getSIsPorTarefa(task.id);
       if (!mounted) return;
-      
+
       if (sis.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Nenhuma SI vinculada')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Nenhuma SI vinculada')));
         return;
       }
-      
+
       _mostrarDialogSIs(sis, task);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erro ao carregar SIs: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Erro ao carregar SIs: $e')));
       }
     }
   }
@@ -1548,7 +1605,9 @@ class _TaskCardsViewState extends State<TaskCardsView> {
       });
 
       // Carregar estado de curtidas do usuário atual
-      final curtidasUsuario = await _likeService.verificarCurtidasPorTarefas(taskIds);
+      final curtidasUsuario = await _likeService.verificarCurtidasPorTarefas(
+        taskIds,
+      );
       setState(() {
         for (var taskId in taskIds) {
           _likedTasks[taskId] = curtidasUsuario[taskId] ?? false;
@@ -1562,11 +1621,11 @@ class _TaskCardsViewState extends State<TaskCardsView> {
   Future<void> _handleLike(String taskId) async {
     // Feedback visual imediato
     HapticFeedback.lightImpact();
-    
+
     // Otimistic update
     final isLiked = _likedTasks[taskId] ?? false;
     final currentCount = _likeCounts[taskId] ?? 0;
-    
+
     setState(() {
       _likedTasks[taskId] = !isLiked;
       _likeCounts[taskId] = isLiked ? currentCount - 1 : currentCount + 1;
@@ -1575,10 +1634,10 @@ class _TaskCardsViewState extends State<TaskCardsView> {
     try {
       // Alternar curtida no banco
       final novoEstado = await _likeService.alternarCurtida(taskId);
-      
+
       // Atualizar contador real
       final contagemReal = await _likeService.contarCurtidas(taskId);
-      
+
       setState(() {
         _likedTasks[taskId] = novoEstado;
         _likeCounts[taskId] = contagemReal;
@@ -1589,19 +1648,19 @@ class _TaskCardsViewState extends State<TaskCardsView> {
         _likedTasks[taskId] = isLiked;
         _likeCounts[taskId] = currentCount;
       });
-      
+
       if (mounted) {
         final errorMessage = e.toString();
-        final mensagem = errorMessage.contains('não encontrada') 
+        final mensagem = errorMessage.contains('não encontrada')
             ? 'Tabela de curtidas não configurada. Execute o script SQL criar_tabela_curtidas.sql no Supabase.'
             : 'Erro ao ${isLiked ? 'descurtir' : 'curtir'}: ${errorMessage.replaceAll('Exception: ', '')}';
-        
+
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(mensagem),
             backgroundColor: Colors.red,
             duration: const Duration(seconds: 4),
-            action: errorMessage.contains('não encontrada') 
+            action: errorMessage.contains('não encontrada')
                 ? SnackBarAction(
                     label: 'Ver SQL',
                     textColor: Colors.white,
@@ -1618,54 +1677,61 @@ class _TaskCardsViewState extends State<TaskCardsView> {
 
   Future<void> _handleComment(Task task) async {
     HapticFeedback.mediumImpact();
-    
+
     try {
       // Obter ou criar grupo de chat para a tarefa
       var grupoChat = await _chatService.obterGrupoPorTarefaId(task.id);
-      
+
       if (grupoChat == null) {
         // Criar grupo se não existir
         // Primeiro, obter ou criar comunidade
         if (task.divisaoId == null || task.segmentoId == null) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Não é possível criar chat: tarefa sem divisão ou segmento'),
+              content: Text(
+                'Não é possível criar chat: tarefa sem divisão ou segmento',
+              ),
               backgroundColor: Colors.orange,
             ),
           );
           return;
         }
-        
+
         final divisaoService = DivisaoService();
         final divisao = await divisaoService.getDivisaoById(task.divisaoId!);
-        
+
         if (divisao == null) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Não é possível criar chat: divisão não encontrada'),
+              content: Text(
+                'Não é possível criar chat: divisão não encontrada',
+              ),
               backgroundColor: Colors.orange,
             ),
           );
           return;
         }
-        
+
         // Verificar se o segmento está na lista de segmentos da divisão
         if (!divisao.segmentoIds.contains(task.segmentoId)) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Não é possível criar chat: segmento não encontrado na divisão'),
+              content: Text(
+                'Não é possível criar chat: segmento não encontrado na divisão',
+              ),
               backgroundColor: Colors.orange,
             ),
           );
           return;
         }
-        
+
         // Obter nome do segmento
         final segmentoIndex = divisao.segmentoIds.indexOf(task.segmentoId!);
-        final segmentoNome = segmentoIndex >= 0 && segmentoIndex < divisao.segmentos.length
+        final segmentoNome =
+            segmentoIndex >= 0 && segmentoIndex < divisao.segmentos.length
             ? divisao.segmentos[segmentoIndex]
             : 'Segmento';
-        
+
         final comunidade = await _chatService.criarOuObterComunidade(
           task.regionalId ?? '',
           task.regional,
@@ -1674,14 +1740,14 @@ class _TaskCardsViewState extends State<TaskCardsView> {
           task.segmentoId!,
           segmentoNome,
         );
-        
+
         grupoChat = await _chatService.criarOuObterGrupo(
           task.id,
           task.tarefa,
           comunidade.id!,
         );
       }
-      
+
       if (mounted) {
         final grupoId = grupoChat.id;
         if (grupoId != null) {
@@ -1717,10 +1783,9 @@ class _TaskCardsViewState extends State<TaskCardsView> {
     }
   }
 
-
   void _handleShare(Task task) {
     HapticFeedback.mediumImpact();
-    
+
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
@@ -1733,10 +1798,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
           children: [
             const Text(
               'Compartilhar',
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 20),
             Row(
@@ -1745,18 +1807,24 @@ class _TaskCardsViewState extends State<TaskCardsView> {
                 _buildShareOption(Icons.message, 'Mensagem', () {
                   Navigator.pop(context);
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Compartilhando via Mensagem...')),
+                    const SnackBar(
+                      content: Text('Compartilhando via Mensagem...'),
+                    ),
                   );
                 }),
                 _buildShareOption(Icons.email, 'Email', () {
                   Navigator.pop(context);
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Compartilhando via Email...')),
+                    const SnackBar(
+                      content: Text('Compartilhando via Email...'),
+                    ),
                   );
                 }),
                 _buildShareOption(Icons.link, 'Copiar Link', () async {
                   try {
-                    await Clipboard.setData(ClipboardData(text: 'Tarefa: ${task.tarefa}'));
+                    await Clipboard.setData(
+                      ClipboardData(text: 'Tarefa: ${task.tarefa}'),
+                    );
                     if (!context.mounted) return;
                     Navigator.pop(context);
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -1766,7 +1834,10 @@ class _TaskCardsViewState extends State<TaskCardsView> {
                     if (!context.mounted) return;
                     Navigator.pop(context);
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Não foi possível copiar: $e'), backgroundColor: Colors.red),
+                      SnackBar(
+                        content: Text('Não foi possível copiar: $e'),
+                        backgroundColor: Colors.red,
+                      ),
                     );
                   }
                 }),
@@ -1782,12 +1853,18 @@ class _TaskCardsViewState extends State<TaskCardsView> {
     );
   }
 
-  Future<void> _copiarParaAreaTransferencia(String texto, String mensagemSucesso) async {
+  Future<void> _copiarParaAreaTransferencia(
+    String texto,
+    String mensagemSucesso,
+  ) async {
     try {
       await Clipboard.setData(ClipboardData(text: texto));
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(mensagemSucesso), duration: const Duration(seconds: 1)),
+        SnackBar(
+          content: Text(mensagemSucesso),
+          duration: const Duration(seconds: 1),
+        ),
       );
     } catch (e) {
       if (!mounted) return;
@@ -1812,16 +1889,12 @@ class _TaskCardsViewState extends State<TaskCardsView> {
           children: [
             Icon(icon, size: 32, color: Colors.blue),
             const SizedBox(height: 8),
-            Text(
-              label,
-              style: const TextStyle(fontSize: 12),
-            ),
+            Text(label, style: const TextStyle(fontSize: 12)),
           ],
         ),
       ),
     );
   }
-
 
   IconData _getIconForType(String tipo) {
     switch (tipo) {
@@ -1843,29 +1916,29 @@ class _TaskCardsViewState extends State<TaskCardsView> {
   Widget _buildImageCarousel(Task task, List<String> imagens) {
     final hasMultipleImages = imagens.length > 1;
     final isMobile = Responsive.isMobile(context);
-    
+
     // Se houver apenas uma imagem, mostrar diretamente sem PageView
     if (!hasMultipleImages) {
       return AspectRatio(
         aspectRatio: 1.0,
         child: GestureDetector(
           onTap: () => _showFullscreenImages(imagens, 0),
-        child: CachedNetworkImage(
-          imageUrl: imagens.first,
-          fit: BoxFit.cover,
-          placeholder: (context, url) => Container(
-            color: Colors.grey[200],
-            child: const Center(
-              child: CircularProgressIndicator(strokeWidth: 2),
+          child: CachedNetworkImage(
+            imageUrl: imagens.first,
+            fit: BoxFit.cover,
+            placeholder: (context, url) => Container(
+              color: Colors.grey[200],
+              child: const Center(
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
             ),
-          ),
-          errorWidget: (context, url, error) => Container(
-            color: Colors.grey[200],
-            child: Center(
-              child: Icon(
-                _getIconForType(task.tipo),
-                size: 48,
-                color: Colors.grey[400],
+            errorWidget: (context, url, error) => Container(
+              color: Colors.grey[200],
+              child: Center(
+                child: Icon(
+                  _getIconForType(task.tipo),
+                  size: 48,
+                  color: Colors.grey[400],
                 ),
               ),
             ),
@@ -1882,7 +1955,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
     if (!_currentPageIndex.containsKey(task.id)) {
       _currentPageIndex[task.id] = 0;
     }
-    
+
     final controller = _pageControllers[task.id]!;
     final currentIndex = _currentPageIndex[task.id]!;
 
@@ -1892,7 +1965,9 @@ class _TaskCardsViewState extends State<TaskCardsView> {
         children: [
           // Carrossel de imagens
           PageView.builder(
-            key: ValueKey('carousel_${task.id}_${imagens.length}'), // Key única para forçar rebuild quando necessário
+            key: ValueKey(
+              'carousel_${task.id}_${imagens.length}',
+            ), // Key única para forçar rebuild quando necessário
             controller: controller,
             itemCount: imagens.length,
             onPageChanged: (index) {
@@ -2041,7 +2116,9 @@ class _TaskCardsViewState extends State<TaskCardsView> {
       context: context,
       barrierColor: Colors.black.withOpacity(0.85),
       builder: (context) {
-        final PageController controller = PageController(initialPage: initialIndex);
+        final PageController controller = PageController(
+          initialPage: initialIndex,
+        );
         return GestureDetector(
           onTap: () => Navigator.of(context).pop(),
           child: Stack(
@@ -2058,7 +2135,11 @@ class _TaskCardsViewState extends State<TaskCardsView> {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       ),
                       errorWidget: (context, url, error) => Center(
-                        child: Icon(Icons.broken_image, color: Colors.white70, size: 48),
+                        child: Icon(
+                          Icons.broken_image,
+                          color: Colors.white70,
+                          size: 48,
+                        ),
                       ),
                     ),
                   );
@@ -2094,7 +2175,9 @@ class _TaskCardsViewState extends State<TaskCardsView> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: Container(
           width: MediaQuery.of(context).size.width * 0.9,
-          constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.8,
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -2119,7 +2202,11 @@ class _TaskCardsViewState extends State<TaskCardsView> {
                         color: Colors.white.withOpacity(0.2),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: const Icon(Icons.description, color: Colors.white, size: 24),
+                      child: const Icon(
+                        Icons.description,
+                        color: Colors.white,
+                        size: 24,
+                      ),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -2197,14 +2284,18 @@ class _TaskCardsViewState extends State<TaskCardsView> {
             Expanded(
               child: Text(
                 'Nota: ${nota.nota}',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
               ),
             ),
             IconButton(
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () => _copiarParaAreaTransferencia(nota.nota, 'Nota copiada!'),
+              onPressed: () =>
+                  _copiarParaAreaTransferencia(nota.nota, 'Nota copiada!'),
               tooltip: 'Copiar nota',
             ),
           ],
@@ -2223,11 +2314,20 @@ class _TaskCardsViewState extends State<TaskCardsView> {
                 _buildInfoRowModern('Local Instalação', nota.localInstalacao),
                 _buildInfoRowModern('Ordem', nota.ordem),
                 _buildInfoRowModern('GPM', nota.gpm),
-                _buildInfoRowModern('Centro Trabalho', nota.centroTrabalhoResponsavel),
+                _buildInfoRowModern(
+                  'Centro Trabalho',
+                  nota.centroTrabalhoResponsavel,
+                ),
                 if (nota.inicioDesejado != null)
-                  _buildInfoRowModern('Início Desejado', _formatDate(nota.inicioDesejado!)),
+                  _buildInfoRowModern(
+                    'Início Desejado',
+                    _formatDate(nota.inicioDesejado!),
+                  ),
                 if (nota.conclusaoDesejada != null)
-                  _buildInfoRowModern('Conclusão Desejada', _formatDate(nota.conclusaoDesejada!)),
+                  _buildInfoRowModern(
+                    'Conclusão Desejada',
+                    _formatDate(nota.conclusaoDesejada!),
+                  ),
               ],
             ),
           ),
@@ -2243,7 +2343,9 @@ class _TaskCardsViewState extends State<TaskCardsView> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: Container(
           width: MediaQuery.of(context).size.width * 0.9,
-          constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.8,
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -2268,7 +2370,11 @@ class _TaskCardsViewState extends State<TaskCardsView> {
                         color: Colors.white.withOpacity(0.2),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: const Icon(Icons.receipt_long, color: Colors.white, size: 24),
+                      child: const Icon(
+                        Icons.receipt_long,
+                        color: Colors.white,
+                        size: 24,
+                      ),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -2346,14 +2452,18 @@ class _TaskCardsViewState extends State<TaskCardsView> {
             Expanded(
               child: Text(
                 'Ordem: ${ordem.ordem}',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
               ),
             ),
             IconButton(
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () => _copiarParaAreaTransferencia(ordem.ordem, 'Ordem copiada!'),
+              onPressed: () =>
+                  _copiarParaAreaTransferencia(ordem.ordem, 'Ordem copiada!'),
               tooltip: 'Copiar ordem',
             ),
           ],
@@ -2369,13 +2479,22 @@ class _TaskCardsViewState extends State<TaskCardsView> {
                 _buildInfoRowModern('Status Sistema', ordem.statusSistema),
                 _buildInfoRowModern('Status Usuário', ordem.statusUsuario),
                 _buildInfoRowModern('Texto Breve', ordem.textoBreve),
-                _buildInfoRowModern('Denominação Local', ordem.denominacaoLocalInstalacao),
-                _buildInfoRowModern('Denominação Objeto', ordem.denominacaoObjeto),
+                _buildInfoRowModern(
+                  'Denominação Local',
+                  ordem.denominacaoLocalInstalacao,
+                ),
+                _buildInfoRowModern(
+                  'Denominação Objeto',
+                  ordem.denominacaoObjeto,
+                ),
                 _buildInfoRowModern('Local Instalação', ordem.localInstalacao),
                 _buildInfoRowModern('Código SI', ordem.codigoSI),
                 _buildInfoRowModern('GPM', ordem.gpm),
                 if (ordem.inicioBase != null)
-                  _buildInfoRowModern('Início Base', _formatDate(ordem.inicioBase!)),
+                  _buildInfoRowModern(
+                    'Início Base',
+                    _formatDate(ordem.inicioBase!),
+                  ),
                 if (ordem.fimBase != null)
                   _buildInfoRowModern('Fim Base', _formatDate(ordem.fimBase!)),
               ],
@@ -2393,7 +2512,9 @@ class _TaskCardsViewState extends State<TaskCardsView> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: Container(
           width: MediaQuery.of(context).size.width * 0.9,
-          constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.8,
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -2418,7 +2539,11 @@ class _TaskCardsViewState extends State<TaskCardsView> {
                         color: Colors.white.withOpacity(0.2),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: const Icon(Icons.assignment, color: Colors.white, size: 24),
+                      child: const Icon(
+                        Icons.assignment,
+                        color: Colors.white,
+                        size: 24,
+                      ),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -2496,19 +2621,25 @@ class _TaskCardsViewState extends State<TaskCardsView> {
             Expanded(
               child: Text(
                 'AT: ${at.autorzTrab}',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
               ),
             ),
             IconButton(
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () => _copiarParaAreaTransferencia(at.autorzTrab, 'AT copiada!'),
+              onPressed: () =>
+                  _copiarParaAreaTransferencia(at.autorzTrab, 'AT copiada!'),
               tooltip: 'Copiar AT',
             ),
           ],
         ),
-        subtitle: at.statusSistema != null ? Text('Status: ${at.statusSistema}') : null,
+        subtitle: at.statusSistema != null
+            ? Text('Status: ${at.statusSistema}')
+            : null,
         children: [
           Padding(
             padding: const EdgeInsets.all(16),
@@ -2524,7 +2655,10 @@ class _TaskCardsViewState extends State<TaskCardsView> {
                 _buildInfoRowModern('Cen', at.cen),
                 _buildInfoRowModern('SI', at.si),
                 if (at.dataInicio != null)
-                  _buildInfoRowModern('Data Início', _formatDate(at.dataInicio!)),
+                  _buildInfoRowModern(
+                    'Data Início',
+                    _formatDate(at.dataInicio!),
+                  ),
                 if (at.dataFim != null)
                   _buildInfoRowModern('Data Fim', _formatDate(at.dataFim!)),
               ],
@@ -2542,7 +2676,9 @@ class _TaskCardsViewState extends State<TaskCardsView> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: Container(
           width: MediaQuery.of(context).size.width * 0.9,
-          constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.8,
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -2567,7 +2703,11 @@ class _TaskCardsViewState extends State<TaskCardsView> {
                         color: Colors.white.withOpacity(0.2),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: const Icon(Icons.info, color: Colors.white, size: 24),
+                      child: const Icon(
+                        Icons.info,
+                        color: Colors.white,
+                        size: 24,
+                      ),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -2645,14 +2785,18 @@ class _TaskCardsViewState extends State<TaskCardsView> {
             Expanded(
               child: Text(
                 'SI: ${si.solicitacao}',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
               ),
             ),
             IconButton(
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () => _copiarParaAreaTransferencia(si.solicitacao, 'SI copiada!'),
+              onPressed: () =>
+                  _copiarParaAreaTransferencia(si.solicitacao, 'SI copiada!'),
               tooltip: 'Copiar SI',
             ),
           ],
@@ -2674,7 +2818,10 @@ class _TaskCardsViewState extends State<TaskCardsView> {
                 _buildInfoRowModern('Cen', si.cen),
                 _buildInfoRowModern('Atrib AT', si.atribAT),
                 if (si.dataInicio != null)
-                  _buildInfoRowModern('Data Início', _formatDate(si.dataInicio!)),
+                  _buildInfoRowModern(
+                    'Data Início',
+                    _formatDate(si.dataInicio!),
+                  ),
                 if (si.dataFim != null)
                   _buildInfoRowModern('Data Fim', _formatDate(si.dataFim!)),
               ],
@@ -2687,7 +2834,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
 
   Widget _buildInfoRowModern(String label, String? value) {
     if (value == null || value.isEmpty) return const SizedBox.shrink();
-    
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Row(
@@ -2707,10 +2854,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
           Expanded(
             child: Text(
               value,
-              style: const TextStyle(
-                fontSize: 13,
-                color: Colors.black87,
-              ),
+              style: const TextStyle(fontSize: 13, color: Colors.black87),
             ),
           ),
         ],
@@ -2722,4 +2866,3 @@ class _TaskCardsViewState extends State<TaskCardsView> {
     return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
   }
 }
-

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../utils/responsive.dart';
+import '../features/documents/presentation/pages/documents_page.dart';
 
 class DocumentsView extends StatefulWidget {
   const DocumentsView({super.key});
@@ -72,8 +73,10 @@ class _DocumentsViewState extends State<DocumentsView> {
           IconButton(
             icon: const Icon(Icons.add_circle, color: Color(0xFF1E3A5F)),
             onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Funcionalidade de upload em desenvolvimento')),
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const DocumentsPage(),
+                ),
               );
             },
           ),

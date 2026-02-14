@@ -3,6 +3,8 @@ const { createClient } = require('@supabase/supabase-js');
 const { Pool } = require('pg');
 const FormData = require('form-data');
 const axios = require('axios');
+const cron = require('node-cron');
+const geo = require('./geo_ingestors');
 
 // ==========================================
 // CONFIGURAÇÃO
@@ -11,23 +13,110 @@ const axios = require('axios');
 const PORT = process.env.PORT || 3001;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8432168734:AAF_Rliq3plc5Crm2oAcLsgkfzqH5_Pywec';
 const TELEGRAM_WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET || 'TgWebhook2026Taskflow_Secret';
+const GEO_JOB_TOKEN = process.env.GEO_JOB_TOKEN || process.env.ADMIN_TOKEN || 'GeoJobToken';
+const GEO_BUFFER_M = Number(process.env.GEO_BUFFER_M || 50);
+const GEO_WINDOW_DAYS_DEFAULT = Number(process.env.GEO_WINDOW_DAYS || 7);
+const GEO_RAIOS_WINDOW_DAYS = Number(process.env.GEO_RAIOS_WINDOW_DAYS || 1); // descargas recentes
+const GEO_CRON_EXPR = process.env.GEO_CRON_EXPR || '15 * * * *'; // a cada hora no minuto 15
 
 // IMPORTANTE: Usar IP público ou domínio público para URLs assinadas
 // O Telegram precisa acessar essas URLs externamente
 const SUPABASE_URL_INTERNAL = process.env.SUPABASE_URL_INTERNAL || 'http://127.0.0.1:8000'; // Para comunicação interna
 const SUPABASE_URL_PUBLIC = process.env.SUPABASE_URL_PUBLIC || 'http://212.85.0.249:8000'; // Para URLs enviadas ao Telegram
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UiLCJpYXQiOjE3NjU4MTc5ODMsImV4cCI6MjA4MTE3Nzk4M30.MYcuHsPkBgYg_M1WVHKbtO3MQYalYNYOppr0Q3ynUgw';
+const APP_TRECHO_DEEPLINK = process.env.APP_TRECHO_DEEPLINK || process.env.APP_WEB_URL || '';
 
 // Cliente Supabase (usa URL interna para comunicação)
 const supabase = createClient(SUPABASE_URL_INTERNAL, SUPABASE_SERVICE_KEY);
 
 // Pool PostgreSQL para LISTEN/NOTIFY
-const pgPool = new Pool({
+const DB_CONFIG = {
   host: process.env.DB_HOST || '127.0.0.1',
-  port: process.env.DB_PORT || 5432,
+  port: Number(process.env.DB_PORT || 5433), // conectar direto no Postgres real (supabase-db)
   database: process.env.DB_NAME || 'postgres',
   user: process.env.DB_USER || 'postgres',
   password: process.env.DB_PASSWORD || 'postgres',
+};
+
+console.log('🔌 Postgres config:', {
+  host: DB_CONFIG.host,
+  port: DB_CONFIG.port,
+  database: DB_CONFIG.database,
+  user: DB_CONFIG.user,
+});
+
+const pgPool = new Pool(DB_CONFIG);
+pgPool.on('error', (err) => {
+  console.error('❌ Erro no pool Postgres:', err);
+});
+
+// Endpoint de detalhe para um evento de queimada com a feature KMZ mais próxima
+app.get('/eventos/queimadas/:id/detalhe', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Garantir que a view existe
+    try {
+      await pgPool.query('SELECT 1 FROM vw_kmz_geoms LIMIT 1');
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: 'vw_kmz_geoms não disponível. Execute a migration.' });
+    }
+
+    const sql = `
+      WITH evento AS (
+        SELECT
+          id,
+          source,
+          acq_time,
+          latitude,
+          longitude,
+          ST_SetSRID(ST_MakePoint(longitude, latitude), 4326) AS geom
+        FROM geo_queimadas
+        WHERE id = $1
+      )
+      SELECT
+        e.id AS evento_id,
+        e.source,
+        e.acq_time,
+        e.latitude,
+        e.longitude,
+        k.id AS kmz_feature_id,
+        k.nome AS kmz_nome,
+        k.is_line,
+        ST_Distance(e.geom::geography, k.geom::geography) AS distancia_m
+      FROM evento e
+      JOIN vw_kmz_geoms k ON TRUE
+      WHERE k.geom IS NOT NULL
+      ORDER BY e.geom <-> k.geom
+      LIMIT 1;
+    `;
+
+    const { rows } = await pgPool.query(sql, [id]);
+    if (!rows.length) {
+      return res.status(404).json({ ok: false, error: 'Evento não encontrado' });
+    }
+
+    const r = rows[0];
+    res.json({
+      ok: true,
+      evento: {
+        id: r.evento_id,
+        fonte: r.source,
+        acq_time: r.acq_time,
+        latitude: r.latitude,
+        longitude: r.longitude,
+      },
+      mais_proximo: {
+        kmz_feature_id: r.kmz_feature_id,
+        nome: r.kmz_nome,
+        tipo: r.is_line ? 'linha' : 'estrutura',
+        distancia_m: r.distancia_m,
+      },
+    });
+  } catch (error) {
+    console.error('❌ Erro no detalhe da queimada:', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
 });
 
 // ==========================================
@@ -731,6 +820,76 @@ app.post('/telegram-webhook', async (req, res) => {
   } catch (error) {
     console.error('❌ Erro ao processar update:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// GeoJSON opcional para queimadas
+app.get('/eventos/queimadas.geojson', async (req, res) => {
+  try {
+    const { bbox, sinceMinutes } = req.query;
+    const limit = Math.min(Number(req.query.limit) || 500, 1000);
+    const minutes = Number(sinceMinutes || GEO_WINDOW_DAYS_DEFAULT * 1440);
+
+    const geomCheck = await pgPool.query(
+      `SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'tbl_queimadas_focos' AND column_name = 'geom'
+      )`,
+    );
+    const hasGeom = geomCheck.rows?.[0]?.exists === true;
+
+    const clauses = [];
+    const params = [];
+    params.push(minutes);
+    clauses.push(`acq_time >= now() - ($${params.length} || ' minutes')::interval`);
+
+    if (bbox) {
+      const [minLon, minLat, maxLon, maxLat] = bbox.split(',').map(Number);
+      if (hasGeom) {
+        params.push(minLon, minLat, maxLon, maxLat);
+        clauses.push(
+          `geom && ST_MakeEnvelope($${params.length - 3}, $${params.length - 2}, $${params.length - 1}, $${params.length}, 4326)::geography`,
+        );
+      } else {
+        params.push(minLon, minLat, maxLon, maxLat);
+        clauses.push(
+          `(longitude BETWEEN $${params.length - 3} AND $${params.length - 1} AND latitude BETWEEN $${params.length - 2} AND $${params.length})`,
+        );
+      }
+    }
+
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    params.push(limit);
+    const sql = `
+      SELECT id, source, acq_time, latitude, longitude, raw
+      FROM tbl_queimadas_focos
+      ${where}
+      ORDER BY acq_time DESC
+      LIMIT $${params.length}
+    `;
+    const { rows } = await pgPool.query(sql, params);
+
+    const features = rows.map((r) => ({
+      type: 'Feature',
+      geometry: {
+        type: 'Point',
+        coordinates: [r.longitude, r.latitude],
+      },
+      properties: {
+        id: r.id,
+        source: r.source,
+        acq_time: r.acq_time,
+        raw: r.raw,
+      },
+    }));
+
+    res.json({
+      type: 'FeatureCollection',
+      features,
+    });
+  } catch (error) {
+    console.error('❌ Erro ao listar queimadas GeoJSON:', error);
+    res.json({ type: 'FeatureCollection', features: [], error: error.message });
   }
 });
 
@@ -3118,6 +3277,437 @@ app.post('/tasks/:id/ensure-topic', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+async function notifyTelegramForTrechoAlerts(trechoGeomId, resumoCustom) {
+  try {
+    const { data: trecho } = await supabase
+      .from('trechos_geoms')
+      .select('id, ref_type, ref_id, nome')
+      .eq('id', trechoGeomId)
+      .maybeSingle();
+
+    if (!trecho) {
+      return { ok: false, reason: 'Trecho não encontrado' };
+    }
+
+    const { data: agregados } = await supabase
+      .from('eventos_agregados_trecho')
+      .select('*')
+      .eq('trecho_geom_id', trechoGeomId);
+
+    const pendentes = (agregados || []).filter(
+      (a) => a.ultimo_evento && (!a.last_notified_at || new Date(a.ultimo_evento) > new Date(a.last_notified_at || 0)),
+    );
+
+    if (pendentes.length === 0) {
+      return { ok: true, sent: false, reason: 'Sem novidades' };
+    }
+
+    let destino = null;
+    if (trecho.ref_type === 'TASK') {
+      destino = await ensureTaskTopic(trecho.ref_id);
+    }
+
+    if (!destino) {
+      // fallback: subscription direta
+      const { data: subscription } = await supabase
+        .from('telegram_subscriptions')
+        .select('telegram_chat_id, telegram_topic_id')
+        .eq('thread_id', trecho.ref_id)
+        .eq('active', true)
+        .maybeSingle();
+      if (subscription) {
+        destino = {
+          telegram_chat_id: subscription.telegram_chat_id,
+          telegram_topic_id: subscription.telegram_topic_id,
+        };
+      }
+    }
+
+    if (!destino) {
+      return { ok: false, reason: 'Sem destino Telegram configurado' };
+    }
+
+    const title = trecho.nome || `Trecho ${trecho.ref_id}`;
+    const linhas = [];
+    for (const a of pendentes) {
+      const icon = a.tipo_evento === 'queimada' ? '🔥' : '⚡';
+      const dist = a.distancia_min_m ? `${Math.round(a.distancia_min_m)} m` : 's/ dist';
+      const dt = a.ultimo_evento ? new Date(a.ultimo_evento).toLocaleString('pt-BR') : '';
+      linhas.push(`${icon} ${a.window_days}d: ${a.total} (último ${dt}, dist ${dist})`);
+    }
+
+    let mensagem = resumoCustom || `🚨 Alertas no trecho ${title}\n${linhas.join('\n')}`;
+    if (APP_TRECHO_DEEPLINK) {
+      const link = APP_TRECHO_DEEPLINK.replace('{trechoId}', trecho.ref_id).replace('{id}', trecho.ref_id);
+      mensagem += `\n\n🔗 Abrir no app: ${link}`;
+    }
+
+    const sent = await sendTelegramMessage(destino.telegram_chat_id, mensagem, destino.telegram_topic_id);
+
+    if (sent) {
+      await supabase
+        .from('eventos_agregados_trecho')
+        .update({ last_notified_at: new Date().toISOString() })
+        .eq('trecho_geom_id', trechoGeomId)
+        .in(
+          'tipo_evento',
+          pendentes.map((p) => p.tipo_evento),
+        );
+    }
+
+    return { ok: sent, sent, destino };
+  } catch (error) {
+    console.error('❌ Erro ao notificar Telegram para trecho:', error);
+    return { ok: false, error: error.message };
+  }
+}
+
+async function notifyPendingTrechoAlerts() {
+  const client = await pgPool.connect();
+  try {
+    const { rows } = await client.query(
+      `SELECT DISTINCT trecho_geom_id
+       FROM eventos_agregados_trecho
+       WHERE ultimo_evento IS NOT NULL
+         AND (last_notified_at IS NULL OR ultimo_evento > last_notified_at)`,
+    );
+    const results = [];
+    for (const row of rows) {
+      const resp = await notifyTelegramForTrechoAlerts(row.trecho_geom_id);
+      results.push({ trecho_geom_id: row.trecho_geom_id, ...resp });
+    }
+    return results;
+  } finally {
+    client.release();
+  }
+}
+
+// ==========================================
+// GEOEVENTOS (QUEIMADAS / RAIOS / ALERTAS)
+// ==========================================
+
+function getJobToken(req) {
+  const header = req.headers.authorization || req.headers['x-api-token'] || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : header;
+  return token;
+}
+
+function ensureJobAuth(req, res) {
+  const token = getJobToken(req);
+  if (!token || token !== GEO_JOB_TOKEN) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return false;
+  }
+  return true;
+}
+
+async function refreshAgregadosMultiWindow({ windows = [7, 30], bufferM = GEO_BUFFER_M }) {
+  const results = [];
+  for (const w of windows) {
+    const r = await geo.refreshAgregados({ pgPool, windowDays: w, bufferM });
+    results.push({ window: w, ...r });
+  }
+  return results;
+}
+
+app.post('/jobs/run', async (req, res) => {
+  try {
+    if (!ensureJobAuth(req, res)) return;
+    const { source = 'all', start, end, bufferM = GEO_BUFFER_M } = req.body || {};
+
+    const runQueimadas = source === 'all' || source === 'queimadas';
+    const runRaios = source === 'all' || source === 'raios';
+
+    const results = {};
+    if (runQueimadas) {
+      results.queimadas = await geo.ingestQueimadas({ pgPool });
+    }
+    if (runRaios) {
+    results.raios = await geo.ingestRaios({ pgPool });
+    }
+
+    results.agregados = await refreshAgregadosMultiWindow({
+      windows: [GEO_WINDOW_DAYS_DEFAULT, 30, GEO_RAIOS_WINDOW_DAYS].filter((v, idx, arr) => arr.indexOf(v) === idx),
+      bufferM,
+    });
+
+    results.notificacoes = await notifyPendingTrechoAlerts();
+
+    res.json({ ok: true, results });
+  } catch (error) {
+    console.error('❌ Erro ao rodar job geoeventos:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/eventos/queimadas', async (req, res) => {
+  try {
+    const { bbox, sinceMinutes } = req.query;
+    const limit = Math.min(Number(req.query.limit) || 200, 500);
+    const offset = Number(req.query.offset) || 0;
+    const minutes = Number(sinceMinutes || GEO_WINDOW_DAYS_DEFAULT * 1440);
+
+    // Verificar se temos view kmz_features_geom
+    let hasKmzGeom = true;
+    try {
+      await pgPool.query('SELECT 1 FROM kmz_features_geom LIMIT 1');
+    } catch (e) {
+      hasKmzGeom = false;
+    }
+
+    const clauses = [];
+    const params = [];
+    params.push(minutes);
+    clauses.push(`q.acq_time >= now() - ($${params.length} || ' minutes')::interval`);
+
+    if (bbox) {
+      const [minLon, minLat, maxLon, maxLat] = bbox.split(',').map(Number);
+      params.push(minLon, minLat, maxLon, maxLat);
+      clauses.push(
+        `q.geom && ST_MakeEnvelope($${params.length - 3}, $${params.length - 2}, $${params.length - 1}, $${params.length}, 4326)::geography`,
+      );
+    }
+
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    params.push(limit, offset);
+
+    let sql = `
+      SELECT
+        q.id, q.source, q.acq_time, q.latitude, q.longitude, q.satellite, q.raw
+        ${hasKmzGeom ? `,
+        nf.feature_id,
+        nf.nome as feature_nome,
+        nf.is_line as feature_is_line,
+        nf.dist_m as feature_dist_m,
+        nf.nearest_lat,
+        nf.nearest_lon
+        ` : ''}
+      FROM geo_queimadas q
+      ${hasKmzGeom ? `
+      LEFT JOIN LATERAL (
+        SELECT
+          k.id as feature_id,
+          k.nome,
+          k.is_line,
+          ST_Distance(q.geom, k.geom)::double precision as dist_m,
+          ST_Y(ST_ClosestPoint(k.geom::geometry, q.geom::geometry)) as nearest_lat,
+          ST_X(ST_ClosestPoint(k.geom::geometry, q.geom::geometry)) as nearest_lon
+        FROM kmz_features_geom k
+        WHERE k.geom IS NOT NULL
+        ORDER BY q.geom <-> k.geom
+        LIMIT 1
+      ) nf ON TRUE
+      ` : ''}
+      ${where}
+      ORDER BY q.acq_time DESC
+      LIMIT $${params.length - 1} OFFSET $${params.length}
+    `;
+
+    const { rows } = await pgPool.query(sql, params);
+    const data = rows.map((r) => ({
+      id: r.id,
+      source: r.source,
+      acq_time: r.acq_time,
+      latitude: r.latitude,
+      longitude: r.longitude,
+      satellite: r.satellite,
+      raw: r.raw,
+      nearest_feature: hasKmzGeom
+        ? {
+            feature_id: r.feature_id,
+            nome: r.feature_nome,
+            is_line: r.feature_is_line,
+            distancia_m: r.feature_dist_m,
+            nearest_point: r.nearest_lat && r.nearest_lon ? { lat: r.nearest_lat, lon: r.nearest_lon } : null,
+          }
+        : null,
+    }));
+
+    res.json({ ok: true, data, count: data.length });
+  } catch (error) {
+    console.error('❌ Erro ao listar queimadas:', error);
+    res.json({ ok: false, data: [], error: error.message });
+  }
+});
+
+app.get('/eventos/raios', async (req, res) => {
+  try {
+    const { bbox, sinceMinutes } = req.query;
+    const limit = Math.min(Number(req.query.limit) || 200, 500);
+    const offset = Number(req.query.offset) || 0;
+    const minutes = Number(sinceMinutes || GEO_WINDOW_DAYS_DEFAULT * 1440);
+
+    // Verificar se temos view kmz_features_geom
+    let hasKmzGeom = true;
+    try {
+      await pgPool.query('SELECT 1 FROM kmz_features_geom LIMIT 1');
+    } catch (e) {
+      hasKmzGeom = false;
+    }
+
+    const clauses = [];
+    const params = [];
+    params.push(minutes);
+    clauses.push(`r.strike_time >= now() - ($${params.length} || ' minutes')::interval`);
+
+    if (bbox) {
+      const [minLon, minLat, maxLon, maxLat] = bbox.split(',').map(Number);
+      params.push(minLon, minLat, maxLon, maxLat);
+      clauses.push(
+        `r.geom && ST_MakeEnvelope($${params.length - 3}, $${params.length - 2}, $${params.length - 1}, $${params.length}, 4326)::geography`,
+      );
+    }
+
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    params.push(limit, offset);
+
+    let sql = `
+      SELECT
+        r.id, r.source, r.strike_time, r.latitude, r.longitude, r.raw
+        ${hasKmzGeom ? `,
+        nf.feature_id,
+        nf.nome as feature_nome,
+        nf.is_line as feature_is_line,
+        nf.dist_m as feature_dist_m,
+        nf.nearest_lat,
+        nf.nearest_lon
+        ` : ''}
+      FROM geo_raios r
+      ${hasKmzGeom ? `
+      LEFT JOIN LATERAL (
+        SELECT
+          k.id as feature_id,
+          k.nome,
+          k.is_line,
+          ST_Distance(r.geom, k.geom)::double precision as dist_m,
+          ST_Y(ST_ClosestPoint(k.geom::geometry, r.geom::geometry)) as nearest_lat,
+          ST_X(ST_ClosestPoint(k.geom::geometry, r.geom::geometry)) as nearest_lon
+        FROM kmz_features_geom k
+        WHERE k.geom IS NOT NULL
+        ORDER BY r.geom <-> k.geom
+        LIMIT 1
+      ) nf ON TRUE
+      ` : ''}
+      ${where}
+      ORDER BY r.strike_time DESC
+      LIMIT $${params.length - 1} OFFSET $${params.length}
+    `;
+
+    const { rows } = await pgPool.query(sql, params);
+    const data = rows.map((r) => ({
+      id: r.id,
+      source: r.source,
+      strike_time: r.strike_time,
+      latitude: r.latitude,
+      longitude: r.longitude,
+      raw: r.raw,
+      nearest_feature: hasKmzGeom
+        ? {
+            feature_id: r.feature_id,
+            nome: r.feature_nome,
+            is_line: r.feature_is_line,
+            distancia_m: r.feature_dist_m,
+            nearest_point: r.nearest_lat && r.nearest_lon ? { lat: r.nearest_lat, lon: r.nearest_lon } : null,
+          }
+        : null,
+    }));
+
+    res.json({ ok: true, data, count: data.length });
+  } catch (error) {
+    console.error('❌ Erro ao listar raios:', error);
+    res.json({ ok: false, data: [], error: error.message });
+  }
+});
+
+app.get('/trechos/:id/alertas', async (req, res) => {
+  try {
+    const { id } = req.params; // trecho_geom_id ou ref_id
+    const { refId } = req.query;
+    let trechoId = id;
+    if (refId) {
+      const { data: trecho } = await supabase
+        .from('trechos_geoms')
+        .select('id')
+        .eq('ref_id', refId)
+        .order('updated_at', { ascending: false })
+        .maybeSingle();
+      if (trecho?.id) {
+        trechoId = trecho.id;
+      }
+    }
+
+    const alertas = await geo.getTrechoAlertas({ pgPool, trechoId });
+    res.json({ ok: true, data: alertas });
+  } catch (error) {
+    console.error('❌ Erro ao buscar alertas do trecho:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/trechos/:id/refresh-alertas', async (req, res) => {
+  try {
+    if (!ensureJobAuth(req, res)) return;
+    const bufferM = Number(req.body?.bufferM || GEO_BUFFER_M);
+    const windows = req.body?.windows || [GEO_WINDOW_DAYS_DEFAULT, 30, GEO_RAIOS_WINDOW_DAYS];
+    const results = await refreshAgregadosMultiWindow({
+      windows: windows.filter((v, idx, arr) => arr.indexOf(v) === idx),
+      bufferM,
+    });
+    res.json({ ok: true, results });
+  } catch (error) {
+    console.error('❌ Erro ao recalcular alertas do trecho:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/trechos/:id/notify', async (req, res) => {
+  try {
+    if (!ensureJobAuth(req, res)) return;
+    const { id } = req.params;
+    const resp = await notifyTelegramForTrechoAlerts(id, req.body?.mensagem);
+    res.json({ ok: resp.ok, data: resp });
+  } catch (error) {
+    console.error('❌ Erro ao notificar trecho:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Ingestão manual de raios (upload JSON) - útil se não houver feed público
+app.post('/eventos/raios/upload', async (req, res) => {
+  try {
+    if (!ensureJobAuth(req, res)) return;
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    const result = await geo.ingestRaios({ pgPool, fallbackItems: items });
+    res.json({ ok: true, result });
+  } catch (error) {
+    console.error('❌ Erro no upload de raios:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==========================================
+// CRON PARA INGESTÃO AUTOMÁTICA
+// ==========================================
+if (GEO_CRON_EXPR) {
+  cron.schedule(GEO_CRON_EXPR, async () => {
+    try {
+      console.log(`⏰ Rodando cron geoeventos (${GEO_CRON_EXPR})`);
+      await geo.ingestQueimadas({ pgPool });
+      await geo.ingestRaios({ pgPool });
+      await refreshAgregadosMultiWindow({
+        windows: [GEO_WINDOW_DAYS_DEFAULT, 30, GEO_RAIOS_WINDOW_DAYS].filter(
+          (v, idx, arr) => arr.indexOf(v) === idx,
+        ),
+      });
+      await notifyPendingTrechoAlerts();
+      console.log('✅ Cron geoeventos finalizado');
+    } catch (error) {
+      console.error('❌ Erro no cron geoeventos:', error);
+    }
+  });
+  console.log(`✅ GEO cron agendado: ${GEO_CRON_EXPR}`);
+}
 
 // ==========================================
 // LISTEN/NOTIFY (Opcional - para processar em tempo real)

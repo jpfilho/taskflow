@@ -1,7 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:fl_chart/fl_chart.dart';
 import '../models/horas_empregado_mes.dart';
+import '../models/ordem_programada_empregado_mes.dart';
+import '../models/horas_apontadas_ordem_mes.dart';
 import '../services/hora_sap_service.dart';
+import '../services/task_service.dart';
+import '../utils/responsive.dart';
 import 'multi_select_filter_dialog.dart';
+import 'task_view_dialog.dart';
 
 class HorasMetasView extends StatefulWidget {
   final VoidCallback? onRefresh;
@@ -13,6 +19,17 @@ class HorasMetasView extends StatefulWidget {
 
 class _HorasMetasViewState extends State<HorasMetasView> {
   final HoraSAPService _service = HoraSAPService();
+
+  /// Formata número com separador de milhar (ponto), ex.: 3120 -> "3.120"
+  static String _fmtMilhar(num value, [int decimals = 0]) {
+    final str = value.toStringAsFixed(decimals);
+    if (decimals > 0) {
+      final parts = str.split('.');
+      final intPart = parts[0].replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]}.');
+      return '$intPart,$parts[1]';
+    }
+    return str.replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]}.');
+  }
   List<HorasEmpregadoMes> _dados = [];
   List<HorasEmpregadoMes> _dadosFiltrados = [];
   bool _isLoading = false;
@@ -20,6 +37,7 @@ class _HorasMetasViewState extends State<HorasMetasView> {
   int? _mesSelecionado = DateTime.now().month;
   Set<String> _filtroEmpregados = {}; // Multi-seleção para empregados
   List<String> _empregadosDisponiveis = []; // Lista de empregados disponíveis
+  Map<String, double>? _horasPorDiaChart; // Horas alocadas por dia (data_lancamento) para o gráfico
 
   @override
   void initState() {
@@ -28,14 +46,16 @@ class _HorasMetasViewState extends State<HorasMetasView> {
   }
 
   Future<void> _carregarDados() async {
+    if (!mounted) return;
     setState(() {
       _isLoading = true;
     });
 
     try {
+      // Carregar ano inteiro para o gráfico acumulado mês a mês; filtro por mês é aplicado na exibição
       final dados = await _service.getHorasPorEmpregadoMes(
         ano: _anoSelecionado,
-        mes: _mesSelecionado,
+        mes: null,
       );
 
       if (mounted) {
@@ -49,20 +69,21 @@ class _HorasMetasViewState extends State<HorasMetasView> {
           _aplicarFiltros();
           _isLoading = false;
         });
+        if (_mesSelecionado == null && mounted) setState(() => _horasPorDiaChart = null);
+        else _carregarGraficoMetas();
       }
     } catch (e) {
       print('❌ Erro ao carregar dados de metas: $e');
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Erro ao carregar dados: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+      });
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          content: Text('Erro ao carregar dados: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 
@@ -82,6 +103,415 @@ class _HorasMetasViewState extends State<HorasMetasView> {
         final nomeCompleto = '${dado.nomeEmpregado} (${dado.matricula})';
         return _filtroEmpregados.contains(nomeCompleto);
       }).toList();
+    }
+  }
+
+  /// Dados apenas do mês selecionado (para cards, tabela e gráfico diário).
+  List<HorasEmpregadoMes> get _dadosDoMesSelecionado {
+    if (_mesSelecionado == null) return [];
+    return _dadosFiltrados
+        .where((d) => d.ano == _anoSelecionado && d.mes == _mesSelecionado!)
+        .toList();
+  }
+
+  /// Dias úteis no mês (segunda a sexta).
+  static int _diasUteisNoMes(int ano, int mes) {
+    final lastDay = DateTime(ano, mes + 1, 0).day;
+    int count = 0;
+    for (int d = 1; d <= lastDay; d++) {
+      final dt = DateTime(ano, mes, d);
+      if (dt.weekday >= DateTime.monday && dt.weekday <= DateTime.friday) count++;
+    }
+    return count;
+  }
+
+  /// Dias úteis do dia 1 até [dia] (inclusive) no mês.
+  static int _diasUteisAteDia(int ano, int mes, int dia) {
+    int count = 0;
+    for (int d = 1; d <= dia; d++) {
+      final dt = DateTime(ano, mes, d);
+      if (dt.weekday >= DateTime.monday && dt.weekday <= DateTime.friday) count++;
+    }
+    return count;
+  }
+
+  /// Dados para a tabela de metas: mês selecionado + linhas para quem não alocou nada ainda.
+  List<HorasEmpregadoMes> get _dadosTabelaMetas {
+    final doMes = _dadosDoMesSelecionado;
+    if (_mesSelecionado == null) return doMes;
+    final matriculasNoMes = doMes.map((d) => d.matricula).toSet();
+    final mapaEmpregado = <String, String>{};
+    for (var d in _dadosFiltrados) {
+      mapaEmpregado[d.matricula] = d.nomeEmpregado;
+    }
+    final resultado = List<HorasEmpregadoMes>.from(doMes);
+    final metaMensal = (_diasUteisNoMes(_anoSelecionado, _mesSelecionado!) * 8.0).clamp(8.0, 250.0);
+    for (var entry in mapaEmpregado.entries) {
+      if (matriculasNoMes.contains(entry.key)) continue;
+      resultado.add(HorasEmpregadoMes(
+        numeroPessoa: entry.key,
+        nomeEmpregado: entry.value,
+        matricula: entry.key,
+        ano: _anoSelecionado,
+        mes: _mesSelecionado!,
+        horasApontadas: 0,
+        horasFaltantes: metaMensal,
+        semApontamento: true,
+        metaMensal: metaMensal,
+      ));
+    }
+    resultado.sort((a, b) => a.nomeEmpregado.compareTo(b.nomeEmpregado));
+    return resultado;
+  }
+
+  Future<void> _carregarGraficoMetas() async {
+    if (_mesSelecionado == null) {
+      if (mounted) setState(() => _horasPorDiaChart = null);
+      return;
+    }
+    final matriculas = _dadosDoMesSelecionado
+        .map((d) => d.matricula)
+        .toSet()
+        .toList();
+    if (matriculas.isEmpty) {
+      if (mounted) setState(() => _horasPorDiaChart = null);
+      return;
+    }
+    final porDia = await _service.getHorasAlocadasPorDiaNoMes(
+      _anoSelecionado,
+      _mesSelecionado!,
+      matriculas,
+    );
+    if (mounted) setState(() => _horasPorDiaChart = porDia);
+  }
+
+  /// Abre o dialog com ordens programadas e horas apontadas por ordem (e ordens não programadas).
+  Future<void> _mostrarOrdensEmpregadoMes(HorasEmpregadoMes dado) async {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) => const Center(child: CircularProgressIndicator()),
+    );
+    List<OrdemProgramadaEmpregadoMes> ordensProgramadas = [];
+    List<HorasApontadasOrdemMes> horasPorOrdem = [];
+    try {
+      ordensProgramadas = await _service.getOrdensProgramadasPorEmpregadoMes(
+        ano: dado.ano,
+        mes: dado.mes,
+        matriculas: [dado.matricula],
+      );
+      horasPorOrdem = await _service.getHorasApontadasPorEmpregadoOrdemMes(
+        ano: dado.ano,
+        mes: dado.mes,
+        matriculas: [dado.matricula],
+      );
+    } finally {
+      if (mounted) Navigator.of(context).pop();
+    }
+    if (!mounted) return;
+
+    final setOrdensProgramadas = ordensProgramadas.map((o) => o.ordem).toSet();
+    final mapHorasPorOrdem = <String, double>{};
+    for (var h in horasPorOrdem) {
+      mapHorasPorOrdem[h.ordem] = (mapHorasPorOrdem[h.ordem] ?? 0) + h.horasApontadas;
+    }
+    final ordensNaoProgramadas = mapHorasPorOrdem.keys.where((ordem) => !setOrdensProgramadas.contains(ordem)).toList()..sort();
+    Map<String, Map<String, String?>> mapDetalhesNaoProgramadas = {};
+    if (ordensNaoProgramadas.isNotEmpty) {
+      mapDetalhesNaoProgramadas = await _service.getDetalhesOrdensByNumeros(ordensNaoProgramadas);
+    }
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        final screenWidth = MediaQuery.of(context).size.width;
+        final screenHeight = MediaQuery.of(context).size.height;
+        final isMobile = Responsive.isMobile(context);
+        final isTablet = Responsive.isTablet(context);
+        // Largura maior e responsiva: mobile quase tela cheia, tablet 92%, desktop até 1400px
+        final dialogWidth = isMobile
+            ? (screenWidth * 0.96).clamp(320.0, screenWidth)
+            : isTablet
+                ? (screenWidth * 0.92).clamp(500.0, screenWidth)
+                : (screenWidth * 0.85).clamp(800.0, 1400.0);
+        final maxContentHeight = (screenHeight * 0.75).clamp(400.0, 800.0);
+        final colTipo = isMobile ? 44.0 : 52.0;
+        final colOrdem = isMobile ? 82.0 : 100.0;
+        final colSala = isMobile ? 44.0 : 52.0;
+        final colLocal = isMobile ? 60.0 : 90.0;
+        final colTarefa = isMobile ? 100.0 : 140.0;
+        final colStatus = isMobile ? 44.0 : 52.0;
+        const colHoras = 48.0;
+        final colTextoBreve = isMobile
+            ? (dialogWidth - colTipo - colOrdem - colSala - colLocal - colTarefa - colStatus - colHoras - 48).clamp(100.0, 280.0)
+            : (isTablet ? 200.0 : 280.0);
+        return Dialog(
+          backgroundColor: Theme.of(context).dialogBackgroundColor,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          insetPadding: EdgeInsets.symmetric(
+            horizontal: isMobile ? 12 : 24,
+            vertical: isMobile ? 24 : 48,
+          ),
+          child: SizedBox(
+            width: dialogWidth,
+            height: maxContentHeight,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 20, 8, 12),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.assignment, color: Colors.blue),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Ordens — ${dado.nomeEmpregado}',
+                          style: TextStyle(fontSize: isMobile ? 16 : 18),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close, size: 20),
+                        onPressed: () => Navigator.of(context).pop(),
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          '${_getNomeMes(dado.mes)}/${dado.ano}',
+                          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey[700], fontSize: 13),
+                        ),
+                        const SizedBox(height: 16),
+                        const Text('Ordens programadas (atribuídas nas tarefas)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                        const SizedBox(height: 6),
+                        if (ordensProgramadas.isEmpty)
+                          Text('Nenhuma ordem programada.', style: TextStyle(color: Colors.grey[600], fontSize: 12))
+                        else
+                          SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: Table(
+                              columnWidths: {
+                                0: FixedColumnWidth(colTipo),
+                                1: FixedColumnWidth(colOrdem),
+                                2: FixedColumnWidth(colSala),
+                                3: FixedColumnWidth(colTextoBreve > 0 ? colTextoBreve : 180),
+                                4: FixedColumnWidth(colLocal),
+                                5: FixedColumnWidth(colTarefa),
+                                6: FixedColumnWidth(colStatus),
+                                7: FixedColumnWidth(colHoras),
+                              },
+                              border: TableBorder.all(color: Colors.grey.shade300, width: 0.5),
+                              children: [
+                                TableRow(
+                                  decoration: BoxDecoration(color: Colors.grey.shade200),
+                                  children: [
+                                    _tableCell('Tipo', isHeader: true),
+                                    _tableCell('Ordem', isHeader: true),
+                                    _tableCell('Sala', isHeader: true),
+                                    _tableCell('Texto breve', isHeader: true),
+                                    _tableCell('Local', isHeader: true),
+                                    _tableCell('Tarefa', isHeader: true),
+                                    _tableCell('Status', isHeader: true),
+                                    _tableCell('Horas', isHeader: true),
+                                  ],
+                                ),
+                                ...ordensProgramadas.map((dados) {
+                                  final horas = mapHorasPorOrdem[dados.ordem] ?? 0.0;
+                                  final status = (dados.taskStatus ?? '').toUpperCase().trim();
+                                  final statusBg = _corFundoStatusPorStatus(status, horas);
+                                  final concSemAlocacao = status.contains('CONC') && horas == 0;
+                                  return TableRow(
+                                    decoration: concSemAlocacao ? BoxDecoration(color: Colors.red.shade50) : null,
+                                    children: [
+                                      _tableCell(dados.tipo ?? '-'),
+                                      _tableCell(dados.ordem),
+                                      _tableCell(dados.sala ?? '-'),
+                                      _tableCell(dados.textoBreve ?? '-'),
+                                      _tableCell(dados.localDetalhe ?? '-'),
+                                      _tableCellTarefaLink(
+                                        tarefa: dados.taskTarefa ?? '-',
+                                        taskId: dados.taskId,
+                                        onTap: dados.taskId != null && dados.taskId!.isNotEmpty
+                                            ? () => _navegarParaTarefa(context, dados.taskId!)
+                                            : null,
+                                      ),
+                                      _tableCell(dados.taskStatus ?? '-', backgroundColor: statusBg),
+                                      _tableCell(horas.toStringAsFixed(1)),
+                                    ],
+                                  );
+                                }),
+                              ],
+                            ),
+                          ),
+                        const SizedBox(height: 16),
+                        const Text('Ordens não programadas (apontou mas não estava na tarefa)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                        const SizedBox(height: 6),
+                        if (ordensNaoProgramadas.isEmpty)
+                          Text('Nenhuma.', style: TextStyle(color: Colors.grey[600], fontSize: 12))
+                        else
+                          SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: Table(
+                              columnWidths: {
+                                0: FixedColumnWidth(colTipo),
+                                1: FixedColumnWidth(colOrdem),
+                                2: FixedColumnWidth(colSala),
+                                3: FixedColumnWidth(colLocal),
+                                4: FixedColumnWidth(colTextoBreve > 0 ? colTextoBreve : 200),
+                                5: FixedColumnWidth(colHoras),
+                              },
+                              border: TableBorder.all(color: Colors.grey.shade300, width: 0.5),
+                              children: [
+                                TableRow(
+                                  decoration: BoxDecoration(color: Colors.orange.shade100),
+                                  children: [
+                                    _tableCell('Tipo', isHeader: true),
+                                    _tableCell('Ordem', isHeader: true),
+                                    _tableCell('Sala', isHeader: true),
+                                    _tableCell('Local', isHeader: true),
+                                    _tableCell('Texto breve', isHeader: true),
+                                    _tableCell('Horas', isHeader: true),
+                                  ],
+                                ),
+                                ...ordensNaoProgramadas.map((ordem) {
+                                  final horas = mapHorasPorOrdem[ordem] ?? 0.0;
+                                  final det = mapDetalhesNaoProgramadas[ordem];
+                                  return TableRow(
+                                    children: [
+                                      _tableCell(det?['tipo'] ?? '-', isOrange: true),
+                                      _tableCell(ordem, isOrange: true),
+                                      _tableCell(det?['sala'] ?? '-', isOrange: true),
+                                      _tableCell(det?['local'] ?? '-', isOrange: true),
+                                      _tableCell(det?['texto_breve'] ?? '-', isOrange: true),
+                                      _tableCell(horas.toStringAsFixed(1), isOrange: true),
+                                    ],
+                                  );
+                                }),
+                              ],
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('Fechar'),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// Cor de fundo da célula Status conforme cadastro: CONC+h>0 verde, PROG azul, ANDA laranja.
+  Color? _corFundoStatusPorStatus(String status, double horas) {
+    if (status.contains('CONC')) {
+      return horas > 0 ? Colors.green.shade50 : null;
+    }
+    if (status.contains('PROG')) return Colors.blue.shade50;
+    if (status.contains('ANDA')) return Colors.orange.shade50;
+    return null;
+  }
+
+  Widget _tableCell(String text, {bool isHeader = false, bool isGreen = false, bool isOrange = false, Color? backgroundColor}) {
+    Color? textColor;
+    if (isHeader) textColor = Colors.grey[800];
+    else if (isGreen) textColor = Colors.green[700];
+    else if (isOrange) textColor = Colors.orange[800];
+    final content = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: isHeader ? FontWeight.w600 : FontWeight.normal,
+          color: textColor,
+        ),
+        overflow: TextOverflow.ellipsis,
+        maxLines: isHeader ? 1 : 2,
+      ),
+    );
+    if (backgroundColor != null) {
+      return Container(color: backgroundColor, child: content);
+    }
+    return content;
+  }
+
+  Widget _tableCellTarefaLink({
+    required String tarefa,
+    required String? taskId,
+    VoidCallback? onTap,
+  }) {
+    final isLink = onTap != null && (taskId ?? '').isNotEmpty;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+      child: isLink
+          ? InkWell(
+              onTap: onTap,
+              child: Text(
+                tarefa,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.blue[700],
+                  decoration: TextDecoration.underline,
+                  decorationColor: Colors.blue[700],
+                ),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 2,
+              ),
+            )
+          : Text(
+              tarefa,
+              style: const TextStyle(fontSize: 12),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 2,
+            ),
+    );
+  }
+
+  Future<void> _navegarParaTarefa(BuildContext context, String taskId) async {
+    try {
+      final taskService = TaskService();
+      final task = await taskService.getTaskById(taskId);
+      if (task != null && context.mounted) {
+        Navigator.of(context).pop(); // fecha o diálogo de Ordens
+        if (!context.mounted) return;
+        showDialog(
+          context: context,
+          builder: (context) => TaskViewDialog(task: task),
+        );
+      } else {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Tarefa não encontrada'), backgroundColor: Colors.orange),
+          );
+        }
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro ao carregar tarefa: $e'), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
@@ -117,38 +547,98 @@ class _HorasMetasViewState extends State<HorasMetasView> {
     return Colors.red[50]!;
   }
 
-  // Calcular estatísticas gerais
+  // Calcular estatísticas gerais (mês selecionado + quem não alocou horas)
   Map<String, dynamic> _calcularEstatisticas() {
-    if (_dadosFiltrados.isEmpty) {
+    final dadosMes = _dadosTabelaMetas;
+    if (dadosMes.isEmpty) {
       return {
         'totalColaboradores': 0,
         'horasTotais': 0.0,
+        'metaTotalMes': 0.0,
+        'percentualAlocado': 0.0,
         'metasAtingidas': 0,
         'metasPendentes': 0,
         'percentualAtingido': 0.0,
+        'horasInvestimento': 0.0,
+        'horasCusteio': 0.0,
+        'percentualInvestimento': 0.0,
+        'horasAteHoje': 0.0,
+        'metaAteHoje': 0.0,
+        'percentualFeitoAteHoje': 0.0,
+        'percentualDeveriaAteHoje': 0.0,
       };
     }
 
     final colaboradoresUnicos = <String>{};
     double horasTotais = 0;
+    double metaTotalMes = 0;
+    double horasInvestimento = 0;
+    double horasCusteio = 0;
     int metasAtingidas = 0;
     int total = 0;
 
-    for (var dado in _dadosFiltrados) {
+    for (var dado in dadosMes) {
       colaboradoresUnicos.add(dado.matricula);
       horasTotais += dado.horasApontadas;
+      metaTotalMes += dado.metaMensal;
+      horasInvestimento += dado.horasInvestimento;
+      horasCusteio += dado.horasCusteio;
       total++;
       if (dado.horasApontadas >= dado.metaMensal) {
         metasAtingidas++;
       }
     }
 
+    final totalCustInvest = horasInvestimento + horasCusteio;
+    final percentualInvestimento = totalCustInvest > 0 ? (horasInvestimento / totalCustInvest * 100) : 0.0;
+    final percentualAlocado = metaTotalMes > 0 ? (horasTotais / metaTotalMes * 100) : 0.0;
+
+    // Até hoje (mês selecionado): horas feitas vs meta proporcional aos dias úteis
+    double horasAteHoje = 0.0;
+    double metaAteHoje = 0.0;
+    double percentualFeitoAteHoje = 0.0;
+    double percentualDeveriaAteHoje = 0.0;
+    if (_mesSelecionado != null) {
+      final ano = _anoSelecionado;
+      final mes = _mesSelecionado!;
+      final agora = DateTime.now();
+      final lastDay = DateTime(ano, mes + 1, 0).day;
+      final diaHoje = (agora.year == ano && agora.month == mes)
+          ? agora.day
+          : (agora.isBefore(DateTime(ano, mes, 1)) ? 0 : lastDay);
+      final porDia = _horasPorDiaChart ?? {};
+      if (diaHoje >= 1) {
+        for (int d = 1; d <= diaHoje; d++) {
+          final chave = '${ano.toString()}-${mes.toString().padLeft(2, '0')}-${d.toString().padLeft(2, '0')}';
+          horasAteHoje += porDia[chave] ?? 0;
+        }
+        final diasUteisNoMes = _diasUteisNoMes(ano, mes);
+        final diasUteisAteHoje = _diasUteisAteDia(ano, mes, diaHoje);
+        if (diasUteisNoMes > 0) {
+          metaAteHoje = (diasUteisAteHoje / diasUteisNoMes) * metaTotalMes;
+          percentualDeveriaAteHoje = (diasUteisAteHoje / diasUteisNoMes) * 100;
+        }
+        if (metaAteHoje > 0) {
+          percentualFeitoAteHoje = (horasAteHoje / metaAteHoje) * 100;
+        }
+      }
+    }
+
     return {
       'totalColaboradores': colaboradoresUnicos.length,
       'horasTotais': horasTotais,
+      'metaTotalMes': metaTotalMes,
+      'percentualAlocado': percentualAlocado,
       'metasAtingidas': metasAtingidas,
       'metasPendentes': total - metasAtingidas,
       'percentualAtingido': total > 0 ? (metasAtingidas / total * 100) : 0.0,
+      'horasInvestimento': horasInvestimento,
+      'horasCusteio': horasCusteio,
+      'percentualInvestimento': percentualInvestimento,
+      'horasAteHoje': horasAteHoje,
+      'metaAteHoje': metaAteHoje,
+      'percentualFeitoAteHoje': percentualFeitoAteHoje,
+      'percentualDeveriaAteHoje': percentualDeveriaAteHoje,
     };
   }
 
@@ -164,233 +654,141 @@ class _HorasMetasViewState extends State<HorasMetasView> {
           primary: true,
           child: Column(
             children: [
+              // Barra: Ano, Mês, Empregados | Cards (mesma largura/altura)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border(bottom: BorderSide(color: Colors.grey[300]!)),
+                ),
+                child: isMobile
+                    ? Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Row(
+                            children: [
+                              _buildFilterDropdown(label: 'ANO', width: 82, child: _buildAnoDropdown()),
+                              const SizedBox(width: 8),
+                              _buildFilterDropdown(label: 'MÊS', width: 100, child: _buildMesDropdown()),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          _buildFilterDropdown(label: 'EMPREGADOS', width: double.infinity, child: _buildEmpregadosDropdown()),
+                        ],
+                      )
+                    : SizedBox(
+                        height: 136,
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            // 3 cards primeiro: META MENSAL, STATUS METAS, INVESTIMENTO
+                            Expanded(child: _buildStatCard(title: 'META MENSAL', value: ((stats['metaTotalMes'] as num).toDouble()).toStringAsFixed(0).replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]}.'), subtitle: null, icon: Icons.flag, iconColor: Colors.orange[700]!, backgroundColor: Colors.orange[50]!, compact: true)),
+                            const SizedBox(width: 8),
+                            Expanded(child: _buildMetasCard(metasAtingidas: stats['metasAtingidas'], metasPendentes: stats['metasPendentes'], percentual: stats['percentualAlocado'], compact: true)),
+                            const SizedBox(width: 8),
+                            Expanded(child: _buildCusteioInvestimentoCard(horasInvestimento: (stats['horasInvestimento'] as num).toDouble(), horasCusteio: (stats['horasCusteio'] as num).toDouble(), percentualInvestimento: (stats['percentualInvestimento'] as num).toDouble(), compact: true)),
+                            const SizedBox(width: 12),
+                            // Filtros (ANO, MÊS, EMPREGADOS)
+                            SizedBox(
+                              width: 92 + 12 + 130,
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Row(
+                                    children: [
+                                      _buildFilterDropdown(label: 'ANO', width: 92, child: _buildAnoDropdown()),
+                                      const SizedBox(width: 12),
+                                      _buildFilterDropdown(label: 'MÊS', width: 130, child: _buildMesDropdown()),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  _buildFilterDropdown(label: 'EMPREGADOS', width: double.infinity, child: _buildEmpregadosDropdown()),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            // 3 cards depois: Colaboradores, ATÉ HOJE, Horas Alocadas
+                            Expanded(child: _buildStatCard(title: 'Colaboradores', value: stats['totalColaboradores'].toString(), subtitle: null, icon: Icons.people, iconColor: Colors.blue[600]!, backgroundColor: Colors.blue[50]!, compact: true)),
+                            const SizedBox(width: 8),
+                            Expanded(child: _buildVelocimetroAteHojeCard(horasAteHoje: (stats['horasAteHoje'] as num).toDouble(), metaAteHoje: (stats['metaAteHoje'] as num).toDouble(), percentualFeitoAteHoje: (stats['percentualFeitoAteHoje'] as num).toDouble(), percentualDeveriaAteHoje: (stats['percentualDeveriaAteHoje'] as num).toDouble(), compact: true)),
+                            const SizedBox(width: 8),
+                            Expanded(child: _buildStatCard(title: 'Horas Alocadas', value: (stats['horasTotais'] as num).toStringAsFixed(0).replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]}.'), subtitle: null, icon: Icons.access_time, iconColor: Colors.green[700]!, backgroundColor: Colors.green[50]!, compact: true)),
+                          ],
+                        ),
+                      ),
+              ),
               Container(
                 padding: const EdgeInsets.all(16),
                 color: Colors.white,
                 child: Column(
                   children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          'Dashboard de Horas',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        if (widget.onRefresh != null)
-                          IconButton(
-                            icon: const Icon(Icons.refresh),
-                            onPressed: widget.onRefresh,
-                            tooltip: 'Atualizar',
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
+                    // No mobile: cards em coluna acima do gráfico
                     if (isMobile)
                       Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          _buildStatCard(
-                            title: 'Total de Colaboradores',
-                            value: stats['totalColaboradores'].toString(),
-                            subtitle: null,
-                            icon: Icons.people,
-                            iconColor: Colors.blue[600]!,
-                            backgroundColor: Colors.blue[50]!,
-                          ),
+                          _buildStatCard(title: 'Colaboradores', value: stats['totalColaboradores'].toString(), subtitle: null, icon: Icons.people, iconColor: Colors.blue[600]!, backgroundColor: Colors.blue[50]!),
                           const SizedBox(height: 12),
-                          _buildStatCard(
-                            title: 'Horas Totais Registradas',
-                            value: stats['horasTotais'].toStringAsFixed(0),
-                            subtitle: null,
-                            icon: Icons.access_time,
-                            iconColor: Colors.orange[600]!,
-                            backgroundColor: Colors.orange[50]!,
-                          ),
+                          _buildVelocimetroAteHojeCard(horasAteHoje: (stats['horasAteHoje'] as num).toDouble(), metaAteHoje: (stats['metaAteHoje'] as num).toDouble(), percentualFeitoAteHoje: (stats['percentualFeitoAteHoje'] as num).toDouble(), percentualDeveriaAteHoje: (stats['percentualDeveriaAteHoje'] as num).toDouble()),
                           const SizedBox(height: 12),
-                          _buildMetasCard(
-                            metasAtingidas: stats['metasAtingidas'],
-                            metasPendentes: stats['metasPendentes'],
-                            percentual: stats['percentualAtingido'],
-                          ),
-                        ],
-                      )
-                    else
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _buildStatCard(
-                              title: 'Total de Colaboradores',
-                              value: stats['totalColaboradores'].toString(),
-                              subtitle: null,
-                              icon: Icons.people,
-                              iconColor: Colors.blue[600]!,
-                              backgroundColor: Colors.blue[50]!,
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _buildStatCard(
-                              title: 'Horas Totais Registradas',
-                              value: stats['horasTotais'].toStringAsFixed(0),
-                              subtitle: null,
-                              icon: Icons.access_time,
-                              iconColor: Colors.orange[600]!,
-                              backgroundColor: Colors.orange[50]!,
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _buildMetasCard(
-                              metasAtingidas: stats['metasAtingidas'],
-                              metasPendentes: stats['metasPendentes'],
-                              percentual: stats['percentualAtingido'],
-                            ),
-                          ),
+                          _buildStatCard(title: 'Horas Alocadas', value: (stats['horasTotais'] as num).toStringAsFixed(0).replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]}.'), subtitle: null, icon: Icons.access_time, iconColor: Colors.green[700]!, backgroundColor: Colors.green[50]!),
+                          const SizedBox(height: 12),
+                          _buildStatCard(title: 'META MENSAL', value: ((stats['metaTotalMes'] as num).toDouble()).toStringAsFixed(0).replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]}.'), subtitle: null, icon: Icons.flag, iconColor: Colors.orange[700]!, backgroundColor: Colors.orange[50]!),
+                          const SizedBox(height: 12),
+                          _buildMetasCard(metasAtingidas: stats['metasAtingidas'], metasPendentes: stats['metasPendentes'], percentual: stats['percentualAlocado']),
+                          const SizedBox(height: 12),
+                          _buildCusteioInvestimentoCard(horasInvestimento: (stats['horasInvestimento'] as num).toDouble(), horasCusteio: (stats['horasCusteio'] as num).toDouble(), percentualInvestimento: (stats['percentualInvestimento'] as num).toDouble()),
                         ],
                       ),
-                  ],
-                ),
-              ),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  border: Border(
-                    bottom: BorderSide(
-                      color: Colors.grey[300]!,
-                      width: 1,
-                    ),
-                  ),
-                ),
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  primary: false,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
+                    if (_mesSelecionado != null) ...[
+                      const SizedBox(height: 16),
                       SizedBox(
-                        width: isMobile ? 82 : 92,
-                        child: DropdownButtonFormField<int>(
-                          value: _anoSelecionado,
-                          decoration: InputDecoration(
-                            labelText: 'Ano',
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            isDense: true,
-                          ),
-                          items: List.generate(5, (index) {
-                            final ano = DateTime.now().year - 2 + index;
-                            return DropdownMenuItem(
-                              value: ano,
-                              child: Text(ano.toString(), style: const TextStyle(fontSize: 13)),
-                            );
-                          }).toList(),
-                          onChanged: (value) {
-                            if (value != null) {
-                              setState(() {
-                                _anoSelecionado = value;
-                              });
-                              _carregarDados();
-                            }
-                          },
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      SizedBox(
-                        width: isMobile ? 100 : 118,
-                        child: DropdownButtonFormField<int?>(
-                          value: _mesSelecionado,
-                          decoration: InputDecoration(
-                            labelText: 'Mês',
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            isDense: true,
-                          ),
-                          items: [
-                            const DropdownMenuItem<int?>(
-                              value: null,
-                              child: Text('Todos', style: TextStyle(fontSize: 13)),
-                            ),
-                            ...List.generate(12, (index) {
-                              final mes = index + 1;
-                              return DropdownMenuItem<int?>(
-                                value: mes,
-                                child: Text(_getNomeMes(mes), style: const TextStyle(fontSize: 13)),
-                              );
-                            }),
-                          ],
-                          onChanged: (value) {
-                            setState(() {
-                              _mesSelecionado = value;
-                            });
-                            _carregarDados();
-                          },
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      SizedBox(
-                        width: isMobile ? 190 : 240,
-                        child: GestureDetector(
-                          onTap: () async {
-                            final selecionados = await showDialog<Set<String>>(
-                              context: context,
-                              builder: (context) => MultiSelectFilterDialog(
-                                title: 'Selecionar Empregados',
-                                options: _empregadosDisponiveis,
-                                selectedValues: _filtroEmpregados,
-                                onSelectionChanged: (values) {
-                                  setState(() {
-                                    _filtroEmpregados = values;
-                                    _aplicarFiltros();
-                                  });
-                                },
-                                searchHint: 'Pesquisar empregado...',
+                        height: isMobile ? 320.0 : 380.0,
+                        child: DefaultTabController(
+                          length: 2,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              TabBar(
+                                labelColor: Theme.of(context).primaryColor,
+                                unselectedLabelColor: Colors.grey[600],
+                                tabs: const [
+                                  Tab(text: 'Horas acumuladas no mês'),
+                                  Tab(text: 'Horas Extras'),
+                                ],
                               ),
-                            );
-                            if (selecionados != null) {
-                              setState(() {
-                                _filtroEmpregados = selecionados;
-                                _aplicarFiltros();
-                              });
-                            }
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-                            decoration: BoxDecoration(
-                              color: Colors.grey[100],
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: Colors.grey[300]!),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(Icons.people, size: 18, color: Colors.grey),
-                                const SizedBox(width: 8),
-                                Flexible(
-                                    child: Text(
-                                      _filtroEmpregados.isEmpty
-                                          ? 'Empregados'
-                                          : '${_filtroEmpregados.length} selecionado(s)',
-                                      style: const TextStyle(fontSize: 13, color: Colors.black87),
-                                      overflow: TextOverflow.ellipsis,
+                              const SizedBox(height: 8),
+                              Expanded(
+                                child: TabBarView(
+                                  children: [
+                                    Row(
+                                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                                      children: [
+                                        Expanded(
+                                          flex: 7,
+                                          child: _buildGraficoAcumuladoMes(isMobile),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          flex: 3,
+                                          child: _buildGraficoAnoCombinado(isMobile),
+                                        ),
+                                      ],
                                     ),
+                                    _buildGraficoHoraExtra(isMobile),
+                                  ],
                                 ),
-                                const SizedBox(width: 6),
-                                const Icon(Icons.arrow_drop_down),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
                         ),
                       ),
                     ],
-                  ),
+                  ],
                 ),
               ),
               Padding(
@@ -400,7 +798,7 @@ class _HorasMetasViewState extends State<HorasMetasView> {
                         padding: EdgeInsets.all(24),
                         child: CircularProgressIndicator(),
                       )
-                    : _dadosFiltrados.isEmpty
+                    : _dadosTabelaMetas.isEmpty
                         ? Center(
                             child: Text(
                               'Nenhum dado encontrado',
@@ -421,9 +819,10 @@ class _HorasMetasViewState extends State<HorasMetasView> {
 
 
   Widget _buildTabelaCompacta(bool isMobile) {
-    // Agrupar dados por empregado (usar dados filtrados)
+    // Dados do mês + quem não alocou nada ainda
+    final dadosTabela = _dadosTabelaMetas;
     final Map<String, List<HorasEmpregadoMes>> dadosPorEmpregado = {};
-    for (var dado in _dadosFiltrados) {
+    for (var dado in dadosTabela) {
       final key = '${dado.nomeEmpregado}_${dado.matricula}';
       dadosPorEmpregado.putIfAbsent(key, () => []);
       dadosPorEmpregado[key]!.add(dado);
@@ -500,6 +899,16 @@ class _HorasMetasViewState extends State<HorasMetasView> {
                 ),
               ),
             ),
+            DataColumn(
+              label: Text(
+                'Ordens',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                  fontSize: isMobile ? 12 : 14,
+                ),
+              ),
+            ),
           ],
           rows: dadosPorEmpregado.values.expand((lista) {
             // Ordenar por mês
@@ -513,7 +922,7 @@ class _HorasMetasViewState extends State<HorasMetasView> {
             final corStatus = _getCorStatus(dado.horasApontadas, dado.metaMensal, dado.semApontamento);
             final corBackground = _getCorBackgroundStatus(dado.horasApontadas, dado.metaMensal, dado.semApontamento);
             final statusText = dado.semApontamento
-                ? 'Sem Apontamento'
+                ? (dado.horasApontadas == 0 ? 'Não alocou nada ainda' : 'Sem Apontamento')
                 : dado.horasApontadas >= dado.metaMensal
                     ? 'Meta Atingida'
                     : dado.horasApontadas >= dado.metaMensal * 0.75
@@ -708,8 +1117,8 @@ class _HorasMetasViewState extends State<HorasMetasView> {
                             ],
                           ),
                         ),
-                        // Informações de horas programadas e extras em linha única compacta
-                        if (dado.horasProgramadas > 0 || dado.horasExtras > 0)
+                        // Informações de horas programadas, extras, investimento e custeio
+                        if (dado.horasProgramadas > 0 || dado.horasExtras > 0 || dado.horasInvestimento > 0 || dado.horasCusteio > 0)
                           Padding(
                             padding: const EdgeInsets.only(top: 2),
                             child: Wrap(
@@ -731,6 +1140,24 @@ class _HorasMetasViewState extends State<HorasMetasView> {
                                     style: TextStyle(
                                       fontSize: isMobile ? 9 : 10,
                                       color: Colors.orange[700],
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                if (dado.horasInvestimento > 0)
+                                  Text(
+                                    'Invest: ${dado.horasInvestimento.toStringAsFixed(1)}',
+                                    style: TextStyle(
+                                      fontSize: isMobile ? 9 : 10,
+                                      color: Colors.purple[700],
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                if (dado.horasCusteio > 0)
+                                  Text(
+                                    'Cust: ${dado.horasCusteio.toStringAsFixed(1)}',
+                                    style: TextStyle(
+                                      fontSize: isMobile ? 9 : 10,
+                                      color: Colors.teal[700],
                                       fontWeight: FontWeight.w600,
                                     ),
                                   ),
@@ -780,6 +1207,13 @@ class _HorasMetasViewState extends State<HorasMetasView> {
                     ),
                   ),
                 ),
+                DataCell(
+                  TextButton.icon(
+                    onPressed: () => _mostrarOrdensEmpregadoMes(dado),
+                    icon: const Icon(Icons.assignment, size: 16, color: Colors.blue),
+                    label: Text('Ver', style: TextStyle(fontSize: isMobile ? 11 : 12, color: Colors.blue[700])),
+                  ),
+                ),
               ],
             );
           }).toList(),
@@ -788,7 +1222,1639 @@ class _HorasMetasViewState extends State<HorasMetasView> {
     );
   }
 
-  // Widget para Card de Estatística
+  Widget _buildGraficoAcumuladoMes(bool isMobile) {
+    final ano = _anoSelecionado;
+    final mes = _mesSelecionado!;
+    final lastDay = DateTime(ano, mes + 1, 0).day;
+    // Incluir quem não alocou: total de colaboradores = _dadosTabelaMetas (mesmo critério dos cards)
+    final numEmpregados = _dadosTabelaMetas.map((d) => d.matricula).toSet().length;
+    final porDia = _horasPorDiaChart ?? {};
+
+    // Totais do mês (custeio/investimento) para evolução proporcional às horas alocadas
+    final doMes = _dadosDoMesSelecionado;
+    final totalAlocadoMes = doMes.fold<double>(0, (s, d) => s + d.horasApontadas);
+    final totalCusteioMes = doMes.fold<double>(0, (s, d) => s + d.horasCusteio);
+    final totalInvestimentoMes = doMes.fold<double>(0, (s, d) => s + d.horasInvestimento);
+
+    final hoje = DateTime.now();
+    final mesmoMesAno = hoje.year == ano && hoje.month == mes;
+    final diaHoje = hoje.day;
+
+    double acumPossivel = 0;
+    double acumAlocado = 0;
+    final spotsPossivel = <FlSpot>[];
+    final spotsAlocado = <FlSpot>[];
+    final spotsCusteio = <FlSpot>[];
+    final spotsInvestimento = <FlSpot>[];
+    for (int d = 1; d <= lastDay; d++) {
+      final dt = DateTime(ano, mes, d);
+      final isDiaUtil = dt.weekday >= DateTime.monday && dt.weekday <= DateTime.friday;
+      if (isDiaUtil) acumPossivel += 8.0 * numEmpregados;
+      final chave = '${ano.toString()}-${mes.toString().padLeft(2, '0')}-${d.toString().padLeft(2, '0')}';
+      if (!mesmoMesAno || d <= diaHoje) {
+        acumAlocado += porDia[chave] ?? 0;
+      }
+      spotsPossivel.add(FlSpot(d.toDouble(), acumPossivel));
+      // Horas alocadas, custeio e investimento: linha só até hoje (não repetir depois)
+      if (!mesmoMesAno || d <= diaHoje) {
+        spotsAlocado.add(FlSpot(d.toDouble(), acumAlocado));
+        final ratio = totalAlocadoMes > 0 ? (acumAlocado / totalAlocadoMes).clamp(0.0, 1.0) : 0.0;
+        spotsCusteio.add(FlSpot(d.toDouble(), totalCusteioMes * ratio));
+        spotsInvestimento.add(FlSpot(d.toDouble(), totalInvestimentoMes * ratio));
+      }
+    }
+
+    final maxY = [
+      ...spotsPossivel.map((e) => e.y),
+      ...spotsAlocado.map((e) => e.y),
+      ...spotsCusteio.map((e) => e.y),
+      ...spotsInvestimento.map((e) => e.y),
+    ].fold<double>(0, (p, c) => c > p ? c : p);
+
+    // Evitar clamp(lower, upper) com lower > upper (ex.: maxY == 0)
+    final maxYScale = maxY <= 0 ? 1.0 : (maxY + 1);
+    final intervalY = maxY <= 0 ? 1.0 : (maxY / 4).clamp(1.0, maxY);
+
+    final lineBars = <LineChartBarData>[
+      LineChartBarData(
+        spots: spotsPossivel,
+        isCurved: false,
+        color: Colors.indigo,
+        barWidth: 3,
+        dotData: FlDotData(show: true),
+      ),
+      LineChartBarData(
+        spots: spotsAlocado,
+        isCurved: false,
+        color: Colors.teal,
+        barWidth: 3,
+        dotData: FlDotData(show: true),
+      ),
+      LineChartBarData(
+        spots: spotsCusteio,
+        isCurved: false,
+        color: Colors.amber.shade700,
+        barWidth: 2,
+        dotData: FlDotData(show: true),
+      ),
+      LineChartBarData(
+        spots: spotsInvestimento,
+        isCurved: false,
+        color: Colors.purple.shade600,
+        barWidth: 2,
+        dotData: FlDotData(show: true),
+      ),
+    ];
+    FlSpot? spotPossivelHoje;
+    FlSpot? spotAlocadoHoje;
+    FlSpot? spotCusteioHoje;
+    FlSpot? spotInvestimentoHoje;
+    if (mesmoMesAno && diaHoje >= 1 && diaHoje <= lastDay &&
+        spotsPossivel.length >= diaHoje && spotsAlocado.length >= diaHoje) {
+      spotPossivelHoje = spotsPossivel[diaHoje - 1];
+      spotAlocadoHoje = spotsAlocado[diaHoje - 1];
+      spotCusteioHoje = spotsCusteio[diaHoje - 1];
+      spotInvestimentoHoje = spotsInvestimento[diaHoje - 1];
+    }
+    if (mesmoMesAno && diaHoje >= 1 && diaHoje <= lastDay) {
+      lineBars.add(
+        LineChartBarData(
+          spots: [
+            FlSpot(diaHoje.toDouble(), 0),
+            FlSpot(diaHoje.toDouble(), maxYScale),
+          ],
+          isCurved: false,
+          color: Colors.orange,
+          barWidth: 2,
+          dotData: FlDotData(show: false),
+          show: true,
+        ),
+      );
+    }
+    const indiceBarraHoje = 4; // 0=possível, 1=alocado, 2=custeio, 3=investimento, 4=hoje
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withOpacity(0.08),
+            blurRadius: 6,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      padding: EdgeInsets.all(isMobile ? 8 : 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.max,
+        children: [
+          Text(
+            'Horas acumuladas no mês',
+            style: TextStyle(
+              fontSize: isMobile ? 14 : 16,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                LineChart(
+              LineChartData(
+                minX: 1,
+                maxX: lastDay.toDouble(),
+                minY: 0,
+                maxY: maxYScale,
+                lineBarsData: lineBars,
+                showingTooltipIndicators: () {
+                  final list = <ShowingTooltipIndicators>[];
+                  if (spotsPossivel.isNotEmpty && spotsAlocado.isNotEmpty) {
+                    list.add(ShowingTooltipIndicators([
+                      LineBarSpot(lineBars[0], 0, spotsPossivel.last),
+                      LineBarSpot(lineBars[1], 1, spotsAlocado.last),
+                      LineBarSpot(lineBars[2], 2, spotsCusteio.last),
+                      LineBarSpot(lineBars[3], 3, spotsInvestimento.last),
+                    ]));
+                    // Rótulos no dia atual
+                    if (mesmoMesAno && diaHoje >= 1 && diaHoje <= lastDay &&
+                        spotsPossivel.length >= diaHoje && spotsAlocado.length >= diaHoje) {
+                      list.add(ShowingTooltipIndicators([
+                        LineBarSpot(lineBars[0], 0, spotPossivelHoje!),
+                        LineBarSpot(lineBars[1], 1, spotAlocadoHoje!),
+                        LineBarSpot(lineBars[2], 2, spotCusteioHoje!),
+                        LineBarSpot(lineBars[3], 3, spotInvestimentoHoje!),
+                      ]));
+                    }
+                  }
+                  return list;
+                }(),
+                titlesData: FlTitlesData(
+                  leftTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 40,
+                      interval: intervalY,
+                      getTitlesWidget: (value, meta) => Padding(
+                        padding: const EdgeInsets.only(right: 4),
+                        child: Text(
+                          _fmtMilhar(value),
+                          style: const TextStyle(fontSize: 10),
+                        ),
+                      ),
+                    ),
+                  ),
+                  rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      interval: 1,
+                      reservedSize: 14,
+                      getTitlesWidget: (value, meta) {
+                        final day = value.toInt();
+                        if (day < 1 || day > lastDay) return const SizedBox.shrink();
+                        final isHoje = mesmoMesAno && day == diaHoje;
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            day.toString(),
+                            style: TextStyle(
+                              fontSize: 8,
+                              fontWeight: isHoje ? FontWeight.bold : FontWeight.normal,
+                              color: isHoje ? Colors.orange : null,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                gridData: FlGridData(
+                  show: true,
+                  drawVerticalLine: true,
+                  verticalInterval: 1,
+                  horizontalInterval: intervalY,
+                ),
+                borderData: FlBorderData(show: false),
+                lineTouchData: LineTouchData(
+                  touchTooltipData: LineTouchTooltipData(
+                    getTooltipItems: (touchedSpots) => touchedSpots.map((s) {
+                      if (s.barIndex == indiceBarraHoje) {
+                        return LineTooltipItem(
+                          'Hoje',
+                          TextStyle(
+                            color: Colors.orange,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 12,
+                          ),
+                        );
+                      }
+                      final color = s.barIndex == 0
+                          ? Colors.indigo
+                          : s.barIndex == 1
+                              ? Colors.teal
+                              : s.barIndex == 2
+                                  ? Colors.amber.shade700
+                                  : Colors.purple.shade600;
+                      final label = s.barIndex == 0
+                          ? 'Possível'
+                          : s.barIndex == 1
+                              ? 'Alocado'
+                              : s.barIndex == 2
+                                  ? 'Custeio'
+                                  : 'Invest.';
+                      return LineTooltipItem(
+                        '$label: ${_fmtMilhar(s.y)} h',
+                        TextStyle(
+                          color: color,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 12,
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ),
+            ),
+                // Rótulos fixos no dia atual (sempre visíveis)
+                if (spotPossivelHoje != null && spotAlocadoHoje != null && maxYScale > 0)
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final spotP = spotPossivelHoje!;
+                      final spotA = spotAlocadoHoje!;
+                      final spotC = spotCusteioHoje;
+                      final spotI = spotInvestimentoHoje;
+                      final w = constraints.maxWidth;
+                      final h = constraints.maxHeight;
+                      if (w < 50 || h < 50) return const SizedBox.shrink();
+                      const plotLeft = 40.0;
+                      const plotBottom = 14.0;
+                      final plotW = w - plotLeft;
+                      final plotH = h - plotBottom;
+                      if (plotW <= 0 || plotH <= 0) return const SizedBox.shrink();
+                      final xCenter = plotLeft + (diaHoje - 1) / (lastDay > 1 ? lastDay - 1 : 1) * plotW;
+                      double topFor(double y) => plotH - (y / maxYScale) * plotH;
+                      return Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          Positioned(
+                            left: xCenter + 4,
+                            top: topFor(spotP.y) - 8,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.indigo.withOpacity(0.95),
+                                borderRadius: BorderRadius.circular(4),
+                                boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 2, offset: const Offset(0, 1))],
+                              ),
+                              child: Text(
+                                '${_fmtMilhar(spotP.y)} h',
+                                style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            left: xCenter + 4,
+                            top: topFor(spotA.y) - 8,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.teal.withOpacity(0.95),
+                                borderRadius: BorderRadius.circular(4),
+                                boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 2, offset: const Offset(0, 1))],
+                              ),
+                              child: Text(
+                                '${_fmtMilhar(spotA.y)} h',
+                                style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ),
+                          if (spotC != null)
+                            Positioned(
+                              left: xCenter + 4,
+                              top: topFor(spotC.y) - 8,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.amber.shade700.withOpacity(0.95),
+                                  borderRadius: BorderRadius.circular(4),
+                                  boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 2, offset: const Offset(0, 1))],
+                                ),
+                                child: Text(
+                                  'Cust: ${_fmtMilhar(spotC.y)} h',
+                                  style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                            ),
+                          if (spotI != null)
+                            Positioned(
+                              left: xCenter + 4,
+                              top: topFor(spotI.y) - 8,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.purple.shade600.withOpacity(0.95),
+                                  borderRadius: BorderRadius.circular(4),
+                                  boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 2, offset: const Offset(0, 1))],
+                                ),
+                                child: Text(
+                                  'Inv: ${_fmtMilhar(spotI.y)} h',
+                                  style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                            ),
+                        ],
+                      );
+                    },
+                  ),
+                // Nos meses anteriores (ou futuro): rótulos no último dia do mês
+                if (!mesmoMesAno && spotsPossivel.length >= lastDay && spotsAlocado.length >= lastDay && maxYScale > 0)
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final spotP = spotsPossivel[lastDay - 1];
+                      final spotA = spotsAlocado[lastDay - 1];
+                      final spotC = spotsCusteio.length >= lastDay ? spotsCusteio[lastDay - 1] : null;
+                      final spotI = spotsInvestimento.length >= lastDay ? spotsInvestimento[lastDay - 1] : null;
+                      final w = constraints.maxWidth;
+                      final h = constraints.maxHeight;
+                      if (w < 50 || h < 50) return const SizedBox.shrink();
+                      const plotLeft = 40.0;
+                      const plotBottom = 14.0;
+                      final plotW = w - plotLeft;
+                      final plotH = h - plotBottom;
+                      if (plotW <= 0 || plotH <= 0) return const SizedBox.shrink();
+                      final xUltimo = plotLeft + (lastDay - 1) / (lastDay > 1 ? lastDay - 1 : 1) * plotW;
+                      double topFor(double y) => plotH - (y / maxYScale) * plotH;
+                      return Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          Positioned(
+                            left: xUltimo - 58,
+                            top: topFor(spotP.y) - 8,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.indigo.withOpacity(0.95),
+                                borderRadius: BorderRadius.circular(4),
+                                boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 2, offset: const Offset(0, 1))],
+                              ),
+                              child: Text(
+                                '${_fmtMilhar(spotP.y)} h',
+                                style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            left: xUltimo - 58,
+                            top: topFor(spotA.y) - 8,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.teal.withOpacity(0.95),
+                                borderRadius: BorderRadius.circular(4),
+                                boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 2, offset: const Offset(0, 1))],
+                              ),
+                              child: Text(
+                                '${_fmtMilhar(spotA.y)} h',
+                                style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ),
+                          if (spotC != null)
+                            Positioned(
+                              left: xUltimo - 58,
+                              top: topFor(spotC.y) - 8,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.amber.shade700.withOpacity(0.95),
+                                  borderRadius: BorderRadius.circular(4),
+                                  boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 2, offset: const Offset(0, 1))],
+                                ),
+                                child: Text(
+                                  'Cust: ${_fmtMilhar(spotC.y)} h',
+                                  style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                            ),
+                          if (spotI != null)
+                            Positioned(
+                              left: xUltimo - 58,
+                              top: topFor(spotI.y) - 8,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.purple.shade600.withOpacity(0.95),
+                                  borderRadius: BorderRadius.circular(4),
+                                  boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 2, offset: const Offset(0, 1))],
+                                ),
+                                child: Text(
+                                  'Inv: ${_fmtMilhar(spotI.y)} h',
+                                  style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                            ),
+                        ],
+                      );
+                    },
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 12,
+            runSpacing: 4,
+            children: [
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(width: 12, height: 12, color: Colors.indigo, margin: const EdgeInsets.only(right: 4)),
+                  const Text('Horas possíveis (acum.)', style: TextStyle(fontSize: 12)),
+                ],
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(width: 12, height: 12, color: Colors.teal, margin: const EdgeInsets.only(right: 4)),
+                  const Text('Horas alocadas (acum.)', style: TextStyle(fontSize: 12)),
+                ],
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(width: 12, height: 12, color: Colors.amber.shade700, margin: const EdgeInsets.only(right: 4)),
+                  const Text('Custeio (acum.)', style: TextStyle(fontSize: 12)),
+                ],
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(width: 12, height: 12, color: Colors.purple.shade600, margin: const EdgeInsets.only(right: 4)),
+                  const Text('Investimento (acum.)', style: TextStyle(fontSize: 12)),
+                ],
+              ),
+              if (mesmoMesAno)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(width: 12, height: 12, color: Colors.orange, margin: const EdgeInsets.only(right: 4)),
+                    const Text('Hoje', style: TextStyle(fontSize: 12)),
+                  ],
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Gráfico acumulado mês a mês (mantido como referência; uso atual: _buildGraficoAnoCombinado).
+  // ignore: unused_element
+  Widget _buildGraficoAcumuladoAno(bool isMobile) {
+    final ano = _anoSelecionado;
+    final agora = DateTime.now();
+    final int maxMes = (agora.year == ano) ? agora.month : 12;
+    if (maxMes < 1) {
+      return const SizedBox.shrink();
+    }
+
+    final horasPossivelPorMes = <int, double>{};
+    final horasAlocadoPorMes = <int, double>{};
+    for (int m = 1; m <= maxMes; m++) {
+      horasPossivelPorMes[m] = 0.0;
+      horasAlocadoPorMes[m] = 0.0;
+    }
+    for (var d in _dadosFiltrados) {
+      if (d.ano != ano || d.mes < 1 || d.mes > maxMes) continue;
+      horasPossivelPorMes[d.mes] = (horasPossivelPorMes[d.mes] ?? 0) + d.metaMensal;
+      horasAlocadoPorMes[d.mes] = (horasAlocadoPorMes[d.mes] ?? 0) + d.horasApontadas;
+    }
+    // Incluir na meta quem não alocou nada no mês: para cada mês, somar meta dos que não têm linha
+    final todasMatriculas = _dadosFiltrados.map((d) => d.matricula).toSet().toList();
+    for (int m = 1; m <= maxMes; m++) {
+      final matriculasNoMes = _dadosFiltrados
+          .where((d) => d.ano == ano && d.mes == m)
+          .map((d) => d.matricula)
+          .toSet();
+      final metaMes = (_diasUteisNoMes(ano, m) * 8.0).clamp(8.0, 250.0);
+      for (var mat in todasMatriculas) {
+        if (!matriculasNoMes.contains(mat)) {
+          horasPossivelPorMes[m] = (horasPossivelPorMes[m] ?? 0) + metaMes;
+        }
+      }
+    }
+
+    double acumP = 0;
+    double acumA = 0;
+    final spotsPossivel = <FlSpot>[];
+    final spotsAlocado = <FlSpot>[];
+    for (int m = 1; m <= maxMes; m++) {
+      acumP += horasPossivelPorMes[m] ?? 0;
+      acumA += horasAlocadoPorMes[m] ?? 0;
+      spotsPossivel.add(FlSpot(m.toDouble(), acumP));
+      spotsAlocado.add(FlSpot(m.toDouble(), acumA));
+    }
+
+    final maxY = [
+      ...spotsPossivel.map((e) => e.y),
+      ...spotsAlocado.map((e) => e.y),
+    ].fold<double>(0, (p, c) => c > p ? c : p);
+    final maxYScale = maxY <= 0 ? 1.0 : (maxY * 1.05);
+    final intervalY = maxY <= 0 ? 1.0 : (maxY / 4).clamp(1.0, maxY);
+
+    const mesLabels = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withOpacity(0.08),
+            blurRadius: 6,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      padding: EdgeInsets.all(isMobile ? 8 : 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.max,
+        children: [
+          Text(
+            'Acumulado no ano',
+            style: TextStyle(
+              fontSize: isMobile ? 12 : 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final w = constraints.maxWidth;
+                final h = constraints.maxHeight;
+                const plotLeft = 32.0;
+                const plotBottom = 14.0;
+                final plotW = w - plotLeft;
+                final plotH = h - plotBottom;
+                if (plotW <= 0 || plotH <= 0) {
+                  return LineChart(
+                    LineChartData(
+                      minX: 1,
+                      maxX: maxMes.toDouble(),
+                      minY: 0,
+                      maxY: maxYScale,
+                      lineBarsData: [
+                        LineChartBarData(spots: spotsPossivel, isCurved: false, color: Colors.indigo, barWidth: 2, dotData: FlDotData(show: true)),
+                        LineChartBarData(spots: spotsAlocado, isCurved: false, color: Colors.teal, barWidth: 2, dotData: FlDotData(show: true)),
+                      ],
+                      titlesData: const FlTitlesData(show: false),
+                      gridData: FlGridData(show: false),
+                      borderData: FlBorderData(show: false),
+                    ),
+                  );
+                }
+                return Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    LineChart(
+                      LineChartData(
+                        minX: 1,
+                        maxX: maxMes.toDouble(),
+                        minY: 0,
+                        maxY: maxYScale,
+                        lineBarsData: [
+                          LineChartBarData(
+                            spots: spotsPossivel,
+                            isCurved: false,
+                            color: Colors.indigo,
+                            barWidth: 2,
+                            dotData: FlDotData(show: true),
+                          ),
+                          LineChartBarData(
+                            spots: spotsAlocado,
+                            isCurved: false,
+                            color: Colors.teal,
+                            barWidth: 2,
+                            dotData: FlDotData(show: true),
+                          ),
+                        ],
+                        titlesData: FlTitlesData(
+                          leftTitles: AxisTitles(
+                            sideTitles: SideTitles(
+                              showTitles: true,
+                              reservedSize: 32,
+                              interval: intervalY,
+                              getTitlesWidget: (value, meta) => Padding(
+                                padding: const EdgeInsets.only(right: 2),
+                                child: Text(
+                                  value.toInt().toString(),
+                                  style: const TextStyle(fontSize: 9),
+                                ),
+                              ),
+                            ),
+                          ),
+                          rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                          topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                          bottomTitles: AxisTitles(
+                            sideTitles: SideTitles(
+                              showTitles: true,
+                              interval: 1,
+                              reservedSize: 14,
+                              getTitlesWidget: (value, meta) {
+                                final m = value.toInt();
+                                if (m < 1 || m > maxMes) return const SizedBox.shrink();
+                                return Padding(
+                                  padding: const EdgeInsets.only(top: 4),
+                                  child: Text(
+                                    mesLabels[m - 1],
+                                    style: const TextStyle(fontSize: 8),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        ),
+                        gridData: FlGridData(
+                          show: true,
+                          drawVerticalLine: true,
+                          verticalInterval: 1,
+                          horizontalInterval: intervalY,
+                        ),
+                        borderData: FlBorderData(show: false),
+                        lineTouchData: LineTouchData(
+                          touchTooltipData: LineTouchTooltipData(
+                            getTooltipItems: (touchedSpots) => touchedSpots.map((s) {
+                              final isPossivel = s.barIndex == 0;
+                              final idx = (s.x.toInt() - 1).clamp(0, 11);
+                              return LineTooltipItem(
+                                '${mesLabels[idx]}: ${s.y.toStringAsFixed(0)} h',
+                                TextStyle(
+                                  color: isPossivel ? Colors.indigo : Colors.teal,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 11,
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ),
+                      ),
+                    ),
+                    // Rótulos de valor para cada mês (Possíveis acima do ponto, Alocadas abaixo)
+                    ...List.generate(maxMes, (i) {
+                      final m = i + 1;
+                      if (spotsPossivel.length < m || spotsAlocado.length < m) return const SizedBox.shrink();
+                      final spotP = spotsPossivel[i];
+                      final spotA = spotsAlocado[i];
+                      final xNorm = maxMes > 1 ? (m - 1) / (maxMes - 1) : 0.5;
+                      final xPixel = plotLeft + xNorm * plotW;
+                      final yP = plotH - (spotP.y / maxYScale) * plotH;
+                      final yA = plotH - (spotA.y / maxYScale) * plotH;
+                      return Stack(
+                        clipBehavior: Clip.none,
+                        key: ValueKey('ano_$m'),
+                        children: [
+                          Positioned(
+                            left: xPixel - 18,
+                            top: yP - 12,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.indigo.withOpacity(0.95),
+                                borderRadius: BorderRadius.circular(4),
+                                boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 1, offset: const Offset(0, 1))],
+                              ),
+                              child: Text(
+                                '${spotP.y.toStringAsFixed(0)} h',
+                                style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            left: xPixel - 18,
+                            top: yA + 2,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.teal.withOpacity(0.95),
+                                borderRadius: BorderRadius.circular(4),
+                                boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 1, offset: const Offset(0, 1))],
+                              ),
+                              child: Text(
+                                '${spotA.y.toStringAsFixed(0)} h',
+                                style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    }),
+                  ],
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(width: 10, height: 10, color: Colors.indigo, margin: const EdgeInsets.only(right: 2)),
+                  Text('Possíveis', style: TextStyle(fontSize: isMobile ? 10 : 11)),
+                ],
+              ),
+              const SizedBox(width: 8),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(width: 10, height: 10, color: Colors.teal, margin: const EdgeInsets.only(right: 2)),
+                  Text('Alocadas', style: TextStyle(fontSize: isMobile ? 10 : 11)),
+                ],
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Um único gráfico: linhas = acumulado no ano (Possíveis e Alocadas), barras = mês a mês (Possíveis e Alocadas). Eixo esq. = acumulado, eixo dir. = mês a mês.
+  Widget _buildGraficoAnoCombinado(bool isMobile) {
+    final ano = _anoSelecionado;
+    final agora = DateTime.now();
+    final int maxMes = (agora.year == ano) ? agora.month : 12;
+    if (maxMes < 1) return const SizedBox.shrink();
+
+    final horasPossivelPorMes = <int, double>{};
+    final horasAlocadoPorMes = <int, double>{};
+    for (int m = 1; m <= maxMes; m++) {
+      horasPossivelPorMes[m] = 0.0;
+      horasAlocadoPorMes[m] = 0.0;
+    }
+    for (var d in _dadosFiltrados) {
+      if (d.ano != ano || d.mes < 1 || d.mes > maxMes) continue;
+      horasPossivelPorMes[d.mes] = (horasPossivelPorMes[d.mes] ?? 0) + d.metaMensal;
+      horasAlocadoPorMes[d.mes] = (horasAlocadoPorMes[d.mes] ?? 0) + d.horasApontadas;
+    }
+    final todasMatriculas = _dadosFiltrados.map((d) => d.matricula).toSet().toList();
+    for (int m = 1; m <= maxMes; m++) {
+      final matriculasNoMes = _dadosFiltrados
+          .where((d) => d.ano == ano && d.mes == m)
+          .map((d) => d.matricula)
+          .toSet();
+      final metaMes = (_diasUteisNoMes(ano, m) * 8.0).clamp(8.0, 250.0);
+      for (var mat in todasMatriculas) {
+        if (!matriculasNoMes.contains(mat)) {
+          horasPossivelPorMes[m] = (horasPossivelPorMes[m] ?? 0) + metaMes;
+        }
+      }
+    }
+
+    double acumP = 0;
+    double acumA = 0;
+    final spotsPossivel = <FlSpot>[];
+    final spotsAlocado = <FlSpot>[];
+    for (int i = 0; i < maxMes; i++) {
+      final m = i + 1;
+      acumP += horasPossivelPorMes[m] ?? 0;
+      acumA += horasAlocadoPorMes[m] ?? 0;
+      spotsPossivel.add(FlSpot(i.toDouble(), acumP));
+      spotsAlocado.add(FlSpot(i.toDouble(), acumA));
+    }
+
+    final maxAccum = [
+      ...spotsPossivel.map((e) => e.y),
+      ...spotsAlocado.map((e) => e.y),
+    ].fold<double>(0, (a, b) => b > a ? b : a);
+    final maxMonth = [
+      for (int m = 1; m <= maxMes; m++) ...[horasPossivelPorMes[m] ?? 0, horasAlocadoPorMes[m] ?? 0],
+    ].fold<double>(0, (a, b) => b > a ? b : a);
+    final scaleAccum = maxAccum <= 0 ? 1.0 : maxAccum;
+    final scaleMonth = maxMonth <= 0 ? 1.0 : maxMonth;
+
+    const mesLabels = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+
+    // Eixo X 0-based (0, 1, ... maxMes-1) para alinhar linhas e barras na mesma posição
+    final spotsPossivelNorm = spotsPossivel.map((s) => FlSpot(s.x, scaleAccum <= 0 ? 0 : (s.y / scaleAccum).clamp(0.0, 1.0))).toList();
+    final spotsAlocadoNorm = spotsAlocado.map((s) => FlSpot(s.x, scaleAccum <= 0 ? 0 : (s.y / scaleAccum).clamp(0.0, 1.0))).toList();
+    final lineMaxX = maxMes > 1 ? (maxMes - 1).toDouble() : 1.0;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withOpacity(0.08),
+            blurRadius: 6,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      padding: EdgeInsets.all(isMobile ? 8 : 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.max,
+        children: [
+          Text(
+            'Acumulado no ano + Mês a mês',
+            style: TextStyle(
+              fontSize: isMobile ? 12 : 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                const plotLeft = 40.0;
+                const plotBottom = 18.0;
+                final plotW = constraints.maxWidth - plotLeft - 40;
+                final plotH = constraints.maxHeight - plotBottom;
+                return Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    BarChart(
+                  BarChartData(
+                    alignment: BarChartAlignment.spaceAround,
+                    maxY: 1.0,
+                    barTouchData: BarTouchData(
+                      touchTooltipData: BarTouchTooltipData(
+                        getTooltipColor: (_) => Colors.grey[800]!,
+                        getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                          final m = group.x.toInt() + 1;
+                          final valor = rodIndex == 0
+                              ? (horasPossivelPorMes[m] ?? 0)
+                              : (horasAlocadoPorMes[m] ?? 0);
+                          final label = rodIndex == 0 ? 'Possíveis (mês)' : 'Alocadas (mês)';
+                          return BarTooltipItem(
+                            '$label: ${valor.toStringAsFixed(0)} h',
+                            TextStyle(
+                              color: Colors.white,
+                              fontSize: isMobile ? 9 : 10,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    titlesData: FlTitlesData(
+                      leftTitles: AxisTitles(
+                        sideTitles: SideTitles(
+                          showTitles: true,
+                          reservedSize: isMobile ? 32 : 40,
+                          interval: 0.25,
+                          getTitlesWidget: (value, meta) {
+                            final real = (value * scaleAccum).round();
+                            return Padding(
+                              padding: const EdgeInsets.only(right: 2),
+                              child: Text(
+                                real.toString(),
+                                style: TextStyle(fontSize: isMobile ? 8 : 9, color: Colors.indigo[700]),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      rightTitles: AxisTitles(
+                        sideTitles: SideTitles(
+                          showTitles: true,
+                          reservedSize: isMobile ? 32 : 40,
+                          interval: 0.25,
+                          getTitlesWidget: (value, meta) {
+                            final real = (value * scaleMonth).round();
+                            return Padding(
+                              padding: const EdgeInsets.only(left: 2),
+                              child: Text(
+                                real.toString(),
+                                style: TextStyle(fontSize: isMobile ? 8 : 9, color: Colors.teal[700]),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                      bottomTitles: AxisTitles(
+                        sideTitles: SideTitles(
+                          showTitles: true,
+                          reservedSize: 18,
+                          interval: 1,
+                          getTitlesWidget: (value, meta) {
+                            final idx = value.toInt();
+                            if (idx < 0 || idx >= maxMes) return const SizedBox.shrink();
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 2),
+                              child: Text(
+                                mesLabels[idx],
+                                style: const TextStyle(fontSize: 8),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                    gridData: FlGridData(
+                      show: true,
+                      drawVerticalLine: false,
+                      horizontalInterval: 0.25,
+                      getDrawingHorizontalLine: (value) => FlLine(color: Colors.grey[200]!, strokeWidth: 1),
+                    ),
+                    borderData: FlBorderData(show: false),
+                    barGroups: List.generate(maxMes, (i) {
+                      final m = i + 1;
+                      final yPossivel = scaleMonth <= 0 ? 0.0 : ((horasPossivelPorMes[m] ?? 0) / scaleMonth).clamp(0.0, 1.0);
+                      final yAlocado = scaleMonth <= 0 ? 0.0 : ((horasAlocadoPorMes[m] ?? 0) / scaleMonth).clamp(0.0, 1.0);
+                      return BarChartGroupData(
+                        x: i,
+                        barRods: [
+                          BarChartRodData(
+                            toY: yPossivel,
+                            color: Colors.indigo.withOpacity(0.7),
+                            width: isMobile ? 8 : 10,
+                            borderRadius: const BorderRadius.vertical(top: Radius.circular(3)),
+                          ),
+                          BarChartRodData(
+                            toY: yAlocado,
+                            color: Colors.teal.withOpacity(0.7),
+                            width: isMobile ? 8 : 10,
+                            borderRadius: const BorderRadius.vertical(top: Radius.circular(3)),
+                          ),
+                        ],
+                      );
+                    }),
+                  ),
+                ),
+                LineChart(
+                  LineChartData(
+                    minX: 0,
+                    maxX: lineMaxX,
+                    minY: 0,
+                    maxY: 1.0,
+                    lineBarsData: [
+                      LineChartBarData(
+                        spots: spotsPossivelNorm,
+                        isCurved: false,
+                        color: Colors.indigo,
+                        barWidth: 2,
+                        dotData: FlDotData(show: true),
+                        belowBarData: BarAreaData(show: false),
+                      ),
+                      LineChartBarData(
+                        spots: spotsAlocadoNorm,
+                        isCurved: false,
+                        color: Colors.teal,
+                        barWidth: 2,
+                        dotData: FlDotData(show: true),
+                        belowBarData: BarAreaData(show: false),
+                      ),
+                    ],
+                    titlesData: const FlTitlesData(show: false),
+                    gridData: FlGridData(show: false),
+                    borderData: FlBorderData(show: false),
+                    lineTouchData: LineTouchData(
+                      enabled: true,
+                      touchTooltipData: LineTouchTooltipData(
+                        getTooltipItems: (touchedSpots) => touchedSpots.map((s) {
+                          final isPossivel = s.barIndex == 0;
+                          final idx = s.x.toInt().clamp(0, spotsPossivel.length - 1).clamp(0, 11);
+                          final valor = isPossivel
+                              ? spotsPossivel[idx].y
+                              : spotsAlocado[idx].y;
+                          return LineTooltipItem(
+                            '${mesLabels[idx]} (acum.): ${valor.toStringAsFixed(0)} h',
+                            TextStyle(
+                              color: isPossivel ? Colors.indigo : Colors.teal,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 10,
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                  ),
+                ),
+                    if (plotW > 0 && plotH > 0)
+                      ...List.generate(maxMes, (i) {
+                        final m = i + 1;
+                        final xNorm = maxMes > 1 ? (m - 1) / (maxMes - 1) : 0.5;
+                        final xPixel = plotLeft + xNorm * plotW;
+                        final spotP = spotsPossivel[i];
+                        final spotA = spotsAlocado[i];
+                        final yP = plotH - (spotsPossivelNorm[i].y * plotH);
+                        final yA = plotH - (spotsAlocadoNorm[i].y * plotH);
+                        final yBarP = plotH - (scaleMonth <= 0 ? 0.0 : ((horasPossivelPorMes[m] ?? 0) / scaleMonth).clamp(0.0, 1.0)) * plotH;
+                        final yBarA = plotH - (scaleMonth <= 0 ? 0.0 : ((horasAlocadoPorMes[m] ?? 0) / scaleMonth).clamp(0.0, 1.0)) * plotH;
+                        return Stack(
+                          key: ValueKey('rotulo_ano_$m'),
+                          clipBehavior: Clip.none,
+                          children: [
+                            Positioned(
+                              left: xPixel - 18,
+                              top: yP - 12,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.indigo.withOpacity(0.95),
+                                  borderRadius: BorderRadius.circular(4),
+                                  boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 1, offset: const Offset(0, 1))],
+                                ),
+                                child: Text(
+                                  '${spotP.y.toStringAsFixed(0)} h',
+                                  style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                            ),
+                            Positioned(
+                              left: xPixel - 18,
+                              top: yA + 2,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.teal.withOpacity(0.95),
+                                  borderRadius: BorderRadius.circular(4),
+                                  boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 1, offset: const Offset(0, 1))],
+                                ),
+                                child: Text(
+                                  '${spotA.y.toStringAsFixed(0)} h',
+                                  style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                            ),
+                            // Rótulo barra Possíveis: logo acima do topo da barra, alinhado à primeira barra
+                            Positioned(
+                              left: xPixel - 24,
+                              top: yBarP - 7,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.indigo.withOpacity(0.85),
+                                  borderRadius: BorderRadius.circular(4),
+                                  boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 1, offset: const Offset(0, 1))],
+                                ),
+                                child: Text(
+                                  '${(horasPossivelPorMes[m] ?? 0).toStringAsFixed(0)} h',
+                                  style: const TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                            ),
+                            // Rótulo barra Alocadas: logo acima do topo da barra, alinhado à segunda barra
+                            Positioned(
+                              left: xPixel - 8,
+                              top: yBarA - 7,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.teal.withOpacity(0.85),
+                                  borderRadius: BorderRadius.circular(4),
+                                  boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 1, offset: const Offset(0, 1))],
+                                ),
+                                child: Text(
+                                  '${(horasAlocadoPorMes[m] ?? 0).toStringAsFixed(0)} h',
+                                  style: const TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                            ),
+                          ],
+                        );
+                      }),
+              ],
+            );
+              },
+            ),
+          ),
+          const SizedBox(height: 4),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Row(mainAxisSize: MainAxisSize.min, children: [Container(width: 8, height: 8, color: Colors.indigo, margin: const EdgeInsets.only(right: 2)), Text('Possíveis', style: TextStyle(fontSize: isMobile ? 8 : 9))]),
+              const SizedBox(width: 8),
+              Row(mainAxisSize: MainAxisSize.min, children: [Container(width: 8, height: 8, color: Colors.teal, margin: const EdgeInsets.only(right: 2)), Text('Alocadas', style: TextStyle(fontSize: isMobile ? 8 : 9))]),
+              const SizedBox(width: 8),
+              Text('— linha = acumulado  ·  barra = mês', style: TextStyle(fontSize: isMobile ? 7 : 8, color: Colors.grey)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Gráfico Hora Extra: horas extras (HHE), Custeio e Investimento por mês no ano.
+  Widget _buildGraficoHoraExtra(bool isMobile) {
+    final ano = _anoSelecionado;
+    final agora = DateTime.now();
+    final int maxMes = (agora.year == ano) ? agora.month : 12;
+    if (maxMes < 1) return const SizedBox.shrink();
+
+    final horasExtrasPorMes = <int, double>{};
+    final horasCusteioPorMes = <int, double>{};
+    final horasInvestimentoPorMes = <int, double>{};
+    for (int m = 1; m <= maxMes; m++) {
+      horasExtrasPorMes[m] = 0.0;
+      horasCusteioPorMes[m] = 0.0;
+      horasInvestimentoPorMes[m] = 0.0;
+    }
+    for (var d in _dadosFiltrados) {
+      if (d.ano != ano || d.mes < 1 || d.mes > maxMes) continue;
+      horasExtrasPorMes[d.mes] = (horasExtrasPorMes[d.mes] ?? 0) + d.horasExtras;
+      horasCusteioPorMes[d.mes] = (horasCusteioPorMes[d.mes] ?? 0) + d.horasCusteio;
+      horasInvestimentoPorMes[d.mes] = (horasInvestimentoPorMes[d.mes] ?? 0) + d.horasInvestimento;
+    }
+
+    final maxY = [
+      for (int m = 1; m <= maxMes; m++)
+        ...[horasExtrasPorMes[m] ?? 0, horasCusteioPorMes[m] ?? 0, horasInvestimentoPorMes[m] ?? 0],
+    ].fold<double>(0, (a, b) => b > a ? b : a);
+    final maxYScale = maxY <= 0 ? 1.0 : (maxY * 1.1);
+
+    const mesLabels = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withOpacity(0.08),
+            blurRadius: 6,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      padding: EdgeInsets.all(isMobile ? 8 : 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Horas extras, Custeio e Investimento',
+            style: TextStyle(
+              fontSize: isMobile ? 12 : 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: BarChart(
+              BarChartData(
+                alignment: BarChartAlignment.spaceAround,
+                maxY: maxYScale,
+                barTouchData: BarTouchData(
+                  touchTooltipData: BarTouchTooltipData(
+                    getTooltipColor: (_) => Colors.grey[800]!,
+                    getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                      final m = group.x.toInt() + 1;
+                      final label = rodIndex == 0 ? 'HHE' : rodIndex == 1 ? 'Custeio' : 'Invest.';
+                      final valor = rodIndex == 0
+                          ? (horasExtrasPorMes[m] ?? 0)
+                          : rodIndex == 1
+                              ? (horasCusteioPorMes[m] ?? 0)
+                              : (horasInvestimentoPorMes[m] ?? 0);
+                      return BarTooltipItem(
+                        '$label: ${_fmtMilhar(valor)} h',
+                        const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                titlesData: FlTitlesData(
+                  leftTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 40,
+                      interval: maxYScale / 4,
+                      getTitlesWidget: (value, meta) => Padding(
+                        padding: const EdgeInsets.only(right: 4),
+                        child: Text(
+                          _fmtMilhar(value),
+                          style: const TextStyle(fontSize: 10),
+                        ),
+                      ),
+                    ),
+                  ),
+                  rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 28,
+                      getTitlesWidget: (value, meta) {
+                        final idx = value.toInt();
+                        if (idx < 0 || idx >= maxMes) return const SizedBox.shrink();
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            mesLabels[idx],
+                            style: const TextStyle(fontSize: 10),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                gridData: FlGridData(
+                  show: true,
+                  drawVerticalLine: false,
+                  horizontalInterval: maxYScale / 4,
+                ),
+                borderData: FlBorderData(show: false),
+                barGroups: [
+                  for (int i = 0; i < maxMes; i++)
+                    BarChartGroupData(
+                      x: i,
+                      barRods: [
+                        BarChartRodData(
+                          toY: horasExtrasPorMes[i + 1] ?? 0,
+                          color: Colors.orange.shade700,
+                          width: isMobile ? 8 : 12,
+                          borderRadius: const BorderRadius.vertical(top: Radius.circular(2)),
+                        ),
+                        BarChartRodData(
+                          toY: horasCusteioPorMes[i + 1] ?? 0,
+                          color: Colors.amber.shade700,
+                          width: isMobile ? 8 : 12,
+                          borderRadius: const BorderRadius.vertical(top: Radius.circular(2)),
+                        ),
+                        BarChartRodData(
+                          toY: horasInvestimentoPorMes[i + 1] ?? 0,
+                          color: Colors.purple.shade600,
+                          width: isMobile ? 8 : 12,
+                          borderRadius: const BorderRadius.vertical(top: Radius.circular(2)),
+                        ),
+                      ],
+                      showingTooltipIndicators: [0, 1, 2],
+                    ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 12,
+            runSpacing: 4,
+            children: [
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(width: 12, height: 12, color: Colors.orange.shade700, margin: const EdgeInsets.only(right: 4)),
+                  const Text('Horas extras (HHE)', style: TextStyle(fontSize: 11)),
+                ],
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(width: 12, height: 12, color: Colors.amber.shade700, margin: const EdgeInsets.only(right: 4)),
+                  const Text('Custeio', style: TextStyle(fontSize: 11)),
+                ],
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(width: 12, height: 12, color: Colors.purple.shade600, margin: const EdgeInsets.only(right: 4)),
+                  const Text('Investimento', style: TextStyle(fontSize: 11)),
+                ],
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Gráfico de barras mês a mês (mantido como referência; uso atual: _buildGraficoAnoCombinado).
+  // ignore: unused_element
+  Widget _buildGraficoBarrasMesAMes(bool isMobile) {
+    final ano = _anoSelecionado;
+    final agora = DateTime.now();
+    final int maxMes = (agora.year == ano) ? agora.month : 12;
+    if (maxMes < 1) return const SizedBox.shrink();
+
+    final horasPossivelPorMes = <int, double>{};
+    final horasAlocadoPorMes = <int, double>{};
+    for (int m = 1; m <= maxMes; m++) {
+      horasPossivelPorMes[m] = 0.0;
+      horasAlocadoPorMes[m] = 0.0;
+    }
+    for (var d in _dadosFiltrados) {
+      if (d.ano != ano || d.mes < 1 || d.mes > maxMes) continue;
+      horasPossivelPorMes[d.mes] = (horasPossivelPorMes[d.mes] ?? 0) + d.metaMensal;
+      horasAlocadoPorMes[d.mes] = (horasAlocadoPorMes[d.mes] ?? 0) + d.horasApontadas;
+    }
+    final todasMatriculas = _dadosFiltrados.map((d) => d.matricula).toSet().toList();
+    for (int m = 1; m <= maxMes; m++) {
+      final matriculasNoMes = _dadosFiltrados
+          .where((d) => d.ano == ano && d.mes == m)
+          .map((d) => d.matricula)
+          .toSet();
+      final metaMes = (_diasUteisNoMes(ano, m) * 8.0).clamp(8.0, 250.0);
+      for (var mat in todasMatriculas) {
+        if (!matriculasNoMes.contains(mat)) {
+          horasPossivelPorMes[m] = (horasPossivelPorMes[m] ?? 0) + metaMes;
+        }
+      }
+    }
+
+    final maxPossivel = [
+      for (int m = 1; m <= maxMes; m++) horasPossivelPorMes[m] ?? 0,
+    ].fold<double>(0, (a, b) => b > a ? b : a);
+    final maxAlocado = [
+      for (int m = 1; m <= maxMes; m++) horasAlocadoPorMes[m] ?? 0,
+    ].fold<double>(0, (a, b) => b > a ? b : a);
+    final scalePossivel = maxPossivel <= 0 ? 1.0 : maxPossivel;
+    final scaleAlocado = maxAlocado <= 0 ? 1.0 : maxAlocado;
+
+    const mesLabels = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withOpacity(0.08),
+            blurRadius: 6,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      padding: EdgeInsets.all(isMobile ? 8 : 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'Mês a mês (não acumulado)',
+            style: TextStyle(
+              fontSize: isMobile ? 12 : 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: BarChart(
+              BarChartData(
+                alignment: BarChartAlignment.spaceAround,
+                maxY: 1.0,
+                barTouchData: BarTouchData(
+                  touchTooltipData: BarTouchTooltipData(
+                    getTooltipColor: (_) => Colors.grey[800]!,
+                    getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                      final m = group.x.toInt() + 1;
+                      final valor = rodIndex == 0
+                          ? (horasPossivelPorMes[m] ?? 0)
+                          : (horasAlocadoPorMes[m] ?? 0);
+                      final label = rodIndex == 0 ? 'Possíveis' : 'Alocadas';
+                      return BarTooltipItem(
+                        '$label: ${valor.toStringAsFixed(0)} h',
+                        TextStyle(
+                          color: Colors.white,
+                          fontSize: isMobile ? 10 : 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                titlesData: FlTitlesData(
+                  leftTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: isMobile ? 36 : 44,
+                      interval: 0.25,
+                      getTitlesWidget: (value, meta) {
+                        final real = (value * scalePossivel).round();
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 4),
+                          child: Text(
+                            real.toString(),
+                            style: TextStyle(fontSize: isMobile ? 9 : 10, color: Colors.indigo[700]),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  rightTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: isMobile ? 36 : 44,
+                      interval: 0.25,
+                      getTitlesWidget: (value, meta) {
+                        final real = (value * scaleAlocado).round();
+                        return Padding(
+                          padding: const EdgeInsets.only(left: 4),
+                          child: Text(
+                            real.toString(),
+                            style: TextStyle(fontSize: isMobile ? 9 : 10, color: Colors.teal[700]),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 20,
+                      interval: 1,
+                      getTitlesWidget: (value, meta) {
+                        final m = value.toInt();
+                        if (m < 0 || m >= maxMes) return const SizedBox.shrink();
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            mesLabels[m],
+                            style: const TextStyle(fontSize: 9),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                gridData: FlGridData(
+                  show: true,
+                  drawVerticalLine: false,
+                  horizontalInterval: 0.25,
+                  getDrawingHorizontalLine: (value) => FlLine(color: Colors.grey[200]!, strokeWidth: 1),
+                ),
+                borderData: FlBorderData(show: false),
+                barGroups: List.generate(maxMes, (i) {
+                  final m = i + 1;
+                  final yPossivel = scalePossivel <= 0 ? 0.0 : ((horasPossivelPorMes[m] ?? 0) / scalePossivel).clamp(0.0, 1.0);
+                  final yAlocado = scaleAlocado <= 0 ? 0.0 : ((horasAlocadoPorMes[m] ?? 0) / scaleAlocado).clamp(0.0, 1.0);
+                  return BarChartGroupData(
+                    x: i,
+                    barRods: [
+                      BarChartRodData(
+                        toY: yPossivel,
+                        color: Colors.indigo,
+                        width: isMobile ? 10 : 14,
+                        borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
+                      ),
+                      BarChartRodData(
+                        toY: yAlocado,
+                        color: Colors.teal,
+                        width: isMobile ? 10 : 14,
+                        borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
+                      ),
+                    ],
+                    showingTooltipIndicators: [0, 1],
+                  );
+                }),
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(width: 10, height: 10, color: Colors.indigo, margin: const EdgeInsets.only(right: 2)),
+                  Text('Possíveis (eixo esq.)', style: TextStyle(fontSize: isMobile ? 9 : 10)),
+                ],
+              ),
+              const SizedBox(width: 12),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(width: 10, height: 10, color: Colors.teal, margin: const EdgeInsets.only(right: 2)),
+                  Text('Alocadas (eixo dir.)', style: TextStyle(fontSize: isMobile ? 9 : 10)),
+                ],
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFilterDropdown({
+    required String label,
+    required double width,
+    required Widget child,
+  }) {
+    final column = Column(
+      crossAxisAlignment: width == double.infinity ? CrossAxisAlignment.stretch : CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w500,
+            color: Colors.grey[600],
+          ),
+        ),
+        const SizedBox(height: 4),
+        child,
+      ],
+    );
+    if (width == double.infinity) return column;
+    return SizedBox(width: width, child: column);
+  }
+
+  Widget _buildAnoDropdown() {
+    return DropdownButtonFormField<int>(
+      value: _anoSelecionado,
+      decoration: InputDecoration(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+        filled: true,
+        fillColor: Colors.grey[50],
+        isDense: true,
+      ),
+      items: List.generate(5, (i) {
+        final ano = DateTime.now().year - 2 + i;
+        return DropdownMenuItem(value: ano, child: Text(ano.toString(), style: const TextStyle(fontSize: 13)));
+      }),
+      onChanged: (v) {
+        if (v != null) { setState(() => _anoSelecionado = v); _carregarDados(); }
+      },
+    );
+  }
+
+  Widget _buildMesDropdown() {
+    return DropdownButtonFormField<int?>(
+      value: _mesSelecionado,
+      decoration: InputDecoration(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+        filled: true,
+        fillColor: Colors.grey[50],
+        isDense: true,
+      ),
+      items: [
+        const DropdownMenuItem(value: null, child: Text('Todos', style: TextStyle(fontSize: 13))),
+        ...List.generate(12, (i) {
+          final mes = i + 1;
+          return DropdownMenuItem(value: mes, child: Text(_getNomeMes(mes), style: const TextStyle(fontSize: 13)));
+        }),
+      ],
+      onChanged: (v) {
+        setState(() => _mesSelecionado = v);
+        _carregarDados();
+      },
+    );
+  }
+
+  Widget _buildEmpregadosDropdown() {
+    return GestureDetector(
+      onTap: () async {
+        final selecionados = await showDialog<Set<String>>(
+          context: context,
+          builder: (ctx) => MultiSelectFilterDialog(
+            title: 'Selecionar Empregados',
+            options: _empregadosDisponiveis,
+            selectedValues: _filtroEmpregados,
+            onSelectionChanged: (values) {
+              setState(() { _filtroEmpregados = values; _aplicarFiltros(); });
+            },
+            searchHint: 'Pesquisar empregado...',
+          ),
+        );
+        if (selecionados != null) {
+          setState(() { _filtroEmpregados = selecionados; _aplicarFiltros(); });
+          _carregarGraficoMetas();
+        }
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.grey[50],
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.grey[300]!),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.people_outline, size: 18, color: Colors.grey[600]),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                _filtroEmpregados.isEmpty ? 'Todos os Colaboradores' : '${_filtroEmpregados.length} selecionado(s)',
+                style: TextStyle(fontSize: 13, color: Colors.grey[800]),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            Icon(Icons.arrow_drop_down, color: Colors.grey[600]),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Widget para Card de Estatística (referência: título uppercase cinza, valor em destaque, ícone em quadrado)
   Widget _buildStatCard({
     required String title,
     required String value,
@@ -796,9 +2862,14 @@ class _HorasMetasViewState extends State<HorasMetasView> {
     required IconData icon,
     required Color iconColor,
     required Color backgroundColor,
+    bool compact = false,
   }) {
+    final padding = compact ? 8.0 : 16.0;
+    final valueSize = compact ? 18.0 : 26.0;
+    final iconSize = compact ? 16.0 : 22.0;
+    final iconPadding = compact ? 6.0 : 10.0;
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.all(padding),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
@@ -812,48 +2883,219 @@ class _HorasMetasViewState extends State<HorasMetasView> {
         ],
       ),
       child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: compact ? MainAxisSize.min : MainAxisSize.max,
         children: [
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: compact ? 10 : 11,
+              color: Colors.grey[600],
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          SizedBox(height: compact ? 6 : 12),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text(
-                title,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey[600],
-                  fontWeight: FontWeight.w500,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      value,
+                      style: TextStyle(
+                        fontSize: valueSize,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (subtitle != null && subtitle.trim().isNotEmpty && !compact) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        subtitle,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.grey[600],
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                    if (subtitle != null && subtitle.trim().isNotEmpty && compact) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle,
+                        style: TextStyle(
+                          fontSize: 9,
+                          color: Colors.grey[600],
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ],
                 ),
               ),
               Container(
-                padding: const EdgeInsets.all(8),
+                padding: EdgeInsets.all(iconPadding),
                 decoration: BoxDecoration(
                   color: backgroundColor,
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(compact ? 6 : 10),
                 ),
-                child: Icon(icon, color: iconColor, size: 20),
+                child: Icon(icon, color: iconColor, size: iconSize),
               ),
             ],
           ),
-          const SizedBox(height: 12),
+        ],
+      ),
+    );
+  }
+
+  /// Card velocímetro: % feito até hoje vs % que deveria ter feito (mês selecionado).
+  Widget _buildVelocimetroAteHojeCard({
+    required double horasAteHoje,
+    required double metaAteHoje,
+    required double percentualFeitoAteHoje,
+    required double percentualDeveriaAteHoje,
+    bool compact = false,
+  }) {
+    final size = compact ? 52.0 : 80.0;
+    final strokeWidth = compact ? 5.0 : 8.0;
+    final fontSize = compact ? 11.0 : 16.0;
+    final padding = compact ? 8.0 : 16.0;
+    final textSize = compact ? 9.0 : 11.0;
+    final gaugeValue = (percentualFeitoAteHoje / 100).clamp(0.0, 1.0);
+    final color = percentualFeitoAteHoje >= 100
+        ? Colors.green[600]!
+        : percentualFeitoAteHoje >= 80
+            ? Colors.orange[600]!
+            : Colors.red[600]!;
+    return Container(
+      padding: EdgeInsets.all(padding),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey[300]!),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: compact ? MainAxisSize.min : MainAxisSize.max,
+        children: [
           Text(
-            value,
-            style: const TextStyle(
-              fontSize: 28,
-              fontWeight: FontWeight.bold,
-              color: Colors.black87,
+            'ATÉ HOJE',
+            style: TextStyle(
+              fontSize: compact ? 10 : 11,
+              color: Colors.grey[600],
+              fontWeight: FontWeight.w500,
             ),
           ),
-          if (subtitle != null && subtitle.trim().isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text(
-              subtitle,
-              style: TextStyle(
-                fontSize: 11,
-                color: Colors.grey[600],
+          SizedBox(height: compact ? 8 : 16),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: size,
+                height: size,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    SizedBox(
+                      width: size,
+                      height: size,
+                      child: CircularProgressIndicator(
+                        value: gaugeValue,
+                        strokeWidth: strokeWidth,
+                        backgroundColor: Colors.grey[200],
+                        valueColor: AlwaysStoppedAnimation<Color>(color),
+                      ),
+                    ),
+                    Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          '${percentualFeitoAteHoje.toStringAsFixed(0)}%',
+                          style: TextStyle(
+                            fontSize: fontSize,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.black87,
+                          ),
+                        ),
+                        if (!compact)
+                          Text(
+                            'feito',
+                            style: TextStyle(
+                              fontSize: 9,
+                              color: Colors.grey[600],
+                            ),
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ],
+              SizedBox(width: compact ? 8 : 16),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: compact ? 8 : 12,
+                          height: compact ? 8 : 12,
+                          decoration: const BoxDecoration(
+                            color: Colors.teal,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            'Feito: ${horasAteHoje.toStringAsFixed(0)} h',
+                            style: TextStyle(fontSize: textSize),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: compact ? 4 : 8),
+                    Row(
+                      children: [
+                        Container(
+                          width: compact ? 8 : 12,
+                          height: compact ? 8 : 12,
+                          decoration: BoxDecoration(
+                            color: Colors.orange[300],
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            'Deveria: ${metaAteHoje.toStringAsFixed(0)} h',
+                            style: TextStyle(fontSize: textSize),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -864,9 +3106,15 @@ class _HorasMetasViewState extends State<HorasMetasView> {
     required int metasAtingidas,
     required int metasPendentes,
     required double percentual,
+    bool compact = false,
   }) {
+    final size = compact ? 52.0 : 80.0;
+    final strokeWidth = compact ? 5.0 : 8.0;
+    final fontSize = compact ? 12.0 : 18.0;
+    final padding = compact ? 8.0 : 16.0;
+    final textSize = compact ? 9.0 : 11.0;
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.all(padding),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
@@ -880,32 +3128,34 @@ class _HorasMetasViewState extends State<HorasMetasView> {
         ],
       ),
       child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: compact ? MainAxisSize.min : MainAxisSize.max,
         children: [
           Text(
-            'Status das Metas',
+            'STATUS METAS',
             style: TextStyle(
-              fontSize: 12,
+              fontSize: compact ? 10 : 11,
               color: Colors.grey[600],
               fontWeight: FontWeight.w500,
             ),
           ),
-          const SizedBox(height: 16),
+          SizedBox(height: compact ? 8 : 16),
           Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              // Gráfico circular
               SizedBox(
-                width: 80,
-                height: 80,
+                width: size,
+                height: size,
                 child: Stack(
                   alignment: Alignment.center,
                   children: [
                     SizedBox(
-                      width: 80,
-                      height: 80,
+                      width: size,
+                      height: size,
                       child: CircularProgressIndicator(
                         value: percentual / 100,
-                        strokeWidth: 8,
+                        strokeWidth: strokeWidth,
                         backgroundColor: Colors.grey[200],
                         valueColor: AlwaysStoppedAnimation<Color>(
                           percentual >= 80
@@ -918,8 +3168,8 @@ class _HorasMetasViewState extends State<HorasMetasView> {
                     ),
                     Text(
                       '${percentual.toStringAsFixed(0)}%',
-                      style: const TextStyle(
-                        fontSize: 18,
+                      style: TextStyle(
+                        fontSize: fontSize,
                         fontWeight: FontWeight.bold,
                         color: Colors.black87,
                       ),
@@ -927,47 +3177,176 @@ class _HorasMetasViewState extends State<HorasMetasView> {
                   ],
                 ),
               ),
-              const SizedBox(width: 16),
-              // Legenda
+              SizedBox(width: compact ? 8 : 16),
               Expanded(
                 child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
                       children: [
                         Container(
-                          width: 12,
-                          height: 12,
+                          width: compact ? 8 : 12,
+                          height: compact ? 8 : 12,
                           decoration: BoxDecoration(
                             color: Colors.green[600],
                             shape: BoxShape.circle,
                           ),
                         ),
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 6),
                         Expanded(
                           child: Text(
                             'Atingido ($metasAtingidas)',
-                            style: const TextStyle(fontSize: 11),
+                            style: TextStyle(fontSize: textSize),
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 8),
+                    SizedBox(height: compact ? 4 : 8),
                     Row(
                       children: [
                         Container(
-                          width: 12,
-                          height: 12,
+                          width: compact ? 8 : 12,
+                          height: compact ? 8 : 12,
                           decoration: BoxDecoration(
                             color: Colors.red[600],
                             shape: BoxShape.circle,
                           ),
                         ),
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 6),
                         Expanded(
                           child: Text(
                             'Pendente ($metasPendentes)',
-                            style: const TextStyle(fontSize: 11),
+                            style: TextStyle(fontSize: textSize),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Card Custeio x Investimento: quantidade de horas e percentual de Investimento no círculo
+  Widget _buildCusteioInvestimentoCard({
+    required double horasInvestimento,
+    required double horasCusteio,
+    required double percentualInvestimento,
+    bool compact = false,
+  }) {
+    final size = compact ? 52.0 : 80.0;
+    final strokeWidth = compact ? 5.0 : 8.0;
+    final fontSize = compact ? 12.0 : 18.0;
+    final padding = compact ? 8.0 : 16.0;
+    final textSize = compact ? 9.0 : 11.0;
+    return Container(
+      padding: EdgeInsets.all(padding),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey[300]!),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: compact ? MainAxisSize.min : MainAxisSize.max,
+        children: [
+          Text(
+            'INVESTIMENTO',
+            style: TextStyle(
+              fontSize: compact ? 10 : 11,
+              color: Colors.grey[600],
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          SizedBox(height: compact ? 8 : 16),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: size,
+                height: size,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    SizedBox(
+                      width: size,
+                      height: size,
+                      child: CircularProgressIndicator(
+                        value: (percentualInvestimento / 100).clamp(0.0, 1.0),
+                        strokeWidth: strokeWidth,
+                        backgroundColor: Colors.grey[200],
+                        valueColor: AlwaysStoppedAnimation<Color>(Colors.purple[600]!),
+                      ),
+                    ),
+                    Text(
+                      '${percentualInvestimento.toStringAsFixed(0)}%',
+                      style: TextStyle(
+                        fontSize: fontSize,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(width: compact ? 8 : 16),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: compact ? 8 : 12,
+                          height: compact ? 8 : 12,
+                          decoration: BoxDecoration(
+                            color: Colors.purple[600],
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            'Inv. (${horasInvestimento.toStringAsFixed(1)} h)',
+                            style: TextStyle(fontSize: textSize),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: compact ? 4 : 8),
+                    Row(
+                      children: [
+                        Container(
+                          width: compact ? 8 : 12,
+                          height: compact ? 8 : 12,
+                          decoration: BoxDecoration(
+                            color: Colors.teal[600],
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            'Cust. (${horasCusteio.toStringAsFixed(1)} h)',
+                            style: TextStyle(fontSize: textSize),
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                       ],

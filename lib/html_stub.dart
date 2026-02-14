@@ -1,5 +1,9 @@
-// Stub file para quando dart:html não está disponível (iOS/Android)
-// Este arquivo é usado apenas quando compilando para plataformas não-web
+// Stub para quando dart:html não está disponível (iOS/Android/desktop).
+// Usado ao compilar para plataformas não-web; implementações vazias para compilar.
+
+class MouseEvent {
+  MouseEvent(String type);
+}
 
 class StyleElement {
   String? id;
@@ -13,6 +17,7 @@ class Blob {
 
 class AnchorElement extends Element {
   String? href;
+  @override
   String? id;
   AnchorElement({this.href}) : super();
   void setAttribute(String name, String value) {}
@@ -81,6 +86,7 @@ class _Location {
 class Element {
   void append(dynamic element) {}
   void remove() {}
+  void dispatchEvent(dynamic event) {}
   String? id;
 }
 

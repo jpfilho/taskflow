@@ -303,86 +303,44 @@ class _MediaAlbumsGalleryPageState extends State<MediaAlbumsGalleryPage> {
                   )
                 : _controller.isLoading && _controller.images.isEmpty
                     ? const Center(child: CircularProgressIndicator())
-                    : _controller.viewModeIndex == 1 || _controller.viewModeIndex == 2
-                        ? AlbumGroupList(
-                            groupedImages: _controller.viewModeIndex == 2
-                                ? _controller.getGroupedImagesByLocal()
-                                : _controller.getGroupedImages(),
-                            onImageTap: _navigateToDetail,
-                            scrollController: _scrollController,
-                            onLoadMore: _controller.hasMore
-                                ? () => _controller.loadMore()
-                                : null,
-                            hasMore: _controller.hasMore,
-                            isLoading: _controller.isLoading,
-                            onImageDelete: (image) async {
-                              final confirmed = await showDialog<bool>(
-                                context: context,
-                                builder: (context) => AlertDialog(
-                                  title: const Text('Confirmar exclusão'),
-                                  content: const Text(
-                                    'Tem certeza que deseja excluir esta imagem?',
-                                  ),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(context, false),
-                                      child: const Text('Cancelar'),
-                                    ),
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(context, true),
-                                      style: TextButton.styleFrom(
-                                        foregroundColor: theme.colorScheme.error,
-                                      ),
-                                      child: const Text('Excluir'),
-                                    ),
-                                  ],
+                    : AlbumGroupList(
+                        groupedImages: _controller.getGroupedImagesByLocal(),
+                        onImageTap: _navigateToDetail,
+                        scrollController: _scrollController,
+                        onLoadMore: _controller.hasMore
+                            ? () => _controller.loadMore()
+                            : null,
+                        hasMore: _controller.hasMore,
+                        isLoading: _controller.isLoading,
+                        onImageDelete: (image) async {
+                          final confirmed = await showDialog<bool>(
+                            context: context,
+                            builder: (context) => AlertDialog(
+                              title: const Text('Confirmar exclusão'),
+                              content: const Text(
+                                'Tem certeza que deseja excluir esta imagem?',
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(context, false),
+                                  child: const Text('Cancelar'),
                                 ),
-                              );
-
-                              if (confirmed == true) {
-                                await _controller.deleteImage(image.id);
-                              }
-                            },
-                          )
-                        : MediaGrid(
-                            images: _controller.images,
-                            onImageTap: _navigateToDetail,
-                            scrollController: _scrollController,
-                            onLoadMore: _controller.hasMore
-                                ? () => _controller.loadMore()
-                                : null,
-                            isLoading: _controller.isLoading,
-                            hasMore: _controller.hasMore,
-                            onImageDelete: (image) async {
-                              final confirmed = await showDialog<bool>(
-                                context: context,
-                                builder: (context) => AlertDialog(
-                                  title: const Text('Confirmar exclusão'),
-                                  content: const Text(
-                                    'Tem certeza que deseja excluir esta imagem?',
+                                TextButton(
+                                  onPressed: () => Navigator.pop(context, true),
+                                  style: TextButton.styleFrom(
+                                    foregroundColor: theme.colorScheme.error,
                                   ),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(context, false),
-                                      child: const Text('Cancelar'),
-                                    ),
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(context, true),
-                                      style: TextButton.styleFrom(
-                                        foregroundColor: theme.colorScheme.error,
-                                      ),
-                                      child: const Text('Excluir'),
-                                    ),
-                                  ],
+                                  child: const Text('Excluir'),
                                 ),
-                              );
+                              ],
+                            ),
+                          );
 
-                              if (confirmed == true) {
-                                await _controller.deleteImage(image.id);
-                              }
-                            },
-                            onAddNew: _navigateToUpload,
-                          ),
+                          if (confirmed == true) {
+                            await _controller.deleteImage(image.id);
+                          }
+                        },
+                      ),
               ),
             ],
           ),

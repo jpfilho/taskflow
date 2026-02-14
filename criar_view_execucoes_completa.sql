@@ -56,7 +56,7 @@ WITH
       ) g(day)
     WHERE
       UPPER(ep.tipo_periodo::text) = 'EXECUCAO'::text
-      AND UPPER(t.status::text) <> 'CANC'::text
+      AND UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANC', 'REPR')
   ),
   
   -- Períodos de PLANEJAMENTO e DESLOCAMENTO de executor_periods
@@ -86,7 +86,7 @@ WITH
       ) g(day)
     WHERE
       UPPER(ep.tipo_periodo::text) IN ('PLANEJAMENTO', 'DESLOCAMENTO')
-      AND UPPER(t.status::text) <> 'CANC'::text
+      AND UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANC', 'REPR')
   ),
   
   -- Períodos de EXECUÇÃO de gantt_segments (quando não há executor_periods)
@@ -123,7 +123,7 @@ WITH
           AND ep.executor_id = te.executor_id
       )
       AND UPPER(gs.tipo_periodo::text) = 'EXECUCAO'::text
-      AND UPPER(t.status::text) <> 'CANC'::text
+      AND UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANC', 'REPR')
   ),
   
   -- Períodos de PLANEJAMENTO e DESLOCAMENTO de gantt_segments
@@ -154,7 +154,7 @@ WITH
       ) g(day)
     WHERE
       UPPER(gs.tipo_periodo::text) IN ('PLANEJAMENTO', 'DESLOCAMENTO')
-      AND UPPER(t.status::text) <> 'CANC'::text
+      AND UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANC', 'REPR')
   ),
   
   -- Fallback: usar datas gerais da tarefa quando não há segmentos
@@ -196,7 +196,7 @@ WITH
         FROM gantt_segments gs
         WHERE gs.task_id = t.id
       )
-      AND UPPER(t.status::text) <> 'CANC'::text
+      AND UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANC', 'REPR')
   ),
   
   -- Unir todos os períodos
@@ -295,7 +295,8 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 -- ============================================
 COMMENT ON MATERIALIZED VIEW public.mv_execucoes_dia_completa IS 
 'View materializada que inclui TODOS os tipos de períodos (EXECUCAO, PLANEJAMENTO, DESLOCAMENTO) 
-de executor_periods e gantt_segments. Use refresh_mv_execucoes_dia_completa() para atualizar.';
+de executor_periods e gantt_segments. Exclui tarefas CANC (canceladas) e REPR (reprogramadas). 
+Use refresh_mv_execucoes_dia_completa() para atualizar.';
 
 COMMENT ON FUNCTION refresh_mv_execucoes_dia_completa() IS 
 'Atualiza a view materializada mv_execucoes_dia_completa. 

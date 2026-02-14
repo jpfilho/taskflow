@@ -69,15 +69,25 @@ class SupressaoVegetacaoService {
         throw Exception('Nenhuma linha de dados encontrada (apenas cabeçalho).');
       }
 
-      final headerRow = sheet.rows.first;
+      // Suporta planilha com 1 ou 3 linhas de cabeçalho (export com layout do frontend)
+      int headerRowIndex = 0;
+      for (var r = 0; r < (sheet.maxRows < 4 ? sheet.maxRows : 4); r++) {
+        final row = sheet.row(r);
+        if (row.any((cell) => cell?.value?.toString().trim().toLowerCase() == 'est.')) {
+          headerRowIndex = r;
+          break;
+        }
+      }
+      final headerRow = sheet.row(headerRowIndex);
       final headerMap = _buildHeaderMap(headerRow);
       if (headerMap.isEmpty) {
         throw Exception('Cabeçalho não reconhecido.');
       }
 
       final upsertPayload = <Map<String, dynamic>>[];
+      final dataStartRow = headerRowIndex + 1;
 
-      for (var i = 1; i < sheet.rows.length; i++) {
+      for (var i = dataStartRow; i < sheet.rows.length; i++) {
         final row = sheet.rows[i];
         if (_rowVazia(row)) continue;
         processadas++;
@@ -126,6 +136,11 @@ class SupressaoVegetacaoService {
             case 'exec_mec_data':
             case 'exec_man_data':
             case 'vao_data_conclusao':
+            case 'map_data':
+            case 'execucao_mec_data_inicio':
+            case 'execucao_mec_data_fim':
+            case 'execucao_man_data_inicio':
+            case 'execucao_man_data_fim':
               final dt = _parseDate(valor);
               if (dt != null) mapa[campo] = dt.toIso8601String();
               break;
@@ -291,6 +306,113 @@ class SupressaoVegetacaoService {
     return resp;
   }
 
+  /// Exporta os vãos para XLSX com formatação e layout igual ao frontend:
+  /// 3 linhas de cabeçalho com células mescladas (Lista de Estruturas / VÃO; Mapeamento / Execução / Fiscalização; Mecanizado / Manual; labels).
+  /// A terceira linha contém os rótulos reconhecidos na importação para reimportar o arquivo.
+  Future<Uint8List> exportarXlsx(List<Map<String, dynamic>> vaos) async {
+    final excel = Excel.createExcel();
+    excel.delete('Sheet1');
+    final sheet = excel['Mapeamento'];
+
+    // Ordem das colunas igual ao frontend; rótulos da linha 2 reconhecidos na importação
+    const List<MapEntry<String, String>> colunas = [
+      MapEntry('Linha', 'lt'),
+      MapEntry('EST.', 'est_codigo'),
+      MapEntry('Vão de Frente (m)', 'vao_frente_m'),
+      MapEntry('Largura (m)', 'vao_largura_m'),
+      MapEntry('Mapeamento Mec. Extensão', 'map_mec_extensao_m'),
+      MapEntry('Largura', 'map_mec_largura_m'),
+      MapEntry('Mapeamento Man. Extensão', 'map_man_extensao_m'),
+      MapEntry('Largura .1', 'map_man_largura_m'),
+      MapEntry('Data (mapeamento)', 'map_data'),
+      MapEntry('Execução Mec. Data Início', 'execucao_mec_data_inicio'),
+      MapEntry('Execução Mec. Data Fim', 'execucao_mec_data_fim'),
+      MapEntry('Execução Man. Data Início', 'execucao_man_data_inicio'),
+      MapEntry('Execução Man. Data Fim', 'execucao_man_data_fim'),
+      MapEntry('Execução Mec. Extensão', 'exec_mec_extensao_m'),
+      MapEntry('Largura .2', 'exec_mec_largura_m'),
+      MapEntry('Data conclusão', 'exec_mec_data'),
+      MapEntry('Execução Man. Extensão', 'exec_man_extensao_m'),
+      MapEntry('Largura .3', 'exec_man_largura_m'),
+      MapEntry('Data conclusão.1', 'exec_man_data'),
+      MapEntry('Data conclusão do vão', 'vao_data_conclusao'),
+      MapEntry('Roço concluído: Sim / Não ?', 'roco_concluido'),
+      MapEntry('Numeração GGT', 'numeracao_ggt'),
+      MapEntry('Mapeamento GGT', 'mapeamento_ggt'),
+      MapEntry('Código GGT (execução)', 'codigo_ggt_execucao'),
+      MapEntry('Descrição dos serviços', 'descricao_servicos'),
+      MapEntry('Prioridade', 'prioridade'),
+      MapEntry('Conferência do Vão Sobra (-) ou Falta (+)', 'conferencia_vao'),
+      MapEntry('Manual', 'pend_manual'),
+      MapEntry('Mecanizado', 'pend_mecanizado'),
+      MapEntry('Seletivo / Preservação / Cultivado', 'pend_seletivo'),
+      MapEntry('Manual', 'pend_manual_extra'),
+      MapEntry('Mecanizado', 'pend_mecanizado_extra'),
+      MapEntry('Seletivo / Preservação / Cultivado.1', 'pend_seletivo_extra'),
+      MapEntry('Pendências na execução do roço', 'pendencias_execucao'),
+    ];
+
+    const int fixedCols = 4; // Linha, EST., Extensão, Largura
+    const int mapeamentoCols = 5; // Mec Ext+Larg, Man Ext+Larg, Data
+    const int execucaoCols = 4; // Mec Data Início/Fim, Man Data Início/Fim
+    const int fiscalizacaoCols = 6; // Mec Ext+Larg+Data, Man Ext+Larg+Data
+
+    // Linha 0: grupos mesclados (Lista de Estruturas, Mapeamento, Execução, Fiscalização)
+    sheet.merge(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: 0), CellIndex.indexByColumnRow(columnIndex: fixedCols - 1, rowIndex: 0), customValue: 'Lista de Estruturas');
+    sheet.merge(CellIndex.indexByColumnRow(columnIndex: fixedCols, rowIndex: 0), CellIndex.indexByColumnRow(columnIndex: fixedCols + mapeamentoCols - 1, rowIndex: 0), customValue: 'Mapeamento');
+    sheet.merge(CellIndex.indexByColumnRow(columnIndex: fixedCols + mapeamentoCols, rowIndex: 0), CellIndex.indexByColumnRow(columnIndex: fixedCols + mapeamentoCols + execucaoCols - 1, rowIndex: 0), customValue: 'Execução');
+    sheet.merge(CellIndex.indexByColumnRow(columnIndex: fixedCols + mapeamentoCols + execucaoCols, rowIndex: 0), CellIndex.indexByColumnRow(columnIndex: fixedCols + mapeamentoCols + execucaoCols + fiscalizacaoCols - 1, rowIndex: 0), customValue: 'Fiscalização da Execução');
+
+    // Linha 1: subgrupos (VÃO; Mecanizado, Manual, Data; Mecanizado, Manual; Mecanizado, Manual)
+    sheet.merge(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: 1), CellIndex.indexByColumnRow(columnIndex: fixedCols - 1, rowIndex: 1), customValue: 'VÃO');
+    sheet.merge(CellIndex.indexByColumnRow(columnIndex: fixedCols, rowIndex: 1), CellIndex.indexByColumnRow(columnIndex: fixedCols + 1, rowIndex: 1), customValue: 'Mecanizado');
+    sheet.merge(CellIndex.indexByColumnRow(columnIndex: fixedCols + 2, rowIndex: 1), CellIndex.indexByColumnRow(columnIndex: fixedCols + 3, rowIndex: 1), customValue: 'Manual');
+    // Data (mapeamento) - 1 célula, vazia na linha 1
+    sheet.cell(CellIndex.indexByColumnRow(columnIndex: fixedCols + 4, rowIndex: 1)).value = '';
+    sheet.merge(CellIndex.indexByColumnRow(columnIndex: fixedCols + mapeamentoCols, rowIndex: 1), CellIndex.indexByColumnRow(columnIndex: fixedCols + mapeamentoCols + 1, rowIndex: 1), customValue: 'Mecanizado');
+    sheet.merge(CellIndex.indexByColumnRow(columnIndex: fixedCols + mapeamentoCols + 2, rowIndex: 1), CellIndex.indexByColumnRow(columnIndex: fixedCols + mapeamentoCols + 3, rowIndex: 1), customValue: 'Manual');
+    sheet.merge(CellIndex.indexByColumnRow(columnIndex: fixedCols + mapeamentoCols + execucaoCols, rowIndex: 1), CellIndex.indexByColumnRow(columnIndex: fixedCols + mapeamentoCols + execucaoCols + 2, rowIndex: 1), customValue: 'Mecanizado');
+    sheet.merge(CellIndex.indexByColumnRow(columnIndex: fixedCols + mapeamentoCols + execucaoCols + 3, rowIndex: 1), CellIndex.indexByColumnRow(columnIndex: fixedCols + mapeamentoCols + execucaoCols + fiscalizacaoCols - 1, rowIndex: 1), customValue: 'Manual');
+
+    // Linha 2: rótulos das colunas (reconhecidos na importação)
+    for (int c = 0; c < colunas.length; c++) {
+      sheet.cell(CellIndex.indexByColumnRow(columnIndex: c, rowIndex: 2)).value = colunas[c].key;
+    }
+
+    // Dados a partir da linha 3
+    for (int r = 0; r < vaos.length; r++) {
+      final vao = vaos[r];
+      for (int c = 0; c < colunas.length; c++) {
+        final key = colunas[c].value;
+        Object? val;
+        if (key == 'lt') {
+          val = vao['linhas_transmissao'] is Map ? (vao['linhas_transmissao'] as Map)['nome'] : vao['lt'];
+        } else {
+          val = vao[key];
+        }
+        final cell = sheet.cell(CellIndex.indexByColumnRow(columnIndex: c, rowIndex: r + 3));
+        if (val == null) {
+          cell.value = '';
+        } else if (val is bool) {
+          cell.value = val ? 'Sim' : 'Não';
+        } else if (val is DateTime) {
+          cell.value = _formatDateExport(val);
+        } else if (val is num) {
+          cell.value = val.toDouble();
+        } else {
+          cell.value = val.toString();
+        }
+      }
+    }
+
+    final bytes = excel.encode();
+    return Uint8List.fromList(bytes ?? []);
+  }
+
+  static String _formatDateExport(DateTime dt) {
+    return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+  }
+
   Future<String> _obterOuCriarLinha({
     required String nome,
     String? tensaoKv,
@@ -363,6 +485,22 @@ class SupressaoVegetacaoService {
           break;
         case 'largura .1':
           map[i] = 'map_man_largura_m';
+          break;
+        case 'data (mapeamento)':
+        case 'data (mapeamento).1':
+          map[i] = 'map_data';
+          break;
+        case 'execução mec. data início':
+          map[i] = 'execucao_mec_data_inicio';
+          break;
+        case 'execução mec. data fim':
+          map[i] = 'execucao_mec_data_fim';
+          break;
+        case 'execução man. data início':
+          map[i] = 'execucao_man_data_inicio';
+          break;
+        case 'execução man. data fim':
+          map[i] = 'execucao_man_data_fim';
           break;
         case 'execução mec. extensão':
         case 'execução mec. extensão ':

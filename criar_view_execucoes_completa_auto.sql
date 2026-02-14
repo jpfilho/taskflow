@@ -58,7 +58,7 @@ WITH
       '1 day'::interval
     ) g(day)
     WHERE UPPER(ep.tipo_periodo::text) = 'EXECUCAO'::text
-      AND UPPER(t.status::text) <> 'CANC'::text
+      AND UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANC', 'REPR')
   ),
   
   -- Períodos de PLANEJAMENTO e DESLOCAMENTO de executor_periods
@@ -86,7 +86,7 @@ WITH
       '1 day'::interval
     ) g(day)
     WHERE UPPER(ep.tipo_periodo::text) IN ('PLANEJAMENTO'::text, 'DESLOCAMENTO'::text)
-      AND UPPER(t.status::text) <> 'CANC'::text
+      AND UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANC', 'REPR')
   ),
   
   -- Segmentos de EXECUÇÃO de gantt_segments
@@ -115,7 +115,7 @@ WITH
       '1 day'::interval
     ) g(day)
     WHERE UPPER(gs.tipo_periodo::text) = 'EXECUCAO'::text
-      AND UPPER(t.status::text) <> 'CANC'::text
+      AND UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANC', 'REPR')
       AND NOT EXISTS (
         SELECT 1
         FROM executor_periods ep
@@ -150,7 +150,7 @@ WITH
       '1 day'::interval
     ) g(day)
     WHERE UPPER(gs.tipo_periodo::text) IN ('PLANEJAMENTO'::text, 'DESLOCAMENTO'::text)
-      AND UPPER(t.status::text) <> 'CANC'::text
+      AND UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANC', 'REPR')
       AND NOT EXISTS (
         SELECT 1
         FROM executor_periods ep
@@ -198,7 +198,7 @@ WITH
         FROM gantt_segments gs
         WHERE gs.task_id = t.id
       )
-      AND UPPER(t.status::text) <> 'CANC'::text
+      AND UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANC', 'REPR')
   ),
   
   -- Unir todos os períodos
@@ -294,4 +294,5 @@ ON public.tasks_locais(task_id, local_id);
 -- ============================================
 COMMENT ON VIEW public.v_execucoes_dia_completa IS 
 'View normal (não materializada) que inclui TODOS os tipos de períodos (EXECUCAO, PLANEJAMENTO, DESLOCAMENTO) 
-de executor_periods e gantt_segments. ATUALIZA AUTOMATICAMENTE quando os dados mudam - não precisa de REFRESH.';
+de executor_periods e gantt_segments. Exclui tarefas CANC (canceladas) e REPR (reprogramadas). 
+ATUALIZA AUTOMATICAMENTE quando os dados mudam - não precisa de REFRESH.';

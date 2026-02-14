@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:async';
 import 'package:sqflite/sqflite.dart';
+import 'package:uuid/uuid.dart';
 import '../config/supabase_config.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'local_database_service.dart';
@@ -15,7 +16,10 @@ class SyncService {
   final LocalDatabaseService _localDb = LocalDatabaseService();
   final ConnectivityService _connectivity = ConnectivityService();
   bool _isSyncing = false;
+  bool _hasLocalChangesThisSession = false;
   final StreamController<bool> _syncingController = StreamController<bool>.broadcast();
+  DateTime? _lastSyncEnd;
+  static const Duration _syncCooldown = Duration(seconds: 2);
 
   // Configuração de backoff
   static const int _maxRetries = 5;
@@ -25,22 +29,48 @@ class SyncService {
   bool get isSyncing => _isSyncing;
   Stream<bool> get syncingStream => _syncingController.stream;
 
+  /// True se nesta sessão o usuário criou/editou algo que ficou pendente de sync.
+  bool get hasLocalChangesThisSession => _hasLocalChangesThisSession;
+
+  /// Marcar que houve alteração local (criar/editar tarefa etc.) — assim o banner "Sincronizar" só aparece quando fizer sentido.
+  void markHasLocalChanges() {
+    _hasLocalChangesThisSession = true;
+  }
+
+  void _clearHasLocalChangesIfNonePending() async {
+    try {
+      final n = await _localDb.getPendingSyncCount();
+      if (n == 0) _hasLocalChangesThisSession = false;
+    } catch (_) {}
+  }
+
   // Inicializar serviço de sincronização
   Future<void> initialize() async {
     await _connectivity.initialize();
-    
-    // Escutar mudanças de conectividade
+
+    // Escutar mudanças de conectividade: sincronizar automaticamente ao reconectar
     _connectivity.connectionStream.listen((isConnected) {
       if (isConnected && !_isSyncing) {
-        // Tentar sincronizar quando conectar
         syncAll();
       }
     });
+
+    // Se já estiver online ao iniciar, sincronizar automaticamente (rede com acesso ao Supabase)
+    if (_connectivity.isConnected) {
+      Future.delayed(const Duration(milliseconds: 800), () {
+        if (!_isSyncing) syncAll();
+      });
+    }
   }
 
   // Sincronizar todas as tabelas pendentes
   Future<void> syncAll() async {
     if (!_connectivity.isConnected || _isSyncing) {
+      return;
+    }
+    // Evitar segunda sync logo após a primeira (hot restart / init + _loadTasks)
+    if (_lastSyncEnd != null &&
+        DateTime.now().difference(_lastSyncEnd!) < _syncCooldown) {
       return;
     }
 
@@ -64,6 +94,8 @@ class SyncService {
       await _syncTable('tipos_atividade_local', 'tipos_atividade');
       await _syncTable('status_local', 'status');
       await _syncTable('feriados_local', 'feriados');
+      await _syncTable('versoes_local', 'versoes');
+      await _syncTable('melhorias_bugs_local', 'melhorias_bugs');
 
       // Baixar dados atualizados do Supabase
       await _pullFromSupabase();
@@ -73,7 +105,9 @@ class SyncService {
       print('❌ Erro na sincronização: $e');
     } finally {
       _isSyncing = false;
+      _lastSyncEnd = DateTime.now();
       _syncingController.add(false);
+      _clearHasLocalChangesIfNonePending();
     }
   }
 
@@ -167,7 +201,8 @@ class SyncService {
       // Baixar tarefas
       await _pullTable('tasks', 'tasks_local');
       await _pullTable('gantt_segments', 'gantt_segments_local');
-      // Adicionar outras tabelas conforme necessário
+      await _pullTable('versoes', 'versoes_local');
+      await _pullTable('melhorias_bugs', 'melhorias_bugs_local');
     } catch (e) {
       print('Erro ao baixar dados do Supabase: $e');
     }
@@ -190,6 +225,8 @@ class SyncService {
 
           // Converter DateTime para timestamp
           _convertDateTimesToTimestamps(recordMap);
+          // SQLite (sqflite_common_ffi_web) aceita só num, String, Uint8List
+          _sanitizeMapForSqlite(recordMap);
 
           // Verificar se já existe localmente
           final existing = await db.query(
@@ -224,7 +261,12 @@ class SyncService {
   // Inserir no Supabase
   Future<bool> _insertToSupabase(String tableName, Map<String, dynamic> data) async {
     try {
-      await _supabase.from(tableName).insert(data);
+      final payload = Map<String, dynamic>.from(data);
+      final id = payload['id'];
+      if (id is String && !_isValidUuid(id)) {
+        payload['id'] = const Uuid().v4();
+      }
+      await _supabase.from(tableName).insert(payload);
       return true;
     } catch (e) {
       print('Erro ao inserir no Supabase: $e');
@@ -272,7 +314,8 @@ class SyncService {
   void _convertTimestamps(Map<String, dynamic> map) {
     final timestampFields = [
       'data_inicio', 'data_fim', 'data_criacao', 'data_atualizacao',
-      'created_at', 'updated_at', 'data_upload', 'dia', 'mes', 'ano'
+      'created_at', 'updated_at', 'data_upload', 'dia', 'mes', 'ano',
+      'data_prevista_lancamento', 'data_lancamento', 'concluido_em', 'reaberto_em'
     ];
 
     for (var field in timestampFields) {
@@ -287,7 +330,8 @@ class SyncService {
   void _convertDateTimesToTimestamps(Map<String, dynamic> map) {
     final dateFields = [
       'data_inicio', 'data_fim', 'data_criacao', 'data_atualizacao',
-      'created_at', 'updated_at', 'data_upload'
+      'created_at', 'updated_at', 'data_upload',
+      'data_prevista_lancamento', 'data_lancamento', 'concluido_em', 'reaberto_em'
     ];
 
     for (var field in dateFields) {
@@ -300,6 +344,24 @@ class SyncService {
         }
       }
     }
+  }
+
+  /// Converte valores incompatíveis com SQLite (ex: bool) para tipos aceitos (num, String).
+  static final RegExp _uuidRegex = RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$');
+
+  void _sanitizeMapForSqlite(Map<String, dynamic> map) {
+    final keys = map.keys.toList();
+    for (final key in keys) {
+      final v = map[key];
+      if (v is bool) {
+        map[key] = v ? 1 : 0;
+      }
+    }
+  }
+
+  bool _isValidUuid(String? id) {
+    if (id == null || id.isEmpty) return false;
+    return _uuidRegex.hasMatch(id);
   }
 
   // Adicionar operação à fila de sincronização

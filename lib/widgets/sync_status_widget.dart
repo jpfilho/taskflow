@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:async';
 import '../services/sync_service.dart';
 import '../services/connectivity_service.dart';
@@ -24,27 +25,32 @@ class _SyncStatusWidgetState extends State<SyncStatusWidget> {
   @override
   void initState() {
     super.initState();
+    if (kIsWeb) return; // Sincronização só faz sentido em mobile/tablet; na web não exibir nem escutar
     _isConnected = _connectivity.isConnected;
     _loadPendingCount();
     
-    // Escutar mudanças de conectividade
+    // Escutar mudanças de conectividade (post-frame evita "Cannot hit test" com Tooltip/Overlay)
     _connectivity.connectionStream.listen((connected) {
-      if (mounted) {
-        setState(() {
-          _isConnected = connected;
-        });
-        _loadPendingCount();
-      }
-    });
-    
-    // Escutar mudanças de sincronização
-    _syncSub = _syncService.syncingStream.listen((syncing) {
-      if (mounted) {
-        setState(() => _isSyncing = syncing);
-        if (!syncing) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          setState(() {
+            _isConnected = connected;
+          });
           _loadPendingCount();
         }
-      }
+      });
+    });
+    
+    // Escutar mudanças de sincronização (post-frame evita hit-test em widget não layoutado)
+    _syncSub = _syncService.syncingStream.listen((syncing) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          setState(() => _isSyncing = syncing);
+          if (!syncing) {
+            _loadPendingCount();
+          }
+        }
+      });
     });
     // Periodicamente, garantir refresh
     _startPeriodicCheck();
@@ -69,6 +75,10 @@ class _SyncStatusWidgetState extends State<SyncStatusWidget> {
     try {
       // Verificar se o banco local está disponível
       try {
+        // Na web: corrigir segmentos marcados como pending cuja tarefa já está synced (bug antigo de cache)
+        if (kIsWeb) {
+          await _localDb.markSegmentsSyncedWhereTaskSynced();
+        }
         final db = await _localDb.database;
         final pendingQueue = await db.query(
           'sync_queue',
@@ -157,6 +167,8 @@ class _SyncStatusWidgetState extends State<SyncStatusWidget> {
   
   @override
   Widget build(BuildContext context) {
+    // Na web não mostrar status de sincronização (só mobile/tablet usam sync offline)
+    if (kIsWeb) return const SizedBox.shrink();
     // Só mostrar se houver conexão ou pendências ou estiver sincronizando
     // E se o banco local estiver disponível (verificado pela ausência de erros)
     if ((!_isConnected || _pendingCount > 0 || _isSyncing) && _pendingCount >= 0) {

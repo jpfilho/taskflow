@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:intl/intl.dart';
 import 'dart:async';
 import '../models/task.dart';
 import '../models/frota.dart';
@@ -15,28 +16,38 @@ import '../services/tipo_atividade_service.dart';
 import '../services/auth_service_simples.dart';
 import '../services/feriado_service.dart';
 import '../services/status_service.dart';
+import '../services/segmento_service.dart';
 import '../services/tab_sync_service.dart';
+import '../services/conflict_service.dart';
 import '../utils/responsive.dart';
 
 class FleetScheduleView extends StatefulWidget {
   final TaskService taskService;
   final FrotaService frotaService;
+  final ConflictService? conflictService;
   final DateTime startDate;
   final DateTime endDate;
   final List<Task>? filteredTasks; // Tarefas já filtradas (opcional)
-  final VoidCallback? onTasksUpdated; // Callback para notificar quando tarefas são atualizadas
-  final Function(Task)? onEdit; // Callback para editar tarefa
-  final Function(Task)? onDelete; // Callback para deletar tarefa
-  final Function(Task)? onDuplicate; // Callback para duplicar tarefa
-  final Function(Task)? onCreateSubtask; // Callback para criar subtarefa
+  /// Filtros da barra da tela Frota: regional, divisao, segmento, frota (valores separados por vírgula)
+  final Map<String, String?>? fleetFilters;
+  /// Callback com opções para os dropdowns da barra (regionais, divisoes, segmentos, frotas) — mesmos dados da tabela.
+  final void Function(Map<String, List<String>>)? onFleetDataLoaded;
+  final VoidCallback? onTasksUpdated;
+  final Function(Task)? onEdit;
+  final Function(Task)? onDelete;
+  final Function(Task)? onDuplicate;
+  final Function(Task)? onCreateSubtask;
 
   const FleetScheduleView({
     super.key,
     required this.taskService,
     required this.frotaService,
+    this.conflictService,
     required this.startDate,
     required this.endDate,
     this.filteredTasks,
+    this.fleetFilters,
+    this.onFleetDataLoaded,
     this.onTasksUpdated,
     this.onEdit,
     this.onDelete,
@@ -61,10 +72,16 @@ class FleetTaskRow {
 class _FleetScheduleViewState extends State<FleetScheduleView> {
   List<Task> _tasks = [];
   List<Frota> _frotas = [];
+  /// Frotas após filtro de perfil (antes do filtro da barra Regional/Divisão/Frota/Local)
+  List<Frota> _frotasAfterProfileFilter = [];
   bool _isLoading = true;
   List<FleetTaskRow> _fleetRows = [];
-  /// Dias com conflito por frota (mesmo conceito da tela de equipes: múltiplos locais no mesmo dia).
+  /// Dias com conflito por frota (v_conflict_por_dia_frota). Exibição em preto com letras brancas.
   Map<String, Set<DateTime>> _conflictDaysByFrota = {};
+  /// Conflitos de frota do backend (v_conflict_por_dia_frota).
+  Map<String, ConflictInfo>? _conflictMapFrotaFromBackend;
+  /// Eventos de execução por frota (v_conflict_execution_events_frota) para tooltip com todos os locais/tarefas.
+  Map<String, List<FleetExecutionEventFromBackend>>? _fleetEventsByDayFromBackend;
   final ScrollController _tableVerticalScrollController = ScrollController();
   final ScrollController _ganttVerticalScrollController = ScrollController();
   final ScrollController _ganttHorizontalScrollController = ScrollController();
@@ -83,6 +100,9 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
   
   // Serviço de autenticação para obter perfil do usuário
   final AuthServiceSimples _authService = AuthServiceSimples();
+  final SegmentoService _segmentoService = SegmentoService();
+  /// ID do segmento "Frota" (quando usuário tem este segmento, vê todas as frotas da regional)
+  String? _segmentoFrotaId;
   
   // Serviços para modal de atividades
   final StatusService _statusService = StatusService();
@@ -182,11 +202,16 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
   @override
   void didUpdateWidget(FleetScheduleView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // Reconstruir quando o período mudar
     if (oldWidget.startDate != widget.startDate || oldWidget.endDate != widget.endDate) {
       print('🔄 Período mudou, reconstruindo dados...');
-      _loadFeriados(); // Recarregar feriados para o novo período
+      _loadFeriados();
       _buildFleetRowsFromView();
+    } else if (oldWidget.fleetFilters != widget.fleetFilters) {
+      final filtered = _applyFleetFiltersToFrotas(_frotasAfterProfileFilter);
+      setState(() => _frotas = filtered);
+      _buildFleetRowsFromView();
+    } else if (oldWidget.conflictService != widget.conflictService) {
+      _loadFleetBackendConflicts();
     }
   }
 
@@ -234,44 +259,72 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
       final frotas = await widget.frotaService.getAllFrotas();
       print('✅ Frotas carregadas: ${frotas.length}');
       
+      // Resolver ID do segmento "Frota" (usuário com este segmento vê todas as frotas da regional)
+      if (_segmentoFrotaId == null) {
+        final segmentos = await _segmentoService.getAllSegmentos();
+        try {
+          final frotaSeg = segmentos.firstWhere(
+            (s) => s.segmento.toLowerCase().trim() == 'frota',
+          );
+          _segmentoFrotaId = frotaSeg.id;
+        } catch (_) {
+          // Nenhum segmento chamado "Frota" cadastrado
+        }
+      }
+      
       // Filtrar frotas pelo perfil do usuário (se não for root)
       var frotasFiltradas = frotas;
-      final usuario = _authService.currentUser;
+      var usuario = _authService.currentUser;
+      // Se o perfil não tem regionais (ex.: cache antigo ou sessão restaurada sem perfil), recarregar do backend
+      if (usuario != null && !usuario.isRoot && usuario.regionalIds.isEmpty) {
+        usuario = await _authService.refreshCurrentUser();
+      }
       if (usuario != null && !usuario.isRoot) {
         print('🔒 Filtrando frotas pelo perfil do usuário...');
         print('   Regionais do perfil: ${usuario.regionalIds.length}');
         print('   Divisões do perfil: ${usuario.divisaoIds.length}');
         print('   Segmentos do perfil: ${usuario.segmentoIds.length}');
         
-        frotasFiltradas = frotas.where((frota) {
-          // Verificar se a frota pertence a uma regional permitida
-          final temRegionalPermitida = frota.regionalId == null || 
-              usuario.regionalIds.contains(frota.regionalId);
-          
-          // Verificar se a frota pertence a uma divisão permitida
-          final temDivisaoPermitida = frota.divisaoId == null || 
-              usuario.divisaoIds.contains(frota.divisaoId);
-          
-          // Verificar se a frota pertence a um segmento permitido
-          final temSegmentoPermitido = frota.segmentoId == null || 
-              usuario.segmentoIds.contains(frota.segmentoId);
-          
-          return temRegionalPermitida && temDivisaoPermitida && temSegmentoPermitido;
-        }).toList();
+        final usuarioTemSegmentoFrota = _segmentoFrotaId != null &&
+            usuario.segmentoIds.contains(_segmentoFrotaId);
         
-        print('✅ Frotas filtradas: ${frotasFiltradas.length} de ${frotas.length}');
+        if (usuarioTemSegmentoFrota) {
+          // Perfil Frota: acesso a todas as frotas da regional do perfil (sem filtrar por divisão/segmento)
+          final regionalIdsLower = usuario.regionalIds.map((id) => id.toString().toLowerCase()).toSet();
+          frotasFiltradas = frotas.where((frota) {
+            if (frota.regionalId == null || frota.regionalId!.isEmpty) return true;
+            return regionalIdsLower.contains(frota.regionalId!.toLowerCase());
+          }).toList();
+          print('✅ Perfil Frota: mostrando todas as frotas da(s) regional(is): ${frotasFiltradas.length} de ${frotas.length}');
+        } else {
+          final regionalIdsLower = usuario.regionalIds.map((id) => id.toString().toLowerCase()).toSet();
+          final divisaoIdsLower = usuario.divisaoIds.map((id) => id.toString().toLowerCase()).toSet();
+          final segmentoIdsLower = usuario.segmentoIds.map((id) => id.toString().toLowerCase()).toSet();
+          frotasFiltradas = frotas.where((frota) {
+            final temRegionalPermitida = frota.regionalId == null || frota.regionalId!.isEmpty ||
+                regionalIdsLower.contains(frota.regionalId!.toLowerCase());
+            final temDivisaoPermitida = frota.divisaoId == null || frota.divisaoId!.isEmpty ||
+                divisaoIdsLower.contains(frota.divisaoId!.toLowerCase());
+            final temSegmentoPermitido = frota.segmentoId == null || frota.segmentoId!.isEmpty ||
+                segmentoIdsLower.contains(frota.segmentoId!.toLowerCase());
+            return temRegionalPermitida && temDivisaoPermitida && temSegmentoPermitido;
+          }).toList();
+          print('✅ Frotas filtradas: ${frotasFiltradas.length} de ${frotas.length}');
+        }
       } else if (usuario != null && usuario.isRoot) {
         print('👑 Usuário root: mostrando todas as frotas');
       } else {
         print('⚠️ Usuário sem perfil configurado: mostrando todas as frotas');
       }
+
+      _frotasAfterProfileFilter = frotasFiltradas;
+      final frotasComFiltroBarra = _applyFleetFiltersToFrotas(frotasFiltradas);
       
       setState(() {
         _tasks = tasks;
-        _frotas = frotasFiltradas;
+        _frotas = frotasComFiltroBarra;
       });
-      // Manter loading até as linhas (view) estarem prontas, para não mostrar
-      // "Nenhuma frota encontrada" antes de terminar o carregamento.
+      _notifyFleetFilterOptions(frotasFiltradas, tasks);
       await _buildFleetRowsFromView();
       if (mounted) {
         setState(() {
@@ -310,6 +363,80 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
   bool _isFeriado(DateTime date) {
     final dateKey = DateTime(date.year, date.month, date.day);
     return _feriadosMap.containsKey(dateKey);
+  }
+
+  /// Aplica filtros da barra da tela Frota (Regional, Divisão, Segmento, Frota, Local não aplicado aqui).
+  List<Frota> _applyFleetFiltersToFrotas(List<Frota> frotas) {
+    final filters = widget.fleetFilters;
+    if (filters == null || filters.isEmpty) return frotas;
+    Set<String>? regionalSet;
+    Set<String>? divisaoSet;
+    Set<String>? segmentoSet;
+    Set<String>? frotaSet;
+    if (filters['regional'] != null && filters['regional']!.trim().isNotEmpty) {
+      regionalSet = filters['regional']!.split(',').map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty).toSet();
+    }
+    if (filters['divisao'] != null && filters['divisao']!.trim().isNotEmpty) {
+      divisaoSet = filters['divisao']!.split(',').map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty).toSet();
+    }
+    if (filters['segmento'] != null && filters['segmento']!.trim().isNotEmpty) {
+      segmentoSet = filters['segmento']!.split(',').map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty).toSet();
+    }
+    if (filters['frota'] != null && filters['frota']!.trim().isNotEmpty) {
+      frotaSet = filters['frota']!.split(',').map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty).toSet();
+    }
+    if (regionalSet == null && divisaoSet == null && segmentoSet == null && frotaSet == null) return frotas;
+    return frotas.where((f) {
+      if (regionalSet != null) {
+        final r = (f.regional ?? '').trim().toLowerCase();
+        if (r.isEmpty || !regionalSet.contains(r)) return false;
+      }
+      if (divisaoSet != null) {
+        final d = (f.divisao ?? '').trim().toLowerCase();
+        if (d.isEmpty || !divisaoSet.contains(d)) return false;
+      }
+      if (segmentoSet != null) {
+        final s = (f.segmento ?? '').trim().toLowerCase();
+        if (s.isEmpty || !segmentoSet.contains(s)) return false;
+      }
+      if (frotaSet != null) {
+        final nome = (f.nome).trim().toLowerCase();
+        final placa = (f.placa).trim().toLowerCase();
+        final match = frotaSet.any((x) => nome == x || placa == x || nome.contains(x) || placa.contains(x));
+        if (!match) return false;
+      }
+      return true;
+    }).toList();
+  }
+
+  /// Notifica as opções dos filtros da frota (mesmos dados da tabela) para a barra de filtros.
+  void _notifyFleetFilterOptions(List<Frota> frotas, List<Task> tasks) {
+    widget.onFleetDataLoaded?.call(_buildFleetFilterOptions(frotas, tasks));
+  }
+
+  /// Constrói o mapa de opções: regionals, divisoes, segmentos, frotas (valores únicos da tabela).
+  Map<String, List<String>> _buildFleetFilterOptions(List<Frota> frotas, List<Task> tasks) {
+    final regionais = <String>{};
+    final divisoes = <String>{};
+    final segmentos = <String>{};
+    final frotasNomes = <String>{};
+    for (final f in frotas) {
+      final r = (f.regional ?? '').trim();
+      if (r.isNotEmpty) regionais.add(r);
+      final d = (f.divisao ?? '').trim();
+      if (d.isNotEmpty) divisoes.add(d);
+      final s = (f.segmento ?? '').trim();
+      if (s.isNotEmpty) segmentos.add(s);
+      final nome = f.nome.trim();
+      final placa = (f.placa).trim();
+      frotasNomes.add(placa.isNotEmpty ? '$nome - $placa' : nome);
+    }
+    return {
+      'regionals': regionais.toList(),
+      'divisoes': divisoes.toList(),
+      'segmentos': segmentos.toList(),
+      'frotas': frotasNomes.toList(),
+    };
   }
 
   /// Recarrega dados
@@ -374,8 +501,61 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
     }
   }
 
+  /// Carrega conflitos de frota do backend (v_conflict_por_dia_frota).
+  Future<void> _loadFleetBackendConflicts() async {
+    final cs = widget.conflictService;
+    if (cs == null) {
+      if (_conflictMapFrotaFromBackend != null) {
+        setState(() {
+          _conflictMapFrotaFromBackend = null;
+          _fleetEventsByDayFromBackend = null;
+          _conflictDaysByFrota = {};
+        });
+      }
+      return;
+    }
+    final ok = await cs.isFleetConflictBackendAvailable();
+    if (!ok) {
+      if (_conflictMapFrotaFromBackend != null) {
+        setState(() {
+          _conflictMapFrotaFromBackend = null;
+          _fleetEventsByDayFromBackend = null;
+          _conflictDaysByFrota = {};
+        });
+      }
+      return;
+    }
+    final start = DateTime(widget.startDate.year, widget.startDate.month, widget.startDate.day);
+    final end = DateTime(widget.endDate.year, widget.endDate.month, widget.endDate.day);
+    final map = await cs.getFleetConflictsForRange(start, end);
+    final events = await cs.getFleetExecutionEventsForRange(start, end);
+    if (!mounted) return;
+    final conflictDaysByFrota = <String, Set<DateTime>>{};
+    for (final entry in map.entries) {
+      if (!entry.value.hasConflict) continue;
+      final key = entry.key;
+      final idx = key.lastIndexOf('_');
+      if (idx <= 0) continue;
+      final frotaId = key.substring(0, idx);
+      final dayStr = key.substring(idx + 1);
+      DateTime? day;
+      try {
+        day = DateTime.parse(dayStr);
+      } catch (_) {
+        continue;
+      }
+      final dayKey = DateTime(day.year, day.month, day.day);
+      conflictDaysByFrota.putIfAbsent(frotaId, () => <DateTime>{}).add(dayKey);
+    }
+    setState(() {
+      _conflictMapFrotaFromBackend = map;
+      _fleetEventsByDayFromBackend = events;
+      _conflictDaysByFrota = conflictDaysByFrota;
+    });
+  }
+
   /// Constrói linhas a partir da view v_execucoes_dia_frota (exclui CANC e REPR).
-  /// Em caso de erro ou view indisponível, faz fallback para _buildFleetRows().
+  /// Conflitos de frota vêm de v_conflict_por_dia_frota (carregados em _loadFleetBackendConflicts).
   Future<void> _buildFleetRowsFromView() async {
     if (_frotas.isEmpty) {
       setState(() => _fleetRows = []);
@@ -390,19 +570,15 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
       );
       if (!mounted) return;
       final byFrota = <String, List<Map<String, dynamic>>>{};
-      final conflictDaysByFrota = <String, Set<DateTime>>{};
       for (final r in rows) {
         final fid = r['frota_id']?.toString() ?? '';
         if (fid.isEmpty) continue;
         byFrota.putIfAbsent(fid, () => []).add(r);
-        if (r['has_conflict'] == true) {
-          final dayStr = r['day']?.toString();
-          if (dayStr != null) {
-            final d = DateTime.parse(dayStr);
-            final dayKey = DateTime(d.year, d.month, d.day);
-            conflictDaysByFrota.putIfAbsent(fid, () => <DateTime>{}).add(dayKey);
-          }
-        }
+      }
+      // Mapa task_id -> Task completa (tabela tasks) para enriquecer executor, datas, etc.
+      final taskFromDb = <String, Task>{};
+      for (final t in _tasks) {
+        taskFromDb[t.id] = t;
       }
       final fleetRows = <FleetTaskRow>[];
       final sortedFrotas = _getSortedFrotas();
@@ -424,38 +600,37 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
           final taskStatus = r['task_status']?.toString() ?? '';
           final taskTipo = r['task_tipo']?.toString() ?? '';
           final taskLabel = (r['task_tarefa'] ?? r['task_tipo'] ?? '').toString();
-          final hasConflict = (r['has_conflict'] == true);
           taskDaysByTipo.putIfAbsent(taskId, () => {});
           taskDaysByTipo[taskId]!.putIfAbsent(tipoPeriodo, () => []).add(day);
+          final fullTask = taskFromDb[taskId];
           tasksById.putIfAbsent(
             taskId,
             () => Task(
               id: taskId,
               status: taskStatus,
-              statusNome: '',
-              regional: '',
-              divisao: '',
-              locais: locs,
-              segmento: '',
-              equipes: const [],
+              statusNome: fullTask?.statusNome ?? '',
+              regional: fullTask?.regional ?? '',
+              divisao: fullTask?.divisao ?? '',
+              locais: locs.isNotEmpty ? locs : (fullTask?.locais ?? []),
+              segmento: fullTask?.segmento ?? '',
+              equipes: fullTask?.equipes ?? const [],
               tipo: taskTipo,
               tarefa: taskLabel,
-              executores: const [],
-              executor: '',
+              executores: fullTask?.executores ?? const [],
+              executor: fullTask?.executor ?? '',
               frota: frota.nome + (frota.placa.isNotEmpty ? ' - ${frota.placa}' : ''),
-              coordenador: '',
-              si: '',
-              dataInicio: day,
-              dataFim: day,
+              coordenador: fullTask?.coordenador ?? '',
+              si: fullTask?.si ?? '',
+              dataInicio: fullTask?.dataInicio ?? day,
+              dataFim: fullTask?.dataFim ?? day,
               ganttSegments: const [],
-              executorPeriods: const [],
+              executorPeriods: fullTask?.executorPeriods ?? const [],
               frotaPeriods: const [],
-              precisaSi: false,
-              executorIds: const [],
-              equipeIds: const [],
+              precisaSi: fullTask?.precisaSi ?? false,
+              executorIds: fullTask?.executorIds ?? const [],
+              equipeIds: fullTask?.equipeIds ?? const [],
               frotaIds: const [],
-              localIds: locIds,
-              hasConflict: hasConflict,
+              localIds: locIds.isNotEmpty ? locIds : (fullTask?.localIds ?? []),
             ),
           );
         }
@@ -505,16 +680,19 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
         fleetRows.add(FleetTaskRow(frota: frota, tasks: tasksById.values.toList()));
       }
       if (!mounted) return;
-      setState(() {
-        _fleetRows = fleetRows;
-        _conflictDaysByFrota = conflictDaysByFrota;
-      });
-      print('✅ FleetScheduleView: Dados via view v_execucoes_dia_frota: ${fleetRows.length} frotas');
+      final rowsWithLocalFilter = fleetRows.map((row) => FleetTaskRow(
+        frota: row.frota,
+        tasks: row.tasks,
+      )).toList();
+      setState(() => _fleetRows = rowsWithLocalFilter);
+      await _loadFleetBackendConflicts();
+      print('✅ FleetScheduleView: Dados via view v_execucoes_dia_frota: ${rowsWithLocalFilter.length} frotas');
     } catch (e, st) {
       print('⚠️ FleetScheduleView: View indisponível, usando fallback: $e');
       print(st);
       setState(() => _conflictDaysByFrota = {});
       _buildFleetRows();
+      await _loadFleetBackendConflicts();
     }
   }
 
@@ -620,11 +798,14 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
       ));
     }
 
-    print('✅ Dados construídos: ${fleetRows.length} frotas');
-    
+    final rowsWithLocalFilter = fleetRows.map((row) => FleetTaskRow(
+      frota: row.frota,
+      tasks: row.tasks,
+    )).toList();
+    print('✅ Dados construídos: ${rowsWithLocalFilter.length} frotas');
     setState(() {
-      _fleetRows = fleetRows;
-      _conflictDaysByFrota = {}; // fallback não tem sinal de conflito da view
+      _fleetRows = rowsWithLocalFilter;
+      _conflictDaysByFrota = {};
     });
   }
 
@@ -693,6 +874,46 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
       if (_hasConflictOnDayForFrota(day, frotaId)) return true;
     }
     return false;
+  }
+
+  /// Mensagem do tooltip de conflito de frota para um segmento: TODOS os locais/tarefas (eventos), igual ao conflito de executores.
+  String _getFleetConflictTooltipMessage(String frotaId, List<DateTime> conflictDays) {
+    if (conflictDays.isEmpty) {
+      return 'Conflito de frota: mesma frota em mais de um local nestes dias.';
+    }
+    final lines = <String>['Conflito de frota (dias em preto): mesma frota alocada em mais de um local nestes dias.', ''];
+    final added = <String>{};
+    // Usar eventos (v_conflict_execution_events_frota) para listar TODOS os locais e tarefas, como no conflito de executores
+    if (_fleetEventsByDayFromBackend != null) {
+      for (final day in conflictDays) {
+        final dayStr = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+        final events = _fleetEventsByDayFromBackend![dayStr];
+        if (events != null) {
+          for (final e in events) {
+            if (e.frotaId != frotaId || e.description.isEmpty) continue;
+            if (added.add(e.description)) {
+              lines.add('• ${e.description}');
+            }
+          }
+        }
+      }
+    }
+    // Fallback: descriptions do resumo (v_conflict_por_dia_frota)
+    if (lines.length <= 2 && _conflictMapFrotaFromBackend != null) {
+      for (final day in conflictDays) {
+        final dayKey = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+        final info = _conflictMapFrotaFromBackend!['${frotaId}_$dayKey'];
+        if (info != null && info.descriptions.isNotEmpty) {
+          for (final d in info.descriptions) {
+            if (d.trim().isNotEmpty && added.add(d)) {
+              lines.add('• $d');
+            }
+          }
+        }
+      }
+    }
+    if (lines.length <= 2) return lines.first;
+    return lines.join('\n');
   }
 
   List<Frota> _getSortedFrotas() {
@@ -930,7 +1151,7 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: Colors.grey[200]!)),
         color: hasConflict
-            ? Colors.red[100]
+            ? Colors.black87
             : (row.tasks.isNotEmpty ? Colors.white : Colors.grey[50]),
       ),
       child: Row(
@@ -940,7 +1161,7 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
           _buildCell(_getTipoVeiculoLabel(frota.tipoVeiculo), 100, hasConflict: hasConflict),
           _buildCell(frota.placa, 100, hasConflict: hasConflict),
           _buildTasksCell(row.tasks.length, row, 80, hasConflict: hasConflict),
-          _buildFleetNameCell(frota, 150, hasConflict: hasConflict),
+          _buildFleetNameCell(frota, 150, hasConflict: hasConflict, row: row),
         ],
       ),
     );
@@ -1130,7 +1351,6 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.start,
                             crossAxisAlignment: CrossAxisAlignment.stretch,
-                            textDirection: TextDirection.ltr,
                             mainAxisSize: MainAxisSize.min,
                             children: days.map((day) {
                               final isWeekend = day.weekday == 6 || day.weekday == 7;
@@ -1362,7 +1582,6 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.start,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
-                    textDirection: TextDirection.ltr,
                     mainAxisSize: MainAxisSize.min,
                     children: days.map((day) {
                       final isWeekend = day.weekday == 6 || day.weekday == 7;
@@ -1421,58 +1640,76 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
                       }
                       
                       final segmentColor = _getSegmentColor(segment, task);
+                      final conflictTooltipMessage = conflictDays.isNotEmpty
+                          ? _getFleetConflictTooltipMessage(row.frota.id, conflictDays)
+                          : null;
                       
+                      Widget segmentChild = SizedBox(
+                        width: barWidth - 1,
+                        height: _rowHeight - 2,
+                        child: Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            Container(
+                              width: barWidth - 1,
+                              height: _rowHeight - 2,
+                              decoration: BoxDecoration(
+                                color: segmentColor,
+                                borderRadius: BorderRadius.circular(2),
+                                border: Border.all(
+                                  color: segmentColor.withOpacity(0.3),
+                                  width: 1,
+                                ),
+                              ),
+                              child: _buildSegmentContent(segment, task, barWidth),
+                            ),
+                            // Overlay de conflito por dia (acima de tudo), só nos dias conflitantes.
+                            if (conflictDays.isNotEmpty) ...[
+                              Positioned.fill(
+                                child: IgnorePointer(
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.max,
+                                    children: () {
+                                      final segmentDays = <DateTime>[];
+                                      var d = startDate.isBefore(periodStart) ? periodStart : startDate;
+                                      final last = endDate.isAfter(periodEnd) ? periodEnd : endDate;
+                                      while (!d.isAfter(last)) {
+                                        segmentDays.add(DateTime(d.year, d.month, d.day));
+                                        d = d.add(const Duration(days: 1));
+                                      }
+                                      return segmentDays.map((day) {
+                                        final isConflictDay = conflictDays.any((cd) =>
+                                            cd.year == day.year && cd.month == day.month && cd.day == day.day);
+                                        return Expanded(
+                                          child: Container(
+                                            decoration: BoxDecoration(
+                                              color: isConflictDay ? Colors.black : Colors.transparent,
+                                              borderRadius: isConflictDay ? BorderRadius.circular(2) : null,
+                                              border: isConflictDay ? Border.all(color: Colors.black, width: 2) : null,
+                                            ),
+                                          ),
+                                        );
+                                      }).toList();
+                                    }(),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      );
+                      if (conflictTooltipMessage != null && conflictTooltipMessage.isNotEmpty) {
+                        segmentChild = Tooltip(
+                          message: conflictTooltipMessage,
+                          preferBelow: true,
+                          child: segmentChild,
+                        );
+                      }
                       return Positioned(
                         left: startOffset,
                         top: 1,
                         bottom: 1,
-                        child: SizedBox(
-                          width: barWidth - 1,
-                          height: _rowHeight - 2,
-                          child: Stack(
-                            clipBehavior: Clip.none,
-                            children: [
-                              Container(
-                                width: barWidth - 1,
-                                height: _rowHeight - 2,
-                                decoration: BoxDecoration(
-                                  color: segmentColor,
-                                  borderRadius: BorderRadius.circular(2),
-                                  border: Border.all(
-                                    color: segmentColor.withOpacity(0.3),
-                                    width: 1,
-                                  ),
-                                ),
-                                child: _buildSegmentContent(segment, task, barWidth),
-                              ),
-                              // Overlay de conflito por dia (acima de tudo), só nos dias conflitantes
-                              if (conflictDays.isNotEmpty)
-                                Positioned.fill(
-                                  child: IgnorePointer(
-                                    child: Row(
-                                      children: days.map((day) {
-                                        final dayStart = DateTime(day.year, day.month, day.day);
-                                        final dayEnd = dayStart.add(const Duration(days: 1));
-                                        final coversDay = startDate.isBefore(dayEnd) && endDate.isAfter(dayStart);
-                                        if (!coversDay) return const SizedBox.shrink();
-                                        final isConflictDay = conflictDays.any((d) =>
-                                            d.year == day.year && d.month == day.month && d.day == day.day);
-                                        return Expanded(
-                                          child: Container(
-                                            decoration: BoxDecoration(
-                                              color: isConflictDay ? Colors.red[600]!.withOpacity(0.9) : Colors.transparent,
-                                              borderRadius: isConflictDay ? BorderRadius.circular(2) : null,
-                                              border: isConflictDay ? Border.all(color: Colors.red[800]!, width: 2) : null,
-                                            ),
-                                          ),
-                                        );
-                                      }).toList(),
-                                    ),
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
+                        child: segmentChild,
                       );
                     }).whereType<Widget>();
                   }),
@@ -1584,8 +1821,14 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
       }
     }
     
-    // PRIORIDADE 4: Cores padrão baseadas no tipo
-    switch (task.tipo.toUpperCase()) {
+    // PRIORIDADE 4: Atividade de manutenção da frota → vermelho (frota indisponível no período)
+    final tipoUpper = task.tipo.toUpperCase();
+    if (tipoUpper.contains('MANUT') || tipoUpper == 'R&M') {
+      return Colors.red;
+    }
+    
+    // PRIORIDADE 5: Cores padrão baseadas no tipo
+    switch (tipoUpper) {
       case 'COMP':
         return Colors.brown[400]!;
       case 'FER':
@@ -1596,8 +1839,6 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
         return Colors.yellow[400]!;
       case 'OBRA':
         return Colors.grey[500]!;
-      case 'R&M':
-        return Colors.blueGrey[400]!;
       default:
         return Colors.grey[400]!;
     }
@@ -1633,7 +1874,7 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
           style: TextStyle(
             fontSize: 11,
             fontWeight: hasConflict ? FontWeight.bold : FontWeight.normal,
-            color: hasConflict ? Colors.red[900] : Colors.black,
+            color: hasConflict ? Colors.white : Colors.black,
           ),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
@@ -1656,7 +1897,7 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
               style: TextStyle(
                 fontSize: 11,
                 fontWeight: hasConflict ? FontWeight.bold : FontWeight.normal,
-                color: hasConflict ? Colors.red[900] : Colors.black,
+                color: hasConflict ? Colors.white : Colors.black,
               ),
             ),
             if (taskCount > 0) ...[
@@ -1679,7 +1920,32 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
     );
   }
 
-  Widget _buildFleetNameCell(Frota frota, double width, {bool hasConflict = false}) {
+  /// Retorna true se a frota tem alguma tarefa do tipo OFICINA no dia atual.
+  bool _fleetHasOficinaOnCurrentDay(FleetTaskRow row) {
+    final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+    for (final task in row.tasks) {
+      final tipoUpper = task.tipo.toUpperCase().trim();
+      if (tipoUpper != 'OFICINA' && !tipoUpper.contains('OFICINA')) continue;
+      if (task.ganttSegments.isNotEmpty) {
+        for (final seg in task.ganttSegments) {
+          final start = DateTime(seg.dataInicio.year, seg.dataInicio.month, seg.dataInicio.day);
+          final end = DateTime(seg.dataFim.year, seg.dataFim.month, seg.dataFim.day);
+          if (today.isAfter(end) || today.isBefore(start)) continue;
+          return true;
+        }
+      } else {
+        final start = DateTime(task.dataInicio.year, task.dataInicio.month, task.dataInicio.day);
+        final end = DateTime(task.dataFim.year, task.dataFim.month, task.dataFim.day);
+        if (today.isBefore(start) || today.isAfter(end)) continue;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  Widget _buildFleetNameCell(Frota frota, double width, {bool hasConflict = false, FleetTaskRow? row}) {
+    final hasOficinaToday = row != null && _fleetHasOficinaOnCurrentDay(row);
+    final useOficinaStyle = hasOficinaToday;
     return SizedBox(
       width: width,
       child: Padding(
@@ -1688,16 +1954,22 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
           mainAxisAlignment: MainAxisAlignment.end,
           children: [
             Expanded(
-              child: Text(
-                frota.nome,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: hasConflict ? FontWeight.bold : FontWeight.normal,
-                  color: hasConflict ? Colors.red[900] : Colors.black,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                decoration: useOficinaStyle
+                    ? BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(4))
+                    : null,
+                child: Text(
+                  frota.nome,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: (hasConflict || useOficinaStyle) ? FontWeight.bold : FontWeight.normal,
+                    color: useOficinaStyle ? Colors.white : (hasConflict ? Colors.white : Colors.black),
+                  ),
+                  textAlign: TextAlign.right,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                textAlign: TextAlign.right,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
               ),
             ),
             const SizedBox(width: 4),
@@ -1731,7 +2003,7 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
 
   void _showFleetTasks(Frota frota, List<Task> tasks) {
     // Filtrar tarefas que estão no período
-    final tasksNoPeriodo = tasks.where((task) {
+    var tasksNoPeriodo = tasks.where((task) {
       // Verificar se a tarefa tem segmentos no período
       if (task.ganttSegments.isNotEmpty) {
         return task.ganttSegments.any((segment) {
@@ -1743,6 +2015,13 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
       return (task.dataInicio.isBefore(widget.endDate.add(const Duration(days: 1))) &&
               task.dataFim.isAfter(widget.startDate.subtract(const Duration(days: 1))));
     }).toList();
+    // Ordem crescente: primeiro por data de início, depois por data de fim
+    tasksNoPeriodo = tasksNoPeriodo.toList()
+      ..sort((a, b) {
+        final cmpInicio = a.dataInicio.compareTo(b.dataInicio);
+        if (cmpInicio != 0) return cmpInicio;
+        return a.dataFim.compareTo(b.dataFim);
+      });
 
     if (tasksNoPeriodo.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1795,6 +2074,31 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
     }
   }
 
+  Widget _buildTaskInfoRow(IconData icon, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 14, color: Colors.grey[600]),
+          const SizedBox(width: 6),
+          Text(
+            '$label: ',
+            style: TextStyle(fontSize: 13, color: Colors.grey[600], fontWeight: FontWeight.w500),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: TextStyle(fontSize: 13, color: Colors.grey[800]),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 2,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildTaskCard(Task task) {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -1839,6 +2143,16 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
                         fontSize: 14,
                         color: Colors.grey[600],
                       ),
+                    ),
+                    const SizedBox(height: 8),
+                    _buildTaskInfoRow(Icons.calendar_today_outlined, 'Início', DateFormat('dd/MM/yyyy HH:mm', 'pt_BR').format(task.dataInicio)),
+                    _buildTaskInfoRow(Icons.calendar_today, 'Fim', DateFormat('dd/MM/yyyy HH:mm', 'pt_BR').format(task.dataFim)),
+                    if (task.locais.isNotEmpty)
+                      _buildTaskInfoRow(Icons.place_outlined, 'Local', task.locais.join(', ')),
+                    _buildTaskInfoRow(
+                      Icons.person_outline,
+                      'Executor',
+                      task.executor.isNotEmpty ? task.executor : (task.executores.isNotEmpty ? task.executores.join(', ') : '—'),
                     ),
                   ],
                 ),

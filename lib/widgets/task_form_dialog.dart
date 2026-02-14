@@ -119,6 +119,8 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
   // Perfil do usuário atual
   Usuario? _usuarioAtual;
   List<String> _segmentoIdsPerfil = []; // IDs dos segmentos permitidos no perfil
+  /// ID do segmento "Frota" (usuário com este segmento vê todas as frotas da regional)
+  String? _segmentoFrotaId;
 
   // Listas carregadas
   List<Status> _statusList = [];
@@ -597,11 +599,12 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         if (_statusId != null && _statusList.isNotEmpty) {
           try {
             _selectedStatus = _statusList.firstWhere((s) => s.id == _statusId);
+            _status = _selectedStatus!.codigo;
           } catch (e) {
             print('⚠️ Status ${_statusId} não encontrado na lista');
           }
         }
-        
+
         if (_regionalId != null && _regionaisList.isNotEmpty) {
           try {
             _selectedRegional = _regionaisList.firstWhere((r) => r.id == _regionalId);
@@ -701,61 +704,92 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       
       if (_usuarioAtual != null && !_usuarioAtual!.isRoot && _usuarioAtual!.temPerfilConfigurado()) {
         print('🔒 DEBUG Locais: Filtrando pelo perfil do usuário...');
+        // Resolver ID do segmento "Frota" (para regra: perfil apenas Frota = só locais regional+divisão+segmento)
+        if (_segmentoFrotaId == null) {
+          final segmentos = await _segmentoService.getAllSegmentos();
+          try {
+            final frotaSeg = segmentos.firstWhere(
+              (s) => s.segmento.toLowerCase().trim() == 'frota',
+            );
+            _segmentoFrotaId = frotaSeg.id;
+          } catch (_) {}
+        }
+        final usuario = _usuarioAtual!;
+        final regionalIdsLower = usuario.regionalIds.map((id) => id.toString().toLowerCase()).toSet();
+        final divisaoIdsLower = usuario.divisaoIds.map((id) => id.toString().toLowerCase()).toSet();
+        final segmentoIdsLower = usuario.segmentoIds.map((id) => id.toString().toLowerCase()).toSet();
+        final usuarioTemApenasSegmentoFrota = _segmentoFrotaId != null &&
+            usuario.segmentoIds.length == 1 &&
+            segmentoIdsLower.contains(_segmentoFrotaId!.toLowerCase());
+
         // Buscar TODOS os locais primeiro para verificar os flags
         final todosLocais = await _localService.getAllLocais();
         print('   Total de locais no banco: ${todosLocais.length}');
-        
+        if (usuarioTemApenasSegmentoFrota) {
+          print('   Perfil apenas segmento Frota: mostrando só locais da Regional & Divisão & Segmento');
+        }
+
         Set<Local> locaisUnicos = {};
-        
-        // Para cada local, verificar se deve ser incluído baseado no perfil do usuário
-        for (final local in todosLocais) {
-          bool deveIncluir = false;
-          
-          // 1. Verificar locais "para toda a regional"
-          if (local.paraTodaRegional && local.regionalId != null) {
-            if (_usuarioAtual!.regionalIds.contains(local.regionalId)) {
-              print('     ✅ Local "${local.local}" incluído: para toda a regional ${local.regionalId}');
-              deveIncluir = true;
+
+        if (usuarioTemApenasSegmentoFrota) {
+          // Perfil com APENAS segmento Frota: mostrar somente locais que batem com regional E divisão E segmento do usuário
+          for (final local in todosLocais) {
+            final regOk = local.regionalId != null && local.regionalId!.isNotEmpty &&
+                regionalIdsLower.contains(local.regionalId!.toLowerCase());
+            final divOk = local.divisaoId != null && local.divisaoId!.isNotEmpty &&
+                divisaoIdsLower.contains(local.divisaoId!.toLowerCase());
+            final segOk = local.segmentoId != null && local.segmentoId!.isNotEmpty &&
+                segmentoIdsLower.contains(local.segmentoId!.toLowerCase());
+            if (regOk && divOk && segOk) {
+              locaisUnicos.add(local);
             }
           }
-          
-          // 2. Verificar locais "para toda a divisão"
-          if (!deveIncluir && local.paraTodaDivisao && local.divisaoId != null) {
-            if (_usuarioAtual!.divisaoIds.contains(local.divisaoId)) {
-              print('     ✅ Local "${local.local}" incluído: para toda a divisão ${local.divisaoId}');
-              deveIncluir = true;
+        } else {
+          // Perfil geral: incluir "para toda regional", "para toda divisão" e específicos conforme antes
+          for (final local in todosLocais) {
+            bool deveIncluir = false;
+
+            // 1. Verificar locais "para toda a regional"
+            if (local.paraTodaRegional && local.regionalId != null) {
+              if (regionalIdsLower.contains(local.regionalId!.toLowerCase())) {
+                deveIncluir = true;
+              }
             }
-          }
-          
-          // 3. Verificar locais com segmento específico
-          if (!deveIncluir && local.segmentoId != null && local.segmentoId!.isNotEmpty) {
-            if (_usuarioAtual!.segmentoIds.contains(local.segmentoId)) {
-              print('     ✅ Local "${local.local}" incluído: segmento específico ${local.segmentoId}');
-              deveIncluir = true;
+
+            // 2. Verificar locais "para toda a divisão"
+            if (!deveIncluir && local.paraTodaDivisao && local.divisaoId != null) {
+              if (divisaoIdsLower.contains(local.divisaoId!.toLowerCase())) {
+                deveIncluir = true;
+              }
             }
-          }
-          
-          // 4. Verificar locais com divisão específica
-          if (!deveIncluir && local.divisaoId != null && local.divisaoId!.isNotEmpty) {
-            if (_usuarioAtual!.divisaoIds.contains(local.divisaoId)) {
-              print('     ✅ Local "${local.local}" incluído: divisão específica ${local.divisaoId}');
-              deveIncluir = true;
+
+            // 3. Verificar locais com segmento específico
+            if (!deveIncluir && local.segmentoId != null && local.segmentoId!.isNotEmpty) {
+              if (segmentoIdsLower.contains(local.segmentoId!.toLowerCase())) {
+                deveIncluir = true;
+              }
             }
-          }
-          
-          // 5. Verificar locais com regional específica
-          if (!deveIncluir && local.regionalId != null && local.regionalId!.isNotEmpty) {
-            if (_usuarioAtual!.regionalIds.contains(local.regionalId)) {
-              print('     ✅ Local "${local.local}" incluído: regional específica ${local.regionalId}');
-              deveIncluir = true;
+
+            // 4. Verificar locais com divisão específica
+            if (!deveIncluir && local.divisaoId != null && local.divisaoId!.isNotEmpty) {
+              if (divisaoIdsLower.contains(local.divisaoId!.toLowerCase())) {
+                deveIncluir = true;
+              }
             }
-          }
-          
-          if (deveIncluir) {
-            locaisUnicos.add(local);
+
+            // 5. Verificar locais com regional específica
+            if (!deveIncluir && local.regionalId != null && local.regionalId!.isNotEmpty) {
+              if (regionalIdsLower.contains(local.regionalId!.toLowerCase())) {
+                deveIncluir = true;
+              }
+            }
+
+            if (deveIncluir) {
+              locaisUnicos.add(local);
+            }
           }
         }
-        
+
         locaisFiltrados = locaisUnicos.toList();
         print('🔒 DEBUG Locais: Total de locais únicos após filtro: ${locaisFiltrados.length}');
         if (locaisFiltrados.isNotEmpty) {
@@ -826,7 +860,11 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
               _selectedStatus = null;
             }
           }
-          
+          // Manter _status em sync com _selectedStatus para salvar o código correto (ex.: RPGR ao exibir Reprogramado)
+          if (_selectedStatus != null) {
+            _status = _selectedStatus!.codigo;
+          }
+
           // Regional - verificar se existe na lista antes de atribuir
           if (task.regionalId != null && task.regionalId!.isNotEmpty) {
             try {
@@ -921,9 +959,11 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
             if (_statusId != null && _statusId!.isNotEmpty) {
               try {
                 _selectedStatus = _statusList.firstWhere((s) => s.id == _statusId);
+                _status = _selectedStatus!.codigo;
               } catch (e) {
                 try {
                   _selectedStatus = _statusList.firstWhere((s) => s.codigo == _status);
+                  _status = _selectedStatus!.codigo;
                 } catch (e2) {
                   _selectedStatus = null;
                 }
@@ -1216,62 +1256,20 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       
       List<Executor> coordenadores = [];
       
-      // Se o usuário tem perfil configurado, filtrar coordenadores pelo perfil
+      // Se o usuário tem perfil configurado: apenas coordenadores da MESMA regional E divisão E segmento
       if (_usuarioAtual != null && !_usuarioAtual!.isRoot && _usuarioAtual!.temPerfilConfigurado()) {
-        print('🔒 DEBUG Coordenadores: Filtrando pelo perfil do usuário...');
+        print('🔒 DEBUG Coordenadores: Filtrando pela mesma REGIONAL, DIVISÃO e SEGMENTO do usuário...');
         print('   Regional IDs: ${_usuarioAtual!.regionalIds}');
         print('   Divisão IDs: ${_usuarioAtual!.divisaoIds}');
         print('   Segmento IDs: ${_usuarioAtual!.segmentoIds}');
-        
-        // Buscar coordenadores para cada segmento e combinar
-        Set<Executor> coordenadoresUnicos = {};
-        
-        if (_usuarioAtual!.segmentoIds.isNotEmpty) {
-          print('   Buscando coordenadores por segmento (${_usuarioAtual!.segmentoIds.length} segmentos)...');
-          // Buscar por segmento (mais específico)
-          for (final segmentoId in _usuarioAtual!.segmentoIds) {
-            print('     Buscando coordenadores para segmento: $segmentoId');
-            final coordenadoresSegmento = await _executorService.getCoordenadoresFiltrados(
-              segmentoId: segmentoId,
-            );
-            print('     Encontrados ${coordenadoresSegmento.length} coordenadores para segmento $segmentoId');
-            coordenadoresUnicos.addAll(coordenadoresSegmento);
-          }
-        } else if (_usuarioAtual!.divisaoIds.isNotEmpty) {
-          print('   Buscando coordenadores por divisão (${_usuarioAtual!.divisaoIds.length} divisões)...');
-          // Buscar por divisão
-          for (final divisaoId in _usuarioAtual!.divisaoIds) {
-            print('     Buscando coordenadores para divisão: $divisaoId');
-            final coordenadoresDivisao = await _executorService.getCoordenadoresFiltrados(
-              divisaoId: divisaoId,
-            );
-            print('     Encontrados ${coordenadoresDivisao.length} coordenadores para divisão $divisaoId');
-            coordenadoresUnicos.addAll(coordenadoresDivisao);
-          }
-        } else if (_usuarioAtual!.regionalIds.isNotEmpty) {
-          print('   Buscando coordenadores por regional (${_usuarioAtual!.regionalIds.length} regionais)...');
-          // Buscar por regional
-          for (final regionalId in _usuarioAtual!.regionalIds) {
-            print('     Buscando coordenadores para regional: $regionalId');
-            final coordenadoresRegional = await _executorService.getCoordenadoresFiltrados(
-              regionalId: regionalId,
-            );
-            print('     Encontrados ${coordenadoresRegional.length} coordenadores para regional $regionalId');
-            coordenadoresUnicos.addAll(coordenadoresRegional);
-          }
-        } else {
-          print('   Sem filtros específicos, buscando todos os coordenadores...');
-          // Buscar todos os coordenadores (sem filtro de perfil)
-          final todosCoordenadores = await _executorService.getCoordenadores();
-          print('   Total de coordenadores encontrados: ${todosCoordenadores.length}');
-          coordenadoresUnicos.addAll(todosCoordenadores);
-        }
-        
-        coordenadores = coordenadoresUnicos.toList();
-        print('🔒 DEBUG Coordenadores: Total de coordenadores únicos após filtro: ${coordenadores.length}');
+        coordenadores = await _executorService.getCoordenadoresPorPerfilUsuario(
+          regionalIds: _usuarioAtual!.regionalIds,
+          divisaoIds: _usuarioAtual!.divisaoIds,
+          segmentoIds: _usuarioAtual!.segmentoIds,
+        );
+        print('🔒 DEBUG Coordenadores: Total após filtro (regional+divisão+segmento): ${coordenadores.length}');
       } else {
         print('👑 DEBUG Coordenadores: Usuário root ou sem perfil, buscando todos os coordenadores...');
-        // Usuário root ou sem perfil: buscar todos os coordenadores
         coordenadores = await _executorService.getCoordenadores();
         print('👑 DEBUG Coordenadores: Total de coordenadores encontrados: ${coordenadores.length}');
       }
@@ -1328,33 +1326,45 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       return todasFrotas.where((f) => f.ativo && !f.emManutencao).toList();
     }
 
-    // Filtrar por regional, divisão e segmento do perfil
     final regionaisPermitidas = _usuarioAtual!.regionalIds;
     final divisoesPermitidas = _usuarioAtual!.divisaoIds;
     final segmentosPermitidos = _usuarioAtual!.segmentoIds;
 
+    // Perfil com segmento "Frota": acesso a todas as frotas da regional (para cadastrar manutenção etc.)
+    final usuarioTemSegmentoFrota = _segmentoFrotaId != null &&
+        segmentosPermitidos.contains(_segmentoFrotaId);
+    if (usuarioTemSegmentoFrota) {
+      return todasFrotas.where((frota) {
+        if (!frota.ativo) return false;
+        return frota.regionalId == null || regionaisPermitidas.contains(frota.regionalId);
+      }).toList();
+    }
+
+    // Filtrar por regional, divisão e segmento do perfil
     return todasFrotas.where((frota) {
-      // Apenas frotas ativas e não em manutenção
-      if (!frota.ativo || frota.emManutencao) {
-        return false;
-      }
-
-      // Se não tem regional/divisão/segmento configurados, não filtrar por eles
-      bool passaRegional = regionaisPermitidas.isEmpty || 
+      if (!frota.ativo || frota.emManutencao) return false;
+      bool passaRegional = regionaisPermitidas.isEmpty ||
           (frota.regionalId != null && regionaisPermitidas.contains(frota.regionalId));
-      
-      bool passaDivisao = divisoesPermitidas.isEmpty || 
+      bool passaDivisao = divisoesPermitidas.isEmpty ||
           (frota.divisaoId != null && divisoesPermitidas.contains(frota.divisaoId));
-      
-      bool passaSegmento = segmentosPermitidos.isEmpty || 
+      bool passaSegmento = segmentosPermitidos.isEmpty ||
           (frota.segmentoId != null && segmentosPermitidos.contains(frota.segmentoId));
-
       return passaRegional && passaDivisao && passaSegmento;
     }).toList();
   }
 
   Future<void> _loadFrotasFiltradas() async {
     try {
+      // Resolver ID do segmento "Frota" (uma vez)
+      if (_segmentoFrotaId == null) {
+        final segmentos = await _segmentoService.getAllSegmentos();
+        try {
+          final frotaSeg = segmentos.firstWhere(
+            (s) => s.segmento.toLowerCase().trim() == 'frota',
+          );
+          if (mounted) setState(() => _segmentoFrotaId = frotaSeg.id);
+        } catch (_) {}
+      }
       // Recarregar frotas e filtrar pelo perfil
       final todasFrotas = await _frotaService.getAllFrotas();
       final frotasFiltradas = _filtrarFrotasPorPerfil(todasFrotas);
@@ -2711,6 +2721,12 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
     );
   }
 
+  /// Texto exibido no dropdown de frota: nome - placa (- modelo/marca se houver).
+  String _frotaDisplayText(Frota frota) {
+    final modelo = (frota.marca != null && frota.marca!.trim().isNotEmpty) ? ' - ${frota.marca!.trim()}' : '';
+    return '${frota.nome} - ${frota.placa}$modelo';
+  }
+
   Widget _buildFrotasSection() {
     // Garantir que sempre há pelo menos um dropdown
     if (_frotasSelecionadas.isEmpty) {
@@ -2808,7 +2824,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                 label: 'Frota ${index + 1}',
                 value: frotaSelecionada,
                 items: frotasDisponiveis,
-                getDisplayText: (frota) => '${frota.nome} - ${frota.placa}',
+                getDisplayText: (frota) => _frotaDisplayText(frota),
                 onChanged: (Frota? value) {
                   setState(() {
                     final frotaAnterior = _frotasSelecionadas[index];
@@ -2842,6 +2858,27 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                 },
               ),
             ),
+            // Botão para desmarcar frota (deixar sem frota neste slot)
+            if (frotaSelecionada != null)
+              IconButton(
+                icon: const Icon(Icons.clear, color: Colors.grey, size: 20),
+                onPressed: () {
+                  final idRemovida = frotaSelecionada.id;
+                  setState(() {
+                    _selectedFrotaIds.remove(idRemovida);
+                    _frotasSelecionadas[index] = null;
+                    if (_selectedFrotaIds.isEmpty) {
+                      _frota = '-N/A-';
+                    } else {
+                      _frota = _frotasList
+                          .where((f) => _selectedFrotaIds.contains(f.id))
+                          .map((f) => '${f.nome} - ${f.placa}')
+                          .join(', ');
+                    }
+                  });
+                },
+                tooltip: 'Desmarcar frota (deixar sem frota)',
+              ),
             // Botão para remover este dropdown (apenas se houver mais de um)
             if (_frotasSelecionadas.length > 1)
               IconButton(

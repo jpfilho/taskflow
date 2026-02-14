@@ -1,7 +1,14 @@
 import 'package:flutter/material.dart';
 import '../models/frota.dart';
+import '../models/regional.dart';
+import '../models/divisao.dart';
+import '../models/segmento.dart';
 import '../services/frota_service.dart';
+import '../services/regional_service.dart';
+import '../services/divisao_service.dart';
+import '../services/segmento_service.dart';
 import 'frota_form_dialog.dart';
+import 'multi_select_filter_dialog.dart';
 import '../utils/responsive.dart';
 
 class FrotaListView extends StatefulWidget {
@@ -13,16 +20,49 @@ class FrotaListView extends StatefulWidget {
 
 class _FrotaListViewState extends State<FrotaListView> {
   final FrotaService _frotaService = FrotaService();
+  final RegionalService _regionalService = RegionalService();
+  final DivisaoService _divisaoService = DivisaoService();
+  final SegmentoService _segmentoService = SegmentoService();
+
   List<Frota> _frotas = [];
   List<Frota> _filteredFrotas = [];
   bool _isLoading = true;
   final TextEditingController _searchController = TextEditingController();
   bool _isTableView = false; // false = lista (cards), true = tabela
+  final ScrollController _horizontalTableScrollController = ScrollController();
+
+  // Filtros (multiseleção com pesquisa)
+  List<Regional> _regionais = [];
+  List<Divisao> _divisoes = [];
+  List<Segmento> _segmentos = [];
+  List<String> _regionaisTotais = [];
+  List<String> _divisoesTotais = [];
+  List<String> _segmentosTotais = [];
+  List<String> _tiposTotais = [];
+  Set<String> _selectedRegional = {};
+  Set<String> _selectedDivisao = {};
+  Set<String> _selectedSegmento = {};
+  Set<String> _selectedTipo = {};
+  bool _isLoadingFilterOptions = true;
+
+  static const List<Map<String, String>> _tiposVeiculos = [
+    {'value': 'CARRO_LEVE', 'label': 'Carro Leve'},
+    {'value': 'MUNCK', 'label': 'Munck'},
+    {'value': 'TRATOR', 'label': 'Trator'},
+    {'value': 'CAMINHAO', 'label': 'Caminhão'},
+    {'value': 'PICKUP', 'label': 'Pickup'},
+    {'value': 'VAN', 'label': 'Van'},
+    {'value': 'MOTO', 'label': 'Moto'},
+    {'value': 'ONIBUS', 'label': 'Ônibus'},
+    {'value': 'OUTRO', 'label': 'Outro'},
+  ];
 
   @override
   void initState() {
     super.initState();
+    _tiposTotais = _tiposVeiculos.map((e) => e['label']!).toList();
     _loadFrotas();
+    _loadFilterOptions();
     _searchController.addListener(_onSearchChanged);
     // No desktop, tabela é o padrão
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -37,6 +77,7 @@ class _FrotaListViewState extends State<FrotaListView> {
   @override
   void dispose() {
     _searchController.dispose();
+    _horizontalTableScrollController.dispose();
     super.dispose();
   }
 
@@ -49,7 +90,7 @@ class _FrotaListViewState extends State<FrotaListView> {
       final frotas = await _frotaService.getAllFrotas();
       setState(() {
         _frotas = frotas;
-        _filteredFrotas = frotas;
+        _filteredFrotas = _applyAllFilters();
         _isLoading = false;
       });
     } catch (e) {
@@ -68,22 +109,80 @@ class _FrotaListViewState extends State<FrotaListView> {
     }
   }
 
-  void _onSearchChanged() {
-    final query = _searchController.text.toLowerCase().trim();
-    setState(() {
-      if (query.isEmpty) {
-        _filteredFrotas = _frotas;
-      } else {
-        _filteredFrotas = _frotas.where((frota) {
-          return frota.nome.toLowerCase().contains(query) ||
-              (frota.marca?.toLowerCase().contains(query) ?? false) ||
-              frota.placa.toLowerCase().contains(query) ||
-              frota.tipoVeiculo.toLowerCase().contains(query) ||
-              (frota.regional?.toLowerCase().contains(query) ?? false) ||
-              (frota.divisao?.toLowerCase().contains(query) ?? false) ||
-              (frota.segmento?.toLowerCase().contains(query) ?? false);
-        }).toList();
+  Future<void> _loadFilterOptions() async {
+    _tiposTotais = _tiposVeiculos.map((t) => t['label']!).toList();
+    try {
+      final results = await Future.wait([
+        _regionalService.getAllRegionais(),
+        _divisaoService.getAllDivisoes(),
+        _segmentoService.getAllSegmentos(),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _regionais = results[0] as List<Regional>;
+        _divisoes = results[1] as List<Divisao>;
+        _segmentos = results[2] as List<Segmento>;
+        _regionaisTotais = _regionais.map((r) => r.regional).toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+        _divisoesTotais = _divisoes.map((d) => d.divisao).toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+        _segmentosTotais = _segmentos.map((s) => s.segmento).toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+        _isLoadingFilterOptions = false;
+        _filteredFrotas = _applyAllFilters();
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoadingFilterOptions = false;
+          _filteredFrotas = _applyAllFilters();
+        });
       }
+    }
+  }
+
+  List<Frota> _applyAllFilters() {
+    List<Frota> result = _frotas;
+
+    if (_selectedRegional.isNotEmpty) {
+      final regionalIds = _regionais.where((r) => _selectedRegional.contains(r.regional)).map((r) => r.id).toSet();
+      result = result.where((e) => e.regionalId != null && regionalIds.contains(e.regionalId)).toList();
+    }
+    if (_selectedDivisao.isNotEmpty) {
+      final divisaoIds = _divisoes.where((d) => _selectedDivisao.contains(d.divisao)).map((d) => d.id).toSet();
+      result = result.where((e) => e.divisaoId != null && divisaoIds.contains(e.divisaoId)).toList();
+    }
+    if (_selectedSegmento.isNotEmpty) {
+      final segmentoIds = _segmentos.where((s) => _selectedSegmento.contains(s.segmento)).map((s) => s.id).toSet();
+      result = result.where((e) => e.segmentoId != null && segmentoIds.contains(e.segmentoId)).toList();
+    }
+    if (_selectedTipo.isNotEmpty) {
+      final tipoValues = _tiposVeiculos.where((t) => _selectedTipo.contains(t['label'])).map((t) => t['value']!).toSet();
+      result = result.where((e) => tipoValues.contains(e.tipoVeiculo)).toList();
+    }
+
+    final query = _searchController.text.toLowerCase().trim();
+    if (query.isNotEmpty) {
+      result = result.where((frota) {
+        return frota.nome.toLowerCase().contains(query) ||
+            (frota.marca?.toLowerCase().contains(query) ?? false) ||
+            frota.placa.toLowerCase().contains(query) ||
+            frota.tipoVeiculo.toLowerCase().contains(query) ||
+            (_getTipoVeiculoLabel(frota.tipoVeiculo).toLowerCase().contains(query)) ||
+            (frota.regional?.toLowerCase().contains(query) ?? false) ||
+            (frota.divisao?.toLowerCase().contains(query) ?? false) ||
+            (frota.segmento?.toLowerCase().contains(query) ?? false);
+      }).toList();
+    }
+    return result;
+  }
+
+  void _onSearchChanged() {
+    setState(() {
+      _filteredFrotas = _applyAllFilters();
+    });
+  }
+
+  void _onFilterChanged() {
+    setState(() {
+      _filteredFrotas = _applyAllFilters();
     });
   }
 
@@ -287,6 +386,7 @@ class _FrotaListViewState extends State<FrotaListView> {
             padding: const EdgeInsets.all(16.0),
             child: TextField(
               controller: _searchController,
+              onChanged: (_) => _onSearchChanged(),
               decoration: InputDecoration(
                 labelText: 'Buscar frota',
                 prefixIcon: const Icon(Icons.search),
@@ -298,11 +398,17 @@ class _FrotaListViewState extends State<FrotaListView> {
                         icon: const Icon(Icons.clear),
                         onPressed: () {
                           _searchController.clear();
+                          _onSearchChanged();
                         },
                       )
                     : null,
               ),
             ),
+          ),
+          // Filtros: Regional, Divisão, Segmento, Tipo (multiseleção com pesquisa)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 0),
+            child: _buildFiltersRow(),
           ),
           // Lista ou Tabela
           Expanded(
@@ -336,6 +442,162 @@ class _FrotaListViewState extends State<FrotaListView> {
                         : _buildListView(),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildFiltersRow() {
+    final isMobile = Responsive.isMobile(context);
+    if (_isLoadingFilterOptions) {
+      return const SizedBox(
+        height: 48,
+        child: Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))),
+      );
+    }
+    if (isMobile) {
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          return SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minWidth: constraints.maxWidth),
+              child: IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _buildMultiSelectFilterField('REGIONAL', _regionaisTotais, _selectedRegional, (v) {
+                      setState(() { _selectedRegional = v; _onFilterChanged(); });
+                    }, isMobile: true),
+                    const SizedBox(width: 8),
+                    _buildMultiSelectFilterField('DIVISÃO', _divisoesTotais, _selectedDivisao, (v) {
+                      setState(() { _selectedDivisao = v; _onFilterChanged(); });
+                    }, isMobile: true),
+                    const SizedBox(width: 8),
+                    _buildMultiSelectFilterField('SEGMENTO', _segmentosTotais, _selectedSegmento, (v) {
+                      setState(() { _selectedSegmento = v; _onFilterChanged(); });
+                    }, isMobile: true),
+                    const SizedBox(width: 8),
+                    _buildMultiSelectFilterField('TIPO', _tiposTotais, _selectedTipo, (v) {
+                      setState(() { _selectedTipo = v; _onFilterChanged(); });
+                    }, isMobile: true),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.grey[200],
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.grey[350]!),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _buildMultiSelectFilterField('REGIONAL', _regionaisTotais, _selectedRegional, (v) {
+              setState(() { _selectedRegional = v; _onFilterChanged(); });
+            }, isMobile: false),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: _buildMultiSelectFilterField('DIVISÃO', _divisoesTotais, _selectedDivisao, (v) {
+              setState(() { _selectedDivisao = v; _onFilterChanged(); });
+            }, isMobile: false),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: _buildMultiSelectFilterField('SEGMENTO', _segmentosTotais, _selectedSegmento, (v) {
+              setState(() { _selectedSegmento = v; _onFilterChanged(); });
+            }, isMobile: false),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: _buildMultiSelectFilterField('TIPO', _tiposTotais, _selectedTipo, (v) {
+              setState(() { _selectedTipo = v; _onFilterChanged(); });
+            }, isMobile: false),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMultiSelectFilterField(
+    String label,
+    List<String> options,
+    Set<String> selectedValues,
+    ValueChanged<Set<String>> onChanged, {
+    bool isMobile = false,
+  }) {
+    final hasSelection = selectedValues.isNotEmpty;
+    final horizontalPad = isMobile ? 8.0 : 12.0;
+    final verticalPad = isMobile ? 6.0 : 8.0;
+    final fontSize = isMobile ? 11.0 : 12.0;
+    final labelSize = isMobile ? 9.0 : 10.0;
+    return Container(
+      constraints: isMobile ? const BoxConstraints(minWidth: 100) : null,
+      padding: EdgeInsets.symmetric(horizontal: horizontalPad, vertical: verticalPad),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(
+          color: hasSelection ? Colors.blue : Colors.grey[350]!,
+          width: isMobile ? 1 : 1.2,
+        ),
+      ),
+      child: InkWell(
+        onTap: () {
+          showDialog(
+            context: context,
+            builder: (ctx) => MultiSelectFilterDialog(
+              title: label,
+              options: options,
+              selectedValues: selectedValues,
+              onSelectionChanged: onChanged,
+              searchHint: 'Pesquisar...',
+            ),
+          );
+        },
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: labelSize,
+                      color: Colors.grey[700],
+                      fontWeight: FontWeight.w600,
+                      height: 1.1,
+                    ),
+                  ),
+                  SizedBox(height: isMobile ? 2 : 4),
+                  Text(
+                    selectedValues.isEmpty
+                        ? 'Todos'
+                        : selectedValues.length == 1
+                            ? selectedValues.first
+                            : '${selectedValues.length} selecionado(s)',
+                    style: TextStyle(
+                      fontSize: fontSize,
+                      color: selectedValues.isEmpty ? Colors.grey[600]! : Colors.black87,
+                      height: 1.2,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+            Icon(Icons.arrow_drop_down, color: Colors.grey[600], size: isMobile ? 20 : 24),
+          ],
+        ),
       ),
     );
   }
@@ -537,157 +799,163 @@ class _FrotaListViewState extends State<FrotaListView> {
   }
 
   Widget _buildTableView() {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
+    return Scrollbar(
+      controller: _horizontalTableScrollController,
+      thumbVisibility: true,
       child: SingleChildScrollView(
-        child: DataTable(
-          headingRowColor: MaterialStateProperty.all(Colors.blue[50]),
-          columns: const [
-            DataColumn(label: Text('Nome', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Marca', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Tipo', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Placa', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Regional', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Divisão', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Segmento', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Manutenção', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Ações', style: TextStyle(fontWeight: FontWeight.bold))),
-          ],
-          rows: _filteredFrotas.map((frota) {
-            return DataRow(
-              color: MaterialStateProperty.resolveWith<Color?>(
-                (Set<MaterialState> states) {
-                  if (!frota.ativo) {
-                    return Colors.grey[100];
-                  }
-                  return null;
-                },
-              ),
-              cells: [
-                DataCell(
-                  Text(
-                    frota.nome,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w500,
-                      color: frota.ativo ? Colors.black : Colors.grey,
+        controller: _horizontalTableScrollController,
+        scrollDirection: Axis.horizontal,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.vertical,
+          child: DataTable(
+            headingRowColor: MaterialStateProperty.all(Colors.blue[50]),
+            columns: const [
+              DataColumn(label: Text('Ações', style: TextStyle(fontWeight: FontWeight.bold))),
+              DataColumn(label: Text('Nome', style: TextStyle(fontWeight: FontWeight.bold))),
+              DataColumn(label: Text('Marca', style: TextStyle(fontWeight: FontWeight.bold))),
+              DataColumn(label: Text('Tipo', style: TextStyle(fontWeight: FontWeight.bold))),
+              DataColumn(label: Text('Placa', style: TextStyle(fontWeight: FontWeight.bold))),
+              DataColumn(label: Text('Regional', style: TextStyle(fontWeight: FontWeight.bold))),
+              DataColumn(label: Text('Divisão', style: TextStyle(fontWeight: FontWeight.bold))),
+              DataColumn(label: Text('Segmento', style: TextStyle(fontWeight: FontWeight.bold))),
+              DataColumn(label: Text('Manutenção', style: TextStyle(fontWeight: FontWeight.bold))),
+              DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold))),
+            ],
+            rows: _filteredFrotas.map((frota) {
+              return DataRow(
+                color: MaterialStateProperty.resolveWith<Color?>(
+                  (Set<MaterialState> states) {
+                    if (!frota.ativo) {
+                      return Colors.grey[100];
+                    }
+                    return null;
+                  },
+                ),
+                cells: [
+                  DataCell(
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.edit, size: 20),
+                          onPressed: () => _editFrota(frota),
+                          tooltip: 'Editar',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.copy, size: 20, color: Colors.orange),
+                          onPressed: () => _duplicateFrota(frota),
+                          tooltip: 'Duplicar',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.delete, size: 20, color: Colors.red),
+                          onPressed: () => _deleteFrota(frota),
+                          tooltip: 'Excluir',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                        ),
+                      ],
                     ),
                   ),
-                ),
-                DataCell(
-                  Text(
-                    frota.marca ?? '-',
-                    style: TextStyle(
-                      color: frota.ativo ? Colors.black : Colors.grey,
-                    ),
-                  ),
-                ),
-                DataCell(
-                  Text(
-                    _getTipoVeiculoLabel(frota.tipoVeiculo),
-                    style: TextStyle(
-                      color: frota.ativo ? Colors.black : Colors.grey,
-                    ),
-                  ),
-                ),
-                DataCell(
-                  Text(
-                    frota.placa,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w500,
-                      color: frota.ativo ? Colors.black : Colors.grey,
-                    ),
-                  ),
-                ),
-                DataCell(
-                  Text(
-                    frota.regional ?? '-',
-                    style: TextStyle(
-                      color: frota.ativo ? Colors.black : Colors.grey,
-                    ),
-                  ),
-                ),
-                DataCell(
-                  Text(
-                    frota.divisao ?? '-',
-                    style: TextStyle(
-                      color: frota.ativo ? Colors.black : Colors.grey,
-                    ),
-                  ),
-                ),
-                DataCell(
-                  Text(
-                    frota.segmento ?? '-',
-                    style: TextStyle(
-                      color: frota.ativo ? Colors.black : Colors.grey,
-                    ),
-                  ),
-                ),
-                DataCell(
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: frota.emManutencao ? Colors.orange[100] : Colors.green[100],
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      frota.emManutencao ? 'Sim' : 'Não',
+                  DataCell(
+                    Text(
+                      frota.nome,
                       style: TextStyle(
-                        fontSize: 12,
-                        color: frota.emManutencao ? Colors.orange[800] : Colors.green[800],
-                        fontWeight: FontWeight.bold,
+                        fontWeight: FontWeight.w500,
+                        color: frota.ativo ? Colors.black : Colors.grey,
                       ),
                     ),
                   ),
-                ),
-                DataCell(
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: frota.ativo ? Colors.green[100] : Colors.red[100],
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      frota.ativo ? 'Ativo' : 'Inativo',
+                  DataCell(
+                    Text(
+                      frota.marca ?? '-',
                       style: TextStyle(
-                        fontSize: 12,
-                        color: frota.ativo ? Colors.green[800] : Colors.red[800],
-                        fontWeight: FontWeight.bold,
+                        color: frota.ativo ? Colors.black : Colors.grey,
                       ),
                     ),
                   ),
-                ),
-                DataCell(
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.edit, size: 20),
-                        onPressed: () => _editFrota(frota),
-                        tooltip: 'Editar',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
+                  DataCell(
+                    Text(
+                      _getTipoVeiculoLabel(frota.tipoVeiculo),
+                      style: TextStyle(
+                        color: frota.ativo ? Colors.black : Colors.grey,
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.copy, size: 20, color: Colors.orange),
-                        onPressed: () => _duplicateFrota(frota),
-                        tooltip: 'Duplicar',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.delete, size: 20, color: Colors.red),
-                        onPressed: () => _deleteFrota(frota),
-                        tooltip: 'Excluir',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                      ),
-                    ],
+                    ),
                   ),
-                ),
-              ],
-            );
-          }).toList(),
+                  DataCell(
+                    Text(
+                      frota.placa,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w500,
+                        color: frota.ativo ? Colors.black : Colors.grey,
+                      ),
+                    ),
+                  ),
+                  DataCell(
+                    Text(
+                      frota.regional ?? '-',
+                      style: TextStyle(
+                        color: frota.ativo ? Colors.black : Colors.grey,
+                      ),
+                    ),
+                  ),
+                  DataCell(
+                    Text(
+                      frota.divisao ?? '-',
+                      style: TextStyle(
+                        color: frota.ativo ? Colors.black : Colors.grey,
+                      ),
+                    ),
+                  ),
+                  DataCell(
+                    Text(
+                      frota.segmento ?? '-',
+                      style: TextStyle(
+                        color: frota.ativo ? Colors.black : Colors.grey,
+                      ),
+                    ),
+                  ),
+                  DataCell(
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: frota.emManutencao ? Colors.orange[100] : Colors.green[100],
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        frota.emManutencao ? 'Sim' : 'Não',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: frota.emManutencao ? Colors.orange[800] : Colors.green[800],
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                  DataCell(
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: frota.ativo ? Colors.green[100] : Colors.red[100],
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        frota.ativo ? 'Ativo' : 'Inativo',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: frota.ativo ? Colors.green[800] : Colors.red[800],
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            }).toList(),
+          ),
         ),
       ),
     );

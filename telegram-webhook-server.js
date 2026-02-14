@@ -83,6 +83,62 @@ app.post('/telegram-webhook', async (req, res) => {
   }
 });
 
+// ==========================================
+// GEOEVENTOS (fallback simples para Flutter)
+// Nota: versão completa e com filtros está em telegram-webhook-server-generalized.js
+// Aqui retornamos lista paginada por data, sem filtro geoespacial.
+// ==========================================
+
+app.get('/eventos/queimadas', async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 200, 500);
+    const offset = Number(req.query.offset) || 0;
+    const start = req.query.start ? new Date(req.query.start) : null;
+    const end = req.query.end ? new Date(req.query.end) : null;
+
+    let query = supabase
+      .from('eventos_queimadas')
+      .select('id, fonte, data_hora, atributos, lat, lon, created_at')
+      .order('data_hora', { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (start) query = query.gte('data_hora', start.toISOString());
+    if (end) query = query.lte('data_hora', end.toISOString());
+
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json({ ok: true, data, count: data?.length || 0 });
+  } catch (error) {
+    console.error('❌ Erro ao listar queimadas:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/eventos/raios', async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 200, 500);
+    const offset = Number(req.query.offset) || 0;
+    const start = req.query.start ? new Date(req.query.start) : null;
+    const end = req.query.end ? new Date(req.query.end) : null;
+
+    let query = supabase
+      .from('eventos_raios')
+      .select('id, fonte, data_hora, atributos, lat, lon, created_at')
+      .order('data_hora', { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (start) query = query.gte('data_hora', start.toISOString());
+    if (end) query = query.lte('data_hora', end.toISOString());
+
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json({ ok: true, data, count: data?.length || 0 });
+  } catch (error) {
+    console.error('❌ Erro ao listar raios:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Endpoint para enviar mensagem do Flutter para Telegram
 app.post('/send-message', async (req, res) => {
   try {

@@ -127,9 +127,9 @@ class _PerfilUsuarioViewState extends State<PerfilUsuarioView> {
         print('   Divisão IDs: ${usuarioAtualizado.divisaoIds}');
         print('   Segmento IDs: ${usuarioAtualizado.segmentoIds}');
         
-        // Atualizar no AuthService
-        _authService.atualizarUsuarioAtual(usuarioAtualizado);
-        print('✅ Usuário atualizado no AuthService');
+        // Atualizar no AuthService e no cache (para não perder perfil ao voltar para atividades)
+        await _authService.atualizarUsuarioAtual(usuarioAtualizado);
+        print('✅ Usuário atualizado no AuthService e no cache');
       } else {
         print('❌ Erro: Não foi possível recarregar o usuário atualizado');
       }

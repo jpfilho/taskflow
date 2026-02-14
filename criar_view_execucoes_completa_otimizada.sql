@@ -25,7 +25,7 @@ WITH
   ),
   
   -- Períodos de EXECUÇÃO de executor_periods
-  -- OTIMIZAÇÃO: Filtrar tarefas canceladas ANTES do generate_series
+  -- OTIMIZAÇÃO: Filtrar tarefas canceladas/reprogramadas (CANC, REPR) ANTES do generate_series
   ep_execucao AS (
     SELECT
       ep.executor_id,
@@ -50,7 +50,7 @@ WITH
       '1 day'::interval
     ) g(day)
     WHERE UPPER(ep.tipo_periodo::text) = 'EXECUCAO'::text
-      AND UPPER(t.status::text) <> 'CANC'::text
+      AND UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANC', 'REPR', 'RPGR', 'RPAR', 'REPROGRAMADA', 'CANCELADA', 'CANCELADO')
       -- OTIMIZAÇÃO: Filtrar períodos que não se sobrepõem com a janela de datas comum
       -- (isso será feito pelo Supabase client, mas ajuda o planner)
       AND ep.data_fim >= CURRENT_DATE - INTERVAL '1 year'
@@ -82,7 +82,7 @@ WITH
       '1 day'::interval
     ) g(day)
     WHERE UPPER(ep.tipo_periodo::text) IN ('PLANEJAMENTO'::text, 'DESLOCAMENTO'::text)
-      AND UPPER(t.status::text) <> 'CANC'::text
+      AND UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANC', 'REPR', 'RPGR', 'RPAR', 'REPROGRAMADA', 'CANCELADA', 'CANCELADO')
       -- OTIMIZAÇÃO: Filtrar períodos que não se sobrepõem com a janela de datas comum
       AND ep.data_fim >= CURRENT_DATE - INTERVAL '1 year'
       AND ep.data_inicio <= CURRENT_DATE + INTERVAL '2 years'
@@ -114,7 +114,7 @@ WITH
       '1 day'::interval
     ) g(day)
     WHERE UPPER(gs.tipo_periodo::text) = 'EXECUCAO'::text
-      AND UPPER(t.status::text) <> 'CANC'::text
+      AND UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANC', 'REPR', 'RPGR', 'RPAR', 'REPROGRAMADA', 'CANCELADA', 'CANCELADO')
       AND NOT EXISTS (
         SELECT 1
         FROM executor_periods ep
@@ -152,7 +152,7 @@ WITH
       '1 day'::interval
     ) g(day)
     WHERE UPPER(gs.tipo_periodo::text) IN ('PLANEJAMENTO'::text, 'DESLOCAMENTO'::text)
-      AND UPPER(t.status::text) <> 'CANC'::text
+      AND UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANC', 'REPR', 'RPGR', 'RPAR', 'REPROGRAMADA', 'CANCELADA', 'CANCELADO')
       AND NOT EXISTS (
         SELECT 1
         FROM executor_periods ep
@@ -203,7 +203,7 @@ WITH
         FROM gantt_segments gs
         WHERE gs.task_id = t.id
       )
-      AND UPPER(t.status::text) <> 'CANC'::text
+      AND UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANC', 'REPR', 'RPGR', 'RPAR', 'REPROGRAMADA', 'CANCELADA', 'CANCELADO')
       -- OTIMIZAÇÃO: Filtrar períodos que não se sobrepõem com a janela de datas comum
       AND t.data_fim >= CURRENT_DATE - INTERVAL '1 year'
       AND t.data_inicio <= CURRENT_DATE + INTERVAL '2 years'
@@ -306,15 +306,16 @@ ON public.tasks_executores(task_id, executor_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_locais_task_local 
 ON public.tasks_locais(task_id, local_id);
 
--- Índice para filtrar tarefas canceladas mais cedo
+-- Índice para filtrar tarefas canceladas/reprogramadas (CANC, REPR) mais cedo
 CREATE INDEX IF NOT EXISTS idx_tasks_status_dates 
 ON public.tasks(status, data_inicio, data_fim) 
-WHERE UPPER(status::text) <> 'CANC';
+WHERE UPPER(TRIM(COALESCE(status, ''))) NOT IN ('CANC', 'REPR', 'RPGR', 'RPAR', 'REPROGRAMADA', 'CANCELADA', 'CANCELADO');
 
 -- ============================================
 -- COMENTÁRIOS
 -- ============================================
 COMMENT ON VIEW public.v_execucoes_dia_completa IS 
 'View normal (não materializada) OTIMIZADA que inclui TODOS os tipos de períodos (EXECUCAO, PLANEJAMENTO, DESLOCAMENTO) 
-de executor_periods e gantt_segments. ATUALIZA AUTOMATICAMENTE quando os dados mudam - não precisa de REFRESH.
+de executor_periods e gantt_segments. Exclui tarefas CANC (canceladas) e REPR (reprogramadas). 
+ATUALIZA AUTOMATICAMENTE quando os dados mudam - não precisa de REFRESH.
 OTIMIZAÇÃO: Filtra períodos fora da janela de datas comum ANTES de expandir em dias, reduzindo drasticamente o processamento.';

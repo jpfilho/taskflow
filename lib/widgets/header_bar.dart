@@ -5,6 +5,7 @@ import '../services/theme_service.dart';
 import '../providers/theme_provider.dart';
 import 'perfil_usuario_view.dart';
 import 'sync_status_widget.dart';
+import 'gantt_chart.dart';
 import 'dart:async';
 
 class HeaderBar extends StatefulWidget {
@@ -20,13 +21,23 @@ class HeaderBar extends StatefulWidget {
   final Function(String)? onSearch;
   final VoidCallback? onChat;
   final VoidCallback? onConfig;
-  final VoidCallback? onPerfilUpdated;
-  final Function(String)? onViewModeChanged; // Callback para mudança de modo de visualização
-  final String? currentViewMode; // Modo de visualização atual
-  final VoidCallback? onToggleGantt; // Callback para alternar visibilidade do Gantt
-  final bool? showGantt; // Se o Gantt está visível
-  final bool? isAtividadesScreen; // Se está na tela de atividades
-  final bool canEditTasks; // Se pode criar/editar tarefas e ver config
+  final Future<void> Function()? onPerfilUpdated;
+  final Function(String)? onViewModeChanged;
+  final String? currentViewMode;
+  final VoidCallback? onToggleGantt;
+  final bool? showGantt;
+  final bool? isAtividadesScreen;
+  final GanttScale? ganttScale;
+  final ValueChanged<GanttScale>? onGanttScaleChanged;
+  final bool canEditTasks;
+  /// Botão "Atualizar" na tela de Atividades (recarrega tarefas e reaplica filtros).
+  final Future<void> Function()? onRefreshAtividades;
+  final bool isAtividadesRefreshing;
+  /// Tela de Horas: botão Atualizar e seletor Tabela/Metas no header.
+  final bool? isHorasScreen;
+  final String? horasViewMode;
+  final Function(String)? onHorasViewModeChanged;
+  final VoidCallback? onRefreshHoras;
 
   const HeaderBar({
     super.key,
@@ -48,7 +59,15 @@ class HeaderBar extends StatefulWidget {
     this.onToggleGantt,
     this.showGantt,
     this.isAtividadesScreen,
+    this.ganttScale,
+    this.onGanttScaleChanged,
     this.canEditTasks = true,
+    this.onRefreshAtividades,
+    this.isAtividadesRefreshing = false,
+    this.isHorasScreen,
+    this.horasViewMode,
+    this.onHorasViewModeChanged,
+    this.onRefreshHoras,
   });
 
   @override
@@ -259,37 +278,111 @@ class _HeaderBarState extends State<HeaderBar> {
               ),
               Expanded(
                 child: Center(
-                  child: InkWell(
-                    onTap: () async {
-                      final picked = await showDateRangePicker(
-                        context: context,
-                        initialDateRange: DateTimeRange(start: widget.startDate, end: widget.endDate),
-                        firstDate: DateTime(2020),
-                        lastDate: DateTime(2030),
-                        locale: const Locale('pt', 'BR'),
-                      );
-                      if (picked != null) {
-                        widget.onDateRangeChanged(picked.start, picked.end);
-                      }
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.calendar_today, size: 15, color: Colors.black87),
-                          const SizedBox(width: 6),
-                          Text(
-                            '${_formatShortDate(widget.startDate)}-${_formatShortDate(widget.endDate)}',
-                            style: const TextStyle(fontSize: 12, color: Colors.black87),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      InkWell(
+                        onTap: () async {
+                          final picked = await showDateRangePicker(
+                            context: context,
+                            initialDateRange: DateTimeRange(start: widget.startDate, end: widget.endDate),
+                            firstDate: DateTime(2020),
+                            lastDate: DateTime(2030),
+                            locale: const Locale('pt', 'BR'),
+                          );
+                          if (picked != null) {
+                            widget.onDateRangeChanged(picked.start, picked.end);
+                          }
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(8),
                           ),
-                        ],
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.calendar_today, size: 15, color: Colors.black87),
+                              const SizedBox(width: 6),
+                              Text(
+                                '${_formatShortDate(widget.startDate)}-${_formatShortDate(widget.endDate)}',
+                                style: const TextStyle(fontSize: 12, color: Colors.black87),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
-                    ),
+                      if (widget.isAtividadesScreen == true && widget.onRefreshAtividades != null) ...[
+                        const SizedBox(width: 6),
+                        Tooltip(
+                          message: 'Atualizar dados',
+                          child: widget.isAtividadesRefreshing
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : IconButton(
+                                  icon: const Icon(Icons.refresh, size: 18),
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                                  onPressed: () => widget.onRefreshAtividades?.call(),
+                                ),
+                        ),
+                      ],
+                      if (widget.isAtividadesScreen == true &&
+                          widget.showGantt == true &&
+                          widget.onGanttScaleChanged != null &&
+                          widget.ganttScale != null) ...[
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: DropdownButton<GanttScale>(
+                            value: widget.ganttScale,
+                            isDense: true,
+                            underline: const SizedBox.shrink(),
+                            dropdownColor: Colors.white,
+                            icon: const Icon(Icons.arrow_drop_down, size: 18, color: Color.fromARGB(221, 252, 252, 252)),
+                            style: const TextStyle(fontSize: 11, color: Color.fromARGB(221, 255, 255, 255), fontWeight: FontWeight.w500),
+                            items: [
+                              DropdownMenuItem(
+                                value: GanttScale.daily,
+                                child: Text('Dia', style: TextStyle(color: Colors.grey[900], fontSize: 12)),
+                              ),
+                              DropdownMenuItem(
+                                value: GanttScale.weekly,
+                                child: Text('Sem', style: TextStyle(color: Colors.grey[900], fontSize: 12)),
+                              ),
+                              DropdownMenuItem(
+                                value: GanttScale.biweekly,
+                                child: Text('Quin', style: TextStyle(color: Colors.grey[900], fontSize: 12)),
+                              ),
+                              DropdownMenuItem(
+                                value: GanttScale.monthly,
+                                child: Text('Mês', style: TextStyle(color: Colors.grey[900], fontSize: 12)),
+                              ),
+                              DropdownMenuItem(
+                                value: GanttScale.quarterly,
+                                child: Text('Trim', style: TextStyle(color: Colors.grey[900], fontSize: 12)),
+                              ),
+                              DropdownMenuItem(
+                                value: GanttScale.semiAnnual,
+                                child: Text('Semest', style: TextStyle(color: Colors.grey[900], fontSize: 12)),
+                              ),
+                            ],
+                            onChanged: (v) {
+                              if (v != null) widget.onGanttScaleChanged!(v);
+                            },
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
               ),
@@ -417,6 +510,69 @@ class _HeaderBarState extends State<HeaderBar> {
               ),
             ),
           ],
+          // Botão Atualizar Horas (antes das opções de visualização)
+          if (widget.isHorasScreen == true && widget.onRefreshHoras != null &&
+              !isMobile &&
+              (isTablet || isTabletLandscape || isLargeDesktop)) ...[
+            const SizedBox(width: 8),
+            Tooltip(
+              message: 'Atualizar dados',
+              child: IconButton(
+                icon: Icon(Icons.refresh, size: 20, color: iconColor),
+                onPressed: widget.onRefreshHoras,
+                padding: const EdgeInsets.all(8),
+                constraints: const BoxConstraints(),
+                tooltip: 'Atualizar dados',
+              ),
+            ),
+          ],
+          // Seletor de visualização Horas (referência: barra com ícones, estilo tela Atividades)
+          if (widget.isHorasScreen == true &&
+              widget.horasViewMode != null &&
+              widget.onHorasViewModeChanged != null &&
+              !isMobile &&
+              (isTablet || isTabletLandscape || isLargeDesktop)) ...[
+            const SizedBox(width: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              decoration: BoxDecoration(
+                color: iconColor.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _buildHorasViewModeButton(iconColor, Icons.table_chart, 'Tabela', 'tabela'),
+                  _buildHorasViewModeButton(iconColor, Icons.track_changes, 'Metas', 'metas'),
+                ],
+              ),
+            ),
+          ],
+          // Botão Atualizar (apenas na tela de Atividades)
+          if (widget.isAtividadesScreen == true && widget.onRefreshAtividades != null) ...[
+            const SizedBox(width: 8),
+            Tooltip(
+              message: 'Atualizar dados',
+              child: widget.isAtividadesRefreshing
+                  ? SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(iconColor),
+                      ),
+                    )
+                  : IconButton(
+                      icon: Icon(Icons.refresh, size: 20, color: iconColor),
+                      onPressed: () async {
+                        await widget.onRefreshAtividades?.call();
+                      },
+                      padding: const EdgeInsets.all(8),
+                      constraints: const BoxConstraints(),
+                      tooltip: 'Atualizar dados',
+                    ),
+            ),
+          ],
           // Botão para mostrar/ocultar Gantt (apenas quando o modo for 'split' E estiver na tela de atividades)
           if (widget.onToggleGantt != null && 
               widget.currentViewMode == 'split' && 
@@ -435,6 +591,64 @@ class _HeaderBarState extends State<HeaderBar> {
                 constraints: const BoxConstraints(),
               ),
             ),
+            // Seletor de escala do Gantt (apenas quando o Gantt está visível)
+            if (widget.showGantt == true && 
+                widget.onGanttScaleChanged != null && 
+                widget.ganttScale != null) ...[
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: textColor.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: DropdownButton<GanttScale>(
+                  value: widget.ganttScale,
+                  isDense: true,
+                  underline: const SizedBox.shrink(),
+                  dropdownColor: Colors.white,
+                  icon: Icon(Icons.arrow_drop_down, color: Colors.white, size: 20),
+                  style: TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.w500),
+                  selectedItemBuilder: (context) => [
+                    Text('Diário', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w500)),
+                    Text('Semanal', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w500)),
+                    Text('Quinzenal', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w500)),
+                    Text('Mensal', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w500)),
+                    Text('Trimestral', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w500)),
+                    Text('Semestral', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w500)),
+                  ],
+                  items: [
+                    DropdownMenuItem(
+                      value: GanttScale.daily,
+                      child: Text('Diário', style: TextStyle(color: Colors.grey[900], fontSize: 13)),
+                    ),
+                    DropdownMenuItem(
+                      value: GanttScale.weekly,
+                      child: Text('Semanal', style: TextStyle(color: Colors.grey[900], fontSize: 13)),
+                    ),
+                    DropdownMenuItem(
+                      value: GanttScale.biweekly,
+                      child: Text('Quinzenal', style: TextStyle(color: Colors.grey[900], fontSize: 13)),
+                    ),
+                    DropdownMenuItem(
+                      value: GanttScale.monthly,
+                      child: Text('Mensal', style: TextStyle(color: Colors.grey[900], fontSize: 13)),
+                    ),
+                    DropdownMenuItem(
+                      value: GanttScale.quarterly,
+                      child: Text('Trimestral', style: TextStyle(color: Colors.grey[900], fontSize: 13)),
+                    ),
+                    DropdownMenuItem(
+                      value: GanttScale.semiAnnual,
+                      child: Text('Semestral', style: TextStyle(color: Colors.grey[900], fontSize: 13)),
+                    ),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) widget.onGanttScaleChanged!(v);
+                  },
+                ),
+              ),
+            ],
           ],
           const SizedBox(width: 20),
           // Seletor de datas (clicável)
@@ -530,10 +744,10 @@ class _HeaderBarState extends State<HeaderBar> {
                   ),
                 );
                 // Se o perfil foi atualizado (resultado == true), recarregar tarefas
-                if (resultado == true && widget.onPerfilUpdated != null) {
-                  widget.onPerfilUpdated!();
-                  _carregarPerfilUsuario(); // Recarregar perfil após atualização
-                }
+                        if (resultado == true && widget.onPerfilUpdated != null) {
+                          await widget.onPerfilUpdated!();
+                          _carregarPerfilUsuario(); // Recarregar perfil após atualização
+                        }
               } else if (value == 'logout') {
                 widget.onLogout?.call();
               }
@@ -572,6 +786,33 @@ class _HeaderBarState extends State<HeaderBar> {
             icon,
             color: isSelected ? iconColor : iconColor.withOpacity(0.7),
             size: 20,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Botão de modo de visualização da tela Horas (ícone apenas, estilo referência).
+  Widget _buildHorasViewModeButton(Color iconColor, IconData icon, String tooltip, String value) {
+    final isSelected = widget.horasViewMode == value;
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => widget.onHorasViewModeChanged?.call(value),
+          borderRadius: BorderRadius.circular(6),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: isSelected ? iconColor.withOpacity(0.25) : Colors.transparent,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Icon(
+              icon,
+              size: 20,
+              color: isSelected ? iconColor : iconColor.withOpacity(0.6),
+            ),
           ),
         ),
       ),

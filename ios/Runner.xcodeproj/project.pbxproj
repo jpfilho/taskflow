@@ -199,6 +199,8 @@
 				3B06AD1E1E4923F5004D2608 /* Thin Binary */,
 				59867F338462D6D105AF29F9 /* [CP] Embed Pods Frameworks */,
 				7EF72B95D892B09BE0125F45 /* [CP] Copy Pods Resources */,
+				A1B2C3D4E5F6012345678AB /* Remove Simulator Frameworks */,
+				B2C3D4E5F6012345678ABCD /* Generate dSYM for sqlite3arm64ios */,
 			);
 			buildRules = (
 			);
@@ -318,6 +320,37 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-Runner/Pods-Runner-resources.sh\"\n";
+			showEnvVarsInLog = 0;
+		};
+		A1B2C3D4E5F6012345678AB /* Remove Simulator Frameworks */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Remove Simulator Frameworks";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Remove simulator-only frameworks from app bundle when building for device (archive).\n# Fixes: \"sqlite3arm64ios_sim.framework does not support the minimum OS Version\"\nif [ \"${EFFECTIVE_PLATFORM_NAME}\" = \"-iphoneos\" ]; then\n  FRAMEWORKS_DIR=\"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}\"\n  if [ -d \"${FRAMEWORKS_DIR}\" ]; then\n    find \"${FRAMEWORKS_DIR}\" -maxdepth 1 -name \"*_sim*.framework\" -type d -print0 | xargs -0 rm -rf\n    echo \"Removed simulator frameworks from bundle for device build.\"\n  fi\nfi\n";
+			showEnvVarsInLog = 0;
+		};
+		B2C3D4E5F6012345678ABCD /* Generate dSYM for sqlite3arm64ios */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Generate dSYM for sqlite3arm64ios";
+			outputPaths = (
+				"${BUILT_PRODUCTS_DIR}/sqlite3arm64ios.framework.dSYM",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Generate dSYM for sqlite3arm64ios.framework so the archive includes it (fixes \"Upload Symbols Failed\" warning).\nif [ \"${EFFECTIVE_PLATFORM_NAME}\" = \"-iphoneos\" ] && [ \"${CONFIGURATION}\" = \"Release\" ]; then\n  APP_PATH=\"${BUILT_PRODUCTS_DIR}/${WRAPPER_NAME}\"\n  BINARY=\"${APP_PATH}/Frameworks/sqlite3arm64ios.framework/sqlite3arm64ios\"\n  DSYM_OUT=\"${BUILT_PRODUCTS_DIR}/sqlite3arm64ios.framework.dSYM\"\n  if [ -f \"${BINARY}\" ]; then\n    dsymutil \"${BINARY}\" -o \"${DSYM_OUT}\"\n    echo \"Generated dSYM for sqlite3arm64ios.framework\"\n  fi\nfi\n";
 			showEnvVarsInLog = 0;
 		};
 		84AC66909398E7F05FD87773 /* [CP] Check Pods Manifest.lock */ = {

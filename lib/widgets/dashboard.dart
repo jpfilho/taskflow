@@ -6,16 +6,20 @@ import '../services/tipo_atividade_service.dart';
 import '../models/tipo_atividade.dart';
 import '../services/status_service.dart';
 import '../models/status.dart';
+import '../features/warnings/warnings.dart';
 
 class Dashboard extends StatelessWidget {
   final TaskService taskService;
   final List<Task>? filteredTasks; // Tarefas já filtradas (opcional)
+  /// Mapa taskId -> alertas (opcional). Se null, usa mock para contadores.
+  final Map<String, List<TaskWarning>>? warningsByTaskId;
   final StatusService _statusService = StatusService();
 
   Dashboard({
     super.key,
     required this.taskService,
     this.filteredTasks,
+    this.warningsByTaskId,
   });
 
   // Calcular estatísticas a partir de uma lista de tarefas
@@ -260,59 +264,111 @@ class Dashboard extends StatelessWidget {
     final listaProgramadas = _asTaskList(stats['listaProgramadas']);
     final listaCanceladas = _asTaskList(stats['listaCanceladas']);
 
+    final effectiveWarnings = warningsByTaskId ?? {};
+    int highCount = 0, mediumCount = 0, lowCount = 0, tasksWithWarnings = 0;
+    for (final list in effectiveWarnings.values) {
+      if (list.isEmpty) continue;
+      tasksWithWarnings++;
+      for (final w in list) {
+        switch (w.severity.toUpperCase()) {
+          case 'HIGH': highCount++; break;
+          case 'MEDIUM': mediumCount++; break;
+          case 'LOW': lowCount++; break;
+        }
+      }
+    }
+
+    final cards = <Widget>[
+      _buildStatCard(
+        'Total',
+        stats['total'].toString(),
+        Icons.assignment,
+        Colors.blue,
+        isMobile,
+        onTap: () => _showTaskList(context, 'Todas as tarefas', listaTotal),
+      ),
+      _buildStatCard(
+        'Em Andamento',
+        stats['emAndamento'].toString(),
+        Icons.schedule,
+        resolve('ANDA', Colors.orange),
+        isMobile,
+        onTap: () => _showTaskList(context, 'Em andamento', listaEmAndamento),
+      ),
+      _buildStatCard(
+        'Concluídas',
+        stats['concluidas'].toString(),
+        Icons.check_circle,
+        resolve('CONC', resolve('RPAR', Colors.green)),
+        isMobile,
+        onTap: () => _showTaskList(context, 'Concluídas', listaConcluidas),
+      ),
+      _buildStatCard(
+        'Programadas',
+        stats['programadas'].toString(),
+        Icons.event,
+        resolve('PROG', Colors.purple),
+        isMobile,
+        onTap: () => _showTaskList(context, 'Programadas', listaProgramadas),
+      ),
+      _buildStatCard(
+        'Canceladas',
+        stats['canceladas'].toString(),
+        Icons.cancel,
+        resolve('CANC', Colors.redAccent),
+        isMobile,
+        onTap: () => _showTaskList(context, 'Canceladas', listaCanceladas),
+      ),
+      _buildAlertasCard(
+        context,
+        isMobile,
+        tasksWithWarnings: tasksWithWarnings,
+        highCount: highCount,
+        mediumCount: mediumCount,
+        lowCount: lowCount,
+        effectiveWarnings: effectiveWarnings,
+        listaTotal: listaTotal,
+      ),
+    ];
+
     return GridView.count(
-      crossAxisCount: isMobile ? 2 : 5,
+      crossAxisCount: isMobile ? 2 : 6,
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       mainAxisSpacing: 12,
       crossAxisSpacing: 12,
       childAspectRatio: isMobile ? 1.2 : 1.5,
-      children: [
-        _buildStatCard(
-          'Total',
-          stats['total'].toString(),
-          Icons.assignment,
-          Colors.blue,
-          isMobile,
-          onTap: () => _showTaskList(context, 'Todas as tarefas', listaTotal),
-        ),
-        _buildStatCard(
-          'Em Andamento',
-          stats['emAndamento'].toString(),
-          Icons.schedule,
-          resolve('ANDA', Colors.orange),
-          isMobile,
-          onTap: () => _showTaskList(context, 'Em andamento', listaEmAndamento),
-        ),
-        _buildStatCard(
-          'Concluídas',
-          stats['concluidas'].toString(),
-          Icons.check_circle,
-          resolve('CONC', resolve('RPAR', Colors.green)),
-          isMobile,
-          onTap: () => _showTaskList(context, 'Concluídas', listaConcluidas),
-        ),
-        _buildStatCard(
-          'Programadas',
-          stats['programadas'].toString(),
-          Icons.event,
-          resolve('PROG', Colors.purple),
-          isMobile,
-          onTap: () => _showTaskList(context, 'Programadas', listaProgramadas),
-        ),
-        _buildStatCard(
-          'Canceladas',
-          stats['canceladas'].toString(),
-          Icons.cancel,
-          resolve('CANC', Colors.redAccent),
-          isMobile,
-          onTap: () => _showTaskList(context, 'Canceladas', listaCanceladas),
-        ),
-      ],
+      children: cards,
     );
   }
 
-  Widget _buildStatCard(String title, String value, IconData icon, Color color, bool isMobile, {VoidCallback? onTap}) {
+  Widget _buildAlertasCard(
+    BuildContext context,
+    bool isMobile, {
+    required int tasksWithWarnings,
+    required int highCount,
+    required int mediumCount,
+    required int lowCount,
+    required Map<String, List<TaskWarning>> effectiveWarnings,
+    required List<Task> listaTotal,
+  }) {
+    final color = tasksWithWarnings > 0 ? Colors.orange : Colors.grey;
+    return _buildStatCard(
+      'Alertas Ativos',
+      tasksWithWarnings.toString(),
+      Icons.warning_amber_rounded,
+      color,
+      isMobile,
+      subtitle: highCount > 0 || mediumCount > 0 || lowCount > 0
+          ? 'Alta: $highCount  Média: $mediumCount  Baixa: $lowCount'
+          : null,
+      onTap: tasksWithWarnings > 0
+          ? () => _showAlertasConsolidados(context, effectiveWarnings, listaTotal)
+          : null,
+    );
+  }
+
+  Widget _buildStatCard(String title, String value, IconData icon, Color color, bool isMobile, {VoidCallback? onTap, String? subtitle}) {
     final content = Container(
       decoration: BoxDecoration(
         gradient: LinearGradient(
@@ -371,6 +427,19 @@ class Dashboard extends StatelessWidget {
               ),
               textAlign: TextAlign.center,
             ),
+            if (subtitle != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                subtitle,
+                style: TextStyle(
+                  fontSize: isMobile ? 9 : 10,
+                  color: Colors.grey[600],
+                ),
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
           ],
         ),
     );
@@ -712,6 +781,152 @@ class Dashboard extends StatelessWidget {
           },
         );
       },
+    );
+  }
+
+  void _showAlertasConsolidados(
+    BuildContext context,
+    Map<String, List<TaskWarning>> effectiveWarnings,
+    List<Task> listaTotal,
+  ) {
+    final tasksById = {for (final t in listaTotal) t.id: t};
+    final entries = effectiveWarnings.entries
+        .where((e) => e.value.isNotEmpty)
+        .map((e) => MapEntry(e.key, e.value))
+        .toList();
+    if (entries.isEmpty) return;
+
+    final isMobile = MediaQuery.of(context).size.width < 600;
+    if (isMobile) {
+      showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        builder: (ctx) => DraggableScrollableSheet(
+          initialChildSize: 0.6,
+          minChildSize: 0.3,
+          maxChildSize: 0.95,
+          expand: false,
+          builder: (_, scrollController) => _buildAlertasConsolidadosContent(
+            context: ctx,
+            entries: entries,
+            tasksById: tasksById,
+            onClose: () => Navigator.of(ctx).pop(),
+          ),
+        ),
+      );
+    } else {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          title: Row(
+            children: [
+              Icon(Icons.warning_amber_rounded, color: Colors.orange[700]),
+              const SizedBox(width: 10),
+              const Text('Alertas Ativos'),
+            ],
+          ),
+          content: SizedBox(
+            width: 520,
+            height: 400,
+            child: _buildAlertasConsolidadosContent(
+              context: ctx,
+              entries: entries,
+              tasksById: tasksById,
+              onClose: () => Navigator.of(ctx).pop(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Fechar'),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
+  Widget _buildAlertasConsolidadosContent({
+    required BuildContext context,
+    required List<MapEntry<String, List<TaskWarning>>> entries,
+    required Map<String, Task> tasksById,
+    VoidCallback? onClose,
+  }) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (onClose != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: onClose,
+                  tooltip: 'Fechar',
+                ),
+              ],
+            ),
+          ),
+        Expanded(
+          child: ListView.builder(
+            itemCount: entries.length,
+            itemBuilder: (context, index) {
+              final taskId = entries[index].key;
+              final warnings = entries[index].value;
+              final task = tasksById[taskId];
+              final label = task?.tarefa ?? taskId;
+              final maxSev = WarningSeverityTheme.maxSeverity(warnings);
+              final color = WarningSeverityTheme.colorForSeverity(maxSev);
+              return Card(
+                margin: const EdgeInsets.only(bottom: 8),
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  side: BorderSide(color: color.withOpacity(0.4)),
+                ),
+                child: ListTile(
+                  leading: Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: color.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Center(
+                      child: Text(
+                        '${warnings.length}',
+                        style: TextStyle(fontWeight: FontWeight.bold, color: color, fontSize: 12),
+                      ),
+                    ),
+                  ),
+                  title: Text(
+                    label,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                  ),
+                  subtitle: Text(
+                    '${warnings.length} alerta(s) · ${WarningSeverityTheme.labelForSeverity(maxSev)}',
+                    style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                  ),
+                  onTap: () {
+                    showWarningsPanel(
+                      context: context,
+                      taskTarefaLabel: label,
+                      warnings: warnings,
+                    );
+                  },
+                ),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 

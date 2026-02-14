@@ -87,6 +87,16 @@ class AlbumGroupList extends StatelessWidget {
     List<MediaImage> images,
   ) {
     final theme = Theme.of(context);
+    // Subagrupamento por sala
+    final byRoom = <String, List<MediaImage>>{};
+    for (final img in images) {
+      final roomKey = (img.roomName != null && img.roomName!.trim().isNotEmpty)
+          ? img.roomName!
+          : 'Sem sala';
+      byRoom.putIfAbsent(roomKey, () => []);
+      byRoom[roomKey]!.add(img);
+    }
+    final roomKeys = byRoom.keys.toList()..sort((a, b) => a.compareTo(b));
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -126,28 +136,65 @@ class AlbumGroupList extends StatelessWidget {
             ],
           ),
         ),
-        // Grid de imagens do grupo
-        GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: _getCrossAxisCount(context),
-            crossAxisSpacing: 16,
-            mainAxisSpacing: 16,
-            childAspectRatio: 0.75,
-          ),
-          itemCount: images.length,
-          itemBuilder: (context, index) {
-            final image = images[index];
-            return MediaCard(
-              image: image,
-              onTap: () => onImageTap(image),
-              onDelete: onImageDelete != null
-                  ? () => onImageDelete!(image)
-                  : null,
-            );
-          },
-        ),
+        // Subgrupos por sala
+        ...roomKeys.map((roomName) {
+          final imgs = byRoom[roomName]!;
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(left: 4, bottom: 8, top: 4),
+                child: Row(
+                  children: [
+                    Icon(Icons.meeting_room, size: 18, color: theme.colorScheme.secondary),
+                    const SizedBox(width: 6),
+                    Text(
+                      roomName,
+                      style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.secondaryContainer,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        '${imgs.length}',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSecondaryContainer,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: _getCrossAxisCount(context),
+                  crossAxisSpacing: 16,
+                  mainAxisSpacing: 16,
+                  childAspectRatio: 0.75,
+                ),
+                itemCount: imgs.length,
+                itemBuilder: (context, index) {
+                  final image = imgs[index];
+                  return MediaCard(
+                    image: image,
+                    onTap: () => onImageTap(image),
+                    onDelete: onImageDelete != null
+                        ? () => onImageDelete!(image)
+                        : null,
+                  );
+                },
+              ),
+              const SizedBox(height: 24),
+            ],
+          );
+        }),
         const SizedBox(height: 32),
       ],
     );
