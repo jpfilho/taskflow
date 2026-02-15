@@ -196,12 +196,18 @@ class HoraSAPService {
     DateTime? dataLancamentoFim,
     int? limit,
     int? offset,
+    String? searchQuery, // Novo parâmetro para busca no backend
   }) async {
     try {
-      // Janela padrão: últimos 3 meses
+      // Janela padrão: últimos 3 meses (apenas se não houver busca)
       final agora = DateTime.now();
       final padraoInicio = DateTime(agora.year, agora.month - 3, 1);
       final padraoFim = agora;
+
+      // Se houver busca, ignorar janela de tempo padrão (buscar em todo histórico ou definir janela maior se necessário)
+      // Por segurança/performance, ainda vamos manter uma janela, mas talvez maior, ou avisar o usuário.
+      // Neste MVP, manteremos a janela padrão mas permitiremos que o caller passe null para dataInicio se quiser buscar em tudo
+      // Mas a UI atual passa datas. Se a UI passar datas, respeitamos.
 
       final dataIni = dataLancamentoInicio ?? padraoInicio;
       final dataFim = dataLancamentoFim ?? padraoFim;
@@ -305,6 +311,13 @@ class HoraSAPService {
         }
       }
 
+      // Filtro de Busca Textual (Search Query)
+      if (searchQuery != null && searchQuery.isNotEmpty) {
+        // Busca em múltiplos campos usando OR
+        final termo = '%$searchQuery%';
+        query = query.or('ordem.ilike.$termo,nome_empregado.ilike.$termo,numero_pessoa.ilike.$termo,centro_trabalho_real.ilike.$termo,tipo_atividade_real.ilike.$termo,status_sistema.ilike.$termo');
+      }
+
       // Filtro por data de lançamento (sempre aplicado)
       query = query
           .gte('data_lancamento', dataIni.toIso8601String().split('T')[0])
@@ -339,6 +352,7 @@ class HoraSAPService {
     List<String>? filtroCentroTrabalho,
     DateTime? dataLancamentoInicio,
     DateTime? dataLancamentoFim,
+    String? searchQuery, // Novo parâmetro
   }) async {
     try {
       // Janela padrão: últimos 3 meses
@@ -438,6 +452,12 @@ class HoraSAPService {
           final orConditions = filtroCentroTrabalho.map((centro) => 'centro_trabalho_real.ilike.%$centro%').join(',');
           query = query.or(orConditions);
         }
+      }
+
+      // Filtro de Busca Textual (Search Query)
+      if (searchQuery != null && searchQuery.isNotEmpty) {
+        final termo = '%$searchQuery%';
+        query = query.or('ordem.ilike.$termo,nome_empregado.ilike.$termo,numero_pessoa.ilike.$termo,centro_trabalho_real.ilike.$termo,tipo_atividade_real.ilike.$termo,status_sistema.ilike.$termo');
       }
 
       // Filtro por data de lançamento (sempre aplicado)
@@ -832,6 +852,8 @@ class HoraSAPService {
       // Agrupar horas por empregado e mês
       final Map<String, Map<String, double>> horasPorEmpregadoMes = {};
       final Map<String, Map<String, double>> horasExtrasPorEmpregadoMes = {}; // tipo_atividade_real começa com HH
+      final Map<String, Map<String, double>> horasExtrasInvestimentoPorEmpregadoMes = {}; // Novo
+      final Map<String, Map<String, double>> horasExtrasCusteioPorEmpregadoMes = {}; // Novo
       final Map<String, Map<String, double>> horasInvestimentoPorEmpregadoMes = {}; // tipo_ordem = PROJ
       final Map<String, Map<String, double>> horasCusteioPorEmpregadoMes = {}; // todos os demais tipos de ordem (PREV, INSP, ANOM, PRED, etc.)
       final Map<String, Map<String, Set<String>>> tiposAtividadePorEmpregadoMes = {}; // Tipos de atividade
@@ -869,6 +891,12 @@ class HoraSAPService {
         
         // Custeio = todos os tipos de ordem (PREV, INSP, ANOM, PRED, etc.). Investimento = apenas tipo_ordem PROJ.
         final tipoOrd = (hora.tipoOrdem ?? '').trim().toUpperCase();
+        
+        // DEBUG: Log para verificar classificação
+        if (numeroPessoa == '264259' && dataLancamento.month == 1 && dataLancamento.year == 2026) {
+           // print('DEBUG HORA: $numeroPessoa - Data: $dataLancamento - TipoOrdem: $tipoOrd - TipoAtiv: ${hora.tipoAtividadeReal} - Trab: ${hora.trabalhoReal}');
+        }
+
         if (tipoOrd == 'PROJ') {
           horasInvestimentoPorEmpregadoMes.putIfAbsent(numeroPessoa, () => {});
           horasInvestimentoPorEmpregadoMes[numeroPessoa]!.putIfAbsent(anoMes, () => 0.0);
@@ -880,18 +908,40 @@ class HoraSAPService {
         }
         
         // Horas extras: tipo_atividade_real que inicia com HH
-        final tipoAtividade = hora.tipoAtividadeReal?.trim().toUpperCase() ?? '';
+        final tipoAtividade = (hora.tipoAtividadeReal ?? '').trim().toUpperCase();
         if (tipoAtividade.startsWith('HH')) {
           horasExtrasPorEmpregadoMes.putIfAbsent(numeroPessoa, () => {});
           horasExtrasPorEmpregadoMes[numeroPessoa]!.putIfAbsent(anoMes, () => 0.0);
           horasExtrasPorEmpregadoMes[numeroPessoa]![anoMes] = horasExtrasPorEmpregadoMes[numeroPessoa]![anoMes]! + hora.trabalhoReal!;
+          
+          // Separar HHE em Investimento vs Custeio
+          if (tipoOrd == 'PROJ') {
+             horasExtrasInvestimentoPorEmpregadoMes.putIfAbsent(numeroPessoa, () => {});
+             horasExtrasInvestimentoPorEmpregadoMes[numeroPessoa]!.putIfAbsent(anoMes, () => 0.0);
+             horasExtrasInvestimentoPorEmpregadoMes[numeroPessoa]![anoMes] = horasExtrasInvestimentoPorEmpregadoMes[numeroPessoa]![anoMes]! + hora.trabalhoReal!;
+          } else {
+             horasExtrasCusteioPorEmpregadoMes.putIfAbsent(numeroPessoa, () => {});
+             horasExtrasCusteioPorEmpregadoMes[numeroPessoa]!.putIfAbsent(anoMes, () => 0.0);
+             horasExtrasCusteioPorEmpregadoMes[numeroPessoa]![anoMes] = horasExtrasCusteioPorEmpregadoMes[numeroPessoa]![anoMes]! + hora.trabalhoReal!;
+          }
         }
         
         // Tipos de atividade diferentes
         if (tipoAtividade.isNotEmpty) {
-          tiposAtividadePorEmpregadoMes.putIfAbsent(numeroPessoa, () => {});
-          tiposAtividadePorEmpregadoMes[numeroPessoa]!.putIfAbsent(anoMes, () => <String>{});
-          tiposAtividadePorEmpregadoMes[numeroPessoa]![anoMes]!.add(tipoAtividade);
+           // Parse anoMes (string YYYY-MM) back to int YYYYMM for consistency with other maps if needed, 
+           // BUT wait, existing maps use string key 'YYYY-MM' (anoMes variable).
+           // The error said 'anoMesInt' is undefined. In my previous edit I defined 'anoMesInt' but maybe I botched the variable name usage.
+           // Let's stick to using 'anoMes' (String) if that's what other maps use, OR fix 'anoMesInt'.
+           // Looking at lines 853-857, maps are Map<String, Map<String, ...>>. So keys are Strings.
+           // Wait, line 893 uses 'anoMes' (String). 
+           // Line 932 used 'anoMesInt'. This was the error. 'anoMes' is the String key.
+           // However, 'tiposAtividadePorEmpregadoMes' is Map<String, Map<String, Set<String>>>? 
+           // Let's check definition at line 857: Map<String, Map<String, Set<String>>>.
+           // So key should be String 'anoMes'.
+           
+           tiposAtividadePorEmpregadoMes.putIfAbsent(numeroPessoa, () => {});
+           tiposAtividadePorEmpregadoMes[numeroPessoa]!.putIfAbsent(anoMes, () => <String>{});
+           tiposAtividadePorEmpregadoMes[numeroPessoa]![anoMes]!.add(tipoAtividade);
         }
         
         if (hora.nomeEmpregado != null && hora.nomeEmpregado!.isNotEmpty) {
@@ -899,16 +949,16 @@ class HoraSAPService {
         }
       }
       
-      print('📊 Números de pessoa únicos nas horas: ${horasPorEmpregadoMes.keys.toList()}');
+      print('📊 Números de pessoa únicos nas horas: ${horasCusteioPorEmpregadoMes.keys.toList()}');
 
-      // Criar lista de resultados
       // Buscar horas programadas das atividades
       final Map<String, Map<String, double>> horasProgramadasPorEmpregadoMes =
           await _buscarHorasProgramadas(ano, mes, matriculasFiltro);
 
+      // Consolidar resultados
       final List<HorasEmpregadoMes> resultados = [];
-
-      // Coletar todos os meses únicos que têm data de lançamento
+      
+      // Coletar todos os meses únicos que têm data de lançamento ou horas programadas
       final Set<String> mesesComLancamento = {};
       for (var hora in horas) {
         if (hora.dataLancamento != null) {
@@ -917,12 +967,15 @@ class HoraSAPService {
           mesesComLancamento.add(anoMes);
         }
       }
-      
-      // Adicionar meses que têm horas programadas mas não têm apontamentos
       for (var matricula in horasProgramadasPorEmpregadoMes.keys) {
         for (var anoMesStr in horasProgramadasPorEmpregadoMes[matricula]!.keys) {
-          mesesComLancamento.add(anoMesStr);
+             mesesComLancamento.add(anoMesStr);
         }
+      }
+      
+      // Se filtro de mês/ano, garantir que processe mesmo sem apontamento
+      if (ano != null && mes != null) {
+          mesesComLancamento.add('$ano-${mes.toString().padLeft(2, '0')}');
       }
 
       print('📊 Total de executores do perfil: ${executores.length}');
@@ -984,6 +1037,8 @@ class HoraSAPService {
                 horasProgramadas: horasProgramadasPorEmpregadoMes[matricula]?[anoMesStr] ?? 0.0,
                 horasInvestimento: 0.0,
                 horasCusteio: 0.0,
+                horasExtrasInvestimento: 0.0, // Novo
+                horasExtrasCusteio: 0.0, // Novo
               ));
             } catch (e) {
               print('❌ Erro ao processar mês $anoMesStr: $e');
@@ -1047,6 +1102,8 @@ class HoraSAPService {
                 horasProgramadas: horasProgramadasPorEmpregadoMes[matricula]?[entry.key] ?? 0.0,
                 horasInvestimento: horasInvestimentoPorEmpregadoMes[matricula]?[entry.key] ?? 0.0,
                 horasCusteio: horasCusteioPorEmpregadoMes[matricula]?[entry.key] ?? 0.0,
+                horasExtrasInvestimento: horasExtrasInvestimentoPorEmpregadoMes[matricula]?[entry.key] ?? 0.0,
+                horasExtrasCusteio: horasExtrasCusteioPorEmpregadoMes[matricula]?[entry.key] ?? 0.0,
               ));
             } catch (e) {
               print('❌ Erro ao processar entrada ${entry.key}: $e');
@@ -1163,9 +1220,6 @@ class HoraSAPService {
     try {
       final mesStr = mes.toString().padLeft(2, '0');
       final firstDay = '$ano-$mesStr-01';
-      final lastDay = mes == 12
-          ? '$ano-12-31'
-          : '${mes < 12 ? ano : ano + 1}-${(mes + 1).toString().padLeft(2, '0')}-01';
       dynamic query = _supabase
           .from('horas_sap')
           .select('data_lancamento, trabalho_real, numero_pessoa')

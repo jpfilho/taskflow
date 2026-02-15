@@ -16,6 +16,11 @@ class HorasEmpregadoMes {
   /// Horas apontadas em ordens de outros tipos (custeio).
   final double horasCusteio;
 
+  /// Horas extras (HHE) associadas a investimento (PROJ).
+  final double horasExtrasInvestimento;
+  /// Horas extras (HHE) associadas a custeio (outros).
+  final double horasExtrasCusteio;
+
   HorasEmpregadoMes({
     required this.numeroPessoa,
     required this.nomeEmpregado,
@@ -31,5 +36,7 @@ class HorasEmpregadoMes {
     this.horasProgramadas = 0.0,
     this.horasInvestimento = 0.0,
     this.horasCusteio = 0.0,
+    this.horasExtrasInvestimento = 0.0,
+    this.horasExtrasCusteio = 0.0,
   }) : tiposAtividade = tiposAtividade ?? {};
 }

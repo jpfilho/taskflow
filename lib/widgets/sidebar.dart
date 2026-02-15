@@ -155,6 +155,8 @@ class _SidebarState extends State<Sidebar> {
                   ),
                   // Horas - disponível para todos os usuários
                   _buildSidebarIcon(Icons.access_time, 20, 'Horas', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
+                  // Confirmação de Ordens - disponível para todos os usuários
+                  _buildSidebarIcon(Icons.fact_check, 27, 'Confirmação de Ordens', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
                   // Apenas para root
                   if (widget.isRoot) ...[
                     _buildSidebarIcon(Icons.dashboard, 4, 'Dashboard', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),

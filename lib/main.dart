@@ -46,6 +46,7 @@ import 'widgets/si_view.dart';
 import 'widgets/linhas_transmissao_view.dart';
 import 'widgets/supressao_vegetacao_view.dart';
 import 'widgets/horas_sap_view.dart';
+import 'widgets/confirmacao_ordens_view.dart';
 import 'widgets/demandas_view.dart';
 import 'widgets/login_screen.dart';
 import 'widgets/home_shortcuts_screen.dart';
@@ -2375,6 +2376,8 @@ class _MainScreenState extends State<MainScreen> {
         return const GtdHomePage();
       case 26: // Melhorias e Bugs
         return const MelhoriasBugsHomeScreen();
+      case 27: // Confirmação de Ordens
+        return const ConfirmacaoOrdensView();
       default:
         if (!_showGantt) {
           return TaskTable(

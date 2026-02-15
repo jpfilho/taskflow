@@ -64,7 +64,7 @@ class _HorasMetasViewState extends State<HorasMetasView> {
         );
       },
       child: Container(
-        constraints: const BoxConstraints(minHeight: 40), // Match year dropdown height
+        height: 48, // Match other inputs
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
           color: Colors.grey[50], // Match other inputs
@@ -1454,6 +1454,32 @@ class _HorasMetasViewState extends State<HorasMetasView> {
         dotData: FlDotData(show: true),
       ),
     ];
+    FlSpot? spotPossivelHoje;
+    FlSpot? spotAlocadoHoje;
+    FlSpot? spotCusteioHoje;
+    FlSpot? spotInvestimentoHoje;
+    if (mesmoMesAno && diaHoje >= 1 && diaHoje <= lastDay &&
+        spotsPossivel.length >= diaHoje && spotsAlocado.length >= diaHoje) {
+      spotPossivelHoje = spotsPossivel[diaHoje - 1];
+      spotAlocadoHoje = spotsAlocado[diaHoje - 1];
+      spotCusteioHoje = spotsCusteio[diaHoje - 1];
+      spotInvestimentoHoje = spotsInvestimento[diaHoje - 1];
+    }
+    if (mesmoMesAno && diaHoje >= 1 && diaHoje <= lastDay) {
+      lineBars.add(
+        LineChartBarData(
+          spots: [
+            FlSpot(diaHoje.toDouble(), 0),
+            FlSpot(diaHoje.toDouble(), maxYScale),
+          ],
+          isCurved: false,
+          color: Colors.orange,
+          barWidth: 2,
+          dotData: FlDotData(show: false),
+          show: true,
+        ),
+      );
+    }
     const indiceBarraHoje = 4; // 0=possível, 1=alocado, 2=custeio, 3=investimento, 4=hoje
 
     return Container(
@@ -1487,8 +1513,8 @@ class _HorasMetasViewState extends State<HorasMetasView> {
               children: [
                 LineChart(
               LineChartData(
-                minX: 0,
-                maxX: (xPosition - 1).toDouble(),
+                minX: 1,
+                maxX: lastDay.toDouble(),
                 minY: 0,
                 maxY: maxYScale,
                 lineBarsData: lineBars,
@@ -1501,6 +1527,16 @@ class _HorasMetasViewState extends State<HorasMetasView> {
                       LineBarSpot(lineBars[2], 2, spotsCusteio.last),
                       LineBarSpot(lineBars[3], 3, spotsInvestimento.last),
                     ]));
+                    // Rótulos no dia atual
+                    if (mesmoMesAno && diaHoje >= 1 && diaHoje <= lastDay &&
+                        spotsPossivel.length >= diaHoje && spotsAlocado.length >= diaHoje) {
+                      list.add(ShowingTooltipIndicators([
+                        LineBarSpot(lineBars[0], 0, spotPossivelHoje!),
+                        LineBarSpot(lineBars[1], 1, spotAlocadoHoje!),
+                        LineBarSpot(lineBars[2], 2, spotCusteioHoje!),
+                        LineBarSpot(lineBars[3], 3, spotInvestimentoHoje!),
+                      ]));
+                    }
                   }
                   return list;
                 }(),
@@ -1589,105 +1625,6 @@ class _HorasMetasViewState extends State<HorasMetasView> {
                 ),
               ),
             ),
-                // Rótulos nos últimos pontos (sempre visíveis)
-                if (spotsPossivel.isNotEmpty && spotsAlocado.isNotEmpty && maxYScale > 0)
-                  LayoutBuilder(
-                    builder: (context, constraints) {
-                      final w = constraints.maxWidth;
-                      final h = constraints.maxHeight;
-                      if (w < 50 || h < 50) return const SizedBox.shrink();
-                      const plotLeft = 40.0;
-                      const plotBottom = 20.0;
-                      final plotW = w - plotLeft;
-                      final plotH = h - plotBottom;
-                      if (plotW <= 0 || plotH <= 0) return const SizedBox.shrink();
-                      
-                      final maxX = (xPosition - 1).toDouble();
-                      final spotP = spotsPossivel.last;
-                      final spotA = spotsAlocado.last;
-                      final spotC = spotsCusteio.isNotEmpty ? spotsCusteio.last : null;
-                      final spotI = spotsInvestimento.isNotEmpty ? spotsInvestimento.last : null;
-                      
-                      final xUltimo = plotLeft + (maxX > 0 ? (spotA.x / maxX) * plotW : 0);
-                      double topFor(double y) => plotH - (y / maxYScale) * plotH;
-                      
-                      return Stack(
-                        clipBehavior: Clip.none,
-                        children: [
-                          // Label Possível
-                          Positioned(
-                            left: xUltimo - 30,
-                            top: topFor(spotP.y) - 8,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: Colors.indigo.withOpacity(0.9),
-                                borderRadius: BorderRadius.circular(4),
-                                boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 2, offset: const Offset(0, 1))],
-                              ),
-                              child: Text(
-                                '${_fmtMilhar(spotP.y)} h',
-                                style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w600),
-                              ),
-                            ),
-                          ),
-                          // Label Alocado
-                          Positioned(
-                            left: xUltimo + 4,
-                            top: topFor(spotA.y) - 8,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: Colors.teal.withOpacity(0.9),
-                                borderRadius: BorderRadius.circular(4),
-                                boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 2, offset: const Offset(0, 1))],
-                              ),
-                              child: Text(
-                                '${_fmtMilhar(spotA.y)} h',
-                                style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w600),
-                              ),
-                            ),
-                          ),
-                          // Label Custeio
-                          if (spotC != null)
-                            Positioned(
-                              left: xUltimo - 30,
-                              top: topFor(spotC.y) + 12,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: Colors.amber.shade700.withOpacity(0.9),
-                                  borderRadius: BorderRadius.circular(4),
-                                  boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 2, offset: const Offset(0, 1))],
-                                ),
-                                child: Text(
-                                  '${_fmtMilhar(spotC.y)} h',
-                                  style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w600),
-                                ),
-                              ),
-                            ),
-                          // Label Investimento
-                          if (spotI != null)
-                            Positioned(
-                              left: xUltimo + 4,
-                              top: topFor(spotI.y) + 12,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: Colors.purple.shade600.withOpacity(0.9),
-                                  borderRadius: BorderRadius.circular(4),
-                                  boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 2, offset: const Offset(0, 1))],
-                                ),
-                                child: Text(
-                                  '${_fmtMilhar(spotI.y)} h',
-                                  style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w600),
-                                ),
-                              ),
-                            ),
-                        ],
-                      );
-                    },
-                  ),
               ],
             ),
           ),
@@ -1702,6 +1639,237 @@ class _HorasMetasViewState extends State<HorasMetasView> {
               Row(mainAxisSize: MainAxisSize.min, children: [Container(width: 8, height: 8, color: Colors.amber.shade700, margin: const EdgeInsets.only(right: 2)), const Text('Custeio', style: TextStyle(fontSize: 9))]),
               const SizedBox(width: 8),
               Row(mainAxisSize: MainAxisSize.min, children: [Container(width: 8, height: 8, color: Colors.purple.shade600, margin: const EdgeInsets.only(right: 2)), const Text('Investimento', style: TextStyle(fontSize: 9))]),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final spotP = spotPossivelHoje!;
+                      final spotA = spotAlocadoHoje!;
+                      final spotC = spotCusteioHoje;
+                      final spotI = spotInvestimentoHoje;
+                      final w = constraints.maxWidth;
+                      final h = constraints.maxHeight;
+                      if (w < 50 || h < 50) return const SizedBox.shrink();
+                      const plotLeft = 40.0;
+                      const plotBottom = 14.0;
+                      final plotW = w - plotLeft;
+                      final plotH = h - plotBottom;
+                      if (plotW <= 0 || plotH <= 0) return const SizedBox.shrink();
+                      final xCenter = plotLeft + (diaHoje - 1) / (lastDay > 1 ? lastDay - 1 : 1) * plotW;
+                      double topFor(double y) => plotH - (y / maxYScale) * plotH;
+                      return Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          Positioned(
+                            left: xCenter + 4,
+                            top: topFor(spotP.y) - 8,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.indigo.withOpacity(0.95),
+                                borderRadius: BorderRadius.circular(4),
+                                boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 2, offset: const Offset(0, 1))],
+                              ),
+                              child: Text(
+                                '${_fmtMilhar(spotP.y)} h',
+                                style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            left: xCenter + 4,
+                            top: topFor(spotA.y) - 8,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.teal.withOpacity(0.95),
+                                borderRadius: BorderRadius.circular(4),
+                                boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 2, offset: const Offset(0, 1))],
+                              ),
+                              child: Text(
+                                '${_fmtMilhar(spotA.y)} h',
+                                style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ),
+                          if (spotC != null)
+                            Positioned(
+                              left: xCenter + 4,
+                              top: topFor(spotC.y) - 8,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.amber.shade700.withOpacity(0.95),
+                                  borderRadius: BorderRadius.circular(4),
+                                  boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 2, offset: const Offset(0, 1))],
+                                ),
+                                child: Text(
+                                  'Cust: ${_fmtMilhar(spotC.y)} h',
+                                  style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                            ),
+                          if (spotI != null)
+                            Positioned(
+                              left: xCenter + 4,
+                              top: topFor(spotI.y) - 8,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.purple.shade600.withOpacity(0.95),
+                                  borderRadius: BorderRadius.circular(4),
+                                  boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 2, offset: const Offset(0, 1))],
+                                ),
+                                child: Text(
+                                  'Inv: ${_fmtMilhar(spotI.y)} h',
+                                  style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                            ),
+                        ],
+                      );
+                    },
+                  ),
+                // Nos meses anteriores (ou futuro): rótulos no último dia do mês
+                if (!mesmoMesAno && spotsPossivel.length >= lastDay && spotsAlocado.length >= lastDay && maxYScale > 0)
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final spotP = spotsPossivel[lastDay - 1];
+                      final spotA = spotsAlocado[lastDay - 1];
+                      final spotC = spotsCusteio.length >= lastDay ? spotsCusteio[lastDay - 1] : null;
+                      final spotI = spotsInvestimento.length >= lastDay ? spotsInvestimento[lastDay - 1] : null;
+                      final w = constraints.maxWidth;
+                      final h = constraints.maxHeight;
+                      if (w < 50 || h < 50) return const SizedBox.shrink();
+                      const plotLeft = 40.0;
+                      const plotBottom = 14.0;
+                      final plotW = w - plotLeft;
+                      final plotH = h - plotBottom;
+                      if (plotW <= 0 || plotH <= 0) return const SizedBox.shrink();
+                      final xUltimo = plotLeft + (lastDay - 1) / (lastDay > 1 ? lastDay - 1 : 1) * plotW;
+                      double topFor(double y) => plotH - (y / maxYScale) * plotH;
+                      return Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          Positioned(
+                            left: xUltimo - 58,
+                            top: topFor(spotP.y) - 8,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.indigo.withOpacity(0.95),
+                                borderRadius: BorderRadius.circular(4),
+                                boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 2, offset: const Offset(0, 1))],
+                              ),
+                              child: Text(
+                                '${_fmtMilhar(spotP.y)} h',
+                                style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            left: xUltimo - 58,
+                            top: topFor(spotA.y) - 8,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.teal.withOpacity(0.95),
+                                borderRadius: BorderRadius.circular(4),
+                                boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 2, offset: const Offset(0, 1))],
+                              ),
+                              child: Text(
+                                '${_fmtMilhar(spotA.y)} h',
+                                style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ),
+                          if (spotC != null)
+                            Positioned(
+                              left: xUltimo - 58,
+                              top: topFor(spotC.y) - 8,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.amber.shade700.withOpacity(0.95),
+                                  borderRadius: BorderRadius.circular(4),
+                                  boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 2, offset: const Offset(0, 1))],
+                                ),
+                                child: Text(
+                                  'Cust: ${_fmtMilhar(spotC.y)} h',
+                                  style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                            ),
+                          if (spotI != null)
+                            Positioned(
+                              left: xUltimo - 58,
+                              top: topFor(spotI.y) - 8,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.purple.shade600.withOpacity(0.95),
+                                  borderRadius: BorderRadius.circular(4),
+                                  boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 2, offset: const Offset(0, 1))],
+                                ),
+                                child: Text(
+                                  'Inv: ${_fmtMilhar(spotI.y)} h',
+                                  style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                            ),
+                        ],
+                      );
+                    },
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 12,
+            runSpacing: 4,
+            children: [
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(width: 12, height: 12, color: Colors.indigo, margin: const EdgeInsets.only(right: 4)),
+                  const Text('Horas possíveis (acum.)', style: TextStyle(fontSize: 12)),
+                ],
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(width: 12, height: 12, color: Colors.teal, margin: const EdgeInsets.only(right: 4)),
+                  const Text('Horas alocadas (acum.)', style: TextStyle(fontSize: 12)),
+                ],
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(width: 12, height: 12, color: Colors.amber.shade700, margin: const EdgeInsets.only(right: 4)),
+                  const Text('Custeio (acum.)', style: TextStyle(fontSize: 12)),
+                ],
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(width: 12, height: 12, color: Colors.purple.shade600, margin: const EdgeInsets.only(right: 4)),
+                  const Text('Investimento (acum.)', style: TextStyle(fontSize: 12)),
+                ],
+              ),
+              if (mesmoMesAno)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(width: 12, height: 12, color: Colors.orange, margin: const EdgeInsets.only(right: 4)),
+                    const Text('Hoje', style: TextStyle(fontSize: 12)),
+                  ],
+                ),
             ],
           ),
         ],

@@ -65,6 +65,7 @@ class AppMenuConfig {
     AppMenuItem(index: 1, label: 'Equipe', icon: Icons.people),
     AppMenuItem(index: 2, label: 'Frota', icon: Icons.directions_car),
     AppMenuItem(index: 20, label: 'Horas', icon: Icons.access_time),
+    AppMenuItem(index: 27, label: 'Confirmação de Ordens', icon: Icons.fact_check),
     AppMenuItem(index: 4, label: 'Dashboard', icon: Icons.dashboard, forRootOnly: true),
     AppMenuItem(index: 5, label: 'Documento', icon: Icons.description, forRootOnly: true),
     AppMenuItem(index: 6, label: 'Lista', icon: Icons.list, forRootOnly: true),

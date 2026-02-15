@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'dart:async';
 import '../models/hora_sap.dart';
 import '../services/hora_sap_service.dart';
@@ -86,37 +85,25 @@ class HorasSAPViewState extends State<HorasSAPView> {
       final dataFimPadrao = agora;
       final inicio = _paginaAtual * _itensPorPagina;
 
-      // Buscar página no backend com paginação
+      // Buscar página no backend com paginação (e busca textual se houver)
       final horasPagina = await _service.getAllHoras(
         limit: _itensPorPagina,
         offset: inicio,
-        dataLancamentoInicio: dataInicioPadrao,
-        dataLancamentoFim: dataFimPadrao,
+        dataLancamentoInicio: _searchQuery.isNotEmpty ? null : dataInicioPadrao,
+        dataLancamentoFim: _searchQuery.isNotEmpty ? null : dataFimPadrao,
+        searchQuery: _searchQuery.isNotEmpty ? _searchQuery : null,
       );
 
       // Contar total no backend (para paginação)
       final total = await _service.contarHoras(
-        dataLancamentoInicio: dataInicioPadrao,
-        dataLancamentoFim: dataFimPadrao,
+        dataLancamentoInicio: _searchQuery.isNotEmpty ? null : dataInicioPadrao,
+        dataLancamentoFim: _searchQuery.isNotEmpty ? null : dataFimPadrao,
+        searchQuery: _searchQuery.isNotEmpty ? _searchQuery : null,
       );
-
-      // Aplicar busca local (fallback) somente se houver termo
-      var horasFiltradas = horasPagina;
-      if (_searchQuery.isNotEmpty) {
-        final queryLower = _searchQuery.toLowerCase();
-        horasFiltradas = horasPagina.where((hora) {
-          return (hora.ordem?.toLowerCase().contains(queryLower) ?? false) ||
-                 (hora.nomeEmpregado?.toLowerCase().contains(queryLower) ?? false) ||
-                 (hora.numeroPessoa?.toLowerCase().contains(queryLower) ?? false) ||
-                 (hora.centroTrabalhoReal?.toLowerCase().contains(queryLower) ?? false) ||
-                 (hora.tipoAtividadeReal?.toLowerCase().contains(queryLower) ?? false) ||
-                 (hora.statusSistema?.toLowerCase().contains(queryLower) ?? false);
-        }).toList();
-      }
 
       if (mounted) {
         setState(() {
-          _horas = horasFiltradas;
+          _horas = horasPagina;
           _totalHoras = total;
           _isLoading = false;
         });
@@ -303,10 +290,42 @@ class HorasSAPViewState extends State<HorasSAPView> {
   }
 
   Widget _buildTabelaView() {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: SingleChildScrollView(
-        child: DataTable(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Feedback Visual do Filtro
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          color: _searchQuery.isNotEmpty ? Colors.blue[50] : Colors.orange[50], // Azul para busca, Laranja para alerta de data
+          child: Row(
+            children: [
+              Icon(
+                _searchQuery.isNotEmpty ? Icons.search : Icons.date_range, 
+                size: 16, 
+                color: _searchQuery.isNotEmpty ? Colors.blue[800] : Colors.orange[800],
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  _searchQuery.isNotEmpty 
+                    ? 'Buscando por "$_searchQuery" em todo o histórico'
+                    : 'Exibindo padrão: Últimos 3 meses (Use a busca para ver registros antigos)',
+                  style: TextStyle(
+                    color: _searchQuery.isNotEmpty ? Colors.blue[900] : Colors.orange[900],
+                    fontWeight: FontWeight.w500,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: SingleChildScrollView(
+              child: DataTable(
           headingRowColor: MaterialStateProperty.all(Colors.blue[50]),
           columns: const [
             DataColumn(label: Text('Ações', style: TextStyle(fontWeight: FontWeight.bold))),
@@ -355,7 +374,10 @@ class HorasSAPViewState extends State<HorasSAPView> {
             );
           }).toList(),
         ),
-      ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
