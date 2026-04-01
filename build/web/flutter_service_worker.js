@@ -1,0 +1,1 @@
+﻿// Service worker desabilitado no deploy
