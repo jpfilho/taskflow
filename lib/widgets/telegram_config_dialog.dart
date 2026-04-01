@@ -249,7 +249,7 @@ class _TelegramConfigDialogState extends State<TelegramConfigDialog> {
               const Text('Modo:', style: TextStyle(fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
               DropdownButtonFormField<String>(
-                value: _selectedMode,
+                initialValue: _selectedMode,
                 decoration: const InputDecoration(
                   border: OutlineInputBorder(),
                   isDense: true,

@@ -649,7 +649,7 @@ class _DemandasViewState extends State<DemandasView> with TickerProviderStateMix
                     children: [
                       Expanded(
                         child: DropdownButtonFormField<String>(
-                          value: _formStatus,
+                          initialValue: _formStatus,
                           decoration: const InputDecoration(labelText: 'Status'),
                           items: const [
                             DropdownMenuItem(value: 'pendente', child: Text('Pendente')),
@@ -663,7 +663,7 @@ class _DemandasViewState extends State<DemandasView> with TickerProviderStateMix
                       const SizedBox(width: 12),
                       Expanded(
                         child: DropdownButtonFormField<String>(
-                          value: _formPrioridade,
+                          initialValue: _formPrioridade,
                           decoration: const InputDecoration(labelText: 'Prioridade'),
                           items: const [
                             DropdownMenuItem(value: 'baixa', child: Text('Baixa')),
@@ -911,7 +911,7 @@ class _DemandasViewState extends State<DemandasView> with TickerProviderStateMix
       grouped.putIfAbsent(d.status, () => []).add(d);
     }
 
-    String _fmtDateTime(DateTime? dt) =>
+    String fmtDateTime(DateTime? dt) =>
         dt != null ? DateFormat('dd/MM/yyyy HH:mm').format(dt) : '-';
 
     Widget buildRow(Demand d) {
@@ -960,7 +960,7 @@ class _DemandasViewState extends State<DemandasView> with TickerProviderStateMix
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Criado por: ${_executorNomeById[d.criadoPor] ?? d.criadoPor ?? '—'} • ${_fmtDateTime(d.dataCriacao)}',
+                    'Criado por: ${_executorNomeById[d.criadoPor] ?? d.criadoPor ?? '—'} • ${fmtDateTime(d.dataCriacao)}',
                     style: const TextStyle(fontSize: 11, color: Colors.grey),
                     overflow: TextOverflow.ellipsis,
                   ),

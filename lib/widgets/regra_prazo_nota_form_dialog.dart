@@ -136,7 +136,7 @@ class _RegraPrazoNotaFormDialogState extends State<RegraPrazoNotaFormDialog> {
             mainAxisSize: MainAxisSize.min,
             children: [
               DropdownButtonFormField<String>(
-                value: _selectedPrioridade,
+                initialValue: _selectedPrioridade,
                 decoration: const InputDecoration(
                   labelText: 'Prioridade *',
                   border: OutlineInputBorder(),
@@ -183,7 +183,7 @@ class _RegraPrazoNotaFormDialogState extends State<RegraPrazoNotaFormDialog> {
               ),
               const SizedBox(height: 16),
               DropdownButtonFormField<String>(
-                value: _selectedDataReferencia,
+                initialValue: _selectedDataReferencia,
                 decoration: InputDecoration(
                   labelText: 'Data de Referência *',
                   border: const OutlineInputBorder(),

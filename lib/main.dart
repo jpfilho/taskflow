@@ -18,6 +18,7 @@ import 'widgets/filter_bar.dart';
 import 'widgets/sidebar.dart';
 import 'widgets/task_table.dart';
 import 'widgets/gantt_chart.dart';
+import 'widgets/hourly_calendar_view.dart';
 import 'widgets/task_cards_view.dart';
 import 'widgets/planner_view.dart';
 import 'widgets/task_form_dialog.dart';
@@ -39,6 +40,7 @@ import 'widgets/maintenance_checklist_view.dart';
 import 'widgets/cost_management_view.dart';
 import 'widgets/configuracao_view.dart';
 import 'widgets/chat_view.dart';
+import 'services/chat_service.dart';
 import 'widgets/notas_sap_view.dart';
 import 'widgets/ordem_view.dart';
 import 'widgets/at_view.dart';
@@ -62,7 +64,6 @@ import 'services/connectivity_service.dart';
 import 'services/version_check_service.dart';
 import 'providers/theme_provider.dart';
 import 'services/theme_service.dart';
-import 'dart:async';
 import 'features/media_albums/presentation/pages/gallery_page.dart';
 import 'features/documents/presentation/pages/documents_page.dart';
 import 'modules/gtd/domain/gtd_session.dart';
@@ -436,6 +437,7 @@ class _MainScreenState extends State<MainScreen> {
   final AuthServiceSimples _authService = AuthServiceSimples();
   
   List<Task> _tasks = []; // Tarefas filtradas (para telas gerais)
+  bool _isTasksLoading = true; // Flag para indicar carregamento em andamento
   List<Task> _tasksSemFiltros = []; // Tarefas sem filtros (para tela de equipes)
   Task? _selectedTask; // Tarefa selecionada para edição/deleção
   Map<String, String?> _currentFilters = {}; // Filtros ativos (tela Atividades)
@@ -456,6 +458,7 @@ class _MainScreenState extends State<MainScreen> {
   int _tasksVersion = 0; // Versão das tarefas para forçar rebuild quando necessário
   bool _showGantt = true; // Controla se o Gantt está visível
   GanttScale _ganttScale = GanttScale.daily; // Escala do eixo temporal do Gantt
+  bool _showHourlyView = false; // Ativa/desativa visualização horária no Gantt
   bool _isAtividadesRefreshing = false; // Botão "Atualizar" na tela de Atividades
   bool _canEditTasks = false; // Permissão para criar/editar tarefas
   bool _canEditTasksChecked = false; // Indica se a permissão já foi verificada
@@ -473,6 +476,21 @@ class _MainScreenState extends State<MainScreen> {
 
   /// Uma vez por sessão: após carregar tarefas do Supabase, disparar sync automático (rede com acesso ao BD).
   bool _autoSyncTriggeredAfterLoad = false;
+
+  // Badge de mensagens não lidas no header
+  int _unreadChatCount = 0;
+  Timer? _chatCountTimer;
+
+  /// Atualiza o índice da sidebar e, se estiver SAINDO do chat (index 15),
+  /// recarrega imediatamente a contagem de mensagens não lidas.
+  void _setSidebarIndex(int newIndex) {
+    final wasInChat = _sidebarSelectedIndex == 15;
+    _sidebarSelectedIndex = newIndex;
+    if (wasInChat && newIndex != 15) {
+      // Saiu do chat — atualizar badge imediatamente
+      _carregarContagemChat();
+    }
+  }
 
   void _toggleAllSubtasks() {
     setState(() {
@@ -500,6 +518,12 @@ class _MainScreenState extends State<MainScreen> {
     });
   }
 
+  void _toggleHourlyView() {
+    setState(() {
+      _showHourlyView = !_showHourlyView;
+    });
+  }
+
   Future<void> _loadTaskEditPermission() async {
     if (_isCheckingTaskPermission) return;
     _isCheckingTaskPermission = true;
@@ -522,7 +546,7 @@ class _MainScreenState extends State<MainScreen> {
       }
 
       final email = usuario.email;
-      if (email == null || email.isEmpty) {
+      if (email.isEmpty) {
         print('🔐 Permissão tarefas: usuário sem email -> negar (sem criar/editar)');
         _canEditTasks = false;
         _canEditTasksChecked = true;
@@ -755,6 +779,12 @@ class _MainScreenState extends State<MainScreen> {
     // Sincronizar scroll entre tabela e Gantt (100% sincronizado)
     _tableScrollController.addListener(_syncTableToGantt);
     _ganttScrollController.addListener(_syncGanttToTable);
+
+    // Carregar contagem de mensagens não lidas e iniciar timer periódico
+    _carregarContagemChat();
+    _chatCountTimer = Timer.periodic(const Duration(seconds: 60), (_) {
+      _carregarContagemChat();
+    });
   }
 
   @override
@@ -764,7 +794,23 @@ class _MainScreenState extends State<MainScreen> {
     _ganttScrollController.removeListener(_syncGanttToTable);
     _tableScrollController.dispose();
     _ganttScrollController.dispose();
+    _chatCountTimer?.cancel();
     super.dispose();
+  }
+
+  /// Carrega contagem total de mensagens não lidas para o badge do header.
+  Future<void> _carregarContagemChat() async {
+    try {
+      final total = await ChatService().contarTotalMensagensNaoLidas();
+      if (mounted && total != _unreadChatCount) {
+        setState(() {
+          _unreadChatCount = total;
+        });
+      }
+    } catch (e) {
+      // Silencioso - não afetar o app se falhar
+      print('⚠️ Erro ao carregar contagem de chat: $e');
+    }
   }
 
   // Função para ordenar tarefas por período (data de início e fim)
@@ -779,14 +825,14 @@ class _MainScreenState extends State<MainScreen> {
     sortedTasks.sort((a, b) {
       int comparison = 0;
 
-      DateTime _getStart(Task t) {
+      DateTime getStart(Task t) {
         if (t.ganttSegments.isNotEmpty) {
           return t.ganttSegments.first.dataInicio;
         }
         return t.dataInicio;
       }
 
-      DateTime _getEnd(Task t) {
+      DateTime getEnd(Task t) {
         if (t.ganttSegments.isNotEmpty) {
           return t.ganttSegments.first.dataFim;
         }
@@ -829,11 +875,11 @@ class _MainScreenState extends State<MainScreen> {
           final statusB = b.statusNome.isNotEmpty ? b.statusNome : b.status;
           comparison = statusA.compareTo(statusB);
           if (comparison == 0) {
-            final aStart = _getStart(a);
-            final bStart = _getStart(b);
+            final aStart = getStart(a);
+            final bStart = getStart(b);
             comparison = aStart.compareTo(bStart);
             if (comparison == 0) {
-              comparison = _getEnd(a).compareTo(_getEnd(b));
+              comparison = getEnd(a).compareTo(getEnd(b));
             }
           }
           break;
@@ -843,11 +889,11 @@ class _MainScreenState extends State<MainScreen> {
           final localB = b.locais.isNotEmpty ? b.locais.first : '';
           comparison = localA.compareTo(localB);
           if (comparison == 0) {
-            final aStart = _getStart(a);
-            final bStart = _getStart(b);
+            final aStart = getStart(a);
+            final bStart = getStart(b);
             comparison = aStart.compareTo(bStart);
             if (comparison == 0) {
-              comparison = _getEnd(a).compareTo(_getEnd(b));
+              comparison = getEnd(a).compareTo(getEnd(b));
             }
           }
           break;
@@ -855,11 +901,11 @@ class _MainScreenState extends State<MainScreen> {
         case 'TIPO':
           comparison = a.tipo.compareTo(b.tipo);
           if (comparison == 0) {
-            final aStart = _getStart(a);
-            final bStart = _getStart(b);
+            final aStart = getStart(a);
+            final bStart = getStart(b);
             comparison = aStart.compareTo(bStart);
             if (comparison == 0) {
-              comparison = _getEnd(a).compareTo(_getEnd(b));
+              comparison = getEnd(a).compareTo(getEnd(b));
             }
           }
           break;
@@ -867,11 +913,11 @@ class _MainScreenState extends State<MainScreen> {
         case 'TAREFA':
           comparison = a.tarefa.compareTo(b.tarefa);
           if (comparison == 0) {
-            final aStart = _getStart(a);
-            final bStart = _getStart(b);
+            final aStart = getStart(a);
+            final bStart = getStart(b);
             comparison = aStart.compareTo(bStart);
             if (comparison == 0) {
-              comparison = _getEnd(a).compareTo(_getEnd(b));
+              comparison = getEnd(a).compareTo(getEnd(b));
             }
           }
           break;
@@ -879,11 +925,11 @@ class _MainScreenState extends State<MainScreen> {
         case 'EXECUTOR':
           comparison = a.executor.compareTo(b.executor);
           if (comparison == 0) {
-            final aStart = _getStart(a);
-            final bStart = _getStart(b);
+            final aStart = getStart(a);
+            final bStart = getStart(b);
             comparison = aStart.compareTo(bStart);
             if (comparison == 0) {
-              comparison = _getEnd(a).compareTo(_getEnd(b));
+              comparison = getEnd(a).compareTo(getEnd(b));
             }
           }
           break;
@@ -891,11 +937,11 @@ class _MainScreenState extends State<MainScreen> {
         case 'COORDENADOR':
           comparison = a.coordenador.compareTo(b.coordenador);
           if (comparison == 0) {
-            final aStart = _getStart(a);
-            final bStart = _getStart(b);
+            final aStart = getStart(a);
+            final bStart = getStart(b);
             comparison = aStart.compareTo(bStart);
             if (comparison == 0) {
-              comparison = _getEnd(a).compareTo(_getEnd(b));
+              comparison = getEnd(a).compareTo(getEnd(b));
             }
           }
           break;
@@ -963,10 +1009,10 @@ class _MainScreenState extends State<MainScreen> {
   int get _warningsTotalCount => _warningsByTaskId?.length ?? 0;
 
   Future<void> _loadWarnings() async {
-    const bool _debugWarnings = true; // DEBUG: por que warnings não refletem no Flutter
+    const bool debugWarnings = true; // DEBUG: por que warnings não refletem no Flutter
     try {
       final map = await TaskWarningsService.getWarningsByTaskId();
-      if (kDebugMode && _debugWarnings) {
+      if (kDebugMode && debugWarnings) {
         final totalW = map.values.fold<int>(0, (s, l) => s + l.length);
         final taskIdsInList = _tasks.map((t) => t.id).toSet();
         final warningTaskIds = map.keys.toSet();
@@ -978,7 +1024,7 @@ class _MainScreenState extends State<MainScreen> {
       }
       if (mounted) setState(() => _warningsByTaskId = map);
     } catch (e) {
-      if (kDebugMode && _debugWarnings) debugPrint('[WARNINGS DEBUG] main _loadWarnings erro: $e');
+      if (kDebugMode && debugWarnings) debugPrint('[WARNINGS DEBUG] main _loadWarnings erro: $e');
       if (mounted) setState(() => _warningsByTaskId = {});
     }
   }
@@ -1035,32 +1081,19 @@ class _MainScreenState extends State<MainScreen> {
             final startDate = DateTime(segment.dataInicio.year, segment.dataInicio.month, segment.dataInicio.day);
             final endDate = DateTime(segment.dataFim.year, segment.dataFim.month, segment.dataFim.day);
             
-            if (_startDate != null && _endDate != null) {
-              if (!(startDate.isAfter(_endDate) || endDate.isBefore(_startDate))) {
-                hasSegmentInRange = true;
-                break;
-              }
-            } else if (_startDate != null) {
-              if (endDate.isAfter(_startDate) || endDate.isAtSameMomentAs(_startDate)) {
-                hasSegmentInRange = true;
-                break;
-              }
-            } else if (_endDate != null) {
-              if (startDate.isBefore(_endDate) || startDate.isAtSameMomentAs(_endDate)) {
-                hasSegmentInRange = true;
-                break;
-              }
+            if (!(startDate.isAfter(_endDate) || endDate.isBefore(_startDate))) {
+              hasSegmentInRange = true;
+              break;
             }
+                    
           }
           if (!hasSegmentInRange && newTask.ganttSegments.isEmpty) {
-            if (_startDate != null && _endDate != null) {
-              if (newTask.dataInicio.isAfter(_endDate) || newTask.dataFim.isBefore(_startDate)) {
-                hasSegmentInRange = false;
-              } else {
-                hasSegmentInRange = true;
-              }
+            if (newTask.dataInicio.isAfter(_endDate) || newTask.dataFim.isBefore(_startDate)) {
+              hasSegmentInRange = false;
+            } else {
+              hasSegmentInRange = true;
             }
-          }
+                    }
           shouldAdd = hasSegmentInRange;
         }
 
@@ -1175,32 +1208,19 @@ class _MainScreenState extends State<MainScreen> {
               final startDate = DateTime(segment.dataInicio.year, segment.dataInicio.month, segment.dataInicio.day);
               final endDate = DateTime(segment.dataFim.year, segment.dataFim.month, segment.dataFim.day);
               
-              if (_startDate != null && _endDate != null) {
-                if (!(startDate.isAfter(_endDate) || endDate.isBefore(_startDate))) {
-                  hasSegmentInRange = true;
-                  break;
-                }
-              } else if (_startDate != null) {
-                if (endDate.isAfter(_startDate) || endDate.isAtSameMomentAs(_startDate)) {
-                  hasSegmentInRange = true;
-                  break;
-                }
-              } else if (_endDate != null) {
-                if (startDate.isBefore(_endDate) || startDate.isAtSameMomentAs(_endDate)) {
-                  hasSegmentInRange = true;
-                  break;
-                }
+              if (!(startDate.isAfter(_endDate) || endDate.isBefore(_startDate))) {
+                hasSegmentInRange = true;
+                break;
               }
+                        
             }
             if (!hasSegmentInRange && updatedTask.ganttSegments.isEmpty) {
-              if (_startDate != null && _endDate != null) {
-                if (updatedTask.dataInicio.isAfter(_endDate) || updatedTask.dataFim.isBefore(_startDate)) {
-                  hasSegmentInRange = false;
-                } else {
-                  hasSegmentInRange = true;
-                }
+              if (updatedTask.dataInicio.isAfter(_endDate) || updatedTask.dataFim.isBefore(_startDate)) {
+                hasSegmentInRange = false;
+              } else {
+                hasSegmentInRange = true;
               }
-            }
+                        }
             shouldKeep = hasSegmentInRange;
           }
 
@@ -1276,13 +1296,11 @@ class _MainScreenState extends State<MainScreen> {
               final startDate = DateTime(segment.dataInicio.year, segment.dataInicio.month, segment.dataInicio.day);
               final endDate = DateTime(segment.dataFim.year, segment.dataFim.month, segment.dataFim.day);
               
-              if (_startDate != null && _endDate != null) {
-                if (!(startDate.isAfter(_endDate) || endDate.isBefore(_startDate))) {
-                  hasSegmentInRange = true;
-                  break;
-                }
+              if (!(startDate.isAfter(_endDate) || endDate.isBefore(_startDate))) {
+                hasSegmentInRange = true;
+                break;
               }
-            }
+                        }
             shouldAdd = hasSegmentInRange;
           }
 
@@ -1350,6 +1368,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Future<void> _loadTasks() async {
+    if (mounted) setState(() => _isTasksLoading = true);
     try {
       // Carregar lista base SEM filtros (somente janela de datas) para a tela de equipes
       final baseTasks = await _taskService.filterTasks(
@@ -1388,6 +1407,7 @@ class _MainScreenState extends State<MainScreen> {
         setState(() {
           _tasksSemFiltros = baseTasks;
           _tasks = filtered;
+          _isTasksLoading = false;
           _tasksVersion++; // Incrementar versão para forçar rebuild dos widgets
         });
         await _loadWarnings();
@@ -1406,6 +1426,7 @@ class _MainScreenState extends State<MainScreen> {
           // Fallback para mock (síncrono)
           _tasksSemFiltros = [];
           _tasks = [];
+          _isTasksLoading = false;
         });
 
         // Reaplicar filtros vigentes (inclui período selecionado no HeaderBar)
@@ -1465,12 +1486,13 @@ class _MainScreenState extends State<MainScreen> {
                     onSearch: _searchTasks,
                     onChat: () {
                       setState(() {
-                        _sidebarSelectedIndex = 15;
+                        _setSidebarIndex(15);
                       });
                     },
+                    unreadChatCount: _unreadChatCount,
                     onConfig: () {
                       setState(() {
-                        _sidebarSelectedIndex = 14;
+                        _setSidebarIndex(14);
                       });
                     },
                     canEditTasks: _canEditTasks,
@@ -1516,6 +1538,8 @@ class _MainScreenState extends State<MainScreen> {
                       });
                     },
                     onRefreshHoras: () => _horasViewKey.currentState?.refresh(),
+                    showHourlyView: _showHourlyView,
+                    onToggleHourlyView: _toggleHourlyView,
                   ),
                   // Filter Bar (mobile): Frota usa filtros específicos; demais telas barra completa
                   if (_sidebarSelectedIndex == 2)
@@ -1574,8 +1598,11 @@ class _MainScreenState extends State<MainScreen> {
                           final newShowGantt = !_showGantt;
                           _showGantt = newShowGantt;
                           if (isMobile) {
-                            if (newShowGantt) _selectedTab = 1;
-                            else _selectedTab = 0;
+                            if (newShowGantt) {
+                              _selectedTab = 1;
+                            } else {
+                              _selectedTab = 0;
+                            }
                           }
                         });
                       },
@@ -1611,7 +1638,7 @@ class _MainScreenState extends State<MainScreen> {
                   selectedIndex: _sidebarSelectedIndex,
                   onItemSelected: (index) {
                     setState(() {
-                      _sidebarSelectedIndex = index;
+                      _setSidebarIndex(index);
                     });
                   },
                   onExport: _exportData,
@@ -1644,12 +1671,13 @@ class _MainScreenState extends State<MainScreen> {
                         onSearch: _searchTasks,
                         onChat: () {
                           setState(() {
-                            _sidebarSelectedIndex = 15;
+                            _setSidebarIndex(15);
                           });
                         },
+                        unreadChatCount: _unreadChatCount,
                         onConfig: () {
                           setState(() {
-                            _sidebarSelectedIndex = 14;
+                            _setSidebarIndex(14);
                           });
                         },
                         canEditTasks: _canEditTasks,
@@ -1696,6 +1724,8 @@ class _MainScreenState extends State<MainScreen> {
                           });
                         },
                         onRefreshHoras: () => _horasViewKey.currentState?.refresh(),
+                        showHourlyView: _showHourlyView,
+                        onToggleHourlyView: _toggleHourlyView,
                       ),
                       // Filter Bar: na Frota (2) usa filtros específicos; ocultar em Configurações, Chat, etc.
                       if (_sidebarSelectedIndex == 2)
@@ -1918,6 +1948,7 @@ class _MainScreenState extends State<MainScreen> {
         // Caso contrário, mostrar Tabela e Gantt (ou apenas Tabela se _showGantt for false)
         if (!_showGantt) {
           return TaskTable(
+                isLoading: _isTasksLoading,
             key: ValueKey('task_table_$_tasksVersion'),
             tasks: _tasksForTable,
             warningsByTaskId: _warningsByTaskIdForTable,
@@ -1960,6 +1991,7 @@ class _MainScreenState extends State<MainScreen> {
                 SizedBox(
                   width: tableWidth,
                   child: TaskTable(
+                isLoading: _isTasksLoading,
                     key: ValueKey('task_table_$_tasksVersion'),
                     tasks: _tasksForTable,
                     warningsByTaskId: _warningsByTaskIdForTable,
@@ -1986,7 +2018,13 @@ class _MainScreenState extends State<MainScreen> {
                 ),
                 // Gantt: ocupar TODO o espaço restante até a lateral direita
                 Expanded(
-                  child: GanttChart(
+                  child: _ganttScale == GanttScale.hourly
+                      ? HourlyCalendarView(
+                          tasks: _tasksForTable,
+                          startDate: _startDate,
+                          endDate: _endDate,
+                        )
+                      : GanttChart(
                     key: ValueKey('gantt_chart_${_tasksVersion}_${_expandedTasks.length}_${_expandedTasks.toList()..sort()}'),
                     tasks: _tasksForTable,
                     startDate: _startDate,
@@ -2019,6 +2057,8 @@ class _MainScreenState extends State<MainScreen> {
                         _createSubtask(task.id);
                       }
                     },
+                    showHourlyView: _showHourlyView,
+                    onHourlyViewChanged: (_) => _toggleHourlyView(),
                   ),
                 ),
               ],
@@ -2061,6 +2101,7 @@ class _MainScreenState extends State<MainScreen> {
       case 0: // Grid - já tratado acima
         if (!_showGantt) {
           return TaskTable(
+                isLoading: _isTasksLoading,
             key: ValueKey('task_table_$_tasksVersion'),
             tasks: _tasksForTable,
             warningsByTaskId: _warningsByTaskIdForTable,
@@ -2084,6 +2125,7 @@ class _MainScreenState extends State<MainScreen> {
           minLeftWidth: 200,
           minRightWidth: 200,
           leftChild: TaskTable(
+                isLoading: _isTasksLoading,
             key: ValueKey('task_table_$_tasksVersion'),
             tasks: _tasksForTable,
             warningsByTaskId: _warningsByTaskIdForTable,
@@ -2101,7 +2143,13 @@ class _MainScreenState extends State<MainScreen> {
               });
             },
           ),
-          rightChild: GanttChart(
+          rightChild: _ganttScale == GanttScale.hourly
+              ? HourlyCalendarView(
+                  tasks: _tasksForTable,
+                  startDate: _startDate,
+                  endDate: _endDate,
+                )
+              : GanttChart(
             key: ValueKey('gantt_chart_${_tasksVersion}_${_expandedTasks.length}_${_expandedTasks.toList()..sort()}'),
             tasks: _tasksForTable,
             startDate: _startDate,
@@ -2124,6 +2172,8 @@ class _MainScreenState extends State<MainScreen> {
                 _createSubtask(task.id);
               }
             },
+            showHourlyView: _showHourlyView,
+            onHourlyViewChanged: (_) => _toggleHourlyView(),
           ),
         );
       case 1: // Pessoas / Equipes
@@ -2136,10 +2186,8 @@ class _MainScreenState extends State<MainScreen> {
           filteredTasks: _tasksSemFiltros, // Equipes deve usar lista sem filtros
           teamFilters: _teamFilters,
           onTeamDataLoaded: (opts) {
-            if (opts != null) {
-              setState(() { _teamFilterOptions = opts; });
-            }
-          },
+            setState(() { _teamFilterOptions = opts; });
+                    },
           onEdit: (task) => _editTaskById(task.id),
           onDelete: (task) => _deleteTaskById(task.id),
           onDuplicate: (task) => _duplicateTask(task),
@@ -2174,10 +2222,8 @@ class _MainScreenState extends State<MainScreen> {
           filteredTasks: _tasksSemFiltros,
           fleetFilters: _fleetFilters,
           onFleetDataLoaded: (opts) {
-            if (opts != null) {
-              setState(() { _fleetFilterOptions = opts; });
-            }
-          },
+            setState(() { _fleetFilterOptions = opts; });
+                    },
           onTasksUpdated: () async {
             print('🔄 FleetScheduleView onTasksUpdated: Recarregando tarefas...');
             await _loadTasks();
@@ -2224,6 +2270,7 @@ class _MainScreenState extends State<MainScreen> {
           // Usar a mesma lógica do case 0
           if (!_showGantt) {
             return TaskTable(
+                isLoading: _isTasksLoading,
               key: ValueKey('task_table_$_tasksVersion'),
               tasks: _tasksForTable,
               warningsByTaskId: _warningsByTaskIdForTable,
@@ -2247,6 +2294,7 @@ class _MainScreenState extends State<MainScreen> {
             minLeftWidth: 200,
             minRightWidth: 200,
             leftChild: TaskTable(
+                isLoading: _isTasksLoading,
               key: ValueKey('task_table_$_tasksVersion'),
               tasks: _tasksForTable,
               warningsByTaskId: _warningsByTaskIdForTable,
@@ -2289,6 +2337,8 @@ class _MainScreenState extends State<MainScreen> {
               },
               expandedTasks: _expandedTasks,
               onTaskExpanded: _onTaskExpanded,
+              showHourlyView: _showHourlyView,
+              onHourlyViewChanged: (_) => _toggleHourlyView(),
             ),
           );
         }
@@ -2381,6 +2431,7 @@ class _MainScreenState extends State<MainScreen> {
       default:
         if (!_showGantt) {
           return TaskTable(
+                isLoading: _isTasksLoading,
             key: ValueKey('task_table_$_tasksVersion'),
             tasks: _tasksForTable,
             warningsByTaskId: _warningsByTaskIdForTable,
@@ -2410,6 +2461,7 @@ class _MainScreenState extends State<MainScreen> {
             Expanded(
               flex: 1,
               child: TaskTable(
+                isLoading: _isTasksLoading,
                 key: ValueKey('task_table_$_tasksVersion'),
                 tasks: _tasksForTable,
                 warningsByTaskId: _warningsByTaskIdForTable,
@@ -2427,12 +2479,12 @@ class _MainScreenState extends State<MainScreen> {
                 onEdit: (task) => _editTaskById(task.id),
                 onDelete: (task) => _deleteTaskById(task.id),
                 onDuplicate: (task) => _duplicateTask(task),
-                onCreateSubtask: (task) {
+                    onCreateSubtask: (task) {
                   if (task.isMainTask) {
                     _createSubtask(task.id);
                   }
                 },
-              ),
+                  ),
             ),
             Expanded(
               flex: 1,
@@ -2476,6 +2528,8 @@ class _MainScreenState extends State<MainScreen> {
                     _createSubtask(task.id);
                   }
                 },
+                showHourlyView: _showHourlyView,
+                onHourlyViewChanged: (_) => _toggleHourlyView(),
               ),
             ),
           ],
@@ -2509,7 +2563,7 @@ class _MainScreenState extends State<MainScreen> {
                       selectedIndex: _sidebarSelectedIndex,
                       onItemSelected: (index) {
                         setState(() {
-                          _sidebarSelectedIndex = index;
+                          _setSidebarIndex(index);
                         });
                         Navigator.of(context).pop();
                       },
@@ -2529,7 +2583,7 @@ class _MainScreenState extends State<MainScreen> {
                 selectedIndex: _sidebarSelectedIndex,
                 onItemSelected: (index) {
                   setState(() {
-                    _sidebarSelectedIndex = index;
+                    _setSidebarIndex(index);
                   });
                   Navigator.of(context).pop();
                 },
@@ -2556,6 +2610,7 @@ class _MainScreenState extends State<MainScreen> {
           return RepaintBoundary(
             key: const ValueKey('table_boundary'),
             child: TaskTable(
+                isLoading: _isTasksLoading,
               key: const ValueKey('table'),
               tasks: _tasksForTable,
               warningsByTaskId: _warningsByTaskIdForTable,
@@ -2598,6 +2653,7 @@ class _MainScreenState extends State<MainScreen> {
                   child: RepaintBoundary(
                     key: const ValueKey('table_boundary'),
                     child: TaskTable(
+                isLoading: _isTasksLoading,
                       key: const ValueKey('table'),
                       tasks: _tasksForTable,
                       warningsByTaskId: _warningsByTaskIdForTable,
@@ -2675,6 +2731,7 @@ class _MainScreenState extends State<MainScreen> {
         return RepaintBoundary(
           key: const ValueKey('table_boundary'),
           child: TaskTable(
+                isLoading: _isTasksLoading,
             key: const ValueKey('table'),
             tasks: _tasksForTable,
             warningsByTaskId: _warningsByTaskIdForTable,
@@ -2777,9 +2834,9 @@ class _MainScreenState extends State<MainScreen> {
         );
       } else if (_selectedTab == 3) {
         return RepaintBoundary(
-          key: ValueKey('calendar_boundary_${_tasksVersion}'),
+          key: ValueKey('calendar_boundary_$_tasksVersion'),
           child: MaintenanceCalendarView(
-            key: ValueKey('calendar_${_tasksVersion}'),
+            key: ValueKey('calendar_$_tasksVersion'),
             taskService: _taskService,
             filteredTasks: _tasks, // Passar tarefas filtradas
             onEdit: (task) => _editTaskById(task.id),

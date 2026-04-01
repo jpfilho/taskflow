@@ -119,7 +119,7 @@ class CentroTrabalho {
       segmentoId: map['segmento_id'] as String? ?? 
                   (map['segmentos'] != null ? (map['segmentos'] as Map<String, dynamic>)['id'] as String : ''),
       segmento: segmentoNome ?? '',
-      gpm: map['gpm'] != null ? (map['gpm'] is int ? map['gpm'] as int : int.tryParse(map['gpm'].toString()) ?? null) : null,
+      gpm: map['gpm'] != null ? (map['gpm'] is int ? map['gpm'] as int : int.tryParse(map['gpm'].toString())) : null,
       ativo: map['ativo'] as bool? ?? true,
       createdAt: map['created_at'] != null
           ? DateTime.parse(map['created_at'] as String)

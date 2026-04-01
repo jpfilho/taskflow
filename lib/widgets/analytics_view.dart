@@ -22,7 +22,7 @@ class AnalyticsView extends StatelessWidget {
     int programadas = 0;
 
     for (var task in tasks) {
-      final status = task.status?.toLowerCase() ?? '';
+      final status = task.status.toLowerCase() ?? '';
       if (status.contains('conclu') || status.contains('finaliz')) {
         concluidas++;
       } else if (status.contains('andamento') || status.contains('exec')) {

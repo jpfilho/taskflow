@@ -4,7 +4,6 @@ import 'package:file_picker/file_picker.dart';
 import '../../application/controllers/upload_controller.dart';
 import '../../data/repositories/supabase_documents_repository.dart';
 import '../../../../services/auth_service_simples.dart';
-import '../../../../services/usuario_service.dart';
 
 /// Página simples para upload. Integração com file picker deve ser
 /// adicionada conforme plataforma (web/mobile/desktop). Por enquanto,

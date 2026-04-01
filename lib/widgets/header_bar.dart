@@ -20,6 +20,7 @@ class HeaderBar extends StatefulWidget {
   final VoidCallback? onLogout;
   final Function(String)? onSearch;
   final VoidCallback? onChat;
+  final int unreadChatCount;
   final VoidCallback? onConfig;
   final Future<void> Function()? onPerfilUpdated;
   final Function(String)? onViewModeChanged;
@@ -38,6 +39,9 @@ class HeaderBar extends StatefulWidget {
   final String? horasViewMode;
   final Function(String)? onHorasViewModeChanged;
   final VoidCallback? onRefreshHoras;
+  /// Visualização horária do Gantt
+  final bool? showHourlyView;
+  final VoidCallback? onToggleHourlyView;
 
   const HeaderBar({
     super.key,
@@ -52,6 +56,7 @@ class HeaderBar extends StatefulWidget {
     this.onLogout,
     this.onSearch,
     this.onChat,
+    this.unreadChatCount = 0,
     this.onConfig,
     this.onPerfilUpdated,
     this.onViewModeChanged,
@@ -68,6 +73,8 @@ class HeaderBar extends StatefulWidget {
     this.horasViewMode,
     this.onHorasViewModeChanged,
     this.onRefreshHoras,
+    this.showHourlyView,
+    this.onToggleHourlyView,
   });
 
   @override
@@ -344,7 +351,10 @@ class _HeaderBarState extends State<HeaderBar> {
                             borderRadius: BorderRadius.circular(6),
                           ),
                           child: DropdownButton<GanttScale>(
-                            value: widget.ganttScale,
+                            // Desativar opção de Hora no header: se vier selecionada, cair para Diário
+                            value: widget.ganttScale == GanttScale.hourly
+                                ? GanttScale.daily
+                                : widget.ganttScale,
                             isDense: true,
                             underline: const SizedBox.shrink(),
                             dropdownColor: Colors.white,
@@ -381,6 +391,7 @@ class _HeaderBarState extends State<HeaderBar> {
                             },
                           ),
                         ),
+                        // removido: toggle de horas (agora controlado via dropdown "Hora")
                       ],
                     ],
                   ),
@@ -395,6 +406,22 @@ class _HeaderBarState extends State<HeaderBar> {
                     tooltip: 'Criar',
                     padding: const EdgeInsets.symmetric(horizontal: 2),
                     constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  ),
+                  const SizedBox(width: 6),
+                  Badge(
+                    isLabelVisible: widget.unreadChatCount > 0,
+                    label: Text(
+                      widget.unreadChatCount > 99 ? '99+' : '${widget.unreadChatCount}',
+                      style: const TextStyle(fontSize: 9, color: Colors.white),
+                    ),
+                    backgroundColor: Colors.red,
+                    child: IconButton(
+                      icon: Icon(Icons.chat, color: iconColor, size: 20),
+                      onPressed: widget.onChat,
+                      tooltip: 'Chat',
+                      padding: const EdgeInsets.symmetric(horizontal: 2),
+                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                    ),
                   ),
                   const SizedBox(width: 6),
                   if (widget.canEditTasks)
@@ -603,7 +630,10 @@ class _HeaderBarState extends State<HeaderBar> {
                   borderRadius: BorderRadius.circular(4),
                 ),
                 child: DropdownButton<GanttScale>(
-                  value: widget.ganttScale,
+                  // Desativar opção de Hora no header desktop: se vier selecionada, cair para Diário
+                  value: widget.ganttScale == GanttScale.hourly
+                      ? GanttScale.daily
+                      : widget.ganttScale,
                   isDense: true,
                   underline: const SizedBox.shrink(),
                   dropdownColor: Colors.white,
@@ -648,6 +678,7 @@ class _HeaderBarState extends State<HeaderBar> {
                   },
                 ),
               ),
+              // removido: toggle de horas (agora controlado via dropdown "Hora")
             ],
           ],
           const SizedBox(width: 20),
@@ -695,10 +726,18 @@ class _HeaderBarState extends State<HeaderBar> {
             onPressed: widget.canEditTasks ? widget.onCreate : null,
             tooltip: 'Criar',
           ),
-          IconButton(
-            icon: Icon(Icons.chat, color: iconColor),
-            onPressed: widget.onChat,
-            tooltip: 'Chat',
+          Badge(
+            isLabelVisible: widget.unreadChatCount > 0,
+            label: Text(
+              widget.unreadChatCount > 99 ? '99+' : '${widget.unreadChatCount}',
+              style: const TextStyle(fontSize: 10, color: Colors.white),
+            ),
+            backgroundColor: Colors.red,
+            child: IconButton(
+              icon: Icon(Icons.chat, color: iconColor),
+              onPressed: widget.onChat,
+              tooltip: 'Chat',
+            ),
           ),
           if (widget.canEditTasks)
             IconButton(

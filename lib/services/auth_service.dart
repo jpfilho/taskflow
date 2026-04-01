@@ -221,7 +221,7 @@ class AuthService {
           await Future.delayed(Duration(seconds: delay));
         } else {
           // Na última tentativa, lançar erro
-          throw loginError;
+          rethrow;
         }
       }
     }

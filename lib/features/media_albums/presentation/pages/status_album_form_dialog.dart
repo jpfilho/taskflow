@@ -267,7 +267,7 @@ class _StatusAlbumFormDialogState extends State<StatusAlbumFormDialog> {
                             ),
                           ),
                           value: _ativo,
-                          activeColor: const Color(0xFF3b82f6),
+                          activeThumbColor: const Color(0xFF3b82f6),
                           onChanged: (value) {
                             setState(() {
                               _ativo = value;

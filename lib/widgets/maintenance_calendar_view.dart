@@ -14,7 +14,7 @@ import '../models/nota_sap.dart';
 import '../models/ordem.dart';
 import '../models/at.dart';
 import '../models/si.dart';
-import '../widgets/chat_screen.dart';
+import 'chat_view.dart';
 import '../utils/responsive.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
@@ -50,10 +50,10 @@ class _MaintenanceCalendarViewState extends State<MaintenanceCalendarView> {
   final SIService _siService = SIService();
 
   // Mapas para armazenar contagens do SAP por tarefa
-  Map<String, int> _notasSAPCount = {};
-  Map<String, int> _ordensCount = {};
-  Map<String, int> _atsCount = {};
-  Map<String, int> _sisCount = {};
+  final Map<String, int> _notasSAPCount = {};
+  final Map<String, int> _ordensCount = {};
+  final Map<String, int> _atsCount = {};
+  final Map<String, int> _sisCount = {};
 
   @override
   Widget build(BuildContext context) {
@@ -663,9 +663,9 @@ class _MaintenanceCalendarViewState extends State<MaintenanceCalendarView> {
         if (grupoId != null && grupoId.isNotEmpty) {
           Navigator.of(context).push(
             MaterialPageRoute(
-              builder: (context) => ChatScreen(
-                grupoId: grupoId,
-                onBack: () => Navigator.pop(context),
+              builder: (context) => ChatView(
+                initialGrupoId: grupoId,
+                initialComunidadeId: grupoChat!.comunidadeId,
               ),
             ),
           );

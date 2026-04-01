@@ -117,7 +117,7 @@ class _AdvancedListViewState extends State<AdvancedListView> {
         children: [
           Expanded(
             child: DropdownButtonFormField<String>(
-              value: _sortBy,
+              initialValue: _sortBy,
               decoration: InputDecoration(
                 labelText: 'Ordenar por',
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
@@ -137,7 +137,7 @@ class _AdvancedListViewState extends State<AdvancedListView> {
           const SizedBox(width: 12),
           Expanded(
             child: DropdownButtonFormField<String>(
-              value: _filterStatus,
+              initialValue: _filterStatus,
               decoration: InputDecoration(
                 labelText: 'Status',
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),

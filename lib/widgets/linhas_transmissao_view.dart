@@ -283,17 +283,20 @@ class _LinhasTransmissaoViewState extends State<LinhasTransmissaoView> {
     for (final key in prefer) {
       if (row.containsKey(key)) {
         final v = row[key];
-        if (v != null && v.toString().trim().isNotEmpty)
+        if (v != null && v.toString().trim().isNotEmpty) {
           return v.toString().trim();
+        }
       }
     }
     for (final entry in row.entries) {
       final key = entry.key.toLowerCase();
-      if (key == 'id' || key.contains('created') || key.contains('updated'))
+      if (key == 'id' || key.contains('created') || key.contains('updated')) {
         continue;
+      }
       final v = entry.value;
-      if (v != null && v.toString().trim().isNotEmpty)
+      if (v != null && v.toString().trim().isNotEmpty) {
         return v.toString().trim();
+      }
     }
     return 'Sem nome';
   }
@@ -463,7 +466,7 @@ class _LinhasTransmissaoViewState extends State<LinhasTransmissaoView> {
                       children: [
                         Expanded(
                           child: DropdownButtonFormField<String>(
-                            value: _regionalId,
+                            initialValue: _regionalId,
                             decoration: const InputDecoration(
                               labelText: 'Regional',
                               border: OutlineInputBorder(),
@@ -490,7 +493,7 @@ class _LinhasTransmissaoViewState extends State<LinhasTransmissaoView> {
                         const SizedBox(width: 12),
                         Expanded(
                           child: DropdownButtonFormField<String>(
-                            value: _divisaoId,
+                            initialValue: _divisaoId,
                             decoration: const InputDecoration(
                               labelText: 'Divisão',
                               border: OutlineInputBorder(),

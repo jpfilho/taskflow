@@ -768,9 +768,7 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
         }
         
         // Se ainda não encontrou, tentar buscar por placa diretamente
-        if (frota == null) {
-          frota = frotaByPlaca[frotaNome];
-        }
+        frota ??= frotaByPlaca[frotaNome];
         
         if (frota != null) {
           frotasVinculadas.add(frota);
@@ -1755,7 +1753,7 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
     final localText = task.locais.isNotEmpty ? task.locais.join(', ') : '-';
     final taskText = task.tarefa.isNotEmpty ? task.tarefa : (segment.label.isNotEmpty ? segment.label : '-');
 
-    Widget _line(String text) => SizedBox(
+    Widget line(String text) => SizedBox(
           width: barWidth - 6,
           child: Text(
             text,
@@ -1771,7 +1769,7 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
       );
 
     if (availableHeight < 20 || _showOnlyLocalText) {
-      return Center(child: _line(localText));
+      return Center(child: line(localText));
     }
     
     return Column(
@@ -1779,8 +1777,8 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
       crossAxisAlignment: CrossAxisAlignment.center,
       mainAxisSize: MainAxisSize.min,
       children: [
-        _line(localText),
-        if (taskText.isNotEmpty) _line(taskText),
+        line(localText),
+        if (taskText.isNotEmpty) line(taskText),
       ],
     );
   }

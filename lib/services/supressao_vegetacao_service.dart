@@ -33,13 +33,19 @@ class SupressaoVegetacaoService {
     int processadas = 0;
     int upsertadas = 0;
 
-    // Garantir linha de transmissão (upsert por nome)
-    final linhaId = await _obterOuCriarLinha(
-      nome: linhaNome,
-      tensaoKv: tensaoKv,
-      uf: uf,
-      concessionaria: concessionaria,
-    );
+    // Cache de IDs de linhas para não buscar no DB 1000x
+    final Map<String, String> cacheLinhas = {};
+    String? primaryLinhaId;
+
+    if (linhaNome.trim().isNotEmpty) {
+      primaryLinhaId = await _obterOuCriarLinha(
+        nome: linhaNome,
+        tensaoKv: tensaoKv,
+        uf: uf,
+        concessionaria: concessionaria,
+      );
+      cacheLinhas[linhaNome.trim().toLowerCase()] = primaryLinhaId;
+    }
 
     // Registrar importação
     String? importId;
@@ -64,35 +70,56 @@ class SupressaoVegetacaoService {
       if (excel.tables.isEmpty) {
         throw Exception('Planilha sem abas/tabelas.');
       }
-      final sheet = excel.tables.values.first;
-      if (sheet.maxRows < 2) {
-        throw Exception('Nenhuma linha de dados encontrada (apenas cabeçalho).');
+      Sheet? sheet;
+      int headerRowIndex = 0;
+
+      for (var table in excel.tables.values) {
+        for (var r = 0; r < (table.maxRows < 4 ? table.maxRows : 4); r++) {
+          final row = table.row(r);
+          if (row.any(
+            (cell) => cell?.value?.toString().trim().toLowerCase() == 'est.',
+          )) {
+            sheet = table;
+            headerRowIndex = r;
+            break;
+          }
+        }
+        if (sheet != null) break;
       }
 
-      // Suporta planilha com 1 ou 3 linhas de cabeçalho (export com layout do frontend)
-      int headerRowIndex = 0;
-      for (var r = 0; r < (sheet.maxRows < 4 ? sheet.maxRows : 4); r++) {
-        final row = sheet.row(r);
-        if (row.any((cell) => cell?.value?.toString().trim().toLowerCase() == 'est.')) {
-          headerRowIndex = r;
-          break;
-        }
+      if (sheet == null) {
+        throw Exception(
+          'Cabeçalho "EST." não encontrado em nenhuma aba da planilha.',
+        );
       }
+
       final headerRow = sheet.row(headerRowIndex);
       final headerMap = _buildHeaderMap(headerRow);
       if (headerMap.isEmpty) {
-        throw Exception('Cabeçalho não reconhecido.');
+        throw Exception(
+          'Cabeçalho não reconhecido na aba "${sheet.sheetName}".',
+        );
       }
 
       final upsertPayload = <Map<String, dynamic>>[];
       final dataStartRow = headerRowIndex + 1;
 
-      for (var i = dataStartRow; i < sheet.rows.length; i++) {
+      if (sheet.maxRows <= dataStartRow) {
+        throw Exception(
+          'Nenhuma linha de dados encontrada (apenas cabeçalho).',
+        );
+      }
+
+      for (var i = dataStartRow; i < sheet.maxRows; i++) {
         final row = sheet.rows[i];
         if (_rowVazia(row)) continue;
         processadas++;
 
-        final mapa = <String, dynamic>{'linha_id': linhaId};
+        final mapa = <String, dynamic>{};
+        if (primaryLinhaId != null) {
+          mapa['linha_id'] = primaryLinhaId;
+        }
+
         for (final entry in headerMap.entries) {
           final idx = entry.key;
           final campo = entry.value;
@@ -101,6 +128,7 @@ class SupressaoVegetacaoService {
           final valor = cell?.value;
           if (valor == null) continue;
           switch (campo) {
+            case 'lt':
             case 'est_codigo':
             case 'numeracao_ggt':
             case 'mapeamento_ggt':
@@ -149,7 +177,27 @@ class SupressaoVegetacaoService {
           }
         }
 
-        if (!mapa.containsKey('est_codigo') || (mapa['est_codigo'] as String).isEmpty) {
+        String? rowLinhaNome = mapa['lt'] as String?;
+        if (rowLinhaNome != null && rowLinhaNome.trim().isNotEmpty) {
+          final lowerName = rowLinhaNome.trim().toLowerCase();
+          if (!cacheLinhas.containsKey(lowerName)) {
+            cacheLinhas[lowerName] = await _obterOuCriarLinha(
+              nome: rowLinhaNome.trim(),
+            );
+          }
+          mapa['linha_id'] = cacheLinhas[lowerName];
+        }
+        mapa.remove('lt');
+
+        if (!mapa.containsKey('linha_id') || mapa['linha_id'] == null) {
+          avisos.add(
+            'Linha ${i + 1}: Sem nome da linha ou linha_id. Ignorada.',
+          );
+          continue;
+        }
+
+        if (!mapa.containsKey('est_codigo') ||
+            (mapa['est_codigo'] as String).isEmpty) {
           avisos.add('Linha ${i + 1}: EST. vazio, ignorada.');
           continue;
         }
@@ -170,7 +218,7 @@ class SupressaoVegetacaoService {
             .update({
               'status': 'success',
               'log':
-                  'Processadas: $processadas, Upsertadas: $upsertadas, Avisos: ${avisos.length}, Erros: ${erros.length}'
+                  'Processadas: $processadas, Upsertadas: $upsertadas, Avisos: ${avisos.length}, Erros: ${erros.length}',
             })
             .eq('id', importId);
       }
@@ -186,7 +234,8 @@ class SupressaoVegetacaoService {
       if (importId != null) {
         await _supabase
             .from('importacoes_supressao')
-            .update({'status': 'error', 'log': e.toString()}).eq('id', importId);
+            .update({'status': 'error', 'log': e.toString()})
+            .eq('id', importId);
       }
       rethrow;
     }
@@ -215,7 +264,9 @@ class SupressaoVegetacaoService {
       filtered = filtered.inFilter('linha_id', ids);
     }
 
-    final lista = await filtered.order('created_at', ascending: false).limit(limit);
+    final lista = await filtered
+        .order('created_at', ascending: false)
+        .limit(limit);
     return (lista as List).map((e) => e as Map<String, dynamic>).toList();
   }
 
@@ -248,12 +299,15 @@ class SupressaoVegetacaoService {
     String? ltNome,
     int? limit,
   }) async {
-    PostgrestFilterBuilder<dynamic> query =
-        _supabase.from('vw_mapeamento_completo').select();
+    PostgrestFilterBuilder<dynamic> query = _supabase
+        .from('vw_mapeamento_completo')
+        .select();
     if (ltNome != null && ltNome.trim().isNotEmpty) {
       query = query.ilike('lt', '%${ltNome.trim()}%');
     }
-    var ordered = query.order('lt', ascending: true).order('est_codigo', ascending: true);
+    var ordered = query
+        .order('lt', ascending: true)
+        .order('est_codigo', ascending: true);
     if (limit != null && limit > 0) {
       ordered = ordered.limit(limit);
     }
@@ -293,11 +347,7 @@ class SupressaoVegetacaoService {
     required String estCodigo,
     required Map<String, dynamic> dados,
   }) async {
-    final payload = {
-      'linha_id': linhaId,
-      'est_codigo': estCodigo,
-      ...dados,
-    };
+    final payload = {'linha_id': linhaId, 'est_codigo': estCodigo, ...dados};
     final resp = await _supabase
         .from('vaos_supressao')
         .upsert(payload, onConflict: 'linha_id,est_codigo')
@@ -358,25 +408,121 @@ class SupressaoVegetacaoService {
     const int fiscalizacaoCols = 6; // Mec Ext+Larg+Data, Man Ext+Larg+Data
 
     // Linha 0: grupos mesclados (Lista de Estruturas, Mapeamento, Execução, Fiscalização)
-    sheet.merge(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: 0), CellIndex.indexByColumnRow(columnIndex: fixedCols - 1, rowIndex: 0), customValue: 'Lista de Estruturas');
-    sheet.merge(CellIndex.indexByColumnRow(columnIndex: fixedCols, rowIndex: 0), CellIndex.indexByColumnRow(columnIndex: fixedCols + mapeamentoCols - 1, rowIndex: 0), customValue: 'Mapeamento');
-    sheet.merge(CellIndex.indexByColumnRow(columnIndex: fixedCols + mapeamentoCols, rowIndex: 0), CellIndex.indexByColumnRow(columnIndex: fixedCols + mapeamentoCols + execucaoCols - 1, rowIndex: 0), customValue: 'Execução');
-    sheet.merge(CellIndex.indexByColumnRow(columnIndex: fixedCols + mapeamentoCols + execucaoCols, rowIndex: 0), CellIndex.indexByColumnRow(columnIndex: fixedCols + mapeamentoCols + execucaoCols + fiscalizacaoCols - 1, rowIndex: 0), customValue: 'Fiscalização da Execução');
+    sheet.merge(
+      CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: 0),
+      CellIndex.indexByColumnRow(columnIndex: fixedCols - 1, rowIndex: 0),
+      customValue: 'Lista de Estruturas',
+    );
+    sheet.merge(
+      CellIndex.indexByColumnRow(columnIndex: fixedCols, rowIndex: 0),
+      CellIndex.indexByColumnRow(
+        columnIndex: fixedCols + mapeamentoCols - 1,
+        rowIndex: 0,
+      ),
+      customValue: 'Mapeamento',
+    );
+    sheet.merge(
+      CellIndex.indexByColumnRow(
+        columnIndex: fixedCols + mapeamentoCols,
+        rowIndex: 0,
+      ),
+      CellIndex.indexByColumnRow(
+        columnIndex: fixedCols + mapeamentoCols + execucaoCols - 1,
+        rowIndex: 0,
+      ),
+      customValue: 'Execução',
+    );
+    sheet.merge(
+      CellIndex.indexByColumnRow(
+        columnIndex: fixedCols + mapeamentoCols + execucaoCols,
+        rowIndex: 0,
+      ),
+      CellIndex.indexByColumnRow(
+        columnIndex:
+            fixedCols + mapeamentoCols + execucaoCols + fiscalizacaoCols - 1,
+        rowIndex: 0,
+      ),
+      customValue: 'Fiscalização da Execução',
+    );
 
     // Linha 1: subgrupos (VÃO; Mecanizado, Manual, Data; Mecanizado, Manual; Mecanizado, Manual)
-    sheet.merge(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: 1), CellIndex.indexByColumnRow(columnIndex: fixedCols - 1, rowIndex: 1), customValue: 'VÃO');
-    sheet.merge(CellIndex.indexByColumnRow(columnIndex: fixedCols, rowIndex: 1), CellIndex.indexByColumnRow(columnIndex: fixedCols + 1, rowIndex: 1), customValue: 'Mecanizado');
-    sheet.merge(CellIndex.indexByColumnRow(columnIndex: fixedCols + 2, rowIndex: 1), CellIndex.indexByColumnRow(columnIndex: fixedCols + 3, rowIndex: 1), customValue: 'Manual');
+    sheet.merge(
+      CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: 1),
+      CellIndex.indexByColumnRow(columnIndex: fixedCols - 1, rowIndex: 1),
+      customValue: 'VÃO',
+    );
+    sheet.merge(
+      CellIndex.indexByColumnRow(columnIndex: fixedCols, rowIndex: 1),
+      CellIndex.indexByColumnRow(columnIndex: fixedCols + 1, rowIndex: 1),
+      customValue: 'Mecanizado',
+    );
+    sheet.merge(
+      CellIndex.indexByColumnRow(columnIndex: fixedCols + 2, rowIndex: 1),
+      CellIndex.indexByColumnRow(columnIndex: fixedCols + 3, rowIndex: 1),
+      customValue: 'Manual',
+    );
     // Data (mapeamento) - 1 célula, vazia na linha 1
-    sheet.cell(CellIndex.indexByColumnRow(columnIndex: fixedCols + 4, rowIndex: 1)).value = '';
-    sheet.merge(CellIndex.indexByColumnRow(columnIndex: fixedCols + mapeamentoCols, rowIndex: 1), CellIndex.indexByColumnRow(columnIndex: fixedCols + mapeamentoCols + 1, rowIndex: 1), customValue: 'Mecanizado');
-    sheet.merge(CellIndex.indexByColumnRow(columnIndex: fixedCols + mapeamentoCols + 2, rowIndex: 1), CellIndex.indexByColumnRow(columnIndex: fixedCols + mapeamentoCols + 3, rowIndex: 1), customValue: 'Manual');
-    sheet.merge(CellIndex.indexByColumnRow(columnIndex: fixedCols + mapeamentoCols + execucaoCols, rowIndex: 1), CellIndex.indexByColumnRow(columnIndex: fixedCols + mapeamentoCols + execucaoCols + 2, rowIndex: 1), customValue: 'Mecanizado');
-    sheet.merge(CellIndex.indexByColumnRow(columnIndex: fixedCols + mapeamentoCols + execucaoCols + 3, rowIndex: 1), CellIndex.indexByColumnRow(columnIndex: fixedCols + mapeamentoCols + execucaoCols + fiscalizacaoCols - 1, rowIndex: 1), customValue: 'Manual');
+    sheet
+            .cell(
+              CellIndex.indexByColumnRow(
+                columnIndex: fixedCols + 4,
+                rowIndex: 1,
+              ),
+            )
+            .value =
+        '';
+    sheet.merge(
+      CellIndex.indexByColumnRow(
+        columnIndex: fixedCols + mapeamentoCols,
+        rowIndex: 1,
+      ),
+      CellIndex.indexByColumnRow(
+        columnIndex: fixedCols + mapeamentoCols + 1,
+        rowIndex: 1,
+      ),
+      customValue: 'Mecanizado',
+    );
+    sheet.merge(
+      CellIndex.indexByColumnRow(
+        columnIndex: fixedCols + mapeamentoCols + 2,
+        rowIndex: 1,
+      ),
+      CellIndex.indexByColumnRow(
+        columnIndex: fixedCols + mapeamentoCols + 3,
+        rowIndex: 1,
+      ),
+      customValue: 'Manual',
+    );
+    sheet.merge(
+      CellIndex.indexByColumnRow(
+        columnIndex: fixedCols + mapeamentoCols + execucaoCols,
+        rowIndex: 1,
+      ),
+      CellIndex.indexByColumnRow(
+        columnIndex: fixedCols + mapeamentoCols + execucaoCols + 2,
+        rowIndex: 1,
+      ),
+      customValue: 'Mecanizado',
+    );
+    sheet.merge(
+      CellIndex.indexByColumnRow(
+        columnIndex: fixedCols + mapeamentoCols + execucaoCols + 3,
+        rowIndex: 1,
+      ),
+      CellIndex.indexByColumnRow(
+        columnIndex:
+            fixedCols + mapeamentoCols + execucaoCols + fiscalizacaoCols - 1,
+        rowIndex: 1,
+      ),
+      customValue: 'Manual',
+    );
 
     // Linha 2: rótulos das colunas (reconhecidos na importação)
     for (int c = 0; c < colunas.length; c++) {
-      sheet.cell(CellIndex.indexByColumnRow(columnIndex: c, rowIndex: 2)).value = colunas[c].key;
+      sheet
+              .cell(CellIndex.indexByColumnRow(columnIndex: c, rowIndex: 2))
+              .value =
+          colunas[c].key;
     }
 
     // Dados a partir da linha 3
@@ -386,11 +532,15 @@ class SupressaoVegetacaoService {
         final key = colunas[c].value;
         Object? val;
         if (key == 'lt') {
-          val = vao['linhas_transmissao'] is Map ? (vao['linhas_transmissao'] as Map)['nome'] : vao['lt'];
+          val = vao['linhas_transmissao'] is Map
+              ? (vao['linhas_transmissao'] as Map)['nome']
+              : vao['lt'];
         } else {
           val = vao[key];
         }
-        final cell = sheet.cell(CellIndex.indexByColumnRow(columnIndex: c, rowIndex: r + 3));
+        final cell = sheet.cell(
+          CellIndex.indexByColumnRow(columnIndex: c, rowIndex: r + 3),
+        );
         if (val == null) {
           cell.value = '';
         } else if (val is bool) {
@@ -459,6 +609,9 @@ class SupressaoVegetacaoService {
       final raw = normalize(headerRow[i]?.value);
       if (raw == null || raw.isEmpty) continue;
       switch (raw) {
+        case 'linha':
+          map[i] = 'lt';
+          break;
         case 'est.':
           map[i] = 'est_codigo';
           break;
@@ -553,7 +706,9 @@ class SupressaoVegetacaoService {
         case 'mecanizado':
         case 'mecanizado  ':
           mecanizadoCount++;
-          map[i] = mecanizadoCount == 1 ? 'pend_mecanizado' : 'pend_mecanizado_extra';
+          map[i] = mecanizadoCount == 1
+              ? 'pend_mecanizado'
+              : 'pend_mecanizado_extra';
           break;
         case 'seletivo / preservação / cultivado':
         case 'seletivo/preservação/cultivado':

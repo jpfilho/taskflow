@@ -364,6 +364,28 @@ class _EquipeListViewState extends State<EquipeListView> {
                 Text('Executores: ${equipe.executores.length}'),
               ],
             ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.edit),
+                  onPressed: () => _editEquipe(equipe),
+                  tooltip: 'Editar',
+                ),
+                IconButton(
+                  icon: const Icon(Icons.copy),
+                  color: Colors.orange,
+                  onPressed: () => _duplicateEquipe(equipe),
+                  tooltip: 'Duplicar',
+                ),
+                IconButton(
+                  icon: const Icon(Icons.delete),
+                  onPressed: () => _deleteEquipe(equipe),
+                  tooltip: 'Excluir',
+                  color: Colors.red,
+                ),
+              ],
+            ),
             children: [
               if (equipe.executores.isEmpty)
                 const Padding(
@@ -392,28 +414,6 @@ class _EquipeListViewState extends State<EquipeListView> {
                   );
                 }),
             ],
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.edit),
-                  onPressed: () => _editEquipe(equipe),
-                  tooltip: 'Editar',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.copy),
-                  color: Colors.orange,
-                  onPressed: () => _duplicateEquipe(equipe),
-                  tooltip: 'Duplicar',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.delete),
-                  onPressed: () => _deleteEquipe(equipe),
-                  tooltip: 'Excluir',
-                  color: Colors.red,
-                ),
-              ],
-            ),
           ),
         );
       },
@@ -425,7 +425,7 @@ class _EquipeListViewState extends State<EquipeListView> {
       scrollDirection: Axis.horizontal,
       child: SingleChildScrollView(
         child: DataTable(
-          headingRowColor: MaterialStateProperty.all(Colors.blue[50]),
+          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
           columns: const [
             DataColumn(label: Text('Nome', style: TextStyle(fontWeight: FontWeight.bold))),
             DataColumn(label: Text('Tipo', style: TextStyle(fontWeight: FontWeight.bold))),

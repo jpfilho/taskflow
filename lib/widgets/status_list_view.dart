@@ -441,7 +441,7 @@ class _StatusListViewState extends State<StatusListView> {
       scrollDirection: Axis.horizontal,
       child: SingleChildScrollView(
         child: DataTable(
-          headingRowColor: MaterialStateProperty.all(Colors.blue[50]),
+          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
           columns: const [
             DataColumn(label: Text('Código', style: TextStyle(fontWeight: FontWeight.bold))),
             DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold))),

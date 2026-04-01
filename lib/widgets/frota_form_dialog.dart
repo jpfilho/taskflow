@@ -227,7 +227,7 @@ class _FrotaFormDialogState extends State<FrotaFormDialog> {
               const SizedBox(height: 16),
               // Tipo de Veículo
               DropdownButtonFormField<String>(
-                value: _tipoVeiculo,
+                initialValue: _tipoVeiculo,
                 decoration: const InputDecoration(
                   labelText: 'Tipo de Veículo *',
                   border: OutlineInputBorder(),
@@ -267,7 +267,7 @@ class _FrotaFormDialogState extends State<FrotaFormDialog> {
               _isLoadingRegionais
                   ? const CircularProgressIndicator()
                   : DropdownButtonFormField<Regional>(
-                      value: _selectedRegional,
+                      initialValue: _selectedRegional,
                       decoration: const InputDecoration(
                         labelText: 'Regional (opcional)',
                         border: OutlineInputBorder(),
@@ -295,7 +295,7 @@ class _FrotaFormDialogState extends State<FrotaFormDialog> {
               _isLoadingDivisoes
                   ? const CircularProgressIndicator()
                   : DropdownButtonFormField<Divisao>(
-                      value: _selectedDivisao,
+                      initialValue: _selectedDivisao,
                       decoration: const InputDecoration(
                         labelText: 'Divisão (opcional)',
                         border: OutlineInputBorder(),
@@ -323,7 +323,7 @@ class _FrotaFormDialogState extends State<FrotaFormDialog> {
               _isLoadingSegmentos
                   ? const CircularProgressIndicator()
                   : DropdownButtonFormField<Segmento>(
-                      value: _selectedSegmento,
+                      initialValue: _selectedSegmento,
                       decoration: const InputDecoration(
                         labelText: 'Segmento (opcional)',
                         border: OutlineInputBorder(),

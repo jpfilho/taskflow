@@ -25,7 +25,7 @@ class SISelectionDialog extends StatefulWidget {
 class _SISelectionDialogState extends State<SISelectionDialog> {
   List<SI> _filteredSIs = [];
   List<SI> _displayedSIs = [];
-  Set<String> _selectedSIIds = {}; // IDs das sis selecionadas
+  final Set<String> _selectedSIIds = {}; // IDs das sis selecionadas
   String _searchQuery = '';
   String _viewMode = 'cards'; // 'cards', 'list', 'table'
   Set<String> _filterStatus = {};
@@ -192,7 +192,7 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
 
     return Dialog(
       insetPadding: const EdgeInsets.all(16),
-      child: Container(
+      child: SizedBox(
         width: isMobile ? double.infinity : 900,
         height: isMobile ? double.infinity : 700,
         child: Column(
@@ -901,7 +901,7 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
       child: SingleChildScrollView(
         controller: _scrollController,
         child: DataTable(
-          headingRowColor: MaterialStateProperty.all(Colors.blue[50]),
+          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
           columns: const [
             DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold))),
             DataColumn(label: Text('Local', style: TextStyle(fontWeight: FontWeight.bold))),

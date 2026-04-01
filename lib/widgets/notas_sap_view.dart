@@ -42,7 +42,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
   Map<String, List<Map<String, dynamic>>> _notasProgramadasInfo = {}; // Lista de vinculações por nota
   Map<String, Status> _statusMap = {}; // Mapa de status (codigo -> Status)
   bool _isLoading = false;
-  Set<String> _notasVinculando = {}; // IDs das notas que estão sendo vinculadas
+  final Set<String> _notasVinculando = {}; // IDs das notas que estão sendo vinculadas
   Set<String> _notasSelecionadas = {}; // IDs das notas selecionadas para vinculação múltipla
   String? _filtroTipoNota = 'abertas'; // null = todas, 'abertas' = abertas, 'concluidas' = concluídas
   String? _filtroProgramacao; // null = todas, 'programadas' = programadas, 'nao_programadas' = não programadas
@@ -70,7 +70,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
   List<String> _statusTarefaDisponiveis = [];
   bool _visualizacaoTabela = false; // false = cards, true = tabela
   String _modoVisualizacao = 'tabela'; // 'tabela', 'cards', 'calendario', 'dashboard'
-  String? _tipoFiltro = null; // null = todos, 'vegetacao', 'trator', 'manutencao'
+  String? _tipoFiltro; // null = todos, 'vegetacao', 'trator', 'manutencao'
   int _contadorVegetacao = 0;
   int _contadorTrator = 0;
   int _contadorManutencao = 0;
@@ -272,7 +272,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
       }
 
       final email = usuario.email;
-      if (email == null || email.isEmpty) {
+      if (email.isEmpty) {
         _canEditTasks = false;
         _canEditTasksChecked = true;
         return;
@@ -921,7 +921,77 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                   ),
                 ),
                 if (!isCompact) _buildTipoToggle(),
-                // Nenhum controle de visualização no header (footbar assume no mobile)
+                if (!isCompact)
+                  SegmentedButton<String>(
+                    segments: viewOptions.map((opt) {
+                      return ButtonSegment<String>(
+                        value: opt.$1,
+                        icon: Icon(opt.$2),
+                        label: Text(opt.$3),
+                      );
+                    }).toList(),
+                    selected: {_modoVisualizacao},
+                    onSelectionChanged: (Set<String> newSelection) {
+                      setState(() {
+                        _modoVisualizacao = newSelection.first;
+                        _visualizacaoTabela = _modoVisualizacao == 'tabela';
+                      });
+                      if (widget.onModoChange != null) {
+                        widget.onModoChange!(_modoVisualizacao);
+                      }
+                    },
+                    showSelectedIcon: false,
+                    style: SegmentedButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      selectedBackgroundColor: Colors.blue[50],
+                      selectedForegroundColor: Colors.blue[700],
+                      foregroundColor: Colors.grey[700],
+                      side: BorderSide(color: Colors.grey[300]!, width: 1),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                  )
+                else
+                  DropdownButtonHideUnderline(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        border: Border.all(color: Colors.grey[300]!),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: DropdownButton<String>(
+                        value: _modoVisualizacao,
+                        isDense: true,
+                        icon: const Icon(Icons.arrow_drop_down),
+                        items: viewOptions.map((opt) {
+                          return DropdownMenuItem<String>(
+                            value: opt.$1,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(opt.$2, size: 18, color: Colors.blue[700]),
+                                const SizedBox(width: 8),
+                                Text(opt.$3),
+                              ],
+                            ),
+                          );
+                        }).toList(),
+                        onChanged: (String? newValue) {
+                          if (newValue != null) {
+                            setState(() {
+                              _modoVisualizacao = newValue;
+                              _visualizacaoTabela = _modoVisualizacao == 'tabela';
+                            });
+                            if (widget.onModoChange != null) {
+                              widget.onModoChange!(_modoVisualizacao);
+                            }
+                          }
+                        },
+                      ),
+                    ),
+                  ),
                 ElevatedButton.icon(
                   onPressed: () {
                     setState(() {
@@ -1313,7 +1383,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                           )
                         : _modoVisualizacao == 'dashboard'
                             ? NotasSAPDashboardView(
-                                key: ValueKey('dashboard_${_todasNotasOrdenadas.length}_${_filtroTipoNota}_${_filtroLocais.length}_${_filtroTipos.length}_${_filtroNotas.length}_${_filtroPrioridades.length}_${_filtroStatusUsuario.length}_${_filtroResponsaveis.length}_${_filtroGPMs.length}_${_searchQuery}'),
+                                key: ValueKey('dashboard_${_todasNotasOrdenadas.length}_${_filtroTipoNota}_${_filtroLocais.length}_${_filtroTipos.length}_${_filtroNotas.length}_${_filtroPrioridades.length}_${_filtroStatusUsuario.length}_${_filtroResponsaveis.length}_${_filtroGPMs.length}_$_searchQuery'),
                                 notas: _todasNotasOrdenadas,
                               )
                             : _visualizacaoTabela
@@ -1702,7 +1772,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                         ],
                       ),
                     );
-                  }).toList(),
+                  }),
                 ],
                 
                 const SizedBox(height: 16),
@@ -1994,7 +2064,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
     String? searchHint,
   }) {
     // Função para calcular valores disponíveis dinamicamente a partir de _todasNotasOrdenadas
-    List<String> _calcularOpcoesDisponiveis(String campo) {
+    List<String> calcularOpcoesDisponiveis(String campo) {
       if (_todasNotasOrdenadas.isEmpty) {
         return options; // Fallback para valores iniciais
       }
@@ -2035,7 +2105,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
     return InkWell(
       onTap: () async {
         // Calcular opções disponíveis dinamicamente no momento de abrir o diálogo
-        var opcoesAtualizadas = _calcularOpcoesDisponiveis(label);
+        var opcoesAtualizadas = calcularOpcoesDisponiveis(label);
         // No mobile, se opções vazias e notas ainda não carregadas, forçar carregamento dos filtros
         if (opcoesAtualizadas.isEmpty && _todasNotasOrdenadas.isEmpty) {
           await _loadFiltros();
@@ -2253,7 +2323,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
       scrollDirection: Axis.horizontal,
       child: SingleChildScrollView(
         child: DataTable(
-          headingRowColor: MaterialStateProperty.all(Colors.blue[50]),
+          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
           columns: [
             DataColumn(
               label: Checkbox(
@@ -2313,7 +2383,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
             return DataRow(
               selected: isSelected,
               color: isProgramada && statusColor != null
-                  ? MaterialStateProperty.all(statusColor.withOpacity(0.1))
+                  ? WidgetStateProperty.all(statusColor.withOpacity(0.1))
                   : null,
               cells: [
                 // 0. CHECKBOX DE SELEÇÃO
@@ -2809,7 +2879,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
             ),
             child: Text(
               diasRestantes < 0
-                  ? '${diasRestantes} dias' // Mostrar valor negativo quando vencido
+                  ? '$diasRestantes dias' // Mostrar valor negativo quando vencido
                   : diasRestantes == 0
                       ? 'Vence hoje'
                       : diasRestantes == 1
@@ -2963,7 +3033,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                         ),
                         const SizedBox(height: 20),
                         LinearProgressIndicator(
-                          value: notasParaVincular.length > 0 
+                          value: notasParaVincular.isNotEmpty 
                               ? notasProcessadas / (notasParaVincular.length + 1) // +1 para a criação da tarefa
                               : 0.0,
                           backgroundColor: Colors.grey[300],
@@ -3056,7 +3126,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                   content: Text(
                     vinculadasComSucesso == 1
                         ? 'Tarefa criada e vinculada à nota ${notaPrincipal.nota} com sucesso!'
-                        : 'Tarefa criada e ${vinculadasComSucesso} notas vinculadas com sucesso!',
+                        : 'Tarefa criada e $vinculadasComSucesso notas vinculadas com sucesso!',
                   ),
                   backgroundColor: Colors.green,
                   duration: const Duration(seconds: 3),
@@ -3269,7 +3339,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                       ),
                       const SizedBox(height: 20),
                       LinearProgressIndicator(
-                        value: notasSelecionadas.length > 0 ? notasProcessadas / notasSelecionadas.length : 0.0,
+                        value: notasSelecionadas.isNotEmpty ? notasProcessadas / notasSelecionadas.length : 0.0,
                         backgroundColor: Colors.grey[300],
                         valueColor: const AlwaysStoppedAnimation<Color>(Colors.blue),
                       ),

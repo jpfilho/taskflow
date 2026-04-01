@@ -380,7 +380,7 @@ class _CRCFormDialogState extends State<CRCFormDialog> {
                       _buildSectionTitle('Status'),
                       const SizedBox(height: 8),
                       DropdownButtonFormField<String>(
-                        value: _status,
+                        initialValue: _status,
                         decoration: const InputDecoration(
                           labelText: 'Status',
                           border: OutlineInputBorder(),

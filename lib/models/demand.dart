@@ -34,7 +34,7 @@ class Demand {
   });
 
   factory Demand.fromMap(Map<String, dynamic> m) {
-    DateTime? _dt(dynamic v) => v == null ? null : DateTime.parse(v as String);
+    DateTime? dt(dynamic v) => v == null ? null : DateTime.parse(v as String);
     return Demand(
       id: m['id'] as String,
       titulo: m['titulo'] as String,
@@ -44,13 +44,13 @@ class Demand {
       categoriaId: m['categoria_id'] as String?,
       criadoPor: m['criado_por'] as String?,
       atribuidaPara: m['atribuida_para'] as String?,
-      dataCriacao: _dt(m['data_criacao']),
-      dataVencimento: _dt(m['data_vencimento']),
-      dataInicio: _dt(m['data_inicio']),
-      dataConclusao: _dt(m['data_conclusao']),
+      dataCriacao: dt(m['data_criacao']),
+      dataVencimento: dt(m['data_vencimento']),
+      dataInicio: dt(m['data_inicio']),
+      dataConclusao: dt(m['data_conclusao']),
       tags: (m['tags'] as List?)?.cast<String>() ?? const [],
       metadata: (m['metadata'] as Map?)?.cast<String, dynamic>() ?? const {},
-      atualizadoEm: _dt(m['atualizado_em']),
+      atualizadoEm: dt(m['atualizado_em']),
     );
   }
 

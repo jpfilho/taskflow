@@ -359,7 +359,7 @@ class _GtdProcessTabState extends State<GtdProcessTab> {
                   ),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String?>(
-                    value: _priority,
+                    initialValue: _priority,
                     decoration: const InputDecoration(labelText: 'Prioridade'),
                     items: const [
                       DropdownMenuItem(value: null, child: Text('—')),
@@ -388,7 +388,7 @@ class _GtdProcessTabState extends State<GtdProcessTab> {
                   ),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String?>(
-                    value: _delegatedToUserId,
+                    initialValue: _delegatedToUserId,
                     decoration: const InputDecoration(
                       labelText: 'Delegar para usuário (opcional)',
                     ),

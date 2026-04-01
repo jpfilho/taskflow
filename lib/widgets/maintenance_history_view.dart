@@ -121,7 +121,7 @@ class _MaintenanceHistoryViewState extends State<MaintenanceHistoryView> {
         children: [
           Expanded(
             child: DropdownButtonFormField<String>(
-              value: _selectedFilter,
+              initialValue: _selectedFilter,
               decoration: InputDecoration(
                 labelText: 'Filtro',
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
@@ -141,7 +141,7 @@ class _MaintenanceHistoryViewState extends State<MaintenanceHistoryView> {
           const SizedBox(width: 12),
           Expanded(
             child: DropdownButtonFormField<String>(
-              value: _selectedPeriod,
+              initialValue: _selectedPeriod,
               decoration: InputDecoration(
                 labelText: 'Período',
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),

@@ -18,11 +18,10 @@ import '../models/nota_sap.dart';
 import '../models/ordem.dart';
 import '../models/at.dart';
 import '../models/si.dart';
+import 'chat_view.dart';
 import '../services/tipo_atividade_service.dart';
 import '../models/tipo_atividade.dart';
-import '../widgets/chat_screen.dart';
 import '../utils/responsive.dart';
-import '../config/supabase_config.dart';
 import '../models/mensagem.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
@@ -89,6 +88,8 @@ class _TaskCardsViewState extends State<TaskCardsView> {
   Map<String, TipoAtividade> _tiposMap = {};
   // SIs por tarefa (detalhes)
   final Map<String, List<SI>> _sisPorTarefa = {};
+  // Controla o Loading inicial da tela enquanto checa existencia de mídias/mensagens
+  bool _isLoadingBaseData = true;
 
   List<String> _siCodesFromTask(Task t) {
     final raw = t.si.trim();
@@ -279,26 +280,47 @@ class _TaskCardsViewState extends State<TaskCardsView> {
   }
 
   void _applySorting() {
-    DateTime _sortKey(Task t) {
+    DateTime sortKey(Task t) {
       final v = _ultimaMensagemPorTarefa[t.id];
       if (v != null) return v;
       if (t.dataAtualizacao != null) return t.dataAtualizacao!;
       return t.dataFim;
     }
 
-    _sortedTasks = List<Task>.from(widget.tasks);
+    // Filtrar apenas tarefas que possuem mídias ou mensagens (para o painel Feed)
+    final filteredTasks = widget.tasks.where((t) {
+      final hasAnexos = (_anexosPorTarefa[t.id] ?? []).isNotEmpty || (_imagensPorTarefa[t.id] ?? []).isNotEmpty;
+      final hasMessages = _ultimaMensagemPorTarefa[t.id] != null || (_mensagensPorTarefa[t.id] ?? []).isNotEmpty;
+      return hasAnexos || hasMessages;
+    }).toList();
+
+    _sortedTasks = List<Task>.from(filteredTasks);
     _sortedTasks.sort((a, b) {
-      final dataA = _sortKey(a);
-      final dataB = _sortKey(b);
+      final dataA = sortKey(a);
+      final dataB = sortKey(b);
       return dataB.compareTo(dataA); // Mais recente primeiro
     });
   }
 
-  void _initializeData() {
+  void _initializeData() async {
+    setState(() => _isLoadingBaseData = true);
+    
     _loadStatus();
     _loadTipos();
-    _loadAnexos();
-    _loadUltimasMensagens();
+    
+    // Aguarda dependências pesadas carregarem para formar o feed e bloquear a UI no skeleton/loader
+    await Future.wait([
+      _loadAnexos(),
+      _loadUltimasMensagens(),
+    ]);
+
+    if(mounted) {
+      setState(() {
+         _isLoadingBaseData = false;
+         _applySorting();
+      });
+    }
+
     _loadSIs();
     _loadMensagens();
     _loadCurtidas();
@@ -372,48 +394,37 @@ class _TaskCardsViewState extends State<TaskCardsView> {
   }
 
   Future<void> _loadAnexos() async {
+    if (widget.tasks.isEmpty) return;
     try {
-      // Carregar anexos para todas as tarefas
-      for (var task in widget.tasks) {
-        try {
-          final anexos = await _anexoService.getAnexosByTaskId(task.id);
-          setState(() {
-            _anexosPorTarefa[task.id] = anexos;
-            // Encontrar todas as imagens
-            if (anexos.isNotEmpty) {
-              final imagens = anexos
-                  .where((anexo) => anexo.tipoArquivo == 'imagem')
-                  .toList();
-              if (imagens.isNotEmpty) {
-                final urls = imagens
-                    .map((img) => _anexoService.getPublicUrl(img))
-                    .toList();
-                _imagensPorTarefa[task.id] = urls;
-                // Inicializar índice apenas se houver múltiplas imagens
-                if (imagens.length > 1) {
-                  _currentPageIndex[task.id] = 0;
-                  // Garantir que o controller seja criado se ainda não existir
-                  if (!_pageControllers.containsKey(task.id)) {
-                    _pageControllers[task.id] = PageController();
-                  }
+      final taskIds = widget.tasks.map((t) => t.id).toList();
+      final mapAnexos = await _anexoService.obterAnexosDasTarefas(taskIds);
+
+      setState(() {
+        for (var task in widget.tasks) {
+          final anexos = mapAnexos[task.id] ?? [];
+          _anexosPorTarefa[task.id] = anexos;
+          
+          if (anexos.isNotEmpty) {
+            final imagens = anexos.where((a) => a.tipoArquivo == 'imagem').toList();
+            if (imagens.isNotEmpty) {
+              final urls = imagens.map((img) => _anexoService.getPublicUrl(img)).toList();
+              _imagensPorTarefa[task.id] = urls;
+              if (imagens.length > 1) {
+                _currentPageIndex[task.id] = 0;
+                if (!_pageControllers.containsKey(task.id)) {
+                  _pageControllers[task.id] = PageController();
                 }
-              } else {
-                _imagensPorTarefa[task.id] = [];
               }
             } else {
               _imagensPorTarefa[task.id] = [];
             }
-          });
-        } catch (e) {
-          // Ignorar erros individuais
-          print('Erro ao carregar anexos da tarefa ${task.id}: $e');
-          setState(() {
+          } else {
             _imagensPorTarefa[task.id] = [];
-          });
+          }
         }
-      }
+      });
     } catch (e) {
-      print('Erro ao carregar anexos: $e');
+      print('Erro no modo batch para carregar anexos: $e');
     }
   }
 
@@ -461,64 +472,46 @@ class _TaskCardsViewState extends State<TaskCardsView> {
   }
 
   Future<void> _loadUltimasMensagens() async {
+    if (widget.tasks.isEmpty) return;
     try {
-      // Buscar a última mensagem de cada tarefa
-      for (var task in widget.tasks) {
-        try {
-          final grupo = await _chatService.obterGrupoPorTarefaId(task.id);
-          if (grupo != null && grupo.id != null) {
-            // Usar ultimaMensagemAt do grupo se disponível, senão buscar
-            if (grupo.ultimaMensagemAt != null) {
-              setState(() {
-                _ultimaMensagemPorTarefa[task.id] = grupo.ultimaMensagemAt;
-              });
+      final taskIds = widget.tasks.map((t) => t.id).toList();
+      final grupos = await _chatService.obterGruposPorTarefasIds(taskIds);
+      
+      final mapGrupos = {for (var g in grupos) g.tarefaId: g};
+      final gruposComDataUpdateNull = <String>[];
+      
+      setState(() {
+        for (var task in widget.tasks) {
+          final g = mapGrupos[task.id];
+          if (g != null && g.id != null) {
+            _grupoIdPorTarefa[task.id] = g.id!;
+            if (g.ultimaMensagemAt != null) {
+               _ultimaMensagemPorTarefa[task.id] = g.ultimaMensagemAt;
             } else {
-              // Buscar a última mensagem do grupo diretamente do banco
-              try {
-                final supabase = SupabaseConfig.client;
-                final response = await supabase
-                    .from('mensagens')
-                    .select('created_at')
-                    .eq('grupo_id', grupo.id!)
-                    .order('created_at', ascending: false)
-                    .limit(1)
-                    .maybeSingle();
-
-                if (response != null && response['created_at'] != null) {
-                  setState(() {
-                    _ultimaMensagemPorTarefa[task.id] = DateTime.parse(
-                      response['created_at'] as String,
-                    );
-                  });
-                } else {
-                  setState(() {
-                    _ultimaMensagemPorTarefa[task.id] = null;
-                  });
-                }
-              } catch (e) {
-                setState(() {
-                  _ultimaMensagemPorTarefa[task.id] = null;
-                });
-              }
+               gruposComDataUpdateNull.add(g.id!);
             }
           } else {
-            setState(() {
-              _ultimaMensagemPorTarefa[task.id] = null;
-            });
-          }
-        } catch (e) {
-          print('Erro ao carregar última mensagem da tarefa ${task.id}: $e');
-          setState(() {
             _ultimaMensagemPorTarefa[task.id] = null;
-          });
+          }
         }
+      });
+
+      // Busca mensagens via Batch request se o grupo não gravou no DB Cache a Update Date
+      if (gruposComDataUpdateNull.isNotEmpty) {
+         final fallbackLastMsgs = await _chatService.obterUltimaMensagemPorGrupos(gruposComDataUpdateNull);
+         setState(() {
+            for (var task in widget.tasks) {
+               final gIdVal = _grupoIdPorTarefa[task.id];
+               if (gIdVal != null && fallbackLastMsgs.containsKey(gIdVal)) {
+                  _ultimaMensagemPorTarefa[task.id] = fallbackLastMsgs[gIdVal]!.createdAt;
+               }
+            }
+         });
       }
 
       _applySorting();
-      setState(() {});
     } catch (e) {
-      print('Erro ao carregar últimas mensagens: $e');
-      // Em caso de erro, usar lista original
+      print('Erro ao carregar ultimas mensagens optimizadas: $e');
       _sortedTasks = List<Task>.from(widget.tasks);
       setState(() {});
     }
@@ -551,46 +544,35 @@ class _TaskCardsViewState extends State<TaskCardsView> {
         _mensagensSubscriptions.remove(grupoId);
       }
 
-      // Carregar mensagens para todas as tarefas
-      for (var task in widget.tasks) {
-        try {
-          final grupo = await _chatService.obterGrupoPorTarefaId(task.id);
-          if (grupo != null && grupo.id != null) {
-            final grupoId = grupo.id!;
-            setState(() {
-              _grupoIdPorTarefa[task.id] = grupoId;
-            });
+      // Evita o limite de URL e sockets. Carrega em Batch caso tenha muitas
+      if (gruposAtuais.isNotEmpty) {
+          try {
+             // Otimização: se quiser trazer as ultimas 5 mensagens de N grupos duma vez, seria interessante uma function RPC.
+             // Para não re-construir a base agora, aplicamos Promise.All (Future.wait).
+             final messagesFutures = widget.tasks.map((task) async {
+                 final gId = _grupoIdPorTarefa[task.id];
+                 if (gId == null) return null;
+                 final mensagens = await _chatService.listarMensagens(gId);
+                 return {'taskId': task.id, 'gId': gId, 'msgs': mensagens};
+             });
 
-            // Carregar mensagens do grupo inicialmente
-            try {
-              final mensagens = await _chatService.listarMensagens(grupoId);
-              setState(() {
-                _mensagensPorTarefa[task.id] = mensagens;
-              });
+             final results = await Future.wait(messagesFutures);
 
-              // Configurar stream de mensagens em tempo real para refletir edições/exclusões
-              if (!_mensagensSubscriptions.containsKey(grupoId)) {
-                _setupMensagensStream(grupoId, task.id);
-              }
-            } catch (e) {
-              print('Erro ao carregar mensagens da tarefa ${task.id}: $e');
-              setState(() {
-                _mensagensPorTarefa[task.id] = [];
-              });
-            }
-          } else {
-            setState(() {
-              _grupoIdPorTarefa[task.id] = null;
-              _mensagensPorTarefa[task.id] = [];
-            });
+             setState(() {
+                for(var result in results) {
+                   if (result != null) {
+                      final tId = result['taskId'] as String;
+                      final gId = result['gId'] as String;
+                      _mensagensPorTarefa[tId] = result['msgs'] as List<Mensagem>;
+                      if (!_mensagensSubscriptions.containsKey(gId)) {
+                         _setupMensagensStream(gId, tId);
+                      }
+                   }
+                }
+             });
+          } catch(e) {
+             print('Erro batch mensagens: $e');
           }
-        } catch (e) {
-          print('Erro ao obter grupo da tarefa ${task.id}: $e');
-          setState(() {
-            _grupoIdPorTarefa[task.id] = null;
-            _mensagensPorTarefa[task.id] = [];
-          });
-        }
       }
     } catch (e) {
       print('Erro ao carregar mensagens: $e');
@@ -771,6 +753,31 @@ class _TaskCardsViewState extends State<TaskCardsView> {
 
   @override
   Widget build(BuildContext context) {
+    if (_isLoadingBaseData) {
+      return const Center(
+        child: CircularProgressIndicator(),
+      );
+    }
+    
+    if (_sortedTasks.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.dynamic_feed, size: 64, color: Colors.grey[400]),
+            const SizedBox(height: 16),
+            Text(
+              'Nenhuma atividade com interações no Feed.',
+              style: TextStyle(
+                fontSize: 16,
+                color: Colors.grey[600],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     final isMobile = Responsive.isMobile(context);
     final isTablet = Responsive.isTablet(context);
 
@@ -1242,7 +1249,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
                         ),
                       ),
                     )
-                    .toList(),
+                    ,
               ],
             ),
           ),
@@ -1755,9 +1762,9 @@ class _TaskCardsViewState extends State<TaskCardsView> {
           Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (context) => ChatScreen(
-                grupoId: grupoId,
-                onBack: () => Navigator.pop(context),
+              builder: (context) => ChatView(
+                initialGrupoId: grupoId,
+                initialComunidadeId: grupoChat!.comunidadeId,
               ),
             ),
           );

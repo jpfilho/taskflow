@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:typed_data';
-import 'dart:ui' show Rect;
 import '../models/task.dart';
 import '../models/pex.dart';
 import '../models/apr.dart';

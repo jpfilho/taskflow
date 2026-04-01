@@ -684,8 +684,8 @@ class _SegmentoListViewState extends State<SegmentoListView> {
       floatingActionButton: FloatingActionButton(
         onPressed: _loadSegmentos,
         backgroundColor: const Color(0xFF3b82f6),
-        child: const Icon(Icons.refresh, color: Colors.white),
         tooltip: 'Atualizar',
+        child: const Icon(Icons.refresh, color: Colors.white),
       ),
     );
   }

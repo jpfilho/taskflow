@@ -307,7 +307,7 @@ class _EquipeFormDialogState extends State<EquipeFormDialog> {
               const SizedBox(height: 16),
               // Tipo
               DropdownButtonFormField<String>(
-                value: _tipo,
+                initialValue: _tipo,
                 decoration: const InputDecoration(
                   labelText: 'Tipo *',
                   border: OutlineInputBorder(),
@@ -327,7 +327,7 @@ class _EquipeFormDialogState extends State<EquipeFormDialog> {
               _isLoadingRegionais
                   ? const CircularProgressIndicator()
                   : DropdownButtonFormField<Regional>(
-                      value: _selectedRegional,
+                      initialValue: _selectedRegional,
                       decoration: const InputDecoration(
                         labelText: 'Regional (opcional)',
                         border: OutlineInputBorder(),
@@ -351,7 +351,7 @@ class _EquipeFormDialogState extends State<EquipeFormDialog> {
               _isLoadingDivisoes
                   ? const CircularProgressIndicator()
                   : DropdownButtonFormField<Divisao>(
-                      value: _selectedDivisao,
+                      initialValue: _selectedDivisao,
                       decoration: const InputDecoration(
                         labelText: 'Divisão (opcional)',
                         border: OutlineInputBorder(),
@@ -379,7 +379,7 @@ class _EquipeFormDialogState extends State<EquipeFormDialog> {
               _isLoadingSegmentos
                   ? const CircularProgressIndicator()
                   : DropdownButtonFormField<Segmento>(
-                      value: _selectedSegmento,
+                      initialValue: _selectedSegmento,
                       decoration: const InputDecoration(
                         labelText: 'Segmento (opcional)',
                         border: OutlineInputBorder(),

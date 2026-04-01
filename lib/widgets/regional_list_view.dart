@@ -659,8 +659,8 @@ class _RegionalListViewState extends State<RegionalListView> {
       floatingActionButton: FloatingActionButton(
         onPressed: _loadRegionais,
         backgroundColor: const Color(0xFF3b82f6),
-        child: const Icon(Icons.refresh, color: Colors.white),
         tooltip: 'Atualizar',
+        child: const Icon(Icons.refresh, color: Colors.white),
       ),
     );
   }

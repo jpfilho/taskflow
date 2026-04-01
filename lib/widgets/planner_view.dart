@@ -280,13 +280,14 @@ class _PlannerViewState extends State<PlannerView> {
     final statusDesc = status['descricao'] as String;
     
     return DragTarget<Task>(
-      onWillAccept: (task) {
-        if (task == null) return false;
+      onWillAcceptWithDetails: (details) {
+        final task = details.data;
         final canAccept = task.status != statusCode;
         print('🔍 Verificando se pode aceitar tarefa ${task.tarefa} (status: ${task.status}) na coluna $statusCode: $canAccept');
         return canAccept;
       },
-      onAccept: (task) {
+      onAcceptWithDetails: (details) {
+        final task = details.data;
         print('📦 Tarefa ${task.tarefa} aceita na coluna $statusCode');
         if (task.status != statusCode) {
           _moveTaskToStatus(task, statusCode);

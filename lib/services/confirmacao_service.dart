@@ -69,6 +69,38 @@ class ConfirmacaoService {
     }
   }
 
+  /// Lista confirmações e retorna também o total (items, total)
+  Future<Map<String, dynamic>> listWithCount({
+    String? search,
+    Map<String, dynamic>? filters,
+    int page = 0,
+    int pageSize = 50,
+  }) async {
+    try {
+      final itemsFuture = list(
+        search: search,
+        filters: filters,
+        page: page,
+        pageSize: pageSize,
+      );
+
+      final countFuture = count(
+        search: search,
+        filters: filters,
+      );
+
+      final results = await Future.wait([itemsFuture, countFuture]);
+
+      return {
+        'items': results[0] as List<Confirmacao>,
+        'total': results[1] as int,
+      };
+    } catch (e) {
+      print('❌ Erro em listWithCount: $e');
+      rethrow;
+    }
+  }
+
   /// Conta total de confirmações (para paginação)
   Future<int> count({
     String? search,

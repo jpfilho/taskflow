@@ -436,7 +436,7 @@ class _LocalListViewState extends State<LocalListView> {
       scrollDirection: Axis.horizontal,
       child: SingleChildScrollView(
         child: DataTable(
-          headingRowColor: MaterialStateProperty.all(Colors.blue[50]),
+          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
           columns: const [
             DataColumn(label: Text('Local', style: TextStyle(fontWeight: FontWeight.bold))),
             DataColumn(label: Text('Descrição', style: TextStyle(fontWeight: FontWeight.bold))),

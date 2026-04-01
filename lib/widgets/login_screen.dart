@@ -1,16 +1,26 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
-
+import 'package:video_player/video_player.dart';
+import 'dart:ui';
 import '../services/auth_service_simples.dart';
 import '../services/biometric_service.dart';
 import '../services/azure_auth_service.dart';
 import '../services/azure_auth_service_stub.dart'
     if (dart.library.js) '../services/azure_auth_service_web.dart';
 
+// Design System Tokens
+class AxiaColors {
+  static const primaryBlue = Color(0xFF0000FF);
+  static const blue1 = Color(0xFF1726C8);
+  static const purple = Color(0xFF0A003C);
+  static const neutral = Color(0xFFE8E5E3);
+  static const offWhite = Color(0xFFFAF5F0);
+  static const grey1 = Color(0xFF1A1F25);
+  static const glassOverlay = Color(0x80000000); // 50% opacity black
+}
+
 class LoginScreen extends StatefulWidget {
   final VoidCallback? onLoginSuccess;
-  
+
   const LoginScreen({super.key, this.onLoginSuccess});
 
   @override
@@ -26,20 +36,77 @@ class _LoginScreenState extends State<LoginScreen> {
   final _biometricService = BiometricService();
   final _azureAuthService = AzureAuthService();
   final _azureAuthServiceWeb = AzureAuthServiceWeb();
-  final bool _azureLoginEnabled = false; // Temporariamente desativado até aprovação admin
+  final bool _azureLoginEnabled =
+      false; // Temporariamente desativado até aprovação admin
   final _passwordFocusNode = FocusNode();
   final _nomeFocusNode = FocusNode();
-  
+
   bool _isLoading = false;
   bool _obscurePassword = true;
   bool _isLoginMode = true; // true = login, false = registro
   bool _showBiometricOption = false;
+
+  late VideoPlayerController _videoController;
+  bool _videoInitialized = false;
+  late VoidCallback _videoListener;
 
   @override
   void initState() {
     super.initState();
     _checkBiometricAvailability();
     _loadSavedCredentials();
+    _initVideo();
+  }
+
+  void _initVideo() {
+    _videoController = VideoPlayerController.asset('assets/videos/intro.mp4');
+
+    _videoController
+        .initialize()
+        .then((_) {
+          if (!mounted) return;
+
+          setState(() {
+            _videoInitialized = true;
+          });
+
+          // Configurações garantidas antes do play
+          _videoController.setLooping(false);
+          _videoController.setVolume(
+            0,
+          ); // Muted para facilitar o autoplay nos browsers
+
+          // Delay pequeno ou PostFrameCallback para garantir que o widget VideoPlayer já esteja na árvore
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              _videoController.play();
+            }
+          });
+
+          // Esconder o vídeo quando terminar de tocar
+          _videoListener = () {
+            if (!_videoController.value.isInitialized) return;
+            final pos = _videoController.value.position;
+            final dur = _videoController.value.duration;
+            if (pos >= dur - const Duration(milliseconds: 200)) {
+              if (mounted) {
+                setState(() {
+                  _videoInitialized = false;
+                });
+              }
+              _videoController.removeListener(_videoListener);
+            }
+          };
+          _videoController.addListener(_videoListener);
+        })
+        .catchError((error) {
+          print('❌ Erro ao inicializar vídeo de fundo: $error');
+          if (mounted) {
+            setState(() {
+              _videoInitialized = false;
+            });
+          }
+        });
   }
 
   @override
@@ -49,6 +116,10 @@ class _LoginScreenState extends State<LoginScreen> {
     _nomeController.dispose();
     _passwordFocusNode.dispose();
     _nomeFocusNode.dispose();
+    try {
+      _videoController.removeListener(_videoListener);
+    } catch (_) {}
+    _videoController.dispose();
     super.dispose();
   }
 
@@ -86,7 +157,7 @@ class _LoginScreenState extends State<LoginScreen> {
           email: _emailController.text.trim(),
           password: _passwordController.text,
         );
-        
+
         if (mounted) {
           if (response.sucesso) {
             // Salvar credenciais para autenticação biométrica
@@ -94,7 +165,7 @@ class _LoginScreenState extends State<LoginScreen> {
               _emailController.text.trim(),
               _passwordController.text,
             );
-            
+
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
                 content: Text('Login realizado com sucesso!'),
@@ -117,16 +188,18 @@ class _LoginScreenState extends State<LoginScreen> {
         final response = await _authService.signUpWithEmail(
           email: _emailController.text.trim(),
           password: _passwordController.text,
-          nome: _nomeController.text.trim().isNotEmpty 
-              ? _nomeController.text.trim() 
+          nome: _nomeController.text.trim().isNotEmpty
+              ? _nomeController.text.trim()
               : null,
         );
-        
+
         if (mounted) {
           if (response.sucesso) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
-                content: Text('Conta criada e você foi logado automaticamente!'),
+                content: Text(
+                  'Conta criada e você foi logado automaticamente!',
+                ),
                 backgroundColor: Colors.green,
               ),
             );
@@ -162,10 +235,10 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _handleBiometricAuth() async {
     try {
       setState(() => _isLoading = true);
-      
+
       // Autenticar com biometria
       final authenticated = await _biometricService.authenticate();
-      
+
       if (!authenticated) {
         if (mounted) {
           setState(() => _isLoading = false);
@@ -181,13 +254,15 @@ class _LoginScreenState extends State<LoginScreen> {
 
       // Obter credenciais salvas
       final credentials = await _biometricService.getSavedCredentials();
-      
+
       if (credentials['email'] == null || credentials['password'] == null) {
         if (mounted) {
           setState(() => _isLoading = false);
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Credenciais não encontradas. Faça login manualmente.'),
+              content: Text(
+                'Credenciais não encontradas. Faça login manualmente.',
+              ),
               backgroundColor: Colors.orange,
             ),
           );
@@ -207,7 +282,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
       if (mounted) {
         setState(() => _isLoading = false);
-        
+
         if (response.sucesso) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -274,370 +349,347 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final isDesktop = MediaQuery.of(context).size.width > 600;
-    
+
     return Scaffold(
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              const Color(0xFF1E3A5F),
-              const Color(0xFF075E54).withOpacity(0.8),
-            ],
-          ),
-        ),
-        child: SafeArea(
-          child: Center(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24.0),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxWidth: isDesktop ? 450 : double.infinity,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          // Background Video
+          if (_videoInitialized)
+            SizedBox.expand(
+              child: FittedBox(
+                fit: BoxFit.cover,
+                child: SizedBox(
+                  width: _videoController.value.size.width,
+                  height: _videoController.value.size.height,
+                  child: VideoPlayer(_videoController),
                 ),
-                child: Form(
-                  key: _formKey,
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      // Logo/Ícone
-                      Icon(
-                        Icons.task_alt,
-                        size: 80,
-                        color: Colors.white,
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Task Flow',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
+              ),
+            )
+          else
+            Container(color: AxiaColors.grey1),
+
+          // Glass / Blur Overlay
+          Positioned.fill(
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+              child: Container(color: AxiaColors.glassOverlay),
+            ),
+          ),
+
+          // Content
+          SafeArea(
+            child: Center(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(24.0),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: isDesktop ? 450 : double.infinity,
+                  ),
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        // Entrance Animation Wrapper could go here
+                        TweenAnimationBuilder<double>(
+                          tween: Tween(begin: 0.0, end: 1.0),
+                          duration: const Duration(seconds: 1),
+                          builder: (context, value, child) {
+                            return Opacity(
+                              opacity: value,
+                              child: Transform.translate(
+                                offset: Offset(0, 50 * (1 - value)),
+                                child: child,
+                              ),
+                            );
+                          },
+                          child: Column(
+                            children: [
+                              // Logo/Ícone
+                              const Icon(
+                                Icons.task_alt,
+                                size: 80,
+                                color: Colors.white,
+                              ),
+                              const SizedBox(height: 16),
+                              const Text(
+                                'Task Flow',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 32,
+                                  fontWeight: FontWeight.w800,
+                                  color: Colors.white,
+                                  letterSpacing: 1.2,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                _isLoginMode
+                                    ? 'O novo vem com energia'
+                                    : 'Crie sua conta',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  color: Colors.white.withOpacity(0.8),
+                                  fontWeight: FontWeight.w300,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                    const SizedBox(height: 8),
-                    Text(
-                      _isLoginMode
-                          ? 'Faça login para continuar'
-                          : 'Crie sua conta',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 16,
-                        color: Colors.white.withOpacity(0.9),
-                      ),
-                    ),
-                    const SizedBox(height: 48),
-                    // Card do formulário
-                    Card(
-                      elevation: 8,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.all(24.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            if (_azureLoginEnabled) ...[
-                              // Botão Microsoft (desativado até aprovação admin)
-                              OutlinedButton.icon(
-                                icon: const Icon(Icons.login),
-                                label: const Text('Entrar com Microsoft (Azure AD)'),
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: Colors.blueAccent,
-                                  side: const BorderSide(color: Colors.blueAccent),
-                                ),
-                                onPressed: _isLoading
-                                    ? null
-                                    : () async {
-                                        setState(() => _isLoading = true);
-                                        try {
-                                          final azure = kIsWeb
-                                              ? await _azureAuthServiceWeb.signInInteractive()
-                                              : await _azureAuthService.signInInteractive();
+                        const SizedBox(height: 48),
 
-                                          final sucesso = (azure as dynamic).sucesso == true;
-                                          final emailAzure = (azure as dynamic).email as String?;
-                                          final erroAzure = (azure as dynamic).erro as String?;
-
-                                          if (!sucesso || (emailAzure == null || emailAzure.isEmpty)) {
-                                            if (mounted) {
-                                              ScaffoldMessenger.of(context).showSnackBar(
-                                                SnackBar(
-                                                  content: Text(erroAzure ?? 'Não foi possível obter o email do Microsoft'),
-                                                  backgroundColor: Colors.red,
-                                                ),
-                                              );
-                                            }
-                                            return;
-                                          }
-
-                                          final nome = _nomeController.text.trim().isEmpty
-                                              ? null
-                                              : _nomeController.text.trim();
-                                          final resp = await _authService.signInWithAzureEmail(
-                                            email: emailAzure,
-                                            nome: nome,
-                                          );
-                                          if (mounted) {
-                                            if (resp.sucesso) {
-                                              ScaffoldMessenger.of(context).showSnackBar(
-                                                const SnackBar(
-                                                  content: Text('Login via Microsoft concluído!'),
-                                                  backgroundColor: Colors.green,
-                                                ),
-                                              );
-                                              widget.onLoginSuccess?.call();
-                                            } else {
-                                              ScaffoldMessenger.of(context).showSnackBar(
-                                                SnackBar(
-                                                  content: Text(resp.erro ?? 'Erro no login Microsoft'),
-                                                  backgroundColor: Colors.red,
-                                                ),
-                                              );
-                                            }
-                                          }
-                                        } catch (e) {
-                                          if (mounted) {
-                                            ScaffoldMessenger.of(context).showSnackBar(
-                                              SnackBar(
-                                                content: Text('Erro: $e'),
-                                                backgroundColor: Colors.red,
-                                              ),
-                                            );
-                                          }
-                                        } finally {
-                                          if (mounted) setState(() => _isLoading = false);
-                                        }
-                                      },
-                              ),
-                              const SizedBox(height: 16),
-                            ],
-                            // Campo Email
-                            TextFormField(
-                              controller: _emailController,
-                              keyboardType: TextInputType.emailAddress,
-                              textInputAction: _isLoginMode ? TextInputAction.next : TextInputAction.next,
-                              onFieldSubmitted: (_) {
-                                if (_isLoginMode) {
-                                  _passwordFocusNode.requestFocus();
-                                } else {
-                                  _nomeFocusNode.requestFocus();
-                                }
-                              },
-                              decoration: InputDecoration(
-                                labelText: 'Email',
-                                prefixIcon: const Icon(Icons.email),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(12),
+                        // Form Card with Glassmorphism
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(32),
+                          child: BackdropFilter(
+                            filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+                            child: Container(
+                              padding: const EdgeInsets.all(32.0),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(32),
+                                border: Border.all(
+                                  color: Colors.white.withOpacity(0.2),
+                                  width: 1.5,
                                 ),
                               ),
-                              validator: (value) {
-                                if (value == null || value.isEmpty) {
-                                  return 'Digite seu email';
-                                }
-                                if (!value.contains('@')) {
-                                  return 'Email inválido';
-                                }
-                                return null;
-                              },
-                            ),
-                            // Campo Nome (apenas no modo registro)
-                            if (!_isLoginMode) ...[
-                              const SizedBox(height: 16),
-                              TextFormField(
-                                controller: _nomeController,
-                                focusNode: _nomeFocusNode,
-                                textInputAction: TextInputAction.next,
-                                onFieldSubmitted: (_) {
-                                  _passwordFocusNode.requestFocus();
-                                },
-                                decoration: InputDecoration(
-                                  labelText: 'Nome (opcional)',
-                                  prefixIcon: const Icon(Icons.person),
-                                  border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                ),
-                              ),
-                            ],
-                            const SizedBox(height: 16),
-                            // Campo Senha
-                            TextFormField(
-                              controller: _passwordController,
-                              focusNode: _passwordFocusNode,
-                              obscureText: _obscurePassword,
-                              textInputAction: TextInputAction.done,
-                              onFieldSubmitted: (_) {
-                                if (!_isLoading) {
-                                  _handleSubmit();
-                                }
-                              },
-                              decoration: InputDecoration(
-                                labelText: 'Senha',
-                                prefixIcon: const Icon(Icons.lock),
-                                suffixIcon: IconButton(
-                                  icon: Icon(
-                                    _obscurePassword
-                                        ? Icons.visibility
-                                        : Icons.visibility_off,
-                                  ),
-                                  onPressed: () {
-                                    setState(() {
-                                      _obscurePassword = !_obscurePassword;
-                                    });
-                                  },
-                                ),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                              ),
-                              validator: (value) {
-                                if (value == null || value.isEmpty) {
-                                  return 'Digite sua senha';
-                                }
-                                if (!_isLoginMode && value.length < 6) {
-                                  return 'Senha deve ter pelo menos 6 caracteres';
-                                }
-                                return null;
-                              },
-                            ),
-                            const SizedBox(height: 24),
-                            // Botão de autenticação biométrica (apenas no modo login e se disponível)
-                            if (_isLoginMode && _showBiometricOption) ...[
-                              FutureBuilder<Map<String, dynamic>>(
-                                future: Future.wait([
-                                  _biometricService.getBiometricButtonText(),
-                                  _biometricService.getBiometricIcon(),
-                                ]).then((results) => {
-                                  'text': results[0] as String,
-                                  'icon': results[1] as IconData,
-                                }),
-                                builder: (context, snapshot) {
-                                  if (!snapshot.hasData) {
-                                    return const SizedBox.shrink();
-                                  }
-                                  
-                                  final buttonText = snapshot.data!['text'] as String;
-                                  final buttonIcon = snapshot.data!['icon'] as IconData;
-                                  
-                                  return OutlinedButton.icon(
-                                    onPressed: _isLoading ? null : _handleBiometricAuth,
-                                    icon: Icon(buttonIcon),
-                                    label: Text(buttonText),
-                                    style: OutlinedButton.styleFrom(
-                                      foregroundColor: const Color(0xFF075E54),
-                                      side: const BorderSide(color: Color(0xFF075E54)),
-                                      padding: const EdgeInsets.symmetric(vertical: 16),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                    ),
-                                  );
-                                },
-                              ),
-                              const SizedBox(height: 16),
-                              // Divisor "OU"
-                              Row(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
-                                  Expanded(child: Divider(color: Colors.grey[300])),
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                                  // Campo Email
+                                  _buildTextField(
+                                    controller: _emailController,
+                                    label: 'Email',
+                                    icon: Icons.email_outlined,
+                                    keyboardType: TextInputType.emailAddress,
+                                    validator: (value) {
+                                      if (value == null || value.isEmpty) {
+                                        return 'Digite seu email';
+                                      }
+                                      if (!value.contains('@')) {
+                                        return 'Email inválido';
+                                      }
+                                      return null;
+                                    },
+                                  ),
+
+                                  if (!_isLoginMode) ...[
+                                    const SizedBox(height: 20),
+                                    _buildTextField(
+                                      controller: _nomeController,
+                                      focusNode: _nomeFocusNode,
+                                      label: 'Nome (opcional)',
+                                      icon: Icons.person_outline,
+                                    ),
+                                  ],
+
+                                  const SizedBox(height: 20),
+
+                                  // Campo Senha
+                                  _buildTextField(
+                                    controller: _passwordController,
+                                    focusNode: _passwordFocusNode,
+                                    label: 'Senha',
+                                    icon: Icons.lock_outline,
+                                    obscureText: _obscurePassword,
+                                    suffixIcon: IconButton(
+                                      icon: Icon(
+                                        _obscurePassword
+                                            ? Icons.visibility_outlined
+                                            : Icons.visibility_off_outlined,
+                                        color: Colors.white70,
+                                      ),
+                                      onPressed: () => setState(
+                                        () => _obscurePassword =
+                                            !_obscurePassword,
+                                      ),
+                                    ),
+                                    validator: (value) {
+                                      if (value == null || value.isEmpty) {
+                                        return 'Digite sua senha';
+                                      }
+                                      if (!_isLoginMode && value.length < 6) {
+                                        return 'Senha deve ter pelo menos 6 caracteres';
+                                      }
+                                      return null;
+                                    },
+                                  ),
+
+                                  const SizedBox(height: 32),
+
+                                  // Botão de ação (Premium Blue)
+                                  ElevatedButton(
+                                    onPressed: _isLoading
+                                        ? null
+                                        : _handleSubmit,
+                                    style:
+                                        ElevatedButton.styleFrom(
+                                          backgroundColor:
+                                              AxiaColors.primaryBlue,
+                                          foregroundColor: Colors.white,
+                                          padding: const EdgeInsets.symmetric(
+                                            vertical: 20,
+                                          ),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              16,
+                                            ),
+                                          ),
+                                          elevation: 0,
+                                        ).copyWith(
+                                          backgroundColor:
+                                              WidgetStateProperty.resolveWith((
+                                                states,
+                                              ) {
+                                                if (states.contains(
+                                                  WidgetState.pressed,
+                                                )) {
+                                                  return AxiaColors.blue1;
+                                                }
+                                                return AxiaColors.primaryBlue;
+                                              }),
+                                        ),
+                                    child: _isLoading
+                                        ? const SizedBox(
+                                            height: 24,
+                                            width: 24,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                              valueColor:
+                                                  AlwaysStoppedAnimation<Color>(
+                                                    Colors.white,
+                                                  ),
+                                            ),
+                                          )
+                                        : const Text(
+                                            'ENTRAR',
+                                            style: TextStyle(
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.bold,
+                                              letterSpacing: 2.0,
+                                            ),
+                                          ),
+                                  ),
+
+                                  const SizedBox(height: 20),
+
+                                  // Link para alternar
+                                  TextButton(
+                                    onPressed: _isLoading
+                                        ? null
+                                        : () {
+                                            setState(() {
+                                              _isLoginMode = !_isLoginMode;
+                                              _passwordController.clear();
+                                              _nomeController.clear();
+                                            });
+                                          },
                                     child: Text(
-                                      'OU',
-                                      style: TextStyle(
-                                        color: Colors.grey[600],
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.bold,
+                                      _isLoginMode
+                                          ? 'CRIAR UMA CONTA'
+                                          : 'JÁ TENHO UMA CONTA',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                        letterSpacing: 1.0,
                                       ),
                                     ),
                                   ),
-                                  Expanded(child: Divider(color: Colors.grey[300])),
-                                ],
-                              ),
-                              const SizedBox(height: 16),
-                            ],
-                            // Botão de ação
-                            ElevatedButton(
-                              onPressed: _isLoading ? null : _handleSubmit,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFF075E54),
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(vertical: 16),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                elevation: 2,
-                              ),
-                              child: _isLoading
-                                  ? const SizedBox(
-                                      height: 20,
-                                      width: 20,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        valueColor: AlwaysStoppedAnimation<Color>(
-                                          Colors.white,
+
+                                  if (_isLoginMode) ...[
+                                    TextButton(
+                                      onPressed: _isLoading
+                                          ? null
+                                          : _handleResetPassword,
+                                      child: Text(
+                                        'ESQUECEU A SENHA?',
+                                        style: TextStyle(
+                                          color: Colors.white.withOpacity(0.5),
+                                          fontSize: 11,
                                         ),
                                       ),
-                                    )
-                                  : Text(
-                                      _isLoginMode ? 'Entrar' : 'Criar Conta',
-                                      style: const TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.bold,
-                                      ),
                                     ),
+                                  ],
+                                ],
+                              ),
                             ),
-                            const SizedBox(height: 16),
-                            // Link para alternar entre login e registro
-                            TextButton(
+                          ),
+                        ),
+
+                        // Biometric Option
+                        if (_isLoginMode && _showBiometricOption) ...[
+                          const SizedBox(height: 24),
+                          Center(
+                            child: IconButton(
+                              icon: const Icon(
+                                Icons.fingerprint,
+                                color: Colors.white,
+                                size: 40,
+                              ),
                               onPressed: _isLoading
                                   ? null
-                                  : () {
-                                      setState(() {
-                                        _isLoginMode = !_isLoginMode;
-                                        _passwordController.clear();
-                                        _nomeController.clear();
-                                      });
-                                    },
-                              child: Text(
-                                _isLoginMode
-                                    ? 'Não tem uma conta? Cadastre-se'
-                                    : 'Já tem uma conta? Faça login',
-                                style: const TextStyle(
-                                  color: Color(0xFF075E54),
-                                ),
-                              ),
+                                  : _handleBiometricAuth,
+                              tooltip: 'Entrar com Biometria',
                             ),
-                            // Link para redefinir senha (apenas no modo login)
-                            if (_isLoginMode) ...[
-                              const SizedBox(height: 8),
-                              TextButton(
-                                onPressed: _isLoading ? null : _handleResetPassword,
-                                child: const Text(
-                                  'Esqueceu sua senha?',
-                                  style: TextStyle(
-                                    color: Colors.grey,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
+                          ),
+                        ],
+                      ],
                     ),
-                  ],
-                ),
+                  ),
                 ),
               ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }
-}
 
+  Widget _buildTextField({
+    required TextEditingController controller,
+    required String label,
+    required IconData icon,
+    FocusNode? focusNode,
+    bool obscureText = false,
+    Widget? suffixIcon,
+    TextInputType? keyboardType,
+    String? Function(String?)? validator,
+  }) {
+    return TextFormField(
+      controller: controller,
+      focusNode: focusNode,
+      obscureText: obscureText,
+      keyboardType: keyboardType,
+      style: const TextStyle(color: Colors.white),
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
+        prefixIcon: Icon(icon, color: Colors.white70),
+        suffixIcon: suffixIcon,
+        filled: true,
+        fillColor: Colors.white.withOpacity(0.05),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: const BorderSide(color: AxiaColors.primaryBlue, width: 2),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: const BorderSide(color: Colors.redAccent),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: const BorderSide(color: Colors.redAccent, width: 2),
+        ),
+      ),
+      validator: validator,
+    );
+  }
+}

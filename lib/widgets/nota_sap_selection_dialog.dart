@@ -22,7 +22,7 @@ class NotaSAPSelectionDialog extends StatefulWidget {
 class _NotaSAPSelectionDialogState extends State<NotaSAPSelectionDialog> {
   List<NotaSAP> _filteredNotas = [];
   List<NotaSAP> _displayedNotas = [];
-  Set<String> _selectedNotaIds = {}; // IDs das notas selecionadas
+  final Set<String> _selectedNotaIds = {}; // IDs das notas selecionadas
   String _searchQuery = '';
   String _viewMode = 'cards'; // 'cards', 'list', 'table'
   Set<String> _filterStatus = {};
@@ -106,12 +106,16 @@ class _NotaSAPSelectionDialogState extends State<NotaSAPSelectionDialog> {
 
         if (_filterTipo.isNotEmpty && (nota.tipo == null || !_filterTipo.contains(nota.tipo!))) return false;
         if (_filterPrioridade.isNotEmpty &&
-            (nota.textPrioridade == null || !_filterPrioridade.contains(nota.textPrioridade!))) return false;
+            (nota.textPrioridade == null || !_filterPrioridade.contains(nota.textPrioridade!))) {
+          return false;
+        }
         if (_filterNota.isNotEmpty && !_filterNota.contains(nota.nota)) return false;
         if (_filterSala.isNotEmpty && (nota.sala == null || !_filterSala.contains(nota.sala!))) return false;
         if (_filterLocal.isNotEmpty && (nota.local == null || !_filterLocal.contains(nota.local!))) return false;
         if (_filterStatus.isNotEmpty &&
-            (nota.statusUsuario == null || !_filterStatus.contains(nota.statusUsuario!))) return false;
+            (nota.statusUsuario == null || !_filterStatus.contains(nota.statusUsuario!))) {
+          return false;
+        }
         if (_filterOrdem.isNotEmpty && (nota.ordem == null || !_filterOrdem.contains(nota.ordem!))) return false;
 
         return true;
@@ -185,7 +189,7 @@ class _NotaSAPSelectionDialogState extends State<NotaSAPSelectionDialog> {
 
     return Dialog(
       insetPadding: const EdgeInsets.all(16),
-      child: Container(
+      child: SizedBox(
         width: isMobile ? double.infinity : 1100,
         height: isMobile ? double.infinity : 700,
         child: Column(
@@ -1070,7 +1074,7 @@ class _NotaSAPSelectionDialogState extends State<NotaSAPSelectionDialog> {
           headingRowHeight: 38,
           dataRowMinHeight: 36,
           dataRowMaxHeight: 42,
-          headingRowColor: MaterialStateProperty.all(Colors.blue[50]),
+          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
           columns: const [
             DataColumn(label: Text('Local', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
             DataColumn(label: Text('Tipo', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),

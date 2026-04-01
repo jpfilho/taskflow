@@ -1,6 +1,5 @@
 import 'dart:math' show sqrt;
 import 'package:flutter/material.dart';
-import 'package:flutter/painting.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../../data/models/annotation_models.dart';
 import '../../application/controllers/annotation_controller.dart';
@@ -248,11 +247,13 @@ class _AnnotationPainter extends CustomPainter {
   void _paintSelectionStroke(Canvas canvas, List<Offset> points, double strokeWidth) {
     if (points.length < 2) return;
     final path = Path()..moveTo(points.first.dx, points.first.dy);
-    for (var i = 1; i < points.length; i++) path.lineTo(points[i].dx, points[i].dy);
+    for (var i = 1; i < points.length; i++) {
+      path.lineTo(points[i].dx, points[i].dy);
+    }
     canvas.drawPath(
       path,
       Paint()
-        ..color = const Color(0xFF2196F3).withOpacity(0.6)
+        ..color = const Color(0xFF2196F3).withValues(alpha: 0.6)
         ..strokeWidth = _selectionStrokeWidth
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round
@@ -265,7 +266,7 @@ class _AnnotationPainter extends CustomPainter {
       start,
       end,
       Paint()
-        ..color = const Color(0xFF2196F3).withOpacity(0.6)
+        ..color = const Color(0xFF2196F3).withValues(alpha: 0.6)
         ..strokeWidth = _selectionStrokeWidth
         ..style = PaintingStyle.stroke,
     );
@@ -274,12 +275,14 @@ class _AnnotationPainter extends CustomPainter {
   void _paintSelectionPolygon(Canvas canvas, List<Offset> points, bool closed) {
     if (points.isEmpty) return;
     final path = Path()..moveTo(points.first.dx, points.first.dy);
-    for (var i = 1; i < points.length; i++) path.lineTo(points[i].dx, points[i].dy);
+    for (var i = 1; i < points.length; i++) {
+      path.lineTo(points[i].dx, points[i].dy);
+    }
     if (closed && points.length > 2) path.close();
     canvas.drawPath(
       path,
       Paint()
-        ..color = const Color(0xFF2196F3).withOpacity(0.5)
+        ..color = const Color(0xFF2196F3).withValues(alpha: 0.5)
         ..strokeWidth = _selectionStrokeWidth
         ..style = PaintingStyle.stroke,
     );
@@ -295,7 +298,7 @@ class _AnnotationPainter extends CustomPainter {
     canvas.drawRect(
       r,
       Paint()
-        ..color = const Color(0xFF2196F3).withOpacity(0.3)
+        ..color = const Color(0xFF2196F3).withValues(alpha: 0.3)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 2,
     );
@@ -370,7 +373,7 @@ class _AnnotationPainter extends CustomPainter {
     if (fillColor != null && closed && points.length > 2) {
       canvas.drawPath(
         path,
-        Paint()..color = Color(fillColor).withOpacity(0.3),
+        Paint()..color = Color(fillColor).withValues(alpha: 0.3),
       );
     }
     canvas.drawPath(

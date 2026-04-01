@@ -19,9 +19,10 @@ class GalleryController extends ChangeNotifier {
   // Estado da galeria
   List<MediaImage> _images = [];
   bool _isLoading = false;
+  bool _isLoadingRoom = false; // Separado para não bloquear a galeria toda no lazy load
   bool _hasMore = true;
   int _currentPage = 0;
-  final int _pageSize = 20;
+  final int _pageSize = 50;
   int? _totalImages;
   String? _error;
 
@@ -39,12 +40,14 @@ class GalleryController extends ChangeNotifier {
 
   List<Segment> _segments = [];
   List<Local> _locais = [];
-  List<Room> _rooms = [];
+  List<Room> _rooms = []; // Retirei o final da variavel
   List<StatusAlbum> _statusAlbums = [];
+  List<Map<String, String?>> _availableFolders = [];
   bool _loadingReferences = false;
 
   List<MediaImage> get images => _images;
   bool get isLoading => _isLoading;
+  bool get isLoadingRoom => _isLoadingRoom;
   bool get hasMore => _hasMore;
   int? get totalImages => _totalImages;
   String? get error => _error;
@@ -115,7 +118,7 @@ class GalleryController extends ChangeNotifier {
         if (!pertenceAoSegmento) {
           _selectedLocalId = null;
           _selectedRoomId = null;
-          _rooms = [];
+          _rooms.clear(); // Usar clear() para final List
         }
       }
       // Salas dos equipamentos associados ao local escolhido (equipamentos_sap.local_instalacao = locais.local_instalacao_sap)
@@ -123,18 +126,19 @@ class GalleryController extends ChangeNotifier {
         final selectedLocal = _locais.where((l) => l.id == _selectedLocalId).toList();
         if (selectedLocal.isNotEmpty && selectedLocal.first.localInstalacaoSap != null) {
           try {
-            _rooms = await _repository.getRooms(
+            _rooms.clear(); // Limpar antes de adicionar
+            _rooms.addAll(await _repository.getRooms(
               localInstalacao: selectedLocal.first.localInstalacaoSap,
               userLocalNames: null,
-            );
+            ));
           } catch (e) {
-            _rooms = [];
+            _rooms.clear();
           }
         } else {
-          _rooms = [];
+          _rooms.clear();
         }
       } else {
-        _rooms = [];
+        _rooms.clear();
       }
       // Manter selectedRoomId só se ainda estiver na lista (evita assertion no dropdown)
       if (_selectedRoomId != null && !_rooms.any((r) => r.id == _selectedRoomId)) {
@@ -157,82 +161,119 @@ class GalleryController extends ChangeNotifier {
     }
   }
 
-  /// Carrega imagens (primeira página)
+  /// Carrega a estrutura de pastas (sem imagens paginadas)
+  /// As imagens são carregadas sob demanda via [loadImagesForRoom] ao expandir cada sala.
   Future<void> loadImages({bool refresh = false}) async {
     if (_isLoading && !refresh) return;
 
     if (refresh) {
-      _currentPage = 0;
-      _images = [];
-      _hasMore = true;
+      _images.clear();
     }
 
     _isLoading = true;
     _error = null;
-    final searchAtRequest = _searchQuery;
     notifyListeners();
 
     try {
-      // Offline: não buscar remoto; manter cache em memória
+      // Offline: não buscar remoto
       if (!_connectivity.isConnected) {
-        if (_images.isEmpty) {
-          _error = 'Offline: conecte-se para carregar álbuns';
-        } else {
-          _error = 'Offline: exibindo álbuns já carregados';
-        }
-        _isLoading = false;
-        notifyListeners();
+        _error = _images.isEmpty
+            ? 'Offline: conecte-se para carregar álbuns'
+            : 'Offline: exibindo álbuns já carregados';
         return;
       }
 
-      final authService = AuthServiceSimples();
-      final usuario = authService.currentUser;
-      final userRegionalIds = (usuario?.isRoot ?? false) || (usuario?.regionalIds.isEmpty ?? true) ? null : usuario?.regionalIds;
-      final userDivisaoIds = (usuario?.isRoot ?? false) || (usuario?.divisaoIds.isEmpty ?? true) ? null : usuario?.divisaoIds;
-      final userSegmentoIds = (usuario?.isRoot ?? false) || (usuario?.segmentoIds.isEmpty ?? true) ? null : usuario?.segmentoIds;
+      // Carrega apenas a estrutura de pastas com contagens reais do servidor
+      await _loadAvailableFolders();
 
-      List<String>? equipmentIds;
-      if (_selectedLocalId != null) {
-        final selectedLocalList = locais.where((l) => l.id == _selectedLocalId).toList();
-        if (selectedLocalList.isNotEmpty) {
-          final selectedLocal = selectedLocalList.first;
-          if (selectedLocal.localInstalacaoSap != null && selectedLocal.localInstalacaoSap!.trim().isNotEmpty) {
-            equipmentIds = await _repository.getEquipmentIdsForLocalInstalacaoSap(selectedLocal.localInstalacaoSap!);
-          }
+      // Notificar imediatamente com a estrutura de pastas para UI aparecer rápido
+      _isLoading = false;
+      _hasMore = false;
+      _totalImages = _availableFolders
+          .where((f) {
+            final localName = f['local_name']?.toString().trim() ?? '';
+            return localName.isNotEmpty;
+          })
+          .fold<int>(0, (sum, f) => sum + (int.tryParse(f['count'] ?? '0') ?? 0));
+      notifyListeners();
+      return; // Sai antes do finally para evitar segundo notifyListeners
+    } catch (e) {
+      _error = 'Erro ao carregar álbuns: $e';
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  /// Lazy loader para buscar as imagens atreladas a uma sala específica ao abrir a sanfona
+  Future<void> loadImagesForRoom(String dummyId) async {
+    debugPrint('🚀 [LazyLoad] Chamado com dummyId: "$dummyId"');
+    
+    String? localId;
+    String? roomId;
+    final parts = dummyId.split('|');
+    debugPrint('🔍 [LazyLoad] parts: $parts (total: ${parts.length})');
+    
+    if (parts.length >= 6 && parts[1] == 'room') {
+       localId = parts[4];
+       roomId = parts[5];
+       debugPrint('📁 [LazyLoad] Tipo ROOM → localId=$localId, roomId=$roomId');
+    } else if (parts.length >= 4 && parts[1] == 'root') {
+       localId = parts[3];
+       roomId = null; 
+       debugPrint('📁 [LazyLoad] Tipo ROOT → localId=$localId');
+    } else {
+       debugPrint('❌ [LazyLoad] Formato inválido, partes insuficientes: ${parts.length}');
+    }
+
+    if (localId == null || localId.isEmpty) {
+      debugPrint('❌ [LazyLoad] localId nulo ou vazio — abortando!');
+      return;
+    }
+
+    _isLoadingRoom = true;
+    notifyListeners();
+
+    try {
+      debugPrint('📡 [LazyLoad] Buscando getMediaImages(localId=$localId, roomId=$roomId)');
+      final result = await _repository.getMediaImages(
+        page: 0,
+        pageSize: 100,
+        localId: localId,
+        roomId: (roomId != null && roomId.isNotEmpty) ? roomId : null,
+      );
+
+      final newImages = result['images'] as List<MediaImage>;
+      debugPrint('✅ [LazyLoad] Recebidas ${newImages.length} imagens do servidor');
+      if (newImages.isNotEmpty) {
+        final sample = newImages.first;
+        debugPrint('🔎 [LazyLoad] Sample image: id=${sample.id} localName="${sample.localName}" roomName="${sample.roomName}"');
+      }
+      
+      int added = 0;
+      for (final newImg in newImages) {
+        if (!_images.any((existing) => existing.id == newImg.id)) {
+           _images.add(newImg);
+           added++;
+        }
+      }
+      debugPrint('✅ [LazyLoad] $added imagens novas adicionadas. Total _images=${_images.length}');
+      
+      // Debug: verificar como ficam as chaves após getGroupedImagesByLocal
+      final grouped = getGroupedImagesByLocal();
+      debugPrint('🗂️ [LazyLoad] Após grouped: chaves=${grouped.keys.toList()}');
+      for (final entry in grouped.entries) {
+        final realImgs = entry.value.where((img) => !img.id.startsWith('dummy')).length;
+        if (realImgs > 0) {
+          debugPrint('   📂 ${entry.key}: $realImgs imagens reais');
         }
       }
 
-      final result = await _repository.getMediaImages(
-        page: _currentPage,
-        pageSize: _pageSize,
-        searchQuery: searchAtRequest.isEmpty ? null : searchAtRequest,
-        segmentId: _selectedSegmentId,
-        equipmentIds: equipmentIds,
-        roomId: _selectedRoomId,
-        status: _selectedStatus,
-        statusAlbumId: _selectedStatusAlbumId,
-        userRegionalIds: userRegionalIds,
-        userDivisaoIds: userDivisaoIds,
-        userSegmentoIds: userSegmentoIds,
-      );
-
-      // Ignorar resposta se o usuário já digitou outra busca (evita texto “reordenar” e resultados errados)
-      if (searchAtRequest != _searchQuery) return;
-
-      if (refresh) {
-        _images = result['images'] as List<MediaImage>;
-      } else {
-        _images = [..._images, ...(result['images'] as List<MediaImage>)];
-      }
-
-      final total = result['total'] as int;
-      _totalImages = total;
-      _hasMore = _images.length < total;
-      _currentPage++;
-    } catch (e) {
-      _error = 'Erro ao carregar imagens: $e';
+    } catch (e, stack) {
+      debugPrint('⚠️ [LazyLoad] ERRO: $e');
+      debugPrint('   Stack: $stack');
     } finally {
-      _isLoading = false;
+      _isLoadingRoom = false;
       notifyListeners();
     }
   }
@@ -261,7 +302,7 @@ class GalleryController extends ChangeNotifier {
       _selectedSegmentId = segmentId;
       _selectedLocalId = null;
       _selectedRoomId = null;
-      _rooms = [];
+      _rooms.clear(); // Usar clear() para final List
       notifyListeners();
       loadImages(refresh: true);
     }
@@ -272,17 +313,17 @@ class GalleryController extends ChangeNotifier {
     if (_selectedLocalId != localId) {
       _selectedLocalId = localId;
       _selectedRoomId = null;
-      _rooms = [];
+      _rooms.clear(); // Usar clear() para final List
       if (localId != null) {
         final selectedLocal = locais.where((l) => l.id == localId).toList();
         if (selectedLocal.isNotEmpty && selectedLocal.first.localInstalacaoSap != null && selectedLocal.first.localInstalacaoSap!.trim().isNotEmpty) {
           try {
-            _rooms = await _repository.getRooms(
+            _rooms.addAll(await _repository.getRooms(
               localInstalacao: selectedLocal.first.localInstalacaoSap,
               userLocalNames: null,
-            );
+            ));
           } catch (e) {
-            _rooms = [];
+            _rooms.clear();
           }
           if (_selectedRoomId != null && !_rooms.any((r) => r.id == _selectedRoomId)) {
             _selectedRoomId = null;
@@ -387,6 +428,31 @@ class GalleryController extends ChangeNotifier {
     }
   }
 
+  Future<void> _loadAvailableFolders() async {
+     try {
+       final authService = AuthServiceSimples();
+       final usuario = authService.currentUser;
+       // Coletar segmentIds baseados nos filtros ativos
+       List<String>? segmentFilter;
+       if (_selectedSegmentId != null) {
+          segmentFilter = [_selectedSegmentId!];
+       } else {
+          segmentFilter = (usuario?.isRoot ?? false) || (usuario?.segmentoIds.isEmpty ?? true) ? null : usuario?.segmentoIds;
+       }
+       
+       final regionalFilter = (usuario?.isRoot ?? false) || (usuario?.regionalIds.isEmpty ?? true) ? null : usuario?.regionalIds;
+       final divisaoFilter = (usuario?.isRoot ?? false) || (usuario?.divisaoIds.isEmpty ?? true) ? null : usuario?.divisaoIds;
+       
+       _availableFolders = await _repository.getAvailableAlbumFolders(
+          userSegmentoIds: segmentFilter,
+          userRegionalIds: regionalFilter,
+          userDivisaoIds: divisaoFilter,
+       );
+     } catch (e) {
+       debugPrint('Erro silent ao carregar pastas disponíveis: $e');
+     }
+  }
+
   /// Limpa todos os filtros
   void clearFilters() {
     _searchDebounce?.cancel();
@@ -419,13 +485,90 @@ class GalleryController extends ChangeNotifier {
     return grouped;
   }
 
-  /// Agrupa imagens por local (álbum = um local); ideal para muitos cadastros.
+  /// Agrupa imagens por local (álbum = um local).
   Map<String, List<MediaImage>> getGroupedImagesByLocal() {
     final grouped = <String, List<MediaImage>>{};
 
+    // 1) Primeiramente popular o array local com as pastas e subpastas estruturais garantidas do Repository
+    
+    // 1â) Pré-calcular: quais locais têm pelo menos um room_id (sala real, mesmo que nome seja nulo)
+    // Isso evita criar dummy root 'Sem sala' quando o local JÁ tem salas reais associadas
+    final locaisComRoomId = <String>{};
+    for (final folder in _availableFolders) {
+      final lId = folder['local_id']?.trim() ?? '';
+      final rId = folder['room_id']?.trim() ?? '';
+      if (lId.isNotEmpty && rId.isNotEmpty) {
+        locaisComRoomId.add(lId);
+      }
+    }
+    
+    for (final folder in _availableFolders) {
+      final local = folder['local_name']?.trim();
+        final room = folder['room_name']?.trim();
+        final countStr = folder['count']?.toString() ?? '0';
+        
+        // Tratar locais vazios ou nulos da mesma forma que os objetos MediaImage
+        final robustLocal = (local != null && local.isNotEmpty) ? local : 'Sem local';
+        final robustRoom = (room != null && room.isNotEmpty) ? room : 'Sem sala';
+
+        if (!grouped.containsKey(robustLocal)) {
+           grouped[robustLocal] = [];
+        }
+        
+        // Pasta Raízes do Local (sem vínculo com salas)
+        if (room == null || room.isEmpty) {
+           final localId = folder['local_id']?.trim() ?? '';
+           final hasRoomId = (folder['room_id']?.trim() ?? '').isNotEmpty;
+           
+           // Se tem room_id mas sem nome: é uma sala não resolvida — ela já aparece via dummy|room
+           // Não criar root dummy para não duplicar com a entrada de sala
+           if (hasRoomId) continue;
+           
+           // Não criar root dummy se o local já tem salas reais (evita Sem sala fantasma)
+           if (locaisComRoomId.contains(localId)) continue;
+           
+           final alreadyHasRootDummy = grouped[robustLocal]!.any((img) => img.id.startsWith('dummy_root_') || img.id.startsWith('dummy|root|'));
+           if (!alreadyHasRootDummy && countStr != '0') {
+              grouped[robustLocal]!.add(
+                 MediaImage(
+                    id: 'dummy|root|$countStr|$localId',
+                    filePath: '',
+                    createdBy: '',
+                    createdAt: DateTime.now(),
+                    updatedAt: DateTime.now(),
+                    title: 'Placeholder',
+                    tags: [],
+                    roomName: null, 
+                 )
+              );
+           }
+        } else {
+           // Pastas correspondentes às Salas
+           final alreadyHasRoom = grouped[robustLocal]!.any((img) => (img.roomName?.trim() ?? 'Sem sala') == robustRoom);
+           if (!alreadyHasRoom) {
+              final localId = folder['local_id'] ?? '';
+              final roomId = folder['room_id'] ?? '';
+              grouped[robustLocal]!.add(
+                 MediaImage(
+                    id: 'dummy|room|$countStr|$robustRoom|$localId|$roomId',
+                    filePath: '',
+                    createdBy: '',
+                    createdAt: DateTime.now(),
+                    updatedAt: DateTime.now(),
+                    title: 'Placeholder',
+                    tags: [],
+                    roomName: room,
+                 )
+              );
+           }
+        }
+    }
+
+    // 2) Popular imagens (já carregadas da paginacao respectiva do momento) nessas chaves
     for (final image in _images) {
-      final key = (image.localName != null && image.localName!.trim().isNotEmpty)
-          ? image.localName!
+      final localName = image.localName?.trim();
+      final key = (localName != null && localName.isNotEmpty)
+          ? localName
           : 'Sem local';
       
       if (!grouped.containsKey(key)) {

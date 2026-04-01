@@ -755,7 +755,7 @@ class _ExecutorListViewState extends State<ExecutorListView> {
         child: SingleChildScrollView(
           scrollDirection: Axis.vertical,
           child: DataTable(
-            headingRowColor: MaterialStateProperty.all(Colors.blue[50]),
+            headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
             columns: const [
               DataColumn(label: Text('Ações', style: TextStyle(fontWeight: FontWeight.bold))),
               DataColumn(label: Text('Nome', style: TextStyle(fontWeight: FontWeight.bold))),
@@ -772,8 +772,8 @@ class _ExecutorListViewState extends State<ExecutorListView> {
             ],
             rows: _filteredExecutores.map((executor) {
               return DataRow(
-                color: MaterialStateProperty.resolveWith<Color?>(
-                  (Set<MaterialState> states) {
+                color: WidgetStateProperty.resolveWith<Color?>(
+                  (Set<WidgetState> states) {
                     if (!executor.ativo) {
                       return Colors.grey[100];
                     }

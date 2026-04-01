@@ -284,7 +284,7 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
 
     return Dialog(
       insetPadding: const EdgeInsets.all(16),
-      child: Container(
+      child: SizedBox(
         width: isMobile 
             ? double.infinity 
             : isDesktop 
@@ -821,7 +821,7 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
     return SingleChildScrollView(
       controller: _scrollController,
       child: DataTable(
-          headingRowColor: MaterialStateProperty.all(Colors.blue[50]),
+          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
           columns: [
             const DataColumn(
               label: SizedBox.shrink(),

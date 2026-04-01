@@ -56,7 +56,7 @@ class _OrdemViewState extends State<OrdemView> {
   Map<String, List<Map<String, dynamic>>> _ordensProgramadasInfo = {}; // Lista de vinculações por ordem
   Map<String, Status> _statusMap = {}; // Mapa de status (codigo -> Status)
   bool _isLoading = false;
-  Set<String> _ordensVinculando = {}; // IDs das ordens que estão sendo vinculadas
+  final Set<String> _ordensVinculando = {}; // IDs das ordens que estão sendo vinculadas
   Set<String> _ordensSelecionadas = {}; // IDs das ordens selecionadas para vinculação múltipla
   // Filtros (multi-seleção, padronizados com Notas)
   Set<String> _filtroStatusTarefa = {};
@@ -237,7 +237,7 @@ class _OrdemViewState extends State<OrdemView> {
       }
 
       final email = usuario.email;
-      if (email == null || email.isEmpty) {
+      if (email.isEmpty) {
         _canEditTasks = false;
         _canEditTasksChecked = true;
         return;
@@ -374,17 +374,17 @@ class _OrdemViewState extends State<OrdemView> {
     }
     try {
       final locais = await LocalService().getAllLocais();
-      final localDisplayLower = (String s) => (s.trim().toLowerCase());
-      const _sep = '\u0001';
+      String localDisplayLower(String s) => (s.trim().toLowerCase());
+      const sep = '\u0001';
       final uniqueKeys = <String>{};
       for (final o in _todasOrdens) {
         final localD = _localParaExibicao(o);
         final sala = o.sala?.trim() ?? '';
-        uniqueKeys.add('$localD$_sep$sala');
+        uniqueKeys.add('$localD$sep$sala');
       }
       final cache = <String, _AlbumInfo>{};
       for (final key in uniqueKeys) {
-        final idx = key.indexOf(_sep);
+        final idx = key.indexOf(sep);
         final localDisplay = idx >= 0 ? key.substring(0, idx) : key;
         final sala = idx >= 0 && idx < key.length - 1 ? key.substring(idx + 1) : '';
         String? localId;
@@ -406,7 +406,7 @@ class _OrdemViewState extends State<OrdemView> {
       for (final o in _todasOrdens) {
         final localD = _localParaExibicao(o);
         final sala = o.sala?.trim() ?? '';
-        final k = '$localD$_sep$sala';
+        final k = '$localD$sep$sala';
         newMap[o.id] = cache[k] ?? _AlbumInfo(count: 0);
       }
       if (mounted) setState(() => _albumInfoByOrdemId = newMap);
@@ -1460,7 +1460,7 @@ class _OrdemViewState extends State<OrdemView> {
                         ),
                         const SizedBox(height: 20),
                         LinearProgressIndicator(
-                          value: ordensParaVincular.length > 0 
+                          value: ordensParaVincular.isNotEmpty 
                               ? ordensProcessadas / (ordensParaVincular.length + 1) // +1 para a criação da tarefa
                               : 0.0,
                           backgroundColor: Colors.grey[300],
@@ -1551,7 +1551,7 @@ class _OrdemViewState extends State<OrdemView> {
                   content: Text(
                     vinculadasComSucesso == 1
                         ? 'Tarefa criada e vinculada à ordem ${ordemPrincipal.ordem} com sucesso!'
-                        : 'Tarefa criada e ${vinculadasComSucesso} ordens vinculadas com sucesso!',
+                        : 'Tarefa criada e $vinculadasComSucesso ordens vinculadas com sucesso!',
                   ),
                   backgroundColor: Colors.green,
                   duration: const Duration(seconds: 3),
@@ -1763,7 +1763,7 @@ class _OrdemViewState extends State<OrdemView> {
                       ),
                       const SizedBox(height: 20),
                       LinearProgressIndicator(
-                        value: ordensSelecionadas.length > 0 ? ordensProcessadas / ordensSelecionadas.length : 0.0,
+                        value: ordensSelecionadas.isNotEmpty ? ordensProcessadas / ordensSelecionadas.length : 0.0,
                         backgroundColor: Colors.grey[300],
                         valueColor: const AlwaysStoppedAnimation<Color>(Colors.blue),
                       ),
@@ -2428,7 +2428,7 @@ class _OrdemViewState extends State<OrdemView> {
   // ignore: unused_element
   Widget _buildFilterField(String label, String? value, List<String> options, Function(String?) onChanged) {
     return DropdownButtonFormField<String>(
-      value: value,
+      initialValue: value,
       isExpanded: true,
       decoration: InputDecoration(
         labelText: label,
@@ -2665,7 +2665,7 @@ class _OrdemViewState extends State<OrdemView> {
 
     String diasLabel;
     if (diasRestantes < 0) {
-      diasLabel = '${diasRestantes} dias';
+      diasLabel = '$diasRestantes dias';
     } else if (diasRestantes == 0) {
       diasLabel = 'Vence hoje';
     } else if (diasRestantes == 1) {
@@ -2763,7 +2763,7 @@ class _OrdemViewState extends State<OrdemView> {
       scrollDirection: Axis.horizontal,
       child: SingleChildScrollView(
         child: DataTable(
-          headingRowColor: MaterialStateProperty.all(Colors.blue[50]),
+          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
           columns: [
             DataColumn(
               label: Checkbox(
@@ -2809,7 +2809,7 @@ class _OrdemViewState extends State<OrdemView> {
             return DataRow(
               selected: isSelected,
               color: isProgramada && statusColor != null
-                  ? MaterialStateProperty.all(statusColor.withOpacity(0.1))
+                  ? WidgetStateProperty.all(statusColor.withOpacity(0.1))
                   : null,
               cells: [
                 DataCell(

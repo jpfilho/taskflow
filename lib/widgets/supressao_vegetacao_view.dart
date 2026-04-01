@@ -121,13 +121,17 @@ class _SupressaoVegetacaoViewState extends State<SupressaoVegetacaoView> {
   /// Mobile/desktop: compartilha via share_plus (Salvar em arquivos / enviar).
   Future<void> _exportarXlsx() async {
     if (_vaos.isEmpty) return;
-    const mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    const mime =
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
     try {
       final bytes = await _service.exportarXlsx(_vaos);
       final linhaLabel = _selectedLinhaNomeTabela.trim().isEmpty
           ? 'todas'
-          : _selectedLinhaNomeTabela.replaceAll(RegExp(r'[^\w\s-]'), '_').replaceAll(RegExp(r'\s+'), '_');
-      final filename = 'supressao_vegetacao_${linhaLabel}_${DateTime.now().millisecondsSinceEpoch}.xlsx';
+          : _selectedLinhaNomeTabela
+                .replaceAll(RegExp(r'[^\w\s-]'), '_')
+                .replaceAll(RegExp(r'\s+'), '_');
+      final filename =
+          'supressao_vegetacao_${linhaLabel}_${DateTime.now().millisecondsSinceEpoch}.xlsx';
 
       if (kDebugMode) {
         // ignore: avoid_print
@@ -153,7 +157,9 @@ class _SupressaoVegetacaoViewState extends State<SupressaoVegetacaoView> {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('Falha no download. Tente outro navegador ou salve pelo menu do navegador.'),
+                content: Text(
+                  'Falha no download. Tente outro navegador ou salve pelo menu do navegador.',
+                ),
                 backgroundColor: Colors.orange,
               ),
             );
@@ -161,16 +167,16 @@ class _SupressaoVegetacaoViewState extends State<SupressaoVegetacaoView> {
         }
       } else {
         try {
-          final xFile = XFile.fromData(
-            bytes,
-            name: filename,
-            mimeType: mime,
-          );
-          await Share.shareXFiles([xFile], text: 'Supressão de vegetação - $linhaLabel');
+          final xFile = XFile.fromData(bytes, name: filename, mimeType: mime);
+          await Share.shareXFiles([
+            xFile,
+          ], text: 'Supressão de vegetação - $linhaLabel');
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('Compartilhar: $filename (${bytes.length} bytes)'),
+                content: Text(
+                  'Compartilhar: $filename (${bytes.length} bytes)',
+                ),
                 backgroundColor: Colors.green,
               ),
             );
@@ -179,7 +185,9 @@ class _SupressaoVegetacaoViewState extends State<SupressaoVegetacaoView> {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('Exportação indisponível neste dispositivo. Use a versão web para baixar o arquivo.'),
+                content: Text(
+                  'Exportação indisponível neste dispositivo. Use a versão web para baixar o arquivo.',
+                ),
                 backgroundColor: Colors.orange,
               ),
             );
@@ -194,7 +202,84 @@ class _SupressaoVegetacaoViewState extends State<SupressaoVegetacaoView> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Erro ao exportar: ${e.toString().length > 80 ? 'falha ao gerar planilha.' : e}'),
+            content: Text(
+              'Erro ao exportar: ${e.toString().length > 80 ? 'falha ao gerar planilha.' : e}',
+            ),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _importarDaTabela() async {
+    try {
+      setState(() {
+        _isLoadingTabela = true;
+      });
+
+      // withData: true para Web / desktop funcionar perfeitamente
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['xlsx'],
+        withData: true,
+      );
+
+      if (result == null || result.files.isEmpty) {
+        setState(() {
+          _isLoadingTabela = false;
+        });
+        return;
+      }
+
+      final file = result.files.single;
+      final bytes = await readFileBytes(file);
+      if (bytes == null || bytes.isEmpty) {
+        setState(() {
+          _isLoadingTabela = false;
+        });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Arquivo vazio ou não foi possível ler. Tente novamente.',
+              ),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+
+      final res = await _service.importarXlsx(
+        bytes: bytes,
+        filename: file.name,
+        linhaNome:
+            _selectedLinhaNomeTabela, // Pode ser vazio se for 'Todas as linhas', o DB agora pega do Excel
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Importação concluída: ${res.linhasProcessadas} linhas lidas, ${res.registrosUpsertados} registros atualizados.',
+            ),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+
+      // Recarrega a view
+      await _carregarLinhas();
+      await _carregarVaos();
+    } catch (e) {
+      setState(() {
+        _isLoadingTabela = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erro na importação: $e'),
             backgroundColor: Colors.red,
           ),
         );
@@ -236,7 +321,9 @@ class _SupressaoVegetacaoViewState extends State<SupressaoVegetacaoView> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Arquivo vazio ou não foi possível ler. Tente novamente com withData.'),
+              content: Text(
+                'Arquivo vazio ou não foi possível ler. Tente novamente com withData.',
+              ),
               backgroundColor: Colors.red,
             ),
           );
@@ -248,9 +335,15 @@ class _SupressaoVegetacaoViewState extends State<SupressaoVegetacaoView> {
         bytes: bytes,
         filename: file.name,
         linhaNome: _selectedLinhaNome ?? _linhaController.text.trim(),
-        tensaoKv: _tensaoController.text.trim().isEmpty ? null : _tensaoController.text.trim(),
-        uf: _ufController.text.trim().isEmpty ? null : _ufController.text.trim(),
-        concessionaria: _concessionariaController.text.trim().isEmpty ? null : _concessionariaController.text.trim(),
+        tensaoKv: _tensaoController.text.trim().isEmpty
+            ? null
+            : _tensaoController.text.trim(),
+        uf: _ufController.text.trim().isEmpty
+            ? null
+            : _ufController.text.trim(),
+        concessionaria: _concessionariaController.text.trim().isEmpty
+            ? null
+            : _concessionariaController.text.trim(),
       );
 
       setState(() {
@@ -316,7 +409,9 @@ class _SupressaoVegetacaoViewState extends State<SupressaoVegetacaoView> {
               if (_selectedSection == 0)
                 Card(
                   elevation: 2,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                   child: Padding(
                     padding: const EdgeInsets.all(16.0),
                     child: Column(
@@ -326,24 +421,35 @@ class _SupressaoVegetacaoViewState extends State<SupressaoVegetacaoView> {
                           children: const [
                             Icon(Icons.upload_file, size: 20),
                             SizedBox(width: 8),
-                            Text('Importar mapeamento (XLSX)',
-                                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                            Text(
+                              'Importar mapeamento (XLSX)',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
                           ],
                         ),
                         const SizedBox(height: 12),
                         _loadingLinhas
                             ? const LinearProgressIndicator()
                             : DropdownButtonFormField<String>(
-                                value: _selectedLinhaId.isEmpty ? null : _selectedLinhaId,
+                                initialValue: _selectedLinhaId.isEmpty
+                                    ? null
+                                    : _selectedLinhaId,
                                 decoration: const InputDecoration(
                                   labelText: 'Linha de Transmissão *',
                                   border: OutlineInputBorder(),
                                 ),
                                 items: _linhas
-                                    .map((linha) => DropdownMenuItem<String>(
-                                          value: linha['id'] as String,
-                                          child: Text(linha['nome'] as String? ?? ''),
-                                        ))
+                                    .map(
+                                      (linha) => DropdownMenuItem<String>(
+                                        value: linha['id'] as String,
+                                        child: Text(
+                                          linha['nome'] as String? ?? '',
+                                        ),
+                                      ),
+                                    )
                                     .toList(),
                                 onChanged: (val) {
                                   setState(() {
@@ -413,7 +519,11 @@ class _SupressaoVegetacaoViewState extends State<SupressaoVegetacaoView> {
                         FilledButton.icon(
                           onPressed: _isImporting ? null : _importar,
                           icon: const Icon(Icons.cloud_upload),
-                          label: Text(_isImporting ? 'Importando...' : 'Selecionar e importar XLSX'),
+                          label: Text(
+                            _isImporting
+                                ? 'Importando...'
+                                : 'Selecionar e importar XLSX',
+                          ),
                         ),
                         const SizedBox(height: 12),
                         if (_lastResult != null) ...[
@@ -424,13 +534,27 @@ class _SupressaoVegetacaoViewState extends State<SupressaoVegetacaoView> {
                         ],
                         if (_avisos.isNotEmpty) ...[
                           const SizedBox(height: 8),
-                          const Text('Avisos:', style: TextStyle(fontWeight: FontWeight.bold)),
+                          const Text(
+                            'Avisos:',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
                           ..._avisos.map((a) => Text('- $a')),
                         ],
                         if (_erros.isNotEmpty) ...[
                           const SizedBox(height: 8),
-                          const Text('Erros:', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red)),
-                          ..._erros.map((e) => Text('- $e', style: const TextStyle(color: Colors.red))),
+                          const Text(
+                            'Erros:',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.red,
+                            ),
+                          ),
+                          ..._erros.map(
+                            (e) => Text(
+                              '- $e',
+                              style: const TextStyle(color: Colors.red),
+                            ),
+                          ),
                         ],
                       ],
                     ),
@@ -439,101 +563,165 @@ class _SupressaoVegetacaoViewState extends State<SupressaoVegetacaoView> {
               else
                 Card(
                   elevation: 2,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                   child: Padding(
                     padding: const EdgeInsets.all(12.0),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          alignment: WrapAlignment.spaceBetween,
+                          crossAxisAlignment: WrapCrossAlignment.center,
                           children: [
                             Row(
+                              mainAxisSize: MainAxisSize.min,
                               children: const [
                                 Icon(Icons.table_chart, size: 20),
                                 SizedBox(width: 8),
                                 Text(
                                   'Vãos importados (todos da linha)',
-                                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                  ),
                                 ),
                               ],
                             ),
-                        FilledButton.icon(
-                          onPressed: _isLoadingTabela ? null : _carregarVaos,
-                          icon: const Icon(Icons.refresh),
-                          label: Text(_isLoadingTabela ? 'Carregando...' : 'Atualizar'),
-                        ),
-                        FilledButton.icon(
-                          onPressed: (_vaos.isEmpty || _isLoadingTabela) ? null : _exportarXlsx,
-                          icon: const Icon(Icons.download),
-                          label: const Text('Exportar XLSX'),
-                        ),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                FilledButton.icon(
+                                  onPressed: _isLoadingTabela
+                                      ? null
+                                      : _carregarVaos,
+                                  icon: const Icon(Icons.refresh),
+                                  label: Text(
+                                    _isLoadingTabela
+                                        ? 'Carregando...'
+                                        : 'Atualizar',
+                                  ),
+                                ),
+                                FilledButton.icon(
+                                  onPressed: _isLoadingTabela
+                                      ? null
+                                      : _importarDaTabela,
+                                  icon: const Icon(Icons.upload_file),
+                                  label: const Text('Importar XLSX'),
+                                ),
+                                FilledButton.icon(
+                                  onPressed: (_vaos.isEmpty || _isLoadingTabela)
+                                      ? null
+                                      : _exportarXlsx,
+                                  icon: const Icon(Icons.download),
+                                  label: const Text('Exportar XLSX'),
+                                ),
+                              ],
+                            ),
                           ],
                         ),
                         const SizedBox(height: 12),
                         _loadingLinhas
                             ? const LinearProgressIndicator()
-                            : Builder(builder: (context) {
-                                final Set<String> opts = {
-                                  '',
-                                  ..._linhas.map((l) => (l['nome'] as String?)?.trim() ?? ''),
-                                  ..._ltEstruturas.map((lt) => lt.trim()),
-                                };
-                                final linhaOptions = opts.where((e) => e.isNotEmpty || e == '').toList()..sort();
-                                final dropdownValue = linhaOptions.contains(_selectedLinhaNomeTabela)
-                                    ? _selectedLinhaNomeTabela
-                                    : '';
-                                return DropdownButtonFormField<String>(
-                                  value: dropdownValue,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Filtrar por linha',
-                                    border: OutlineInputBorder(),
-                                    isDense: true,
-                                  ),
-                                  items: linhaOptions
-                                      .map((opt) => DropdownMenuItem<String>(
+                            : Builder(
+                                builder: (context) {
+                                  final Set<String> opts = {
+                                    '',
+                                    ..._linhas.map(
+                                      (l) =>
+                                          (l['nome'] as String?)?.trim() ?? '',
+                                    ),
+                                    ..._ltEstruturas.map((lt) => lt.trim()),
+                                  };
+                                  final linhaOptions =
+                                      opts
+                                          .where((e) => e.isNotEmpty || e == '')
+                                          .toList()
+                                        ..sort();
+                                  final dropdownValue =
+                                      linhaOptions.contains(
+                                        _selectedLinhaNomeTabela,
+                                      )
+                                      ? _selectedLinhaNomeTabela
+                                      : '';
+                                  return DropdownButtonFormField<String>(
+                                    initialValue: dropdownValue,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Filtrar por linha',
+                                      border: OutlineInputBorder(),
+                                      isDense: true,
+                                    ),
+                                    items: linhaOptions
+                                        .map(
+                                          (opt) => DropdownMenuItem<String>(
                                             value: opt,
-                                            child: Text(opt.isEmpty ? 'Todas as linhas' : opt),
-                                          ))
-                                      .toList(),
-                                  onChanged: (val) {
-                                    setState(() {
-                                      _selectedLinhaNomeTabela = val ?? '';
-                                    });
-                                    _carregarVaos();
-                                  },
-                                );
-                              }),
+                                            child: Text(
+                                              opt.isEmpty
+                                                  ? 'Todas as linhas'
+                                                  : opt,
+                                            ),
+                                          ),
+                                        )
+                                        .toList(),
+                                    onChanged: (val) {
+                                      setState(() {
+                                        _selectedLinhaNomeTabela = val ?? '';
+                                      });
+                                      _carregarVaos();
+                                    },
+                                  );
+                                },
+                              ),
                         const SizedBox(height: 12),
                         if (_isLoadingTabela)
-                          const Center(child: Padding(
-                            padding: EdgeInsets.all(16.0),
-                            child: CircularProgressIndicator(),
-                          ))
+                          const Center(
+                            child: Padding(
+                              padding: EdgeInsets.all(16.0),
+                              child: CircularProgressIndicator(),
+                            ),
+                          )
                         else
                           _VaosTable(
                             vaos: _vaos,
                             pageSize: _pageSize,
                             currentPage: _currentPage,
-                            onPageChanged: (p) => setState(() => _currentPage = p),
+                            onPageChanged: (p) =>
+                                setState(() => _currentPage = p),
                             vController: _tableVController,
                             onEdit: (vao) async {
-                              final updated = await showDialog<Map<String, dynamic>>(
-                                context: context,
-                                builder: (context) => _EditarVaoDialog(vao: vao),
-                              );
+                              final updated =
+                                  await showDialog<Map<String, dynamic>>(
+                                    context: context,
+                                    builder: (context) =>
+                                        _EditarVaoDialog(vao: vao),
+                                  );
                               if (updated != null && updated.isNotEmpty) {
                                 try {
                                   final vaoId = vao['vao_id'] as String?;
                                   if (vaoId != null) {
                                     await _service.atualizarVao(vaoId, updated);
                                   } else {
-                                    final ltNome = ((vao['lt'] as String?) ?? _selectedLinhaNomeTabela).trim();
-                                    final est = (((updated['est_codigo'] as String?) ?? (vao['est_codigo'] as String?) ?? '')).trim();
+                                    final ltNome =
+                                        ((vao['lt'] as String?) ??
+                                                _selectedLinhaNomeTabela)
+                                            .trim();
+                                    final est =
+                                        (((updated['est_codigo'] as String?) ??
+                                                (vao['est_codigo']
+                                                    as String?) ??
+                                                ''))
+                                            .trim();
                                     if (ltNome.isEmpty || est.isEmpty) {
-                                      throw Exception('Não foi possível localizar linha ou est_codigo para criar o mapeamento.');
+                                      throw Exception(
+                                        'Não foi possível localizar linha ou est_codigo para criar o mapeamento.',
+                                      );
                                     }
-                                    final linhaId = await _service.obterOuCriarLinhaPorNome(nome: ltNome);
+                                    final linhaId = await _service
+                                        .obterOuCriarLinhaPorNome(nome: ltNome);
                                     await _service.upsertVaoComLinha(
                                       linhaId: linhaId,
                                       estCodigo: est,
@@ -544,7 +732,9 @@ class _SupressaoVegetacaoViewState extends State<SupressaoVegetacaoView> {
                                   if (mounted) {
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       const SnackBar(
-                                        content: Text('Vão atualizado com sucesso'),
+                                        content: Text(
+                                          'Vão atualizado com sucesso',
+                                        ),
                                         backgroundColor: Colors.green,
                                       ),
                                     );
@@ -563,17 +753,23 @@ class _SupressaoVegetacaoViewState extends State<SupressaoVegetacaoView> {
                             },
                             onQuickEdit: (vao, field, value) async {
                               final vaoId = vao['vao_id'] as String?;
-                              final ltNome = ((vao['linhas_transmissao']?['nome'] as String?) ??
-                                      (vao['lt'] as String?) ??
-                                      _selectedLinhaNomeTabela)
-                                  .trim();
-                              final est = (vao['est_codigo'] as String?)?.trim() ?? '';
+                              final ltNome =
+                                  ((vao['linhas_transmissao']?['nome']
+                                              as String?) ??
+                                          (vao['lt'] as String?) ??
+                                          _selectedLinhaNomeTabela)
+                                      .trim();
+                              final est =
+                                  (vao['est_codigo'] as String?)?.trim() ?? '';
                               if (ltNome.isEmpty || est.isEmpty) return;
                               try {
                                 if (vaoId != null) {
-                                  await _service.atualizarVao(vaoId, {field: value});
+                                  await _service.atualizarVao(vaoId, {
+                                    field: value,
+                                  });
                                 } else {
-                                  final linhaId = await _service.obterOuCriarLinhaPorNome(nome: ltNome);
+                                  final linhaId = await _service
+                                      .obterOuCriarLinhaPorNome(nome: ltNome);
                                   await _service.upsertVaoComLinha(
                                     linhaId: linhaId,
                                     estCodigo: est,
@@ -626,7 +822,12 @@ class _VaosTable extends StatefulWidget {
   final ScrollController vController;
   final Future<void> Function(Map<String, dynamic> vao) onEdit;
   final void Function(Map<String, dynamic> vao) onView;
-  final Future<void> Function(Map<String, dynamic> vao, String field, dynamic value)? onQuickEdit;
+  final Future<void> Function(
+    Map<String, dynamic> vao,
+    String field,
+    dynamic value,
+  )?
+  onQuickEdit;
   const _VaosTable({
     required this.vaos,
     required this.pageSize,
@@ -712,7 +913,8 @@ class _VaosTableState extends State<_VaosTable> {
   String _rowKey(Map<String, dynamic> row) {
     final id = row['vao_id']?.toString();
     if (id != null && id.isNotEmpty) return id;
-    final lt = (row['linhas_transmissao']?['nome'] ?? row['lt'] ?? '').toString();
+    final lt = (row['linhas_transmissao']?['nome'] ?? row['lt'] ?? '')
+        .toString();
     final est = (row['est_codigo'] ?? '').toString();
     return '$lt::$est';
   }
@@ -747,14 +949,58 @@ class _VaosTableState extends State<_VaosTable> {
     super.dispose();
   }
 
-  Widget _buildCellForColumn(Map<String, String> c, Map<String, dynamic> row, String linhaNome) {
+  Widget _buildCellForColumn(
+    Map<String, String> c,
+    Map<String, dynamic> row,
+    String linhaNome,
+  ) {
     final key = c['key']!;
     final w = _colWidth(key);
     dynamic val = key == 'linhas_transmissao.nome' ? linhaNome : row[key];
     final label = c['label'] ?? key;
     final isDate = key.contains('_data') || key.contains('conclusao');
     final isNumber = key.contains('_m');
-    if (key == 'roco_concluido') return _cell(val == true ? 'Sim' : 'Não', w, height: bodyRowHeight);
+
+    final bool isMapeamentoField = [
+      'map_mec_extensao_m',
+      'map_mec_largura_m',
+      'map_man_extensao_m',
+      'map_man_largura_m',
+      'map_data',
+    ].contains(key);
+
+    // Regra adicional: se é coluna de Execução Mecanizada, esmaecer caso não tenha Mapeamento Mecanizado
+    final bool isExecucaoMecField = [
+      'execucao_mec_data_inicio',
+      'execucao_mec_data_fim',
+      'exec_mec_extensao_m',
+      'exec_mec_largura_m',
+      'exec_mec_data',
+    ].contains(key);
+    final bool hasMapMec =
+        row['map_mec_extensao_m'] != null &&
+        row['map_mec_extensao_m'].toString().trim().isNotEmpty;
+
+    // Regra adicional: se é coluna de Execução Manual, esmaecer caso não tenha Mapeamento Manual
+    final bool isExecucaoManField = [
+      'execucao_man_data_inicio',
+      'execucao_man_data_fim',
+      'exec_man_extensao_m',
+      'exec_man_largura_m',
+      'exec_man_data',
+    ].contains(key);
+    final bool hasMapMan =
+        row['map_man_extensao_m'] != null &&
+        row['map_man_extensao_m'].toString().trim().isNotEmpty;
+
+    final bool appliesEsmaecerSeVazio = isMapeamentoField;
+    final bool appliesEsmaecerSempre =
+        (isExecucaoMecField && !hasMapMec) ||
+        (isExecucaoManField && !hasMapMan);
+
+    if (key == 'roco_concluido') {
+      return _cell(val == true ? 'Sim' : 'Não', w, height: bodyRowHeight);
+    }
     if (widget.onQuickEdit != null && _editableKeys.contains(key)) {
       return _editableCell(
         row: row,
@@ -763,14 +1009,43 @@ class _VaosTableState extends State<_VaosTable> {
         width: w,
         isNumber: isNumber,
         isDate: isDate,
+        esmaecerSeVazio: appliesEsmaecerSeVazio,
+        esmaecerSempre: appliesEsmaecerSempre,
       );
     }
-    if (isDate) return _cell(_fmtDate(val), w, height: bodyRowHeight, fontSize: _dateCellFontSize);
-    if (isNumber) return _cell(_fmtNum(val), w, height: bodyRowHeight);
-    return _cell(_fmt(val), w, height: bodyRowHeight);
+    if (isDate) {
+      return _cell(
+        _fmtDate(val),
+        w,
+        height: bodyRowHeight,
+        fontSize: _dateCellFontSize,
+        esmaecerSeVazio: appliesEsmaecerSeVazio,
+        esmaecerSempre: appliesEsmaecerSempre,
+      );
+    }
+    if (isNumber) {
+      return _cell(
+        _fmtNum(val),
+        w,
+        height: bodyRowHeight,
+        esmaecerSeVazio: appliesEsmaecerSeVazio,
+        esmaecerSempre: appliesEsmaecerSempre,
+      );
+    }
+    return _cell(
+      _fmt(val),
+      w,
+      height: bodyRowHeight,
+      esmaecerSeVazio: appliesEsmaecerSeVazio,
+      esmaecerSempre: appliesEsmaecerSempre,
+    );
   }
 
-  void _startInlineEdit(Map<String, dynamic> row, String key, String displayValue) {
+  void _startInlineEdit(
+    Map<String, dynamic> row,
+    String key,
+    String displayValue,
+  ) {
     if (widget.onQuickEdit == null) return;
     setState(() {
       _editingRowKey = _rowKey(row);
@@ -782,7 +1057,9 @@ class _VaosTableState extends State<_VaosTable> {
   Future<void> _startDateEdit(Map<String, dynamic> row, String key) async {
     if (widget.onQuickEdit == null) return;
     final current = row[key];
-    DateTime? initial = current is DateTime ? current : DateTime.tryParse(current?.toString() ?? '');
+    DateTime? initial = current is DateTime
+        ? current
+        : DateTime.tryParse(current?.toString() ?? '');
     initial ??= DateTime.now();
     final now = DateTime.now();
     final picked = await showDatePicker(
@@ -791,10 +1068,20 @@ class _VaosTableState extends State<_VaosTable> {
       firstDate: DateTime(now.year - 10),
       lastDate: DateTime(now.year + 10),
     );
-    if (picked != null) await _submitInlineEditWithValue(row, key, picked.toIso8601String().split('T').first);
+    if (picked != null) {
+      await _submitInlineEditWithValue(
+        row,
+        key,
+        picked.toIso8601String().split('T').first,
+      );
+    }
   }
 
-  Future<void> _submitInlineEditWithValue(Map<String, dynamic> row, String key, dynamic newValue) async {
+  Future<void> _submitInlineEditWithValue(
+    Map<String, dynamic> row,
+    String key,
+    dynamic newValue,
+  ) async {
     if (widget.onQuickEdit == null) return;
     try {
       row[key] = newValue;
@@ -855,9 +1142,15 @@ class _VaosTableState extends State<_VaosTable> {
     Color? background,
     double? height,
     double? fontSize,
+    bool esmaecerSeVazio = false,
+    bool esmaecerSempre = false,
   }) {
-    final bg = background ??
-        (isHeader ? Colors.grey.shade100 : Colors.white);
+    final bool isEmpty = text.trim().isEmpty;
+    final bg =
+        background ??
+        (isHeader || esmaecerSempre || (isEmpty && esmaecerSeVazio)
+            ? Colors.grey.shade100
+            : Colors.white);
     return Container(
       alignment: Alignment.center,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
@@ -883,21 +1176,30 @@ class _VaosTableState extends State<_VaosTable> {
     required double width,
     bool isNumber = false,
     bool isDate = false,
+    bool esmaecerSeVazio = false,
+    bool esmaecerSempre = false,
   }) {
     final rowKey = _rowKey(row);
     final isEditing = _editingRowKey == rowKey && _editingField == key;
     final displayText = isDate
         ? _fmtDate(row[key])
         : isNumber
-            ? _fmtNum(row[key])
-            : _fmt(row[key]);
+        ? _fmtNum(row[key])
+        : _fmt(row[key]);
 
     if (isDate) {
       return GestureDetector(
         onTap: (widget.onQuickEdit != null && _editableKeys.contains(key))
             ? () => _startDateEdit(row, key)
             : null,
-        child: _cell(displayText, width, height: bodyRowHeight, fontSize: _dateCellFontSize),
+        child: _cell(
+          displayText,
+          width,
+          height: bodyRowHeight,
+          fontSize: _dateCellFontSize,
+          esmaecerSeVazio: esmaecerSeVazio,
+          esmaecerSempre: esmaecerSempre,
+        ),
       );
     }
 
@@ -906,7 +1208,13 @@ class _VaosTableState extends State<_VaosTable> {
         onTap: (widget.onQuickEdit != null && _editableKeys.contains(key))
             ? () => _startInlineEdit(row, key, displayText)
             : null,
-        child: _cell(displayText, width, height: bodyRowHeight),
+        child: _cell(
+          displayText,
+          width,
+          height: bodyRowHeight,
+          esmaecerSeVazio: esmaecerSeVazio,
+          esmaecerSempre: esmaecerSempre,
+        ),
       );
     }
 
@@ -927,10 +1235,11 @@ class _VaosTableState extends State<_VaosTable> {
         onEditingComplete: () => _submitInlineEdit(row, key),
         decoration: InputDecoration(
           isDense: true,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(6),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 8,
+            vertical: 8,
           ),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
         ),
       ),
     );
@@ -945,7 +1254,9 @@ class _VaosTableState extends State<_VaosTable> {
       return const Text('Nenhum vão encontrado.');
     }
     final start = widget.currentPage * widget.pageSize;
-    final end = (start + widget.pageSize) > widget.vaos.length ? widget.vaos.length : (start + widget.pageSize);
+    final end = (start + widget.pageSize) > widget.vaos.length
+        ? widget.vaos.length
+        : (start + widget.pageSize);
     final pageItems = widget.vaos.sublist(start, end);
     final double bodyHeight = pageItems.length * bodyRowHeight;
 
@@ -986,45 +1297,97 @@ class _VaosTableState extends State<_VaosTable> {
       {'key': 'pendencias_execucao', 'label': 'Pendências Execução'},
     ];
 
-    final dynamicCols =
-        cols.where((c) => !['linhas_transmissao.nome', 'est_codigo', 'vao_frente_m', 'vao_largura_m'].contains(c['key'])).toList();
+    final dynamicCols = cols
+        .where(
+          (c) => ![
+            'linhas_transmissao.nome',
+            'est_codigo',
+            'vao_frente_m',
+            'vao_largura_m',
+          ].contains(c['key']),
+        )
+        .toList();
 
     final fixedCols = <Map<String, dynamic>>[
-      {'key': '__actions__', 'label': 'Ações', 'width': _colWidth('__actions__')},
-      {'key': 'linhas_transmissao.nome', 'label': 'Linha', 'width': _colWidth('linhas_transmissao.nome')},
+      {
+        'key': '__actions__',
+        'label': 'Ações',
+        'width': _colWidth('__actions__'),
+      },
+      {
+        'key': 'linhas_transmissao.nome',
+        'label': 'Linha',
+        'width': _colWidth('linhas_transmissao.nome'),
+      },
       {'key': 'est_codigo', 'label': 'EST.', 'width': _colWidth('est_codigo')},
-      {'key': 'vao_frente_m', 'label': 'Extensão', 'width': _colWidth('vao_frente_m')},
-      {'key': 'vao_largura_m', 'label': 'Largura', 'width': _colWidth('vao_largura_m')},
+      {
+        'key': 'vao_frente_m',
+        'label': 'Extensão',
+        'width': _colWidth('vao_frente_m'),
+      },
+      {
+        'key': 'vao_largura_m',
+        'label': 'Largura',
+        'width': _colWidth('vao_largura_m'),
+      },
     ];
 
     // Colunas visíveis conforme toggles dos grupos (Mapeamento Mec/Man, Execução Mec/Man)
     final mapMecKeys = ['map_mec_extensao_m', 'map_mec_largura_m'];
     final mapManKeys = ['map_man_extensao_m', 'map_man_largura_m'];
     const mapDataKey = 'map_data';
-    final execucaoMecKeys = ['execucao_mec_data_inicio', 'execucao_mec_data_fim'];
-    final execucaoManKeys = ['execucao_man_data_inicio', 'execucao_man_data_fim'];
-    final execMecKeys = ['exec_mec_extensao_m', 'exec_mec_largura_m', 'exec_mec_data'];
-    final execManKeys = ['exec_man_extensao_m', 'exec_man_largura_m', 'exec_man_data'];
+    final execucaoMecKeys = [
+      'execucao_mec_data_inicio',
+      'execucao_mec_data_fim',
+    ];
+    final execucaoManKeys = [
+      'execucao_man_data_inicio',
+      'execucao_man_data_fim',
+    ];
+    final execMecKeys = [
+      'exec_mec_extensao_m',
+      'exec_mec_largura_m',
+      'exec_mec_data',
+    ];
+    final execManKeys = [
+      'exec_man_extensao_m',
+      'exec_man_largura_m',
+      'exec_man_data',
+    ];
     const double iconGroupWidth = 31.0;
-    final totalMapeamentoW = (_mapMecVisible ? mapMecKeys.fold<double>(0, (s, k) => s + _colWidth(k)) : iconGroupWidth) +
-        (_mapManVisible ? mapManKeys.fold<double>(0, (s, k) => s + _colWidth(k)) : iconGroupWidth) +
+    final totalMapeamentoW =
+        (_mapMecVisible
+            ? mapMecKeys.fold<double>(0, (s, k) => s + _colWidth(k))
+            : iconGroupWidth) +
+        (_mapManVisible
+            ? mapManKeys.fold<double>(0, (s, k) => s + _colWidth(k))
+            : iconGroupWidth) +
         _colWidth(mapDataKey);
-    final totalExecucaoMidW = (_execucaoMecVisible ? execucaoMecKeys.fold<double>(0, (s, k) => s + _colWidth(k)) : iconGroupWidth) +
-        (_execucaoManVisible ? execucaoManKeys.fold<double>(0, (s, k) => s + _colWidth(k)) : iconGroupWidth);
+    final totalExecucaoMidW =
+        (_execucaoMecVisible
+            ? execucaoMecKeys.fold<double>(0, (s, k) => s + _colWidth(k))
+            : iconGroupWidth) +
+        (_execucaoManVisible
+            ? execucaoManKeys.fold<double>(0, (s, k) => s + _colWidth(k))
+            : iconGroupWidth);
 
     Widget buildFixedHeader() {
-      final totalWidth =
-          fixedCols.fold<double>(0, (sum, c) => sum + (c['width'] as double));
+      final totalWidth = fixedCols.fold<double>(
+        0,
+        (sum, c) => sum + (c['width'] as double),
+      );
       final rowLabels = Row(
         children: fixedCols
-            .map((c) => _cell(
-                  c['label'] as String,
-                  c['width'] as double,
-                  fontWeight: FontWeight.bold,
-                  isHeader: true,
-                  height: headerCellHeight,
-                  fontSize: headerRow3FontSize,
-                ))
+            .map(
+              (c) => _cell(
+                c['label'] as String,
+                c['width'] as double,
+                fontWeight: FontWeight.bold,
+                isHeader: true,
+                height: headerCellHeight,
+                fontSize: headerRow3FontSize,
+              ),
+            )
             .toList(),
       );
       return Column(
@@ -1069,7 +1432,10 @@ class _VaosTableState extends State<_VaosTable> {
       // Cabeçalhos agrupados com ícone de visibilidade (mostrar/ocultar as colunas do grupo)
       const double iconGroupWidth = 31.0;
 
-      final headerRow0 = <Widget>[]; // Nova linha acima: mesmos mesclados, mesmo conteúdo (só texto)
+      final headerRow0 =
+          <
+            Widget
+          >[]; // Nova linha acima: mesmos mesclados, mesmo conteúdo (só texto)
       final headerRow1 = <Widget>[];
       final headerRow2 = <Widget>[];
 
@@ -1083,7 +1449,11 @@ class _VaosTableState extends State<_VaosTable> {
           height: headerGroupHeight,
           alignment: Alignment.center,
           padding: const EdgeInsets.symmetric(vertical: 8),
-          child: Text(label, style: const TextStyle(fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+          child: Text(
+            label,
+            style: const TextStyle(fontWeight: FontWeight.bold),
+            textAlign: TextAlign.center,
+          ),
         );
       }
 
@@ -1105,11 +1475,22 @@ class _VaosTableState extends State<_VaosTable> {
             mainAxisAlignment: MainAxisAlignment.center,
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (visible) Expanded(child: Text(label, style: const TextStyle(fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis, textAlign: TextAlign.center)),
+              if (visible)
+                Expanded(
+                  child: Text(
+                    label,
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                  ),
+                ),
               IconButton(
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                icon: Icon(visible ? Icons.visibility : Icons.visibility_off, size: 20),
+                icon: Icon(
+                  visible ? Icons.visibility : Icons.visibility_off,
+                  size: 20,
+                ),
                 tooltip: visible ? 'Ocultar colunas' : 'Mostrar colunas',
                 onPressed: onToggle,
               ),
@@ -1118,8 +1499,13 @@ class _VaosTableState extends State<_VaosTable> {
         );
       }
 
-      final totalExecucaoW = (_execMecVisible ? execMecKeys.fold<double>(0, (s, k) => s + _colWidth(k)) : iconGroupWidth) +
-          (_execManVisible ? execManKeys.fold<double>(0, (s, k) => s + _colWidth(k)) : iconGroupWidth);
+      final totalExecucaoW =
+          (_execMecVisible
+              ? execMecKeys.fold<double>(0, (s, k) => s + _colWidth(k))
+              : iconGroupWidth) +
+          (_execManVisible
+              ? execManKeys.fold<double>(0, (s, k) => s + _colWidth(k))
+              : iconGroupWidth);
       var headerRow0MapeamentoAdded = false;
       var headerRow0ExecucaoMidAdded = false;
       var headerRow0ExecucaoAdded = false;
@@ -1127,58 +1513,94 @@ class _VaosTableState extends State<_VaosTable> {
       for (final c in dynamicCols) {
         final key = c['key']!;
         if (mapMecKeys.contains(key)) {
-          if (!headerRow1.any((w) => (w.key as ValueKey?)?.value == 'map-mec-span')) {
-            final totalW = mapMecKeys.fold<double>(0, (s, k) => s + _colWidth(k));
+          if (!headerRow1.any(
+            (w) => (w.key as ValueKey?)?.value == 'map-mec-span',
+          )) {
+            final totalW = mapMecKeys.fold<double>(
+              0,
+              (s, k) => s + _colWidth(k),
+            );
             if (!headerRow0MapeamentoAdded) {
               headerRow0.add(simpleGroupCell('Mapeamento', totalMapeamentoW));
               headerRow0MapeamentoAdded = true;
             }
-            headerRow1.add(KeyedSubtree(
-              key: const ValueKey('map-mec-span'),
-              child: groupHeaderCell(
-                label: 'Mecanizado',
-                visible: _mapMecVisible,
-                onToggle: () => setState(() => _mapMecVisible = !_mapMecVisible),
-                totalWidth: totalW,
+            headerRow1.add(
+              KeyedSubtree(
+                key: const ValueKey('map-mec-span'),
+                child: groupHeaderCell(
+                  label: 'Mecanizado',
+                  visible: _mapMecVisible,
+                  onToggle: () =>
+                      setState(() => _mapMecVisible = !_mapMecVisible),
+                  totalWidth: totalW,
+                ),
               ),
-            ));
+            );
           }
           if (_mapMecVisible) {
-            headerRow2.add(_cell(
-              c['label']!,
-              _colWidth(key),
-              fontWeight: FontWeight.bold,
-              isHeader: true,
-              height: headerCellHeight,
-              fontSize: headerRow3FontSize,
-            ));
+            headerRow2.add(
+              _cell(
+                c['label']!,
+                _colWidth(key),
+                fontWeight: FontWeight.bold,
+                isHeader: true,
+                height: headerCellHeight,
+                fontSize: headerRow3FontSize,
+              ),
+            );
           } else if (key == mapMecKeys.first) {
-            headerRow2.add(_cell('', iconGroupWidth, isHeader: true, height: headerCellHeight, fontSize: headerRow3FontSize));
+            headerRow2.add(
+              _cell(
+                '',
+                iconGroupWidth,
+                isHeader: true,
+                height: headerCellHeight,
+                fontSize: headerRow3FontSize,
+              ),
+            );
           }
         } else if (mapManKeys.contains(key)) {
-          if (!headerRow1.any((w) => (w.key as ValueKey?)?.value == 'map-man-span')) {
-            final totalW = mapManKeys.fold<double>(0, (s, k) => s + _colWidth(k));
-            headerRow1.add(KeyedSubtree(
-              key: const ValueKey('map-man-span'),
-              child: groupHeaderCell(
-                label: 'Manual',
-                visible: _mapManVisible,
-                onToggle: () => setState(() => _mapManVisible = !_mapManVisible),
-                totalWidth: totalW,
+          if (!headerRow1.any(
+            (w) => (w.key as ValueKey?)?.value == 'map-man-span',
+          )) {
+            final totalW = mapManKeys.fold<double>(
+              0,
+              (s, k) => s + _colWidth(k),
+            );
+            headerRow1.add(
+              KeyedSubtree(
+                key: const ValueKey('map-man-span'),
+                child: groupHeaderCell(
+                  label: 'Manual',
+                  visible: _mapManVisible,
+                  onToggle: () =>
+                      setState(() => _mapManVisible = !_mapManVisible),
+                  totalWidth: totalW,
+                ),
               ),
-            ));
+            );
           }
           if (_mapManVisible) {
-            headerRow2.add(_cell(
-              c['label']!,
-              _colWidth(key),
-              fontWeight: FontWeight.bold,
-              isHeader: true,
-              height: headerCellHeight,
-              fontSize: headerRow3FontSize,
-            ));
+            headerRow2.add(
+              _cell(
+                c['label']!,
+                _colWidth(key),
+                fontWeight: FontWeight.bold,
+                isHeader: true,
+                height: headerCellHeight,
+                fontSize: headerRow3FontSize,
+              ),
+            );
           } else if (key == mapManKeys.first) {
-            headerRow2.add(_cell('', iconGroupWidth, isHeader: true, height: headerCellHeight, fontSize: headerRow3FontSize));
+            headerRow2.add(
+              _cell(
+                '',
+                iconGroupWidth,
+                isHeader: true,
+                height: headerCellHeight,
+                fontSize: headerRow3FontSize,
+              ),
+            );
           }
         } else if (key == mapDataKey) {
           // Coluna Data após Manual, com ícone de calendário acima
@@ -1192,147 +1614,225 @@ class _VaosTableState extends State<_VaosTable> {
               ),
               height: headerGroupHeight,
               alignment: Alignment.center,
-              child: Icon(Icons.calendar_today, size: 20, color: Colors.grey.shade700),
+              child: Icon(
+                Icons.calendar_today,
+                size: 20,
+                color: Colors.grey.shade700,
+              ),
             ),
           );
-          headerRow2.add(_cell(
-            'Data',
-            w,
-            fontWeight: FontWeight.bold,
-            isHeader: true,
-            height: headerCellHeight,
-            fontSize: headerRow3FontSize,
-          ));
+          headerRow2.add(
+            _cell(
+              'Data',
+              w,
+              fontWeight: FontWeight.bold,
+              isHeader: true,
+              height: headerCellHeight,
+              fontSize: headerRow3FontSize,
+            ),
+          );
         } else if (execucaoMecKeys.contains(key)) {
-          if (!headerRow1.any((w) => (w.key as ValueKey?)?.value == 'execucao-mec-span')) {
-            final totalW = execucaoMecKeys.fold<double>(0, (s, k) => s + _colWidth(k));
+          if (!headerRow1.any(
+            (w) => (w.key as ValueKey?)?.value == 'execucao-mec-span',
+          )) {
+            final totalW = execucaoMecKeys.fold<double>(
+              0,
+              (s, k) => s + _colWidth(k),
+            );
             if (!headerRow0ExecucaoMidAdded) {
               headerRow0.add(simpleGroupCell('Execução', totalExecucaoMidW));
               headerRow0ExecucaoMidAdded = true;
             }
-            headerRow1.add(KeyedSubtree(
-              key: const ValueKey('execucao-mec-span'),
-              child: groupHeaderCell(
-                label: 'Mecanizado',
-                visible: _execucaoMecVisible,
-                onToggle: () => setState(() => _execucaoMecVisible = !_execucaoMecVisible),
-                totalWidth: totalW,
+            headerRow1.add(
+              KeyedSubtree(
+                key: const ValueKey('execucao-mec-span'),
+                child: groupHeaderCell(
+                  label: 'Mecanizado',
+                  visible: _execucaoMecVisible,
+                  onToggle: () => setState(
+                    () => _execucaoMecVisible = !_execucaoMecVisible,
+                  ),
+                  totalWidth: totalW,
+                ),
               ),
-            ));
+            );
           }
           if (_execucaoMecVisible) {
-            headerRow2.add(_cell(
-              c['label']!,
-              _colWidth(key),
-              fontWeight: FontWeight.bold,
-              isHeader: true,
-              height: headerCellHeight,
-              fontSize: headerRow3FontSize,
-            ));
+            headerRow2.add(
+              _cell(
+                c['label']!,
+                _colWidth(key),
+                fontWeight: FontWeight.bold,
+                isHeader: true,
+                height: headerCellHeight,
+                fontSize: headerRow3FontSize,
+              ),
+            );
           } else if (key == execucaoMecKeys.first) {
-            headerRow2.add(_cell('', iconGroupWidth, isHeader: true, height: headerCellHeight, fontSize: headerRow3FontSize));
+            headerRow2.add(
+              _cell(
+                '',
+                iconGroupWidth,
+                isHeader: true,
+                height: headerCellHeight,
+                fontSize: headerRow3FontSize,
+              ),
+            );
           }
         } else if (execucaoManKeys.contains(key)) {
-          if (!headerRow1.any((w) => (w.key as ValueKey?)?.value == 'execucao-man-span')) {
-            final totalW = execucaoManKeys.fold<double>(0, (s, k) => s + _colWidth(k));
-            headerRow1.add(KeyedSubtree(
-              key: const ValueKey('execucao-man-span'),
-              child: groupHeaderCell(
-                label: 'Manual',
-                visible: _execucaoManVisible,
-                onToggle: () => setState(() => _execucaoManVisible = !_execucaoManVisible),
-                totalWidth: totalW,
+          if (!headerRow1.any(
+            (w) => (w.key as ValueKey?)?.value == 'execucao-man-span',
+          )) {
+            final totalW = execucaoManKeys.fold<double>(
+              0,
+              (s, k) => s + _colWidth(k),
+            );
+            headerRow1.add(
+              KeyedSubtree(
+                key: const ValueKey('execucao-man-span'),
+                child: groupHeaderCell(
+                  label: 'Manual',
+                  visible: _execucaoManVisible,
+                  onToggle: () => setState(
+                    () => _execucaoManVisible = !_execucaoManVisible,
+                  ),
+                  totalWidth: totalW,
+                ),
               ),
-            ));
+            );
           }
           if (_execucaoManVisible) {
-            headerRow2.add(_cell(
-              c['label']!,
-              _colWidth(key),
-              fontWeight: FontWeight.bold,
-              isHeader: true,
-              height: headerCellHeight,
-              fontSize: headerRow3FontSize,
-            ));
+            headerRow2.add(
+              _cell(
+                c['label']!,
+                _colWidth(key),
+                fontWeight: FontWeight.bold,
+                isHeader: true,
+                height: headerCellHeight,
+                fontSize: headerRow3FontSize,
+              ),
+            );
           } else if (key == execucaoManKeys.first) {
-            headerRow2.add(_cell('', iconGroupWidth, isHeader: true, height: headerCellHeight, fontSize: headerRow3FontSize));
+            headerRow2.add(
+              _cell(
+                '',
+                iconGroupWidth,
+                isHeader: true,
+                height: headerCellHeight,
+                fontSize: headerRow3FontSize,
+              ),
+            );
           }
         } else if (execMecKeys.contains(key)) {
-          if (!headerRow1.any((w) => (w.key as ValueKey?)?.value == 'exec-mec-span')) {
-            final totalW = execMecKeys.fold<double>(0, (s, k) => s + _colWidth(k));
+          if (!headerRow1.any(
+            (w) => (w.key as ValueKey?)?.value == 'exec-mec-span',
+          )) {
+            final totalW = execMecKeys.fold<double>(
+              0,
+              (s, k) => s + _colWidth(k),
+            );
             if (!headerRow0ExecucaoAdded) {
-              headerRow0.add(simpleGroupCell('Fiscalização da Execução', totalExecucaoW));
+              headerRow0.add(
+                simpleGroupCell('Fiscalização da Execução', totalExecucaoW),
+              );
               headerRow0ExecucaoAdded = true;
             }
-            headerRow1.add(KeyedSubtree(
-              key: const ValueKey('exec-mec-span'),
-              child: groupHeaderCell(
-                label: 'Mecanizado',
-                visible: _execMecVisible,
-                onToggle: () => setState(() => _execMecVisible = !_execMecVisible),
-                totalWidth: totalW,
+            headerRow1.add(
+              KeyedSubtree(
+                key: const ValueKey('exec-mec-span'),
+                child: groupHeaderCell(
+                  label: 'Mecanizado',
+                  visible: _execMecVisible,
+                  onToggle: () =>
+                      setState(() => _execMecVisible = !_execMecVisible),
+                  totalWidth: totalW,
+                ),
               ),
-            ));
+            );
           }
           if (_execMecVisible) {
-            headerRow2.add(_cell(
-              c['label']!,
-              _colWidth(key),
-              fontWeight: FontWeight.bold,
-              isHeader: true,
-              height: headerCellHeight,
-              fontSize: headerRow3FontSize,
-            ));
+            headerRow2.add(
+              _cell(
+                c['label']!,
+                _colWidth(key),
+                fontWeight: FontWeight.bold,
+                isHeader: true,
+                height: headerCellHeight,
+                fontSize: headerRow3FontSize,
+              ),
+            );
           } else if (key == execMecKeys.first) {
-            headerRow2.add(_cell('', iconGroupWidth, isHeader: true, height: headerCellHeight, fontSize: headerRow3FontSize));
+            headerRow2.add(
+              _cell(
+                '',
+                iconGroupWidth,
+                isHeader: true,
+                height: headerCellHeight,
+                fontSize: headerRow3FontSize,
+              ),
+            );
           }
         } else if (execManKeys.contains(key)) {
-          if (!headerRow1.any((w) => (w.key as ValueKey?)?.value == 'exec-man-span')) {
-            final totalW = execManKeys.fold<double>(0, (s, k) => s + _colWidth(k));
-            headerRow1.add(KeyedSubtree(
-              key: const ValueKey('exec-man-span'),
-              child: groupHeaderCell(
-                label: 'Manual',
-                visible: _execManVisible,
-                onToggle: () => setState(() => _execManVisible = !_execManVisible),
-                totalWidth: totalW,
+          if (!headerRow1.any(
+            (w) => (w.key as ValueKey?)?.value == 'exec-man-span',
+          )) {
+            final totalW = execManKeys.fold<double>(
+              0,
+              (s, k) => s + _colWidth(k),
+            );
+            headerRow1.add(
+              KeyedSubtree(
+                key: const ValueKey('exec-man-span'),
+                child: groupHeaderCell(
+                  label: 'Manual',
+                  visible: _execManVisible,
+                  onToggle: () =>
+                      setState(() => _execManVisible = !_execManVisible),
+                  totalWidth: totalW,
+                ),
               ),
-            ));
+            );
           }
           if (_execManVisible) {
-            headerRow2.add(_cell(
-              c['label']!,
-              _colWidth(key),
-              fontWeight: FontWeight.bold,
-              isHeader: true,
-              height: headerCellHeight,
-              fontSize: headerRow3FontSize,
-            ));
+            headerRow2.add(
+              _cell(
+                c['label']!,
+                _colWidth(key),
+                fontWeight: FontWeight.bold,
+                isHeader: true,
+                height: headerCellHeight,
+                fontSize: headerRow3FontSize,
+              ),
+            );
           } else if (key == execManKeys.first) {
-            headerRow2.add(_cell('', iconGroupWidth, isHeader: true, height: headerCellHeight, fontSize: headerRow3FontSize));
+            headerRow2.add(
+              _cell(
+                '',
+                iconGroupWidth,
+                isHeader: true,
+                height: headerCellHeight,
+                fontSize: headerRow3FontSize,
+              ),
+            );
           }
         } else {
           final w = _colWidth(key);
-          headerRow0.add(_cell(
-            '',
-            w,
-            isHeader: true,
-            height: headerGroupHeight,
-          ));
-          headerRow1.add(_cell(
-            '',
-            w,
-            isHeader: true,
-            height: headerGroupHeight,
-          ));
-          headerRow2.add(_cell(
-            c['label']!,
-            w,
-            fontWeight: FontWeight.bold,
-            isHeader: true,
-            height: headerCellHeight,
-            fontSize: headerRow3FontSize,
-          ));
+          headerRow0.add(
+            _cell('', w, isHeader: true, height: headerGroupHeight),
+          );
+          headerRow1.add(
+            _cell('', w, isHeader: true, height: headerGroupHeight),
+          );
+          headerRow2.add(
+            _cell(
+              c['label']!,
+              w,
+              fontWeight: FontWeight.bold,
+              isHeader: true,
+              height: headerCellHeight,
+              fontSize: headerRow3FontSize,
+            ),
+          );
         }
       }
 
@@ -1377,7 +1877,11 @@ class _VaosTableState extends State<_VaosTable> {
                 ],
               ),
             ),
-            _cell(linhaNome.toString(), fixedCols[1]['width'] as double, height: bodyRowHeight),
+            _cell(
+              linhaNome.toString(),
+              fixedCols[1]['width'] as double,
+              height: bodyRowHeight,
+            ),
             _editableCell(
               row: row,
               key: 'est_codigo',
@@ -1412,37 +1916,49 @@ class _VaosTableState extends State<_VaosTable> {
           final key = c['key']!;
           if (mapMecKeys.contains(key)) {
             if (!_mapMecVisible) {
-              if (key == mapMecKeys.first) cells.add(_cell('', iconGroupWidth, height: bodyRowHeight));
+              if (key == mapMecKeys.first) {
+                cells.add(_cell('', iconGroupWidth, height: bodyRowHeight));
+              }
             } else {
               cells.add(_buildCellForColumn(c, row, linhaNome));
             }
           } else if (mapManKeys.contains(key)) {
             if (!_mapManVisible) {
-              if (key == mapManKeys.first) cells.add(_cell('', iconGroupWidth, height: bodyRowHeight));
+              if (key == mapManKeys.first) {
+                cells.add(_cell('', iconGroupWidth, height: bodyRowHeight));
+              }
             } else {
               cells.add(_buildCellForColumn(c, row, linhaNome));
             }
           } else if (execucaoMecKeys.contains(key)) {
             if (!_execucaoMecVisible) {
-              if (key == execucaoMecKeys.first) cells.add(_cell('', iconGroupWidth, height: bodyRowHeight));
+              if (key == execucaoMecKeys.first) {
+                cells.add(_cell('', iconGroupWidth, height: bodyRowHeight));
+              }
             } else {
               cells.add(_buildCellForColumn(c, row, linhaNome));
             }
           } else if (execucaoManKeys.contains(key)) {
             if (!_execucaoManVisible) {
-              if (key == execucaoManKeys.first) cells.add(_cell('', iconGroupWidth, height: bodyRowHeight));
+              if (key == execucaoManKeys.first) {
+                cells.add(_cell('', iconGroupWidth, height: bodyRowHeight));
+              }
             } else {
               cells.add(_buildCellForColumn(c, row, linhaNome));
             }
           } else if (execMecKeys.contains(key)) {
             if (!_execMecVisible) {
-              if (key == execMecKeys.first) cells.add(_cell('', iconGroupWidth, height: bodyRowHeight));
+              if (key == execMecKeys.first) {
+                cells.add(_cell('', iconGroupWidth, height: bodyRowHeight));
+              }
             } else {
               cells.add(_buildCellForColumn(c, row, linhaNome));
             }
           } else if (execManKeys.contains(key)) {
             if (!_execManVisible) {
-              if (key == execManKeys.first) cells.add(_cell('', iconGroupWidth, height: bodyRowHeight));
+              if (key == execManKeys.first) {
+                cells.add(_cell('', iconGroupWidth, height: bodyRowHeight));
+              }
             } else {
               cells.add(_buildCellForColumn(c, row, linhaNome));
             }
@@ -1455,14 +1971,20 @@ class _VaosTableState extends State<_VaosTable> {
     }
 
     final totalPages = (widget.vaos.length / widget.pageSize).ceil();
-    final fixedWidth = fixedCols.fold<double>(0, (sum, c) => sum + (c['width'] as double));
+    final fixedWidth = fixedCols.fold<double>(
+      0,
+      (sum, c) => sum + (c['width'] as double),
+    );
 
     return LayoutBuilder(
       builder: (context, constraints) {
         final availableWidth = constraints.maxWidth.isFinite
             ? constraints.maxWidth
             : MediaQuery.sizeOf(context).width;
-        final horizontalScrollWidth = (availableWidth - fixedWidth - 8).clamp(200.0, double.infinity);
+        final horizontalScrollWidth = (availableWidth - fixedWidth - 8).clamp(
+          200.0,
+          double.infinity,
+        );
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1492,53 +2014,53 @@ class _VaosTableState extends State<_VaosTable> {
                 SizedBox(
                   width: horizontalScrollWidth,
                   child: Scrollbar(
-                controller: _horizontalScroll,
-                thumbVisibility: true,
-                child: SingleChildScrollView(
-                  controller: _horizontalScroll,
-                  scrollDirection: Axis.horizontal,
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        buildRightHeader(),
-                        SizedBox(
-                          height: bodyHeight,
-                          child: Scrollbar(
-                            controller: _rightV,
-                            thumbVisibility: true,
-                            child: SingleChildScrollView(
-                              controller: _rightV,
-                              scrollDirection: Axis.vertical,
-                              child: Column(children: buildRightRows()),
-                            ),
+                    controller: _horizontalScroll,
+                    thumbVisibility: true,
+                    child: SingleChildScrollView(
+                      controller: _horizontalScroll,
+                      scrollDirection: Axis.horizontal,
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              buildRightHeader(),
+                              SizedBox(
+                                height: bodyHeight,
+                                child: Scrollbar(
+                                  controller: _rightV,
+                                  thumbVisibility: true,
+                                  child: SingleChildScrollView(
+                                    controller: _rightV,
+                                    scrollDirection: Axis.vertical,
+                                    child: Column(children: buildRightRows()),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
-                        ),
-                      ],
+                          Positioned(
+                            left: totalMapeamentoW - 1,
+                            top: 0,
+                            bottom: 0,
+                            width: 2,
+                            child: Container(color: Colors.grey.shade700),
+                          ),
+                          Positioned(
+                            left: totalMapeamentoW + totalExecucaoMidW - 1,
+                            top: 0,
+                            bottom: 0,
+                            width: 2,
+                            child: Container(color: Colors.grey.shade700),
+                          ),
+                        ],
+                      ),
                     ),
-                    Positioned(
-                      left: totalMapeamentoW - 1,
-                      top: 0,
-                      bottom: 0,
-                      width: 2,
-                      child: Container(color: Colors.grey.shade700),
-                    ),
-                    Positioned(
-                      left: totalMapeamentoW + totalExecucaoMidW - 1,
-                      top: 0,
-                      bottom: 0,
-                      width: 2,
-                      child: Container(color: Colors.grey.shade700),
-                    ),
-                    ],
                   ),
                 ),
-              ),
+              ],
             ),
-          ],
-        ),
             const SizedBox(height: 8),
             Row(
               children: [
@@ -1546,11 +2068,15 @@ class _VaosTableState extends State<_VaosTable> {
                 const SizedBox(width: 12),
                 IconButton(
                   icon: const Icon(Icons.chevron_left),
-                  onPressed: widget.currentPage > 0 ? () => widget.onPageChanged(widget.currentPage - 1) : null,
+                  onPressed: widget.currentPage > 0
+                      ? () => widget.onPageChanged(widget.currentPage - 1)
+                      : null,
                 ),
                 IconButton(
                   icon: const Icon(Icons.chevron_right),
-                  onPressed: (widget.currentPage + 1) < totalPages ? () => widget.onPageChanged(widget.currentPage + 1) : null,
+                  onPressed: (widget.currentPage + 1) < totalPages
+                      ? () => widget.onPageChanged(widget.currentPage + 1)
+                      : null,
                 ),
               ],
             ),
@@ -1607,43 +2133,78 @@ class _EditarVaoDialogState extends State<_EditarVaoDialog> {
   @override
   void initState() {
     super.initState();
-    _prioridadeController =
-        TextEditingController(text: widget.vao['prioridade']?.toString() ?? '');
+    _prioridadeController = TextEditingController(
+      text: widget.vao['prioridade']?.toString() ?? '',
+    );
     _pendenciasController = TextEditingController(
-        text: widget.vao['pendencias_execucao']?.toString() ?? '');
-    _estController = TextEditingController(text: widget.vao['est_codigo']?.toString() ?? '');
-    _vaoFrenteController = TextEditingController(text: _numStr(widget.vao['vao_frente_m']));
-    _vaoLarguraController = TextEditingController(text: _numStr(widget.vao['vao_largura_m']));
-    _mapMecExtController = TextEditingController(text: _numStr(widget.vao['map_mec_extensao_m']));
-    _mapMecLargController = TextEditingController(text: _numStr(widget.vao['map_mec_largura_m']));
-    _mapManExtController = TextEditingController(text: _numStr(widget.vao['map_man_extensao_m']));
-    _mapManLargController = TextEditingController(text: _numStr(widget.vao['map_man_largura_m']));
-    _execMecExtController = TextEditingController(text: _numStr(widget.vao['exec_mec_extensao_m']));
-    _execMecLargController = TextEditingController(text: _numStr(widget.vao['exec_mec_largura_m']));
-    _execManExtController = TextEditingController(text: _numStr(widget.vao['exec_man_extensao_m']));
-    _execManLargController = TextEditingController(text: _numStr(widget.vao['exec_man_largura_m']));
-    _numeracaoGgtController =
-        TextEditingController(text: widget.vao['numeracao_ggt']?.toString() ?? '');
-    _mapeamentoGgtController =
-        TextEditingController(text: widget.vao['mapeamento_ggt']?.toString() ?? '');
-    _codigoGgtController =
-        TextEditingController(text: widget.vao['codigo_ggt_execucao']?.toString() ?? '');
-    _descricaoServicosController =
-        TextEditingController(text: widget.vao['descricao_servicos']?.toString() ?? '');
-    _conferenciaController =
-        TextEditingController(text: widget.vao['conferencia_vao']?.toString() ?? '');
-    _pendManualController =
-        TextEditingController(text: widget.vao['pend_manual']?.toString() ?? '');
-    _pendMecanizadoController =
-        TextEditingController(text: widget.vao['pend_mecanizado']?.toString() ?? '');
-    _pendSeletivoController =
-        TextEditingController(text: widget.vao['pend_seletivo']?.toString() ?? '');
-    _pendManualExtraController =
-        TextEditingController(text: widget.vao['pend_manual_extra']?.toString() ?? '');
-    _pendMecanizadoExtraController =
-        TextEditingController(text: widget.vao['pend_mecanizado_extra']?.toString() ?? '');
-    _pendSeletivoExtraController =
-        TextEditingController(text: widget.vao['pend_seletivo_extra']?.toString() ?? '');
+      text: widget.vao['pendencias_execucao']?.toString() ?? '',
+    );
+    _estController = TextEditingController(
+      text: widget.vao['est_codigo']?.toString() ?? '',
+    );
+    _vaoFrenteController = TextEditingController(
+      text: _numStr(widget.vao['vao_frente_m']),
+    );
+    _vaoLarguraController = TextEditingController(
+      text: _numStr(widget.vao['vao_largura_m']),
+    );
+    _mapMecExtController = TextEditingController(
+      text: _numStr(widget.vao['map_mec_extensao_m']),
+    );
+    _mapMecLargController = TextEditingController(
+      text: _numStr(widget.vao['map_mec_largura_m']),
+    );
+    _mapManExtController = TextEditingController(
+      text: _numStr(widget.vao['map_man_extensao_m']),
+    );
+    _mapManLargController = TextEditingController(
+      text: _numStr(widget.vao['map_man_largura_m']),
+    );
+    _execMecExtController = TextEditingController(
+      text: _numStr(widget.vao['exec_mec_extensao_m']),
+    );
+    _execMecLargController = TextEditingController(
+      text: _numStr(widget.vao['exec_mec_largura_m']),
+    );
+    _execManExtController = TextEditingController(
+      text: _numStr(widget.vao['exec_man_extensao_m']),
+    );
+    _execManLargController = TextEditingController(
+      text: _numStr(widget.vao['exec_man_largura_m']),
+    );
+    _numeracaoGgtController = TextEditingController(
+      text: widget.vao['numeracao_ggt']?.toString() ?? '',
+    );
+    _mapeamentoGgtController = TextEditingController(
+      text: widget.vao['mapeamento_ggt']?.toString() ?? '',
+    );
+    _codigoGgtController = TextEditingController(
+      text: widget.vao['codigo_ggt_execucao']?.toString() ?? '',
+    );
+    _descricaoServicosController = TextEditingController(
+      text: widget.vao['descricao_servicos']?.toString() ?? '',
+    );
+    _conferenciaController = TextEditingController(
+      text: widget.vao['conferencia_vao']?.toString() ?? '',
+    );
+    _pendManualController = TextEditingController(
+      text: widget.vao['pend_manual']?.toString() ?? '',
+    );
+    _pendMecanizadoController = TextEditingController(
+      text: widget.vao['pend_mecanizado']?.toString() ?? '',
+    );
+    _pendSeletivoController = TextEditingController(
+      text: widget.vao['pend_seletivo']?.toString() ?? '',
+    );
+    _pendManualExtraController = TextEditingController(
+      text: widget.vao['pend_manual_extra']?.toString() ?? '',
+    );
+    _pendMecanizadoExtraController = TextEditingController(
+      text: widget.vao['pend_mecanizado_extra']?.toString() ?? '',
+    );
+    _pendSeletivoExtraController = TextEditingController(
+      text: widget.vao['pend_seletivo_extra']?.toString() ?? '',
+    );
     _rocoConcluido = (widget.vao['roco_concluido'] == true);
     _mapData = _parseDate(widget.vao['map_data']);
     _execucaoMecDataInicio = _parseDate(widget.vao['execucao_mec_data_inicio']);
@@ -1667,7 +2228,10 @@ class _EditarVaoDialogState extends State<_EditarVaoDialog> {
     return DateTime.tryParse(v.toString());
   }
 
-  Future<void> _pickDate(DateTime? current, void Function(DateTime?) setVal) async {
+  Future<void> _pickDate(
+    DateTime? current,
+    void Function(DateTime?) setVal,
+  ) async {
     final now = DateTime.now();
     final first = DateTime(now.year - 5);
     final last = DateTime(now.year + 5);
@@ -1718,77 +2282,143 @@ class _EditarVaoDialogState extends State<_EditarVaoDialog> {
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          children: [
-            SwitchListTile(
-              title: const Text('Roço concluído'),
-              value: _rocoConcluido,
-              onChanged: (v) => setState(() => _rocoConcluido = v),
-            ),
-            _txt(_estController, 'EST.'),
-            _txt(_vaoFrenteController, 'Extensão', isNumber: true),
-            _txt(_vaoLarguraController, 'Largura', isNumber: true),
-            _txt(_mapMecExtController, 'Map. Mec Extensão (m)', isNumber: true),
-            _txt(_mapMecLargController, 'Map. Mec Largura (m)', isNumber: true),
-            _txt(_mapManExtController, 'Map. Man Extensão (m)', isNumber: true),
-            _txt(_mapManLargController, 'Map. Man Largura (m)', isNumber: true),
-            _DateField(
-              label: 'Data do mapeamento',
-              value: _mapData,
-              onPick: () => _pickDate(_mapData, (v) => _mapData = v),
-            ),
-            _DateField(
-              label: 'Execução Mec. Data Início',
-              value: _execucaoMecDataInicio,
-              onPick: () => _pickDate(_execucaoMecDataInicio, (v) => _execucaoMecDataInicio = v),
-            ),
-            _DateField(
-              label: 'Execução Mec. Data Fim',
-              value: _execucaoMecDataFim,
-              onPick: () => _pickDate(_execucaoMecDataFim, (v) => _execucaoMecDataFim = v),
-            ),
-            _DateField(
-              label: 'Execução Man. Data Início',
-              value: _execucaoManDataInicio,
-              onPick: () => _pickDate(_execucaoManDataInicio, (v) => _execucaoManDataInicio = v),
-            ),
-            _DateField(
-              label: 'Execução Man. Data Fim',
-              value: _execucaoManDataFim,
-              onPick: () => _pickDate(_execucaoManDataFim, (v) => _execucaoManDataFim = v),
-            ),
-            _txt(_execMecExtController, 'Exec. Mec Extensão (m)', isNumber: true),
-            _txt(_execMecLargController, 'Exec. Mec Largura (m)', isNumber: true),
-            _txt(_execManExtController, 'Exec. Man Extensão (m)', isNumber: true),
-            _txt(_execManLargController, 'Exec. Man Largura (m)', isNumber: true),
-            _DateField(
-              label: 'Execução Mecânica',
-              value: _execMecData,
-              onPick: () => _pickDate(_execMecData, (v) => _execMecData = v),
-            ),
-            _DateField(
-              label: 'Execução Manual',
-              value: _execManData,
-              onPick: () => _pickDate(_execManData, (v) => _execManData = v),
-            ),
-            _DateField(
-              label: 'Conclusão do Vão',
-              value: _vaoConclusao,
-              onPick: () => _pickDate(_vaoConclusao, (v) => _vaoConclusao = v),
-            ),
-            _txt(_numeracaoGgtController, 'Numeração GGT'),
-            _txt(_mapeamentoGgtController, 'Mapeamento GGT'),
-            _txt(_codigoGgtController, 'Código GGT Execução'),
-            _txt(_descricaoServicosController, 'Descrição dos Serviços', maxLines: 2),
-            _txt(_prioridadeController, 'Prioridade'),
-            _txt(_conferenciaController, 'Conferência do Vão'),
-            _txt(_pendManualController, 'Pend. Manual'),
-            _txt(_pendMecanizadoController, 'Pend. Mecanizado'),
-            _txt(_pendSeletivoController, 'Pend. Seletivo'),
-            _txt(_pendManualExtraController, 'Pend. Manual Extra'),
-            _txt(_pendMecanizadoExtraController, 'Pend. Mecanizado Extra'),
-            _txt(_pendSeletivoExtraController, 'Pend. Seletivo Extra'),
-            _txt(_pendenciasController, 'Pendências na execução', maxLines: 3),
-          ].map((w) => Padding(padding: const EdgeInsets.only(bottom: 8), child: w)).toList(),
+          children:
+              [
+                    SwitchListTile(
+                      title: const Text('Roço concluído'),
+                      value: _rocoConcluido,
+                      onChanged: (v) => setState(() => _rocoConcluido = v),
+                    ),
+                    _txt(_estController, 'EST.'),
+                    _txt(_vaoFrenteController, 'Extensão', isNumber: true),
+                    _txt(_vaoLarguraController, 'Largura', isNumber: true),
+                    _txt(
+                      _mapMecExtController,
+                      'Map. Mec Extensão (m)',
+                      isNumber: true,
+                    ),
+                    _txt(
+                      _mapMecLargController,
+                      'Map. Mec Largura (m)',
+                      isNumber: true,
+                    ),
+                    _txt(
+                      _mapManExtController,
+                      'Map. Man Extensão (m)',
+                      isNumber: true,
+                    ),
+                    _txt(
+                      _mapManLargController,
+                      'Map. Man Largura (m)',
+                      isNumber: true,
+                    ),
+                    _DateField(
+                      label: 'Data do mapeamento',
+                      value: _mapData,
+                      onPick: () => _pickDate(_mapData, (v) => _mapData = v),
+                    ),
+                    _DateField(
+                      label: 'Execução Mec. Data Início',
+                      value: _execucaoMecDataInicio,
+                      onPick: () => _pickDate(
+                        _execucaoMecDataInicio,
+                        (v) => _execucaoMecDataInicio = v,
+                      ),
+                    ),
+                    _DateField(
+                      label: 'Execução Mec. Data Fim',
+                      value: _execucaoMecDataFim,
+                      onPick: () => _pickDate(
+                        _execucaoMecDataFim,
+                        (v) => _execucaoMecDataFim = v,
+                      ),
+                    ),
+                    _DateField(
+                      label: 'Execução Man. Data Início',
+                      value: _execucaoManDataInicio,
+                      onPick: () => _pickDate(
+                        _execucaoManDataInicio,
+                        (v) => _execucaoManDataInicio = v,
+                      ),
+                    ),
+                    _DateField(
+                      label: 'Execução Man. Data Fim',
+                      value: _execucaoManDataFim,
+                      onPick: () => _pickDate(
+                        _execucaoManDataFim,
+                        (v) => _execucaoManDataFim = v,
+                      ),
+                    ),
+                    _txt(
+                      _execMecExtController,
+                      'Exec. Mec Extensão (m)',
+                      isNumber: true,
+                    ),
+                    _txt(
+                      _execMecLargController,
+                      'Exec. Mec Largura (m)',
+                      isNumber: true,
+                    ),
+                    _txt(
+                      _execManExtController,
+                      'Exec. Man Extensão (m)',
+                      isNumber: true,
+                    ),
+                    _txt(
+                      _execManLargController,
+                      'Exec. Man Largura (m)',
+                      isNumber: true,
+                    ),
+                    _DateField(
+                      label: 'Execução Mecânica',
+                      value: _execMecData,
+                      onPick: () =>
+                          _pickDate(_execMecData, (v) => _execMecData = v),
+                    ),
+                    _DateField(
+                      label: 'Execução Manual',
+                      value: _execManData,
+                      onPick: () =>
+                          _pickDate(_execManData, (v) => _execManData = v),
+                    ),
+                    _DateField(
+                      label: 'Conclusão do Vão',
+                      value: _vaoConclusao,
+                      onPick: () =>
+                          _pickDate(_vaoConclusao, (v) => _vaoConclusao = v),
+                    ),
+                    _txt(_numeracaoGgtController, 'Numeração GGT'),
+                    _txt(_mapeamentoGgtController, 'Mapeamento GGT'),
+                    _txt(_codigoGgtController, 'Código GGT Execução'),
+                    _txt(
+                      _descricaoServicosController,
+                      'Descrição dos Serviços',
+                      maxLines: 2,
+                    ),
+                    _txt(_prioridadeController, 'Prioridade'),
+                    _txt(_conferenciaController, 'Conferência do Vão'),
+                    _txt(_pendManualController, 'Pend. Manual'),
+                    _txt(_pendMecanizadoController, 'Pend. Mecanizado'),
+                    _txt(_pendSeletivoController, 'Pend. Seletivo'),
+                    _txt(_pendManualExtraController, 'Pend. Manual Extra'),
+                    _txt(
+                      _pendMecanizadoExtraController,
+                      'Pend. Mecanizado Extra',
+                    ),
+                    _txt(_pendSeletivoExtraController, 'Pend. Seletivo Extra'),
+                    _txt(
+                      _pendenciasController,
+                      'Pendências na execução',
+                      maxLines: 3,
+                    ),
+                  ]
+                  .map(
+                    (w) => Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: w,
+                    ),
+                  )
+                  .toList(),
         ),
       ),
       actions: [
@@ -1806,11 +2436,11 @@ class _EditarVaoDialogState extends State<_EditarVaoDialog> {
               'map_mec_largura_m': _toDouble(_mapMecLargController.text),
               'map_man_extensao_m': _toDouble(_mapManExtController.text),
               'map_man_largura_m': _toDouble(_mapManLargController.text),
-              'map_data': _mapData != null ? _mapData!.toIso8601String() : null,
-              'execucao_mec_data_inicio': _execucaoMecDataInicio != null ? _execucaoMecDataInicio!.toIso8601String() : null,
-              'execucao_mec_data_fim': _execucaoMecDataFim != null ? _execucaoMecDataFim!.toIso8601String() : null,
-              'execucao_man_data_inicio': _execucaoManDataInicio != null ? _execucaoManDataInicio!.toIso8601String() : null,
-              'execucao_man_data_fim': _execucaoManDataFim != null ? _execucaoManDataFim!.toIso8601String() : null,
+              'map_data': _mapData?.toIso8601String(),
+              'execucao_mec_data_inicio': _execucaoMecDataInicio?.toIso8601String(),
+              'execucao_mec_data_fim': _execucaoMecDataFim?.toIso8601String(),
+              'execucao_man_data_inicio': _execucaoManDataInicio?.toIso8601String(),
+              'execucao_man_data_fim': _execucaoManDataFim?.toIso8601String(),
               'exec_mec_extensao_m': _toDouble(_execMecExtController.text),
               'exec_mec_largura_m': _toDouble(_execMecLargController.text),
               'exec_man_extensao_m': _toDouble(_execManExtController.text),
@@ -1827,14 +2457,12 @@ class _EditarVaoDialogState extends State<_EditarVaoDialog> {
               'pend_mecanizado': _pendMecanizadoController.text.trim(),
               'pend_seletivo': _pendSeletivoController.text.trim(),
               'pend_manual_extra': _pendManualExtraController.text.trim(),
-              'pend_mecanizado_extra': _pendMecanizadoExtraController.text.trim(),
+              'pend_mecanizado_extra': _pendMecanizadoExtraController.text
+                  .trim(),
               'pend_seletivo_extra': _pendSeletivoExtraController.text.trim(),
-              'exec_mec_data':
-                  _execMecData != null ? _execMecData!.toIso8601String() : null,
-              'exec_man_data':
-                  _execManData != null ? _execManData!.toIso8601String() : null,
-              'vao_data_conclusao':
-                  _vaoConclusao != null ? _vaoConclusao!.toIso8601String() : null,
+              'exec_mec_data': _execMecData?.toIso8601String(),
+              'exec_man_data': _execManData?.toIso8601String(),
+              'vao_data_conclusao': _vaoConclusao?.toIso8601String(),
             };
             Navigator.of(context).pop(payload);
           },
@@ -1844,8 +2472,12 @@ class _EditarVaoDialogState extends State<_EditarVaoDialog> {
     );
   }
 
-  Widget _txt(TextEditingController c, String label,
-      {bool isNumber = false, int maxLines = 1}) {
+  Widget _txt(
+    TextEditingController c,
+    String label, {
+    bool isNumber = false,
+    int maxLines = 1,
+  }) {
     return TextField(
       controller: c,
       keyboardType: isNumber ? TextInputType.number : TextInputType.text,
@@ -1868,7 +2500,11 @@ class _DateField extends StatelessWidget {
   final String label;
   final DateTime? value;
   final VoidCallback onPick;
-  const _DateField({required this.label, required this.value, required this.onPick});
+  const _DateField({
+    required this.label,
+    required this.value,
+    required this.onPick,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1969,22 +2605,24 @@ class _VerVaoDialog extends StatelessWidget {
         } else {
           display = _fmt(val);
         }
-        rows.add(Padding(
-          padding: const EdgeInsets.only(bottom: 6),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(
-                width: 160,
-                child: Text(
-                  labels[k] ?? k,
-                  style: const TextStyle(fontWeight: FontWeight.w600),
+        rows.add(
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: 160,
+                  child: Text(
+                    labels[k] ?? k,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
                 ),
-              ),
-              Expanded(child: Text(display)),
-            ],
+                Expanded(child: Text(display)),
+              ],
+            ),
           ),
-        ));
+        );
       }
       if (rows.isEmpty) return [];
       return [
@@ -2010,7 +2648,10 @@ class _VerVaoDialog extends StatelessWidget {
               if (linhaNome.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8),
-                  child: Text('Linha: $linhaNome', style: const TextStyle(fontWeight: FontWeight.w600)),
+                  child: Text(
+                    'Linha: $linhaNome',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
                 ),
               ...buildSection('Estrutura', [
                 'lt',
@@ -2068,7 +2709,7 @@ class _VerVaoDialog extends StatelessWidget {
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Fechar'),
-        )
+        ),
       ],
     );
   }

@@ -64,7 +64,7 @@ class _VersaoDetailScreenState extends State<VersaoDetailScreen> {
     final result = await showDialog<MelhoriaBug>(
       context: context,
       builder: (ctx) => MelhoriaBugFormDialog(
-        initial: item != null ? item : MelhoriaBug(id: '', tipo: kTipoMelhoria, titulo: '', status: 'BACKLOG', versaoId: versao.id),
+        initial: item ?? MelhoriaBug(id: '', tipo: kTipoMelhoria, titulo: '', status: 'BACKLOG', versaoId: versao.id),
         versoes: _versoes,
         onSave: (mb) => _service.saveMelhoriaBug(mb),
       ),

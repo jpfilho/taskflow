@@ -1599,7 +1599,7 @@ class _SIViewState extends State<SIView> {
       scrollDirection: Axis.horizontal,
       child: SingleChildScrollView(
         child: DataTable(
-          headingRowColor: MaterialStateProperty.all(Colors.blue[50]),
+          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
           columns: const [
             DataColumn(label: Text('Ações', style: TextStyle(fontWeight: FontWeight.bold))),
             DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold))),
@@ -1625,7 +1625,7 @@ class _SIViewState extends State<SIView> {
             
             return DataRow(
               color: isProgramada && statusColor != null
-                  ? MaterialStateProperty.all(statusColor.withOpacity(0.1))
+                  ? WidgetStateProperty.all(statusColor.withOpacity(0.1))
                   : null,
               cells: [
                 DataCell(

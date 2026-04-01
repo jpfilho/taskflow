@@ -48,8 +48,6 @@ class ConflictService {
           .select('executor_id, executor_nome, day, has_conflict, descriptions')
           .gte('day', start)
           .lte('day', end);
-
-      if (res is! List) return result;
       for (final row in res as List) {
         final map = row as Map<String, dynamic>;
         final executorId = map['executor_id']?.toString();
@@ -92,8 +90,6 @@ class ConflictService {
           .select('executor_id, executor_nome, day, location_key, task_id, description')
           .gte('day', start)
           .lte('day', end);
-
-      if (res is! List) return result;
       for (final row in res as List) {
         final map = row as Map<String, dynamic>;
         final dayStr = map['day']?.toString();
@@ -148,8 +144,6 @@ class ConflictService {
           .select('frota_id, frota_nome, day, has_conflict, descriptions')
           .gte('day', start)
           .lte('day', end);
-
-      if (res is! List) return result;
       for (final row in res as List) {
         final map = row as Map<String, dynamic>;
         final frotaId = map['frota_id']?.toString();
@@ -190,8 +184,6 @@ class ConflictService {
           .select('frota_id, frota_nome, day, location_key, task_id, description')
           .gte('day', start)
           .lte('day', end);
-
-      if (res is! List) return result;
       for (final row in res as List) {
         final map = row as Map<String, dynamic>;
         final dayStr = map['day']?.toString();

@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 import 'package:file_picker/file_picker.dart';
@@ -364,7 +363,7 @@ class _KmzViewState extends State<KmzView> {
                       children: [
                         Expanded(
                           child: DropdownButtonFormField<String>(
-                            value: _regionalId,
+                            initialValue: _regionalId,
                             decoration: const InputDecoration(
                               labelText: 'Regional',
                               border: OutlineInputBorder(),
@@ -390,7 +389,7 @@ class _KmzViewState extends State<KmzView> {
                         const SizedBox(width: 12),
                         Expanded(
                           child: DropdownButtonFormField<String>(
-                            value: _divisaoId,
+                            initialValue: _divisaoId,
                             decoration: const InputDecoration(
                               labelText: 'Divisão',
                               border: OutlineInputBorder(),

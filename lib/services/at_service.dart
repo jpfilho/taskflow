@@ -22,7 +22,8 @@ class ATService {
       for (int i = 0; i < linhas.length; i++) {
         final linha = linhas[i].trim();
         final linhaLower = linha.toLowerCase();
-        if (linhaLower.contains('autorztrab') && linhaLower.contains('edificação')) {
+        if (linhaLower.contains('autorztrab') &&
+            linhaLower.contains('edificação')) {
           linhaCabecalho = i;
           print('📋 Cabeçalho encontrado na linha ${i + 1}');
           break;
@@ -30,7 +31,9 @@ class ATService {
       }
 
       if (linhaCabecalho == -1) {
-        throw Exception('Cabeçalho não encontrado no CSV. Procure por uma linha contendo "AutorzTrab" e "Edificação"');
+        throw Exception(
+          'Cabeçalho não encontrado no CSV. Procure por uma linha contendo "AutorzTrab" e "Edificação"',
+        );
       }
 
       // Processar linhas de dados (após o separador do cabeçalho)
@@ -43,15 +46,22 @@ class ATService {
       int linhaInicioDados = linhaCabecalho + 1;
       while (linhaInicioDados < linhas.length) {
         final linha = linhas[linhaInicioDados].trim();
-        if (linha.isNotEmpty && 
+        if (linha.isNotEmpty &&
             linha.contains('|') &&
-            !linha.replaceAll('|', '').replaceAll('-', '').replaceAll(' ', '').replaceAll('_', '').isEmpty) {
+            linha
+                .replaceAll('|', '')
+                .replaceAll('-', '')
+                .replaceAll(' ', '')
+                .replaceAll('_', '')
+                .isNotEmpty) {
           break;
         }
         linhaInicioDados++;
       }
-      
-      print('📋 Iniciando processamento de dados a partir da linha ${linhaInicioDados + 1}');
+
+      print(
+        '📋 Iniciando processamento de dados a partir da linha ${linhaInicioDados + 1}',
+      );
 
       for (int i = linhaInicioDados; i < linhas.length; i++) {
         final linha = linhas[i].trim();
@@ -93,7 +103,7 @@ class ATService {
           print('❌ Erro ao testar conexão com banco: $e');
           throw Exception('Erro de conexão com banco de dados: $e');
         }
-        
+
         await _inserirATs(ats);
         print('✅ ${ats.length} ATs inseridas com sucesso!');
       } else {
@@ -115,19 +125,22 @@ class ATService {
       };
     } catch (e) {
       print('❌ Erro ao importar CSV: $e');
-      return {
-        'sucesso': false,
-        'erro': e.toString(),
-      };
+      return {'sucesso': false, 'erro': e.toString()};
     }
   }
 
   // Parse de uma linha do CSV
   AT? _parseLinhaCSV(String linha) {
     try {
-      if (linha.trim().isEmpty || 
-          linha.replaceAll('|', '').replaceAll('-', '').replaceAll(' ', '').replaceAll('_', '').isEmpty ||
-          linha.toLowerCase().contains('autorztrab') && linha.toLowerCase().contains('edificação')) {
+      if (linha.trim().isEmpty ||
+          linha
+              .replaceAll('|', '')
+              .replaceAll('-', '')
+              .replaceAll(' ', '')
+              .replaceAll('_', '')
+              .isEmpty ||
+          linha.toLowerCase().contains('autorztrab') &&
+              linha.toLowerCase().contains('edificação')) {
         return null;
       }
 
@@ -189,7 +202,10 @@ class ATService {
   dynamic _sanitizeForSupabase(dynamic value) {
     if (value == null) return null;
     if (value is String) {
-      String cleaned = value.replaceAll(RegExp(r'[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]'), '');
+      String cleaned = value.replaceAll(
+        RegExp(r'[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]'),
+        '',
+      );
       try {
         final utf8Bytes = utf8.encode(cleaned);
         final verified = utf8.decode(utf8Bytes);
@@ -204,14 +220,16 @@ class ATService {
   // Inserir ATs em lotes
   Future<void> _inserirATs(List<AT> ats) async {
     const batchSize = 50;
-    
+
     try {
       for (int i = 0; i < ats.length; i += batchSize) {
         final lote = ats.skip(i).take(batchSize).toList();
         final maps = lote.map((at) {
           final map = at.toMap();
           // Sanitizar todos os valores string
-          return map.map((key, value) => MapEntry(key, _sanitizeForSupabase(value)));
+          return map.map(
+            (key, value) => MapEntry(key, _sanitizeForSupabase(value)),
+          );
         }).toList();
 
         try {
@@ -224,7 +242,9 @@ class ATService {
           for (final at in lote) {
             try {
               final map = at.toMap();
-              final sanitized = map.map((key, value) => MapEntry(key, _sanitizeForSupabase(value)));
+              final sanitized = map.map(
+                (key, value) => MapEntry(key, _sanitizeForSupabase(value)),
+              );
               await _supabase.from('ats').insert(sanitized);
             } catch (e2) {
               print('⚠️ Erro ao inserir AT ${at.autorzTrab}: $e2');
@@ -243,11 +263,11 @@ class ATService {
   Future<List<String>> _obterCentrosTrabalhoUsuario() async {
     try {
       final usuario = _authService.currentUser;
-      
+
       print('🔍 DEBUG _obterCentrosTrabalhoUsuario:');
       print('   Usuário: ${usuario?.email}');
       print('   isRoot: ${usuario?.isRoot}');
-      
+
       // Se não há usuário ou é root, retornar lista vazia (sem filtro)
       if (usuario == null || usuario.isRoot) {
         print('   → Retornando lista vazia (root ou sem usuário)');
@@ -267,43 +287,60 @@ class ATService {
 
       // Buscar todos os centros de trabalho
       final todosCentros = await _centroTrabalhoService.getAllCentrosTrabalho();
-      print('   Total de centros de trabalho no sistema: ${todosCentros.length}');
-      
+      print(
+        '   Total de centros de trabalho no sistema: ${todosCentros.length}',
+      );
+
       // DEBUG: Verificar se existe centro "MNSE.TSA"
-      final centroMNSE = todosCentros.where((c) => c.centroTrabalho.contains('MNSE')).toList();
+      final centroMNSE = todosCentros
+          .where((c) => c.centroTrabalho.contains('MNSE'))
+          .toList();
       if (centroMNSE.isNotEmpty) {
         print('   🔍 Centros encontrados com "MNSE":');
         for (var c in centroMNSE) {
-          print('      - ${c.centroTrabalho} (Regional: ${c.regional}, Divisão: ${c.divisao}, Segmento: ${c.segmento})');
+          print(
+            '      - ${c.centroTrabalho} (Regional: ${c.regional}, Divisão: ${c.divisao}, Segmento: ${c.segmento})',
+          );
         }
       }
-      
+
       // Filtrar centros de trabalho baseado no perfil do usuário
-      final centrosPermitidos = todosCentros.where((centro) {
-        // Verificar se o centro pertence a uma regional permitida
-        final temRegionalPermitida = usuario.regionalIds.isEmpty || 
-            usuario.regionalIds.contains(centro.regionalId);
-        
-        // Verificar se o centro pertence a uma divisão permitida
-        final temDivisaoPermitida = usuario.divisaoIds.isEmpty || 
-            usuario.divisaoIds.contains(centro.divisaoId);
-        
-        // Verificar se o centro pertence a um segmento permitido
-        final temSegmentoPermitido = usuario.segmentoIds.isEmpty || 
-            usuario.segmentoIds.contains(centro.segmentoId);
-        
-        final permitido = temRegionalPermitida && temDivisaoPermitida && temSegmentoPermitido;
-        
-        if (permitido) {
-          print('   ✅ Centro permitido: ${centro.centroTrabalho} (${centro.regional}/${centro.divisao}/${centro.segmento})');
-        }
-        
-        return permitido;
-      }).map((centro) => centro.centroTrabalho).toList();
+      final centrosPermitidos = todosCentros
+          .where((centro) {
+            // Verificar se o centro pertence a uma regional permitida
+            final temRegionalPermitida =
+                usuario.regionalIds.isEmpty ||
+                usuario.regionalIds.contains(centro.regionalId);
+
+            // Verificar se o centro pertence a uma divisão permitida
+            final temDivisaoPermitida =
+                usuario.divisaoIds.isEmpty ||
+                usuario.divisaoIds.contains(centro.divisaoId);
+
+            // Verificar se o centro pertence a um segmento permitido
+            final temSegmentoPermitido =
+                usuario.segmentoIds.isEmpty ||
+                usuario.segmentoIds.contains(centro.segmentoId);
+
+            final permitido =
+                temRegionalPermitida &&
+                temDivisaoPermitida &&
+                temSegmentoPermitido;
+
+            if (permitido) {
+              print(
+                '   ✅ Centro permitido: ${centro.centroTrabalho} (${centro.regional}/${centro.divisao}/${centro.segmento})',
+              );
+            }
+
+            return permitido;
+          })
+          .map((centro) => centro.centroTrabalho)
+          .toList();
 
       print('🔍 Centros de trabalho do usuário: ${centrosPermitidos.length}');
       print('   Centros: $centrosPermitidos');
-      
+
       // DEBUG: Verificar se há ATs com esses centros de trabalho no banco
       if (centrosPermitidos.isNotEmpty) {
         try {
@@ -314,11 +351,15 @@ class ATService {
                 .select('id, autorz_trab, cntr_trab')
                 .eq('cntr_trab', centrosPermitidos[0])
                 .limit(5);
-            print('   🔍 ATs no banco com cntr_trab="${centrosPermitidos[0]}": ${(response as List).length}');
+            print(
+              '   🔍 ATs no banco com cntr_trab="${centrosPermitidos[0]}": ${(response as List).length}',
+            );
             if ((response as List).isNotEmpty) {
               print('   Primeiras ATs encontradas:');
               for (var at in response as List) {
-                print('      - ${at['autorz_trab']}: cntr_trab="${at['cntr_trab']}"');
+                print(
+                  '      - ${at['autorz_trab']}: cntr_trab="${at['cntr_trab']}"',
+                );
               }
             }
           }
@@ -326,7 +367,7 @@ class ATService {
           print('   ⚠️ Erro ao verificar ATs no banco: $e');
         }
       }
-      
+
       return centrosPermitidos;
     } catch (e) {
       print('⚠️ Erro ao obter centros de trabalho do usuário: $e');
@@ -357,16 +398,24 @@ class ATService {
           query = query.eq('cntr_trab', centrosTrabalhoUsuario[0]);
         } else {
           // Para múltiplos valores, construir filtro OR
-          final orConditions = centrosTrabalhoUsuario.map((centro) => 'cntr_trab.eq.$centro').join(',');
+          final orConditions = centrosTrabalhoUsuario
+              .map((centro) => 'cntr_trab.eq.$centro')
+              .join(',');
           query = query.or(orConditions);
         }
-        print('🔒 Filtrando ATs por centros de trabalho: ${centrosTrabalhoUsuario.length} centros');
+        print(
+          '🔒 Filtrando ATs por centros de trabalho: ${centrosTrabalhoUsuario.length} centros',
+        );
         print('   Centros: $centrosTrabalhoUsuario');
       } else {
         final usuario = _authService.currentUser;
-        if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
+        if (usuario != null &&
+            !usuario.isRoot &&
+            usuario.temPerfilConfigurado()) {
           // Se o usuário tem perfil mas não tem centros de trabalho, não retornar nenhuma AT
-          print('⚠️ Usuário com perfil mas sem centros de trabalho - retornando lista vazia');
+          print(
+            '⚠️ Usuário com perfil mas sem centros de trabalho - retornando lista vazia',
+          );
           return [];
         }
       }
@@ -381,9 +430,13 @@ class ATService {
 
       if (filtroLocal != null && filtroLocal.isNotEmpty) {
         if (filtroLocal.length == 1) {
-          query = query.or('local.ilike.%${filtroLocal.first}%,local_instalacao.ilike.%${filtroLocal.first}%');
+          query = query.or(
+            'local.ilike.%${filtroLocal.first}%,local_instalacao.ilike.%${filtroLocal.first}%',
+          );
         } else {
-          final orParts = filtroLocal.map((v) => 'local.ilike.%$v%,local_instalacao.ilike.%$v%').toList();
+          final orParts = filtroLocal
+              .map((v) => 'local.ilike.%$v%,local_instalacao.ilike.%$v%')
+              .toList();
           query = query.or(orParts.join(','));
         }
       }
@@ -397,14 +450,19 @@ class ATService {
       }
 
       if (dataInicio != null) {
-        query = query.gte('data_inicio', dataInicio.toIso8601String().split('T')[0]);
+        query = query.gte(
+          'data_inicio',
+          dataInicio.toIso8601String().split('T')[0],
+        );
       }
 
       if (dataFim != null) {
         query = query.lte('data_fim', dataFim.toIso8601String().split('T')[0]);
       }
 
-      query = query.order('created_at', ascending: false);
+      query = query
+          .order('data_inicio', ascending: true)
+          .order('data_fim', ascending: true);
 
       if (limit != null) {
         query = query.limit(limit);
@@ -416,7 +474,7 @@ class ATService {
 
       final response = await query;
       final ats = (response as List).map((map) => AT.fromMap(map)).toList();
-      
+
       // DEBUG: Verificar valores de cntr_trab nas ATs retornadas
       print('📊 DEBUG getAllATs:');
       print('   Total de ATs retornadas: ${ats.length}');
@@ -427,7 +485,7 @@ class ATService {
           print('   - AT ${at.autorzTrab}: cntr_trab = "${at.cntrTrab}"');
         }
       }
-      
+
       return ats;
     } catch (e, stackTrace) {
       print('❌ Erro ao buscar ATs: $e');
@@ -456,12 +514,16 @@ class ATService {
           query = query.eq('cntr_trab', centrosTrabalhoUsuario[0]);
         } else {
           // Para múltiplos valores, construir filtro OR
-          final orConditions = centrosTrabalhoUsuario.map((centro) => 'cntr_trab.eq.$centro').join(',');
+          final orConditions = centrosTrabalhoUsuario
+              .map((centro) => 'cntr_trab.eq.$centro')
+              .join(',');
           query = query.or(orConditions);
         }
       } else {
         final usuario = _authService.currentUser;
-        if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
+        if (usuario != null &&
+            !usuario.isRoot &&
+            usuario.temPerfilConfigurado()) {
           // Se o usuário tem perfil mas não tem centros de trabalho, retornar 0
           return 0;
         }
@@ -479,7 +541,9 @@ class ATService {
         if (filtroLocal.length == 1) {
           query = query.ilike('local_instalacao', '%${filtroLocal.first}%');
         } else {
-          final orParts = filtroLocal.map((v) => 'local_instalacao.ilike.%$v%').toList();
+          final orParts = filtroLocal
+              .map((v) => 'local_instalacao.ilike.%$v%')
+              .toList();
           query = query.or(orParts.join(','));
         }
       }
@@ -493,7 +557,10 @@ class ATService {
       }
 
       if (dataInicio != null) {
-        query = query.gte('data_inicio', dataInicio.toIso8601String().split('T')[0]);
+        query = query.gte(
+          'data_inicio',
+          dataInicio.toIso8601String().split('T')[0],
+        );
       }
 
       if (dataFim != null) {
@@ -523,7 +590,9 @@ class ATService {
   // Buscar valores únicos para filtros
   Future<Map<String, List<String>>> getValoresFiltros() async {
     try {
-      dynamic query = _supabase.from('ats_com_local').select('status_sistema, local, local_instalacao, status_usuario');
+      dynamic query = _supabase
+          .from('ats_com_local')
+          .select('status_sistema, local, local_instalacao, status_usuario');
 
       // Aplicar filtro por centro de trabalho do usuário
       final centrosTrabalhoUsuario = await _obterCentrosTrabalhoUsuario();
@@ -534,18 +603,18 @@ class ATService {
           query = query.eq('cntr_trab', centrosTrabalhoUsuario[0]);
         } else {
           // Para múltiplos valores, construir filtro OR
-          final orConditions = centrosTrabalhoUsuario.map((centro) => 'cntr_trab.eq.$centro').join(',');
+          final orConditions = centrosTrabalhoUsuario
+              .map((centro) => 'cntr_trab.eq.$centro')
+              .join(',');
           query = query.or(orConditions);
         }
       } else {
         final usuario = _authService.currentUser;
-        if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
+        if (usuario != null &&
+            !usuario.isRoot &&
+            usuario.temPerfilConfigurado()) {
           // Se o usuário tem perfil mas não tem centros de trabalho, retornar filtros vazios
-          return {
-            'status': [],
-            'local': [],
-            'statusUsuario': [],
-          };
+          return {'status': [], 'local': [], 'statusUsuario': []};
         }
       }
 
@@ -597,12 +666,16 @@ class ATService {
           query = query.eq('cntr_trab', centrosTrabalhoUsuario[0]);
         } else {
           // Para múltiplos valores, construir filtro OR
-          final orConditions = centrosTrabalhoUsuario.map((centro) => 'cntr_trab.eq.$centro').join(',');
+          final orConditions = centrosTrabalhoUsuario
+              .map((centro) => 'cntr_trab.eq.$centro')
+              .join(',');
           query = query.or(orConditions);
         }
       } else {
         final usuario = _authService.currentUser;
-        if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
+        if (usuario != null &&
+            !usuario.isRoot &&
+            usuario.temPerfilConfigurado()) {
           // Se o usuário tem perfil mas não tem centros de trabalho, retornar lista vazia
           return [];
         }
@@ -610,8 +683,10 @@ class ATService {
 
       query = query.order('data_inicio', ascending: false);
       final response = await query;
-      
-      return (response as List).map((item) => AT.fromMap(item as Map<String, dynamic>)).toList();
+
+      return (response as List)
+          .map((item) => AT.fromMap(item as Map<String, dynamic>))
+          .toList();
     } catch (e) {
       print('❌ Erro ao buscar todas as ATs: $e');
       return [];
@@ -622,40 +697,42 @@ class ATService {
   Future<void> vincularATATarefa(String taskId, String atId) async {
     try {
       print('🔗 Iniciando vinculação de AT $atId à tarefa $taskId...');
-      
+
       // Verificar se a tabela existe
       try {
         await _supabase.from('tasks_ats').select('id').limit(1);
         print('✅ Tabela tasks_ats existe e está acessível');
       } catch (e) {
         print('❌ ERRO: Tabela tasks_ats não existe ou não está acessível: $e');
-        throw Exception('Tabela tasks_ats não existe. Execute o script criar_tabela_tasks_at.sql no Supabase.');
+        throw Exception(
+          'Tabela tasks_ats não existe. Execute o script criar_tabela_tasks_at.sql no Supabase.',
+        );
       }
-      
+
       // Verificar se a AT existe
       final atExiste = await _supabase
           .from('ats')
           .select('id')
           .eq('id', atId)
           .maybeSingle();
-      
+
       if (atExiste == null) {
         throw Exception('AT com ID $atId não encontrada');
       }
       print('✅ AT $atId existe no banco');
-      
+
       // Verificar se a tarefa existe
       final tarefaExiste = await _supabase
           .from('tasks')
           .select('id')
           .eq('id', taskId)
           .maybeSingle();
-      
+
       if (tarefaExiste == null) {
         throw Exception('Tarefa com ID $taskId não encontrada');
       }
       print('✅ Tarefa $taskId existe no banco');
-      
+
       // Verificar se já está vinculada
       final vinculoExistente = await _supabase
           .from('tasks_ats')
@@ -663,12 +740,12 @@ class ATService {
           .eq('task_id', taskId)
           .eq('at_id', atId)
           .maybeSingle();
-      
+
       if (vinculoExistente != null) {
         print('ℹ️ AT já está vinculada a esta tarefa');
         return;
       }
-      
+
       // Vincular a AT (VINCULAÇÃO PRINCIPAL)
       print('🔗 Inserindo vínculo na tabela tasks_ats...');
       try {
@@ -676,7 +753,7 @@ class ATService {
           'task_id': taskId,
           'at_id': atId,
         }).select();
-        
+
         print('✅ AT vinculada à tarefa. Resultado: $resultado');
       } catch (e) {
         print('❌ ERRO CRÍTICO ao inserir vínculo principal: $e');
@@ -714,14 +791,14 @@ class ATService {
       dynamic query = _supabase
           .from('contagens_ats_tarefas')
           .select('task_id, quantidade');
-      
+
       if (taskIds.length == 1) {
         query = query.eq('task_id', taskIds[0]);
       } else {
         final orConditions = taskIds.map((id) => 'task_id.eq.$id').join(',');
         query = query.or(orConditions);
       }
-      
+
       final response = await query;
 
       final contagens = <String, int>{};
@@ -765,7 +842,9 @@ class ATService {
           .select('task_id')
           .eq('at_id', atId);
 
-      return (response as List).map((item) => item['task_id'] as String).toList();
+      return (response as List)
+          .map((item) => item['task_id'] as String)
+          .toList();
     } catch (e) {
       print('❌ Erro ao buscar tarefas da AT: $e');
       return [];
@@ -777,7 +856,7 @@ class ATService {
     try {
       // Aplicar filtro por centro de trabalho do usuário
       final centrosTrabalhoUsuario = await _obterCentrosTrabalhoUsuario();
-      
+
       dynamic query = _supabase.from('tasks_ats').select('''
             id,
             created_at,
@@ -813,7 +892,7 @@ class ATService {
       List<dynamic> filteredResponse = response as List;
       print('📊 DEBUG getATsProgramadas:');
       print('   Total de vínculos retornados: ${filteredResponse.length}');
-      
+
       if (centrosTrabalhoUsuario.isNotEmpty) {
         print('   Filtrando por centros de trabalho: $centrosTrabalhoUsuario');
         filteredResponse = filteredResponse.where((item) {
@@ -824,16 +903,21 @@ class ATService {
           }
           final cntrTrab = at['cntr_trab'] as String?;
           final autorzTrab = at['autorz_trab'] as String?;
-          final permitido = cntrTrab != null && centrosTrabalhoUsuario.contains(cntrTrab);
+          final permitido =
+              cntrTrab != null && centrosTrabalhoUsuario.contains(cntrTrab);
           if (!permitido && autorzTrab != null) {
-            print('   ❌ AT $autorzTrab: cntr_trab="$cntrTrab" não está na lista permitida');
+            print(
+              '   ❌ AT $autorzTrab: cntr_trab="$cntrTrab" não está na lista permitida',
+            );
           }
           return permitido;
         }).toList();
         print('   Total após filtro: ${filteredResponse.length}');
       } else {
         final usuario = _authService.currentUser;
-        if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
+        if (usuario != null &&
+            !usuario.isRoot &&
+            usuario.temPerfilConfigurado()) {
           // Se o usuário tem perfil mas não tem centros de trabalho, retornar lista vazia
           print('   ⚠️ Usuário com perfil mas sem centros de trabalho');
           return [];

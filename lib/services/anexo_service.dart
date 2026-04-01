@@ -175,6 +175,48 @@ class AnexoService {
     }
   }
 
+  // Listar anexos de múltiplas tarefas (O(1) request array)
+  Future<Map<String, List<Anexo>>> obterAnexosDasTarefas(List<String> taskIds) async {
+    if (taskIds.isEmpty) return {};
+    
+    try {
+      const int chunkSize = 100;
+      final futures = <Future<List<dynamic>>>[];
+
+      for (var i = 0; i < taskIds.length; i += chunkSize) {
+        final chunk = taskIds.sublist(
+          i,
+          i + chunkSize > taskIds.length ? taskIds.length : i + chunkSize,
+        );
+        futures.add(
+          _supabase.from('anexos').select().inFilter('task_id', chunk).order('created_at', ascending: false)
+        );
+      }
+
+      final results = await Future.wait(futures);
+      final response = <dynamic>[];
+      for (final res in results) {
+         response.addAll(res);
+      }
+
+      final map = <String, List<Anexo>>{};
+      
+      for (var item in response) {
+        final anexo = Anexo.fromMap(item as Map<String, dynamic>);
+        if (map.containsKey(anexo.taskId)) {
+          map[anexo.taskId]!.add(anexo);
+        } else {
+          map[anexo.taskId] = [anexo];
+        }
+      }
+      
+      return map;
+    } catch (e) {
+      debugPrint('Erro ao buscar anexos em lote: $e');
+      return {};
+    }
+  }
+
   // Contar anexos de uma tarefa
   Future<int> contarAnexosPorTarefa(String taskId) async {
     try {

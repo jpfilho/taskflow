@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/gestures.dart';
 
 /// Widget que permite redimensionar dois painéis arrastando um divisor entre eles
 class ResizablePanel extends StatefulWidget {

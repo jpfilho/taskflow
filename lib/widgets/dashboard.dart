@@ -180,7 +180,7 @@ class Dashboard extends StatelessWidget {
   Widget build(BuildContext context) {
     final isMobile = Responsive.isMobile(context);
 
-    Future<Map<String, Color>> _loadStatusColors() async {
+    Future<Map<String, Color>> loadStatusColors() async {
       final list = await _statusService.getAllStatus();
       final map = <String, Color>{};
       for (final s in list) {
@@ -189,9 +189,9 @@ class Dashboard extends StatelessWidget {
       return map;
     }
 
-    Widget _buildWithColors(Map<String, dynamic> stats) {
+    Widget buildWithColors(Map<String, dynamic> stats) {
       return FutureBuilder<Map<String, Color>>(
-        future: _loadStatusColors(),
+        future: loadStatusColors(),
         builder: (context, colorSnap) {
           final statusColors = colorSnap.data ?? {};
       return SingleChildScrollView(
@@ -237,14 +237,14 @@ class Dashboard extends StatelessWidget {
     
     // Calcular estatísticas a partir das tarefas filtradas
     final stats = _calculateStatsFromTasks(tasksToUse);
-    return _buildWithColors(stats);
+    return buildWithColors(stats);
   }
 
   Widget _buildSummaryCards(BuildContext context, Map<String, dynamic> stats, bool isMobile, Map<String, Color> statusColors) {
     Color resolve(String code, Color fallback) => statusColors[code.toUpperCase()] ?? fallback;
 
     // Função auxiliar para converter dinamicamente para List<Task> com proteção
-    List<Task> _asTaskList(dynamic v) {
+    List<Task> asTaskList(dynamic v) {
       if (v == null) return <Task>[];
       if (v is List<Task>) return v;
       if (v is List) {
@@ -258,11 +258,11 @@ class Dashboard extends StatelessWidget {
       return <Task>[];
     }
     
-    final listaTotal = _asTaskList(stats['listaTotal']);
-    final listaEmAndamento = _asTaskList(stats['listaEmAndamento']);
-    final listaConcluidas = _asTaskList(stats['listaConcluidas']);
-    final listaProgramadas = _asTaskList(stats['listaProgramadas']);
-    final listaCanceladas = _asTaskList(stats['listaCanceladas']);
+    final listaTotal = asTaskList(stats['listaTotal']);
+    final listaEmAndamento = asTaskList(stats['listaEmAndamento']);
+    final listaConcluidas = asTaskList(stats['listaConcluidas']);
+    final listaProgramadas = asTaskList(stats['listaProgramadas']);
+    final listaCanceladas = asTaskList(stats['listaCanceladas']);
 
     final effectiveWarnings = warningsByTaskId ?? {};
     int highCount = 0, mediumCount = 0, lowCount = 0, tasksWithWarnings = 0;
@@ -459,8 +459,8 @@ class Dashboard extends StatelessWidget {
   }
 
   Widget _buildDetailedStats(BuildContext context, Map<String, dynamic> stats, bool isMobile) {
-    int _asInt(dynamic v) => v is num ? v.toInt() : 0;
-    Map<String, int> _asMapInt(dynamic v) {
+    int asInt(dynamic v) => v is num ? v.toInt() : 0;
+    Map<String, int> asMapInt(dynamic v) {
       if (v is Map) {
         return v.map<String, int>((key, value) {
           final k = key.toString();
@@ -471,22 +471,22 @@ class Dashboard extends StatelessWidget {
       return {};
     }
 
-    final total = _asInt(stats['total']);
-    final porStatus = _asMapInt(stats['porStatus']);
-    final porTipo = _asMapInt(stats['porTipo']);
-    final porRegional = _asMapInt(stats['porRegional']);
-    final porExecutor = _asMapInt(stats['porExecutor']);
-    final porLocal = _asMapInt(stats['porLocal']);
-    final porCoordenador = _asMapInt(stats['porCoordenador']);
-    final atrasadas = _asInt(stats['atrasadas']);
-    final venceHoje = _asInt(stats['venceHoje']);
-    final semExecutor = _asInt(stats['semExecutor']);
-    final semLocal = _asInt(stats['semLocal']);
-    final semCoordenador = _asInt(stats['semCoordenador']);
+    final total = asInt(stats['total']);
+    final porStatus = asMapInt(stats['porStatus']);
+    final porTipo = asMapInt(stats['porTipo']);
+    final porRegional = asMapInt(stats['porRegional']);
+    final porExecutor = asMapInt(stats['porExecutor']);
+    final porLocal = asMapInt(stats['porLocal']);
+    final porCoordenador = asMapInt(stats['porCoordenador']);
+    final atrasadas = asInt(stats['atrasadas']);
+    final venceHoje = asInt(stats['venceHoje']);
+    final semExecutor = asInt(stats['semExecutor']);
+    final semLocal = asInt(stats['semLocal']);
+    final semCoordenador = asInt(stats['semCoordenador']);
     final mediaDuracao = stats['mediaDuracaoDias'] is num ? (stats['mediaDuracaoDias'] as num).toDouble() : 0.0;
     
     // Função auxiliar para converter dinamicamente para List<Task> com proteção
-    List<Task> _asTaskList(dynamic v) {
+    List<Task> asTaskList(dynamic v) {
       if (v == null) return <Task>[];
       if (v is List<Task>) return v;
       if (v is List) {
@@ -500,12 +500,12 @@ class Dashboard extends StatelessWidget {
       return <Task>[];
     }
     
-    final listaAtrasadas = _asTaskList(stats['listaAtrasadas']);
-    final listaVenceHoje = _asTaskList(stats['listaVenceHoje']);
-    final listaSemExecutor = _asTaskList(stats['listaSemExecutor']);
-    final listaSemLocal = _asTaskList(stats['listaSemLocal']);
-    final listaSemCoordenador = _asTaskList(stats['listaSemCoordenador']);
-    final listaCanceladas = _asTaskList(stats['listaCanceladas']);
+    final listaAtrasadas = asTaskList(stats['listaAtrasadas']);
+    final listaVenceHoje = asTaskList(stats['listaVenceHoje']);
+    final listaSemExecutor = asTaskList(stats['listaSemExecutor']);
+    final listaSemLocal = asTaskList(stats['listaSemLocal']);
+    final listaSemCoordenador = asTaskList(stats['listaSemCoordenador']);
+    final listaCanceladas = asTaskList(stats['listaCanceladas']);
 
     final cardWidth = isMobile ? double.infinity : 420.0;
 
@@ -943,14 +943,14 @@ class Dashboard extends StatelessWidget {
   }
 
   Widget _buildProductivityIndicators(Map<String, dynamic> stats, bool isMobile) {
-    double _asDouble(dynamic v) {
+    double asDouble(dynamic v) {
       if (v is num) return v.toDouble();
       return 0.0;
     }
 
-    final atrasoMedio = _asDouble(stats['atrasoMedioDias']);
-    final prodDia = _asDouble(stats['produtividadeDia']);
-    final eficiencia = _asDouble(stats['eficiencia']);
+    final atrasoMedio = asDouble(stats['atrasoMedioDias']);
+    final prodDia = asDouble(stats['produtividadeDia']);
+    final eficiencia = asDouble(stats['eficiencia']);
     final concluidas = stats['concluidas'] ?? 0;
     final total = stats['total'] ?? 0;
     final taxaConclusao = total == 0 ? 0.0 : (concluidas / total);
@@ -1203,7 +1203,7 @@ class Dashboard extends StatelessWidget {
   }
 
   Widget _buildStatusDistribution(Map<String, int> distribution, int total, bool isMobile) {
-    String _statusDescricao(String sigla) {
+    String statusDescricao(String sigla) {
       final key = sigla.trim().toUpperCase();
       const map = {
         'ANDA': 'Em Andamento',
@@ -1230,7 +1230,7 @@ class Dashboard extends StatelessWidget {
                   SizedBox(
                     width: isMobile ? 60 : 80,
                     child: Text(
-                      _statusDescricao(entry.key),
+                      statusDescricao(entry.key),
                       style: TextStyle(fontSize: isMobile ? 10 : 12),
                     ),
                   ),
@@ -1270,7 +1270,7 @@ class Dashboard extends StatelessWidget {
             mapDescricao[t.codigo.toUpperCase()] = t.descricao;
           }
         }
-        String _tipoDescricao(String sigla) {
+        String tipoDescricao(String sigla) {
           final key = sigla.trim().toUpperCase();
           return mapDescricao[key] ?? sigla;
         }
@@ -1286,7 +1286,7 @@ class Dashboard extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
-                        _tipoDescricao(entry.key),
+                        tipoDescricao(entry.key),
                     style: TextStyle(fontSize: isMobile ? 10 : 12),
                   ),
                   Text(

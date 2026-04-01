@@ -30,7 +30,7 @@ class _DivisaoFormDialogState extends State<DivisaoFormDialog> {
   List<String> _selectedSegmentoIds = [];
   bool _isLoadingRegionais = true;
   bool _isLoadingSegmentos = true;
-  Map<String, TextEditingController> _telegramChatIdControllers = {};
+  final Map<String, TextEditingController> _telegramChatIdControllers = {};
 
   @override
   void initState() {
@@ -526,7 +526,7 @@ class _DivisaoFormDialogState extends State<DivisaoFormDialog> {
                                     ],
                                   ),
                                 );
-                              }).toList(),
+                              }),
                             ],
                           ),
                         ),
@@ -740,7 +740,7 @@ class _FloatingLabelDropdown<T> extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             DropdownButtonFormField<T>(
-              value: value,
+              initialValue: value,
               decoration: InputDecoration(
                 labelText: label,
                 labelStyle: TextStyle(

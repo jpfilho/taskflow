@@ -682,6 +682,28 @@ class _FrotaListViewState extends State<FrotaListView> {
                 ),
               ],
             ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.edit),
+                  onPressed: () => _editFrota(frota),
+                  tooltip: 'Editar',
+                ),
+                IconButton(
+                  icon: const Icon(Icons.copy),
+                  color: Colors.orange,
+                  onPressed: () => _duplicateFrota(frota),
+                  tooltip: 'Duplicar',
+                ),
+                IconButton(
+                  icon: const Icon(Icons.delete),
+                  onPressed: () => _deleteFrota(frota),
+                  tooltip: 'Excluir',
+                  color: Colors.red,
+                ),
+              ],
+            ),
             children: [
               Padding(
                 padding: const EdgeInsets.all(16.0),
@@ -733,28 +755,6 @@ class _FrotaListViewState extends State<FrotaListView> {
                 ),
               ),
             ],
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.edit),
-                  onPressed: () => _editFrota(frota),
-                  tooltip: 'Editar',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.copy),
-                  color: Colors.orange,
-                  onPressed: () => _duplicateFrota(frota),
-                  tooltip: 'Duplicar',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.delete),
-                  onPressed: () => _deleteFrota(frota),
-                  tooltip: 'Excluir',
-                  color: Colors.red,
-                ),
-              ],
-            ),
           ),
         );
       },
@@ -808,7 +808,7 @@ class _FrotaListViewState extends State<FrotaListView> {
         child: SingleChildScrollView(
           scrollDirection: Axis.vertical,
           child: DataTable(
-            headingRowColor: MaterialStateProperty.all(Colors.blue[50]),
+            headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
             columns: const [
               DataColumn(label: Text('Ações', style: TextStyle(fontWeight: FontWeight.bold))),
               DataColumn(label: Text('Nome', style: TextStyle(fontWeight: FontWeight.bold))),
@@ -823,8 +823,8 @@ class _FrotaListViewState extends State<FrotaListView> {
             ],
             rows: _filteredFrotas.map((frota) {
               return DataRow(
-                color: MaterialStateProperty.resolveWith<Color?>(
-                  (Set<MaterialState> states) {
+                color: WidgetStateProperty.resolveWith<Color?>(
+                  (Set<WidgetState> states) {
                     if (!frota.ativo) {
                       return Colors.grey[100];
                     }

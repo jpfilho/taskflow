@@ -62,7 +62,7 @@ class DemandService {
 
   Future<Demand> update(Demand d) async {
     final res = await _supabase.from('demands').update(d.toMap()).eq('id', d.id).select().single();
-    return Demand.fromMap(res as Map<String, dynamic>);
+    return Demand.fromMap(res);
   }
 
   Future<void> delete(String id) async {
@@ -81,7 +81,7 @@ class DemandService {
           table: 'demands',
           callback: (payload) {
             final record = payload.newRecord;
-            if (record != null) onUpsert(Demand.fromMap(record));
+            onUpsert(Demand.fromMap(record));
           },
         )
         .onPostgresChanges(
@@ -90,7 +90,7 @@ class DemandService {
           table: 'demands',
           callback: (payload) {
             final record = payload.newRecord;
-            if (record != null) onUpsert(Demand.fromMap(record));
+            onUpsert(Demand.fromMap(record));
           },
         )
         .onPostgresChanges(
@@ -99,7 +99,7 @@ class DemandService {
           table: 'demands',
           callback: (payload) {
             final record = payload.oldRecord;
-            if (record != null && record['id'] != null) {
+            if (record['id'] != null) {
               onDelete(record['id'] as String);
             }
           },

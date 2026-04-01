@@ -368,7 +368,7 @@ class AlertsView extends StatelessWidget {
         final daysLate = now.difference(task.dataFim).inDays;
         critical.add(Alert(
           title: 'Atividade Atrasada',
-          message: 'A atividade está ${daysLate} dia(s) atrasada',
+          message: 'A atividade está $daysLate dia(s) atrasada',
           icon: Icons.error,
           task: task,
           date: 'Vencimento: ${task.dataFim.day}/${task.dataFim.month}/${task.dataFim.year}',
@@ -381,7 +381,7 @@ class AlertsView extends StatelessWidget {
         if (daysUntil <= 7 && daysUntil >= 0) {
           warnings.add(Alert(
             title: 'Manutenção Preventiva Próxima',
-            message: 'Manutenção preventiva em ${daysUntil} dia(s)',
+            message: 'Manutenção preventiva em $daysUntil dia(s)',
             icon: Icons.warning,
             task: task,
             date: 'Data: ${task.dataInicio.day}/${task.dataInicio.month}/${task.dataInicio.year}',

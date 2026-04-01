@@ -260,8 +260,11 @@ class ExecutorService {
         executores = await getExecutoresAtivos();
       }
 
-      // Filtrar por regional se especificado (filtro adicional)
-      if (regionalId != null && regionalId.isNotEmpty) {
+      // Filtrar por regional APENAS quando não há segmento especificado.
+      // Quando segmentoId foi fornecido, a busca por segmento já é mais específica
+      // que a regional, então aplicar o filtro por divisão_id eliminaria incorretamente
+      // executores que não têm divisao_id preenchido ou pertencem a outra divisão.
+      if (regionalId != null && regionalId.isNotEmpty && (segmentoId == null || segmentoId.isEmpty)) {
         // Buscar divisões da regional e filtrar executores
         final divisoesDaRegional = await _supabase
             .from('divisoes')

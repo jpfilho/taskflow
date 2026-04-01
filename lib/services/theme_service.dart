@@ -114,7 +114,7 @@ class ThemeService {
         onError: Colors.white,
         surface: axiaOffWhite,
         onSurface: axiaNavy,
-        surfaceVariant: axiaGray.withOpacity(0.3),
+        surfaceContainerHighest: axiaGray.withOpacity(0.3),
         onSurfaceVariant: axiaNavy,
         outline: axiaGray,
         shadow: axiaNavy.withOpacity(0.3),

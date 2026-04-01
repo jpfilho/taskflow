@@ -9,14 +9,14 @@ class TaskWarningsService {
   /// Retorna mapa taskId -> lista de warnings visíveis ao usuário logado.
   /// Usuário = AuthServiceSimples.currentUser (tabela usuarios). Em caso de erro retorna mapa vazio.
   static Future<Map<String, List<TaskWarning>>> getWarningsByTaskId() async {
-    const bool _debugWarnings = true; // DEBUG: desativar quando estável
+    const bool debugWarnings = true; // DEBUG: desativar quando estável
     try {
       final client = SupabaseConfig.client;
       // Usuário da tabela usuarios (login no Flutter), não Supabase Auth
       final usuario = AuthServiceSimples().currentUser;
       final userId = usuario?.id;
       final idValido = userId != null && userId.trim().isNotEmpty;
-      if (_debugWarnings && kDebugMode) {
+      if (debugWarnings && kDebugMode) {
         debugPrint('[WARNINGS DEBUG] usuario tabela usuarios: id=${userId ?? "null"} (idValido=$idValido)');
       }
       if (!idValido) return {};
@@ -25,7 +25,7 @@ class TaskWarningsService {
         'get_task_warnings_for_user',
         params: {'p_user_id': userId},
       );
-      if (_debugWarnings && kDebugMode) {
+      if (debugWarnings && kDebugMode) {
         debugPrint('[WARNINGS DEBUG] RPC response: type=${response.runtimeType} | null=${response == null}');
         final respList = response is List ? response : null;
         if (respList != null) {
@@ -67,7 +67,7 @@ class TaskWarningsService {
         }
         map.putIfAbsent(w.taskId, () => []).add(w);
       }
-      if (_debugWarnings && kDebugMode) {
+      if (debugWarnings && kDebugMode) {
         final total = map.values.fold<int>(0, (s, l) => s + l.length);
         debugPrint('[WARNINGS DEBUG] Parsed: ${map.length} tarefas, $total alertas | ignorados taskId vazio: $skippedEmptyTaskId');
         if (map.isEmpty) {

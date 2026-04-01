@@ -94,7 +94,7 @@ class HoraSAP {
       return null;
     }
 
-    String? _normalizeString(dynamic value) {
+    String? normalizeString(dynamic value) {
       if (value == null) return null;
       if (value is String) {
         final trimmed = value.trim();
@@ -117,23 +117,23 @@ class HoraSAP {
       id: id is String ? id : id.toString(),
       inicioReal: parseDate(map['inicio_real']),
       dataFimReal: parseDate(map['data_fim_real']),
-      tipoOrdem: _normalizeString(map['tipo_ordem']),
-      ordem: _normalizeString(map['ordem']),
-      operacao: _normalizeString(map['operacao']),
+      tipoOrdem: normalizeString(map['tipo_ordem']),
+      ordem: normalizeString(map['ordem']),
+      operacao: normalizeString(map['operacao']),
       trabalhoReal: parseDouble(map['trabalho_real']),
-      tipoAtividadeReal: _normalizeString(map['tipo_atividade_real']),
-      numeroPessoa: _normalizeString(map['numero_pessoa']),
-      nomeEmpregado: _normalizeString(map['nome_empregado']),
-      statusSistema: _normalizeString(map['status_sistema']),
-      textoConfirmacao: _normalizeString(map['texto_confirmacao']),
-      confirmacao: _normalizeString(map['confirmacao']),
-      std: _normalizeString(map['std']),
+      tipoAtividadeReal: normalizeString(map['tipo_atividade_real']),
+      numeroPessoa: normalizeString(map['numero_pessoa']),
+      nomeEmpregado: normalizeString(map['nome_empregado']),
+      statusSistema: normalizeString(map['status_sistema']),
+      textoConfirmacao: normalizeString(map['texto_confirmacao']),
+      confirmacao: normalizeString(map['confirmacao']),
+      std: normalizeString(map['std']),
       trabalhoPlanejado: parseDouble(map['trabalho_planejado']),
-      finalizado: _normalizeString(map['finalizado']),
-      campoS: _normalizeString(map['campo_s']),
-      centroTrabalhoReal: _normalizeString(map['centro_trabalho_real']),
+      finalizado: normalizeString(map['finalizado']),
+      campoS: normalizeString(map['campo_s']),
+      centroTrabalhoReal: normalizeString(map['centro_trabalho_real']),
       trabalhoRestante: parseDouble(map['trabalho_restante']),
-      horaInicioReal: _normalizeString(map['hora_inicio_real']),
+      horaInicioReal: normalizeString(map['hora_inicio_real']),
       dataLancamento: parseDate(map['data_lancamento']),
       dataImportacao: parseDate(map['data_importacao']),
       createdAt: parseDate(map['created_at']),

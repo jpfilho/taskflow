@@ -3,12 +3,14 @@ import '../models/comunidade.dart';
 
 class ChatComunidadesList extends StatelessWidget {
   final List<Comunidade> comunidades;
+  final Map<String, int> unreadPerCommunity;
   final Function(String?) onComunidadeSelected;
   final VoidCallback onRefresh;
 
   const ChatComunidadesList({
     super.key,
     required this.comunidades,
+    this.unreadPerCommunity = const {},
     required this.onComunidadeSelected,
     required this.onRefresh,
   });
@@ -52,6 +54,7 @@ class ChatComunidadesList extends StatelessWidget {
               itemCount: comunidades.length,
               itemBuilder: (context, index) {
                 final comunidade = comunidades[index];
+                final unread = unreadPerCommunity[comunidade.id] ?? 0;
                 return ListTile(
                   leading: CircleAvatar(
                     backgroundColor: const Color(0xFF075E54),
@@ -80,7 +83,29 @@ class ChatComunidadesList extends StatelessWidget {
                             fontSize: 12,
                           ),
                         ),
-                  trailing: const Icon(Icons.chevron_right),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (unread > 0)
+                        Container(
+                          margin: const EdgeInsets.only(right: 8),
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF25D366),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            unread > 99 ? '99+' : unread.toString(),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      const Icon(Icons.chevron_right),
+                    ],
+                  ),
                   onTap: () => onComunidadeSelected(comunidade.id),
                 );
               },
@@ -88,4 +113,3 @@ class ChatComunidadesList extends StatelessWidget {
     );
   }
 }
-

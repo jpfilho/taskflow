@@ -888,7 +888,7 @@ class _EditDialogState extends State<EditDialog> {
     return Stack(
       children: [
         DropdownButtonFormField<T>(
-          value: value,
+          initialValue: value,
           items: items,
           onChanged: onChanged,
           style: TextStyle(

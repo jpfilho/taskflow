@@ -15,9 +15,9 @@ import 'package:record/record.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:desktop_drop/desktop_drop.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'telegram_config_dialog.dart';
@@ -28,11 +28,13 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 class ChatScreen extends StatefulWidget {
   final String grupoId;
   final VoidCallback onBack;
+  final bool isEmbedded;
 
   const ChatScreen({
     super.key,
     required this.grupoId,
     required this.onBack,
+    this.isEmbedded = false,
   });
 
   @override
@@ -51,7 +53,6 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _grupoNome;
   String? _mensagemEditandoId; // ID da mensagem sendo editada
   final TextEditingController _editController = TextEditingController();
-  
   
   // Para resposta de mensagens
   Mensagem? _mensagemRespondendo;
@@ -126,6 +127,9 @@ class _ChatScreenState extends State<ChatScreen> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _scrollToBottom();
       });
+
+      // Marcar todas as mensagens como lidas (fire-and-forget)
+      _chatService.marcarMensagensComoLidasPorGrupo(widget.grupoId);
     } catch (e) {
       print('Erro ao carregar mensagens: $e');
       setState(() => _isLoading = false);
@@ -161,6 +165,9 @@ class _ChatScreenState extends State<ChatScreen> {
           ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
       });
       _scrollToBottom();
+
+      // Marcar mensagens como lidas (fire-and-forget)
+      _chatService.marcarMensagensComoLidasPorGrupo(widget.grupoId);
     });
   }
 
@@ -1429,34 +1436,36 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  String _obterUrlPublicaDireto(String urlOriginal) {
+    if (urlOriginal.isEmpty) return urlOriginal;
+    
+    try {
+      final uri = Uri.parse(urlOriginal);
+      final bucketName = 'anexos-tarefas';
+      final idx = uri.pathSegments.indexOf(bucketName);
+      
+      if (idx != -1 && idx < uri.pathSegments.length - 1) {
+        final pathParts = uri.pathSegments.sublist(idx + 1);
+        final caminhoArquivo = pathParts.join('/');
+        
+        // Gera a public URL limpa e original do supabase SDK
+        return SupabaseConfig.client.storage.from(bucketName).getPublicUrl(caminhoArquivo);
+      }
+    } catch (_) {}
+    
+    return urlOriginal;
+  }
+
   Widget _buildAnexoWidget(Mensagem mensagem) {
     final tipo = mensagem.tipo ?? 'arquivo';
     final urlOriginal = mensagem.arquivoUrl ?? '';
     final nomeArquivo = mensagem.conteudo;
     
-    // Se a URL for do Supabase Storage e não for assinada, gerar URL assinada
-    if (urlOriginal.isNotEmpty && urlOriginal.contains('supabase') && !urlOriginal.contains('token=')) {
-      return FutureBuilder<String>(
-        future: _getSignedUrlFromMessage(urlOriginal),
-        builder: (context, snapshot) {
-          final url = snapshot.data ?? urlOriginal;
-          return _buildAnexoWidgetWithUrl(mensagem, url, tipo, nomeArquivo);
-        },
-      );
-    }
+    final urlPublica = _obterUrlPublicaDireto(urlOriginal);
     
-    return _buildAnexoWidgetWithUrl(mensagem, urlOriginal, tipo, nomeArquivo);
+    return _buildAnexoWidgetWithUrl(mensagem, urlPublica, tipo, nomeArquivo);
   }
-  
-  Future<String> _getSignedUrlFromMessage(String url) async {
-    try {
-      final anexoService = AnexoService();
-      return await anexoService.getSignedUrlFromUrl(url);
-    } catch (e) {
-      debugPrint('⚠️ Erro ao gerar URL assinada, usando URL original: $e');
-      return url;
-    }
-  }
+
   
   Widget _buildAnexoWidgetWithUrl(Mensagem mensagem, String url, String tipo, String nomeArquivo) {
 
@@ -1470,8 +1479,8 @@ class _ChatScreenState extends State<ChatScreen> {
         child: Container(
           margin: const EdgeInsets.only(bottom: 8),
           constraints: const BoxConstraints(
-            maxWidth: 250,
-            maxHeight: 300,
+            maxWidth: 350,
+            maxHeight: 400,
           ),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(8),
@@ -1485,29 +1494,21 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(8),
-            child: Image.network(
-              url,
+            child: CachedNetworkImage(
+              imageUrl: url,
               fit: BoxFit.cover,
-              loadingBuilder: (context, child, loadingProgress) {
-                if (loadingProgress == null) return child;
+              placeholder: (context, url) => Container(
+                width: 350,
+                height: 250,
+                color: Colors.grey[200],
+                child: const Center(
+                  child: CircularProgressIndicator(),
+                ),
+              ),
+              errorWidget: (context, url, error) {
                 return Container(
-                  width: 250,
-                  height: 200,
-                  color: Colors.grey[200],
-                  child: Center(
-                    child: CircularProgressIndicator(
-                      value: loadingProgress.expectedTotalBytes != null
-                          ? loadingProgress.cumulativeBytesLoaded /
-                              loadingProgress.expectedTotalBytes!
-                          : null,
-                    ),
-                  ),
-                );
-              },
-              errorBuilder: (context, error, stackTrace) {
-                return Container(
-                  width: 250,
-                  height: 200,
+                  width: 350,
+                  height: 250,
                   color: Colors.grey[200],
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -1549,8 +1550,8 @@ class _ChatScreenState extends State<ChatScreen> {
         child: Container(
           margin: const EdgeInsets.only(bottom: 8),
           constraints: const BoxConstraints(
-            maxWidth: 250,
-            maxHeight: 200,
+            maxWidth: 350,
+            maxHeight: 250,
           ),
           decoration: BoxDecoration(
             color: Colors.black87,
@@ -1568,8 +1569,8 @@ class _ChatScreenState extends State<ChatScreen> {
             children: [
               // Preview do vídeo (pode ser uma imagem de preview ou cor sólida)
               Container(
-                width: 250,
-                height: 200,
+                width: 350,
+                height: 250,
                 decoration: BoxDecoration(
                   color: Colors.black,
                   borderRadius: BorderRadius.circular(8),
@@ -1622,7 +1623,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     // Para áudio: exibir player
-    if (tipo == 'audio' && url.isNotEmpty)
+    if (tipo == 'audio' && url.isNotEmpty) {
       return Container(
         margin: const EdgeInsets.only(bottom: 8),
         padding: const EdgeInsets.all(12),
@@ -1680,6 +1681,7 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
       );
+    }
 
     // Para outros tipos: exibir como antes (documentos, etc)
     return GestureDetector(
@@ -1760,10 +1762,10 @@ class _ChatScreenState extends State<ChatScreen> {
         insetPadding: EdgeInsets.zero,
         child: Stack(
           children: [
-            Center(
+            Positioned.fill(
               child: InteractiveViewer(
                 minScale: 0.5,
-                maxScale: 4.0,
+                maxScale: 5.0,
                 child: Image.network(
                   imageUrl,
                   fit: BoxFit.contain,
@@ -2336,7 +2338,7 @@ class _ChatScreenState extends State<ChatScreen> {
         title: Text(_grupoNome ?? 'Chat'),
         backgroundColor: const Color(0xFF075E54),
         foregroundColor: Colors.white,
-        leading: IconButton(
+        leading: widget.isEmbedded ? null : IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: widget.onBack,
         ),

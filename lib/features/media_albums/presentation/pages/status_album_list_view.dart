@@ -442,7 +442,7 @@ class _StatusAlbumListViewState extends State<StatusAlbumListView> {
         child: Padding(
           padding: EdgeInsets.all(padding),
           child: DataTable(
-          headingRowColor: MaterialStateProperty.all(
+          headingRowColor: WidgetStateProperty.all(
             isDark ? const Color(0xFF1e293b) : Colors.blue[50],
           ),
           columns: [

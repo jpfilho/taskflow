@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import '../../data/models/media_image.dart';
 import 'media_card.dart';
 

@@ -7,12 +7,12 @@ class TagSelectorDialog extends StatefulWidget {
   final String? refIdAtual;
   
   const TagSelectorDialog({
-    Key? key,
+    super.key,
     required this.notasDisponiveis,
     required this.ordensDisponiveis,
     this.refTypeAtual,
     this.refIdAtual,
-  }) : super(key: key);
+  });
   
   @override
   State<TagSelectorDialog> createState() => _TagSelectorDialogState();
@@ -237,7 +237,7 @@ class _TagSelectorDialogState extends State<TagSelectorDialog> {
                       setState(() {
                         _selectedId = nota['id'];
                         _selectedLabel = nota['label'];
-                        print('🔵 [TagDialog] Estado atualizado: _selectedId=${_selectedId}, _selectedLabel=${_selectedLabel}');
+                        print('🔵 [TagDialog] Estado atualizado: _selectedId=$_selectedId, _selectedLabel=$_selectedLabel');
                       });
                     },
                   ),
@@ -291,7 +291,7 @@ class _TagSelectorDialogState extends State<TagSelectorDialog> {
                       setState(() {
                         _selectedId = ordem['id'];
                         _selectedLabel = ordem['label'];
-                        print('🟢 [TagDialog] Estado atualizado: _selectedId=${_selectedId}, _selectedLabel=${_selectedLabel}');
+                        print('🟢 [TagDialog] Estado atualizado: _selectedId=$_selectedId, _selectedLabel=$_selectedLabel');
                       });
                     },
                   ),

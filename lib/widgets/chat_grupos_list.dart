@@ -1,18 +1,21 @@
 import 'package:flutter/material.dart';
 import '../models/grupo_chat.dart';
 import '../services/chat_service.dart';
-import '../services/task_service.dart';
 
 class ChatGruposList extends StatefulWidget {
   final String comunidadeId;
   final Function(String) onGrupoSelected;
   final VoidCallback onBack;
+  final bool isEmbedded;
+  final Widget? embeddedTitle;
 
   const ChatGruposList({
     super.key,
     required this.comunidadeId,
     required this.onGrupoSelected,
     required this.onBack,
+    this.isEmbedded = false,
+    this.embeddedTitle,
   });
 
   @override
@@ -21,7 +24,6 @@ class ChatGruposList extends StatefulWidget {
 
 class _ChatGruposListState extends State<ChatGruposList> {
   final ChatService _chatService = ChatService();
-  final TaskService _taskService = TaskService();
   List<GrupoChat> _grupos = [];
   bool _isLoading = true;
 
@@ -37,62 +39,55 @@ class _ChatGruposListState extends State<ChatGruposList> {
       // Carregar grupos da comunidade
       var grupos = await _chatService.listarGruposPorComunidade(widget.comunidadeId);
 
-      // Carregar tarefas para criar grupos que ainda não existem
-      final todasTarefas = await _taskService.getAllTasks();
-      
-      // Filtrar tarefas que pertencem a esta comunidade (via divisão + segmento)
-      // Precisamos obter a comunidade para saber qual divisão e segmento
-      final comunidade = await _chatService.obterComunidadePorId(widget.comunidadeId);
-      if (comunidade != null) {
-        final tarefasDaComunidade = todasTarefas
-            .where((t) => 
-                t.divisaoId == comunidade.divisaoId &&
-                t.segmentoId == comunidade.segmentoId)
-            .toList();
+      // Otimização: Coletar IPs sem precisar de N+1 queries.
+      final gruposIds = grupos.where((g) => g.id != null).map((g) => g.id!).toList();
 
-        // Criar grupos para tarefas que ainda não têm
-        for (var tarefa in tarefasDaComunidade) {
-          final grupoExistente = grupos.firstWhere(
-            (g) => g.tarefaId == tarefa.id,
-            orElse: () => GrupoChat(
-              tarefaId: '',
-              tarefaNome: '',
-              comunidadeId: '',
-            ),
-          );
-
-          if (grupoExistente.tarefaId.isEmpty) {
-            try {
-              final novoGrupo = await _chatService.criarOuObterGrupo(
-                tarefa.id,
-                tarefa.tarefa,
-                widget.comunidadeId,
-              );
-              grupos.add(novoGrupo);
-            } catch (e) {
-              print('Erro ao criar grupo para tarefa ${tarefa.id}: $e');
-            }
-          }
-        }
+      if (gruposIds.isEmpty) {
+         setState(() {
+            _grupos = [];
+            _isLoading = false;
+         });
+         return;
       }
 
-      // Atualizar contadores de mensagens não lidas
+      // 1. Obter a última mensagem de todos os grupos listados
+      final ultimasMsgsMap = await _chatService.obterUltimaMensagemPorGrupos(gruposIds);
+
+      // 2. Identificar grupos válidos e puxar Lidas
+      final gruposAtivosIds = ultimasMsgsMap.keys.toList();
+
+      if (gruposAtivosIds.isEmpty) {
+         setState(() {
+            _grupos = [];
+            _isLoading = false;
+         });
+         return;
+      }
+
+      final naoLidasMap = await _chatService.contarMensagensNaoLidasEmLote(gruposAtivosIds);
+
+      // 3. Montar matriz
+      var gruposComMensagem = <GrupoChat>[];
       for (var grupo in grupos) {
-        final naoLidas = await _chatService.contarMensagensNaoLidas(grupo.id ?? '');
-        grupos[grupos.indexOf(grupo)] = grupo.copyWith(
-          mensagensNaoLidas: naoLidas,
-        );
+         if (grupo.id != null && ultimasMsgsMap.containsKey(grupo.id!)) {
+            final ultima = ultimasMsgsMap[grupo.id!]!;
+            gruposComMensagem.add(grupo.copyWith(
+               ultimaMensagemAt: ultima.createdAt,
+               ultimaMensagemPreview: ultima.conteudo,
+               mensagensNaoLidas: naoLidasMap[grupo.id!] ?? 0
+            ));
+         }
       }
 
       // Ordenar por última mensagem (mais recente primeiro)
-      grupos.sort((a, b) {
-        final aData = a.ultimaMensagemAt ?? DateTime(1970);
-        final bData = b.ultimaMensagemAt ?? DateTime(1970);
+      gruposComMensagem.sort((a, b) {
+        final aData = a.ultimaMensagemAt ?? a.updatedAt ?? a.createdAt ?? DateTime(1970);
+        final bData = b.ultimaMensagemAt ?? b.updatedAt ?? b.createdAt ?? DateTime(1970);
         return bData.compareTo(aData);
       });
 
       setState(() {
-        _grupos = grupos;
+        _grupos = gruposComMensagem;
         _isLoading = false;
       });
     } catch (e) {
@@ -122,10 +117,12 @@ class _ChatGruposListState extends State<ChatGruposList> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Grupos'),
+        title: widget.isEmbedded && widget.embeddedTitle != null
+            ? widget.embeddedTitle
+            : const Text('Grupos'),
         backgroundColor: const Color(0xFF075E54),
         foregroundColor: Colors.white,
-        leading: IconButton(
+        leading: widget.isEmbedded ? null : IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: widget.onBack,
         ),

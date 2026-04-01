@@ -418,7 +418,7 @@ class _RegraPrazoNotaListViewState extends State<RegraPrazoNotaListView> {
       scrollDirection: Axis.horizontal,
       child: SingleChildScrollView(
         child: DataTable(
-          headingRowColor: MaterialStateProperty.all(Colors.blue[50]),
+          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
           columns: const [
             DataColumn(label: Text('Prioridade', style: TextStyle(fontWeight: FontWeight.bold))),
             DataColumn(label: Text('Dias de Prazo', style: TextStyle(fontWeight: FontWeight.bold))),

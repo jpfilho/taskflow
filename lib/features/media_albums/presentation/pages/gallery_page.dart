@@ -6,7 +6,6 @@ import '../../../../widgets/sync_status_widget.dart';
 import '../../application/controllers/gallery_controller.dart';
 import '../../data/models/media_image.dart';
 import '../widgets/filter_bar.dart';
-import '../widgets/media_grid.dart';
 import '../widgets/album_group_list.dart';
 import 'detail_page.dart';
 import 'upload_page.dart';
@@ -310,8 +309,10 @@ class _MediaAlbumsGalleryPageState extends State<MediaAlbumsGalleryPage> {
                         onLoadMore: _controller.hasMore
                             ? () => _controller.loadMore()
                             : null,
+                        onLoadRoomImages: _controller.loadImagesForRoom,
                         hasMore: _controller.hasMore,
                         isLoading: _controller.isLoading,
+                        isLoadingRoom: _controller.isLoadingRoom,
                         onImageDelete: (image) async {
                           final confirmed = await showDialog<bool>(
                             context: context,

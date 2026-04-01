@@ -337,7 +337,7 @@ class _FuncaoListViewState extends State<FuncaoListView> {
       scrollDirection: Axis.horizontal,
       child: SingleChildScrollView(
         child: DataTable(
-          headingRowColor: MaterialStateProperty.all(Colors.blue[50]),
+          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
           columns: const [
             DataColumn(label: Text('Função', style: TextStyle(fontWeight: FontWeight.bold))),
             DataColumn(label: Text('Descrição', style: TextStyle(fontWeight: FontWeight.bold))),

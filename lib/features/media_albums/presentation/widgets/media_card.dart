@@ -54,8 +54,7 @@ class _MediaCardState extends State<MediaCard> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               // Imagem com aspect ratio 16:9
-              AspectRatio(
-                aspectRatio: 16 / 9,
+              Expanded(
                 child: Stack(
                   fit: StackFit.expand,
                   children: [

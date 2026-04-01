@@ -80,43 +80,17 @@ class ChatService {
     try {
       final response = await _supabase
           .from('comunidades')
-          .select('''
-            *,
-            grupos_chat!inner(
-              id,
-              tarefa_id,
-              tarefa_nome,
-              ultima_mensagem_at,
-              ultima_mensagem_preview
-            )
-          ''')
+          .select()
           .order('updated_at', ascending: false);
 
-      final comunidades = <Comunidade>[];
-      for (var item in response) {
-        final comunidade = Comunidade.fromMap(item);
-        comunidades.add(comunidade);
-      }
+      final comunidades = (response as List)
+          .map((map) => Comunidade.fromMap(map as Map<String, dynamic>))
+          .toList();
 
       // Aplicar filtros de perfil
       return await _aplicarFiltrosPerfilComunidades(comunidades);
     } catch (e) {
-      // Se falhar, tentar sem join
-      try {
-        final response = await _supabase
-            .from('comunidades')
-            .select()
-            .order('updated_at', ascending: false);
-
-        final comunidades = (response as List)
-            .map((map) => Comunidade.fromMap(map as Map<String, dynamic>))
-            .toList();
-
-        // Aplicar filtros de perfil
-        return await _aplicarFiltrosPerfilComunidades(comunidades);
-      } catch (e2) {
-        throw Exception('Erro ao listar comunidades: $e2');
-      }
+      throw Exception('Erro ao listar comunidades: $e');
     }
   }
 
@@ -357,6 +331,7 @@ class ChatService {
 
       return grupos;
     } catch (e) {
+      print('Erro no query principal de listarGruposPorComunidade: $e');
       // Se falhar, tentar sem join
       try {
         final response = await _supabase
@@ -457,39 +432,112 @@ class ChatService {
     }
   }
 
-  // Contar mensagens de múltiplas tarefas (otimizado - usa VIEW do Supabase)
+  // Contar mensagens de múltiplas tarefas (otimizado - usa VIEW do Supabase com fallback)
   Future<Map<String, int>> contarMensagensPorTarefas(List<String> tarefaIds) async {
-    try {
-      if (tarefaIds.isEmpty) return {};
+    if (tarefaIds.isEmpty) return {};
 
-      // Usar VIEW otimizada do Supabase para buscar todas as contagens de uma vez
-      // Usar .or() para múltiplos valores (já funciona no código)
+    // Tentativa 1: usar VIEW otimizada
+    try {
       dynamic query = _supabase
           .from('contagens_mensagens_tarefas')
           .select('task_id, quantidade');
-      
+
       if (tarefaIds.length == 1) {
         query = query.eq('task_id', tarefaIds[0]);
       } else {
         final orConditions = tarefaIds.map((id) => 'task_id.eq.$id').join(',');
         query = query.or(orConditions);
       }
-      
-      final response = await query;
+
+      final response = await query as List;
+
+      // Se a VIEW retornou dados, usá-los
+      if (response.isNotEmpty) {
+        final contagens = <String, int>{};
+        for (var item in response) {
+          final taskId = item['task_id'] as String;
+          final quantidade = item['quantidade'] as int? ?? 0;
+          if (quantidade > 0) {
+            contagens[taskId] = quantidade;
+          }
+        }
+        return contagens;
+      }
+
+      print('⚠️ VIEW contagens_mensagens_tarefas retornou vazio — usando fallback direto.');
+    } catch (e) {
+      print('⚠️ VIEW contagens_mensagens_tarefas falhou ($e) — usando fallback direto.');
+    }
+
+    // Tentativa 2: fallback — buscar grupos das tarefas e contar mensagens diretamente
+    try {
+      // Buscar grupos_chat das tarefas
+      final gruposResp = await _supabase
+          .from('grupos_chat')
+          .select('id, tarefa_id')
+          .inFilter('tarefa_id', tarefaIds);
+
+      if ((gruposResp as List).isEmpty) return {};
+
+      // Mapear grupoId -> tarefaId
+      final grupoParaTarefa = <String, String>{};
+      for (var g in gruposResp) {
+        final grupoId = g['id'] as String;
+        final tarefaId = g['tarefa_id'] as String;
+        grupoParaTarefa[grupoId] = tarefaId;
+      }
+
+      final grupoIds = grupoParaTarefa.keys.toList();
+
+      // Contar mensagens por grupo (excluindo soft-deleted)
+      // Fazemos em lote: buscar todas as mensagens dos grupos e contar no cliente
+      final mensagensResp = await _supabase
+          .from('mensagens')
+          .select('grupo_id')
+          .inFilter('grupo_id', grupoIds)
+          .filter('deleted_at', 'is', null);
 
       final contagens = <String, int>{};
-      for (var item in response) {
-        final taskId = item['task_id'] as String;
-        final quantidade = item['quantidade'] as int;
-        if (quantidade > 0) {
-          contagens[taskId] = quantidade;
+      for (var m in mensagensResp as List) {
+        final grupoId = m['grupo_id'] as String;
+        final tarefaId = grupoParaTarefa[grupoId];
+        if (tarefaId != null) {
+          contagens[tarefaId] = (contagens[tarefaId] ?? 0) + 1;
         }
       }
 
+      print('✅ Fallback chat count: ${contagens.length} tarefas com mensagens');
       return contagens;
     } catch (e) {
-      print('Erro ao contar mensagens das tarefas: $e');
+      print('❌ Erro no fallback de contarMensagensPorTarefas: $e');
       return {};
+    }
+  }
+
+  Future<List<GrupoChat>> obterGruposPorTarefasIds(List<String> tarefasIds) async {
+    if (tarefasIds.isEmpty) return [];
+    try {
+      const int chunkSize = 100;
+      final futures = <Future<List<dynamic>>>[];
+      
+      for (var i = 0; i < tarefasIds.length; i += chunkSize) {
+        final chunk = tarefasIds.sublist(
+          i,
+          i + chunkSize > tarefasIds.length ? tarefasIds.length : i + chunkSize,
+        );
+        futures.add(_supabase.from('grupos_chat').select().inFilter('tarefa_id', chunk));
+      }
+      
+      final results = await Future.wait(futures);
+      final todosGrupos = <GrupoChat>[];
+      
+      for (final res in results) {
+        todosGrupos.addAll(res.map((map) => GrupoChat.fromMap(map)));
+      }
+      return todosGrupos;
+    } catch (e) {
+      print('Erro ao obter múltiplos grupos por tarefas IDs: $e');
+      return [];
     }
   }
 
@@ -755,6 +803,42 @@ class ChatService {
     }
   }
 
+  // Buscar última mensagem enviada de múltiplos grupos em uma única requisição customizada em view ou fallback manual
+  Future<Map<String, Mensagem>> obterUltimaMensagemPorGrupos(List<String> gruposIds) async {
+    if (gruposIds.isEmpty) return {};
+    try {
+      final resultMap = <String, Mensagem>{};
+      
+      // Tentativa de leitura em lote usando RPC se existir, ou query indexada se houver limitação PostgREST
+      // O Supabase PostgREST não tem suporte nativo p/ GROUP BY max(created_at). Faremos requisições isoladas via Future.wait com limite baixo local.
+      final futures = gruposIds.map((grupoId) async {
+        try {
+          final res = await _supabase
+            .from('mensagens')
+            .select()
+            .eq('grupo_id', grupoId)
+            .order('created_at', ascending: false)
+            .limit(1)
+            .maybeSingle();
+            
+          if (res != null) {
+            return MapEntry(grupoId, Mensagem.fromMap(res));
+          }
+        } catch (_) {}
+        return null;
+      });
+      
+      final results = await Future.wait(futures);
+      for (var entry in results) {
+        if (entry != null) resultMap[entry.key] = entry.value;
+      }
+      return resultMap;
+    } catch (e) {
+      print('Erro no fetch em lote das últimas msgs: $e');
+      return {};
+    }
+  }
+
   // Marcar mensagem como lida
   Future<void> marcarMensagemComoLida(String mensagemId) async {
     try {
@@ -779,16 +863,105 @@ class ChatService {
     }
   }
 
+  // Marcar TODAS as mensagens de um grupo como lidas pelo usuário atual (em lote)
+  // Aceita tanto grupo_id quanto tarefa_id (fallback)
+  Future<void> marcarMensagensComoLidasPorGrupo(String grupoIdOuTarefaId) async {
+    try {
+      final userId = currentUserId ?? 'anonymous';
+      if (userId == 'anonymous') return;
+
+      // 1. Obter todas as mensagens do grupo (apenas IDs)
+      var todasMensagens = await _supabase
+          .from('mensagens')
+          .select('id')
+          .eq('grupo_id', grupoIdOuTarefaId)
+          .isFilter('deleted_at', null);
+
+      // Se não encontrou mensagens, pode ser que o ID passado seja tarefa_id
+      // (ChatGruposList usa grupo.id ?? grupo.tarefaId)
+      if (todasMensagens.isEmpty) {
+        // Tentar resolver o grupo_id real a partir do tarefa_id
+        final grupo = await _supabase
+            .from('grupos_chat')
+            .select('id')
+            .eq('tarefa_id', grupoIdOuTarefaId)
+            .maybeSingle();
+
+        if (grupo != null) {
+          final realGrupoId = grupo['id'] as String;
+          todasMensagens = await _supabase
+              .from('mensagens')
+              .select('id')
+              .eq('grupo_id', realGrupoId)
+              .isFilter('deleted_at', null);
+        }
+      }
+
+      if (todasMensagens.isEmpty) return;
+
+      final mensagemIds = (todasMensagens as List)
+          .map((m) => m['id'] as String)
+          .toList();
+
+      // 2. Obter quais já foram marcadas como lidas (em chunks para evitar limite de URL)
+      final jaLidasSet = <String>{};
+      const chunkSize = 100;
+      for (var i = 0; i < mensagemIds.length; i += chunkSize) {
+        final chunk = mensagemIds.sublist(
+          i,
+          i + chunkSize > mensagemIds.length ? mensagemIds.length : i + chunkSize,
+        );
+        final jaLidas = await _supabase
+            .from('mensagens_lidas')
+            .select('mensagem_id')
+            .eq('usuario_id', userId)
+            .inFilter('mensagem_id', chunk);
+
+        for (final m in jaLidas) {
+          jaLidasSet.add(m['mensagem_id'] as String);
+        }
+      }
+
+      // 3. Inserir apenas as não lidas
+      final naoLidasIds = mensagemIds.where((id) => !jaLidasSet.contains(id)).toList();
+
+      if (naoLidasIds.isEmpty) return;
+
+      // Inserir em chunks para evitar payloads muito grandes
+      for (var i = 0; i < naoLidasIds.length; i += chunkSize) {
+        final chunk = naoLidasIds.sublist(
+          i,
+          i + chunkSize > naoLidasIds.length ? naoLidasIds.length : i + chunkSize,
+        );
+        final rows = chunk.map((mId) => {
+          'mensagem_id': mId,
+          'usuario_id': userId,
+        }).toList();
+
+        await _supabase.from('mensagens_lidas').upsert(
+          rows,
+          onConflict: 'mensagem_id,usuario_id',
+        );
+      }
+
+      print('✅ Marcadas ${naoLidasIds.length} mensagens como lidas no grupo $grupoIdOuTarefaId');
+    } catch (e) {
+      print('⚠️ Erro ao marcar mensagens como lidas em lote: $e');
+      // Não propagar - não afetar a experiência do chat
+    }
+  }
+
   // Contar mensagens não lidas de um grupo
   Future<int> contarMensagensNaoLidas(String grupoId) async {
     try {
       final userId = currentUserId ?? 'anonymous';
 
-      // Obter todas as mensagens do grupo
+      // Obter todas as mensagens ativas do grupo (excluir deletadas)
       final todasMensagens = await _supabase
           .from('mensagens')
           .select('id')
-          .eq('grupo_id', grupoId);
+          .eq('grupo_id', grupoId)
+          .isFilter('deleted_at', null);
 
       if (todasMensagens.isEmpty) return 0;
 
@@ -796,20 +969,181 @@ class ChatService {
           .map((m) => m['id'] as String)
           .toList();
 
-      // Obter mensagens já lidas pelo usuário
-      // Como não temos in_, vamos buscar todas e filtrar manualmente
-      final todasLidas = await _supabase
-          .from('mensagens_lidas')
-          .select('mensagem_id')
-          .eq('usuario_id', userId);
+      // Obter mensagens já lidas pelo usuário (filtrado pelos IDs relevantes)
+      final lidasSet = <String>{};
+      const chunkSize = 100;
+      for (var i = 0; i < mensagemIds.length; i += chunkSize) {
+        final chunk = mensagemIds.sublist(
+          i,
+          i + chunkSize > mensagemIds.length ? mensagemIds.length : i + chunkSize,
+        );
+        final lidas = await _supabase
+            .from('mensagens_lidas')
+            .select('mensagem_id')
+            .eq('usuario_id', userId)
+            .inFilter('mensagem_id', chunk);
+        for (final m in lidas) {
+          lidasSet.add(m['mensagem_id'] as String);
+        }
+      }
 
-      final lidasIds = (todasLidas as List)
-          .where((m) => mensagemIds.contains(m['mensagem_id'] as String))
-          .map((m) => m['mensagem_id'] as String)
-          .toSet();
-
-      return mensagemIds.length - lidasIds.length;
+      return mensagemIds.length - lidasSet.length;
     } catch (e) {
+      return 0;
+    }
+  }
+
+  // Contar mensagens não lidas de múltiplos grupos em lote
+  Future<Map<String, int>> contarMensagensNaoLidasEmLote(List<String> gruposIds) async {
+    if (gruposIds.isEmpty) return {};
+    
+    try {
+      final userId = currentUserId ?? 'anonymous';
+
+      // 1. Buscar todas as mensagens ativas dos grupos (excluir deletadas)
+      final todasMensagens = <dynamic>[];
+      const int chunkSize = 100;
+      final futuresMsgs = <Future<List<dynamic>>>[];
+
+      for (var i = 0; i < gruposIds.length; i += chunkSize) {
+         final chunk = gruposIds.sublist(
+           i,
+           i + chunkSize > gruposIds.length ? gruposIds.length : i + chunkSize,
+         );
+         futuresMsgs.add(
+           _supabase.from('mensagens')
+               .select('id, grupo_id')
+               .inFilter('grupo_id', chunk)
+               .isFilter('deleted_at', null),
+         );
+      }
+      
+      final resultsMsgs = await Future.wait(futuresMsgs);
+      for (final res in resultsMsgs) {
+         todasMensagens.addAll(res);
+      }
+
+      if (todasMensagens.isEmpty) return {};
+
+      // 2. Buscar quais mensagens o usuário já leu (filtrado pelos IDs relevantes, em chunks)
+      final mensagemIds = todasMensagens.map((m) => m['id'] as String).toList();
+      final lidasSet = <String>{};
+
+      for (var i = 0; i < mensagemIds.length; i += chunkSize) {
+        final chunk = mensagemIds.sublist(
+          i,
+          i + chunkSize > mensagemIds.length ? mensagemIds.length : i + chunkSize,
+        );
+        final lidas = await _supabase
+            .from('mensagens_lidas')
+            .select('mensagem_id')
+            .eq('usuario_id', userId)
+            .inFilter('mensagem_id', chunk);
+        for (final m in lidas) {
+          lidasSet.add(m['mensagem_id'] as String);
+        }
+      }
+
+      // 3. Contabilizar mensagens não lidas por grupo
+      final unreadCounts = <String, int>{};
+      
+      for (var gId in gruposIds) {
+          unreadCounts[gId] = 0;
+      }
+
+      for (var row in todasMensagens) {
+        final mId = row['id'] as String;
+        final gId = row['grupo_id'] as String;
+        
+        if (!lidasSet.contains(mId)) {
+          unreadCounts[gId] = (unreadCounts[gId] ?? 0) + 1;
+        }
+      }
+
+      return unreadCounts;
+    } catch (e) {
+      print('Erro ao contar mensagens não lidas em lote: $e');
+      return {};
+    }
+  }
+
+  // Contar mensagens não lidas agrupadas por comunidade
+  Future<Map<String, int>> contarNaoLidasPorComunidade(List<String> comunidadeIds) async {
+    if (comunidadeIds.isEmpty) return {};
+    try {
+      // 1. Buscar todos os grupos de todas as comunidades de uma vez
+      final gruposResp = await _supabase
+          .from('grupos_chat')
+          .select('id, comunidade_id')
+          .inFilter('comunidade_id', comunidadeIds);
+
+      if ((gruposResp as List).isEmpty) return {};
+
+      // Mapear grupoId → comunidadeId
+      final grupoComunidade = <String, String>{};
+      for (final g in gruposResp) {
+        grupoComunidade[g['id'] as String] = g['comunidade_id'] as String;
+      }
+
+      // 2. Contar não lidas em lote (por grupo)
+      final grupoIds = grupoComunidade.keys.toList();
+      final naoLidasPorGrupo = await contarMensagensNaoLidasEmLote(grupoIds);
+
+      // 3. Agregar por comunidade
+      final resultado = <String, int>{};
+      for (final entry in naoLidasPorGrupo.entries) {
+        final comunidadeId = grupoComunidade[entry.key];
+        if (comunidadeId != null && entry.value > 0) {
+          resultado[comunidadeId] = (resultado[comunidadeId] ?? 0) + entry.value;
+        }
+      }
+
+      return resultado;
+    } catch (e) {
+      print('Erro ao contar não lidas por comunidade: $e');
+      return {};
+    }
+  }
+
+  // Contar total de mensagens não lidas em TODOS os grupos acessíveis ao usuário
+  Future<int> contarTotalMensagensNaoLidas() async {
+    try {
+      // 1. Listar todas as comunidades acessíveis ao usuário
+      final comunidades = await listarComunidades();
+      if (comunidades.isEmpty) return 0;
+
+      // 2. Coletar todos os IDs de grupos de todas as comunidades
+      final todosGruposIds = <String>[];
+      for (final comunidade in comunidades) {
+        if (comunidade.id == null) continue;
+        try {
+          final grupos = await _supabase
+              .from('grupos_chat')
+              .select('id')
+              .eq('comunidade_id', comunidade.id!);
+          for (final g in grupos) {
+            todosGruposIds.add(g['id'] as String);
+          }
+        } catch (e) {
+          // Ignorar falha em uma comunidade específica
+          print('⚠️ Erro ao listar grupos da comunidade ${comunidade.id}: $e');
+        }
+      }
+
+      if (todosGruposIds.isEmpty) return 0;
+
+      // 3. Contar não lidas em lote (uma única chamada)
+      final naoLidasMap = await contarMensagensNaoLidasEmLote(todosGruposIds);
+
+      // 4. Somar totais
+      int total = 0;
+      for (final count in naoLidasMap.values) {
+        total += count;
+      }
+
+      return total;
+    } catch (e) {
+      print('❌ Erro ao contar total de mensagens não lidas: $e');
       return 0;
     }
   }

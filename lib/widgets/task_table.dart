@@ -17,7 +17,7 @@ import '../models/nota_sap.dart';
 import '../models/ordem.dart';
 import '../models/at.dart';
 import '../models/si.dart';
-import 'chat_screen.dart';
+import 'chat_view.dart';
 import '../utils/responsive.dart';
 import '../features/warnings/warnings.dart';
 
@@ -33,14 +33,20 @@ class TaskTable extends StatefulWidget {
   final Function(Task)? onCreateSubtask;
   final bool? allSubtasksExpanded; // Estado compartilhado
   final VoidCallback? onToggleAllSubtasks; // Callback compartilhado
-  final Set<String>? expandedTasks; // Estado compartilhado de tarefas expandidas
-  final Function(String, bool)? onTaskExpanded; // Callback quando uma tarefa é expandida/colapsada
+  final Set<String>?
+  expandedTasks; // Estado compartilhado de tarefas expandidas
+  final Function(String, bool)?
+  onTaskExpanded; // Callback quando uma tarefa é expandida/colapsada
   final String? sortColumn; // Coluna de ordenação atual
   final Function(Task)? getSortValue; // Função para obter valor de ordenação
   /// Chamado quando o carregamento de contagens (notas, ordens, ícones etc.) termina (para feedback visual de loading na tela de Atividades).
   final VoidCallback? onCountsLoaded;
+
   /// Mapa taskId -> lista de alertas. Se null, usa mock para UI.
   final Map<String, List<TaskWarning>>? warningsByTaskId;
+
+  /// Indica se as tarefas ainda estão sendo carregadas (evita mostrar 'Nenhuma tarefa encontrada' prematuramente).
+  final bool isLoading;
 
   const TaskTable({
     super.key,
@@ -61,6 +67,7 @@ class TaskTable extends StatefulWidget {
     this.getSortValue,
     this.onCountsLoaded,
     this.warningsByTaskId,
+    this.isLoading = false,
   });
 
   @override
@@ -77,8 +84,11 @@ class _TaskTableState extends State<TaskTable> {
     }
     return _localExpandedTasks;
   }
-  final Set<String> _localExpandedTasks = {}; // IDs das tarefas expandidas (fallback local)
-  final Map<String, List<Task>> _loadedSubtasks = {}; // Cache de subtarefas carregadas
+
+  final Set<String> _localExpandedTasks =
+      {}; // IDs das tarefas expandidas (fallback local)
+  final Map<String, List<Task>> _loadedSubtasks =
+      {}; // Cache de subtarefas carregadas
   final StatusService _statusService = StatusService();
   final ChatService _chatService = ChatService();
   final AnexoService _anexoService = AnexoService();
@@ -88,21 +98,26 @@ class _TaskTableState extends State<TaskTable> {
   final SIService _siService = SIService();
   final FrotaService _frotaService = FrotaService();
   Map<String, Status> _statusMap = {}; // Mapa de código de status -> Status
-  Map<String, int> _mensagensCount = {}; // Mapa de taskId -> quantidade de mensagens
+  Map<String, int> _mensagensCount =
+      {}; // Mapa de taskId -> quantidade de mensagens
   Map<String, int> _anexosCount = {}; // Mapa de taskId -> quantidade de anexos
-  Map<String, int> _notasSAPCount = {}; // Mapa de taskId -> quantidade de notas SAP
+  Map<String, int> _notasSAPCount =
+      {}; // Mapa de taskId -> quantidade de notas SAP
   Map<String, int> _ordensCount = {}; // Mapa de taskId -> quantidade de ordens
   Map<String, int> _atsCount = {}; // Mapa de taskId -> quantidade de ATs
   Map<String, int> _sisCount = {}; // Mapa de taskId -> quantidade de SIs
-  Map<String, int> _notasNaoEncerradas = {}; // taskId -> qtd notas com status não encerrado
-  Map<String, int> _ordensNaoEncerradas = {}; // taskId -> qtd ordens não encerradas
+  Map<String, int> _notasNaoEncerradas =
+      {}; // taskId -> qtd notas com status não encerrado
+  Map<String, int> _ordensNaoEncerradas =
+      {}; // taskId -> qtd ordens não encerradas
   Map<String, int> _atsNaoEncerradas = {}; // taskId -> qtd ATs não encerradas
   Map<String, int> _frotasCount = {}; // Mapa de taskId -> quantidade de frotas
   Map<String, String> _frotasNomes = {}; // Mapa de taskId -> nome da frota
-  bool get _allSubtasksExpanded => widget.allSubtasksExpanded ?? false; // Estado compartilhado ou local
+  bool get _allSubtasksExpanded =>
+      widget.allSubtasksExpanded ?? false; // Estado compartilhado ou local
 
   StreamSubscription<String>? _statusChangeSubscription;
-  
+
   // Controladores separados: corpo (rolagem principal) e cabeçalho (seguidor)
   late ScrollController _bodyHorizontalController;
   late ScrollController _headerHorizontalController;
@@ -112,7 +127,8 @@ class _TaskTableState extends State<TaskTable> {
   void initState() {
     super.initState();
     _startEmptyTimer();
-    _bodyHorizontalController = widget.horizontalController ?? ScrollController();
+    _bodyHorizontalController =
+        widget.horizontalController ?? ScrollController();
     _ownsBodyController = widget.horizontalController == null;
     _headerHorizontalController = ScrollController();
     // Corpo dirige o cabeçalho
@@ -147,11 +163,11 @@ class _TaskTableState extends State<TaskTable> {
   // Carregar todas as subtarefas automaticamente
   Future<void> _loadAllSubtasks() async {
     if (widget.taskService == null) return;
-    
+
     try {
       // Identificar tarefas principais que podem ter subtarefas
       final mainTasks = widget.tasks.where((t) => t.parentId == null).toList();
-      
+
       // Carregar subtarefas para cada tarefa principal
       for (var mainTask in mainTasks) {
         if (!_loadedSubtasks.containsKey(mainTask.id)) {
@@ -180,22 +196,24 @@ class _TaskTableState extends State<TaskTable> {
   @override
   void didUpdateWidget(TaskTable oldWidget) {
     super.didUpdateWidget(oldWidget);
-    
+
     // Sincronizar estado de expansão quando allSubtasksExpanded mudar
     if (oldWidget.allSubtasksExpanded != widget.allSubtasksExpanded) {
       // Obter todas as tarefas principais que têm subtarefas OU períodos por executor
       final mainTasks = widget.tasks.where((t) => t.parentId == null).toList();
       final tasksToToggle = <String>[];
-      
+
       for (var task in mainTasks) {
-        final hasSubtasks = _loadedSubtasks.containsKey(task.id) && _loadedSubtasks[task.id]!.isNotEmpty;
+        final hasSubtasks =
+            _loadedSubtasks.containsKey(task.id) &&
+            _loadedSubtasks[task.id]!.isNotEmpty;
         final hasExecutorPeriods = task.executorPeriods.isNotEmpty;
-        
+
         if (hasSubtasks || hasExecutorPeriods) {
           tasksToToggle.add(task.id);
         }
       }
-      
+
       if (mounted) {
         setState(() {
           if (widget.allSubtasksExpanded ?? false) {
@@ -208,21 +226,24 @@ class _TaskTableState extends State<TaskTable> {
         });
       }
     }
-    
+
     // Sincronizar estado de expansão quando expandedTasks mudar externamente
-    if (oldWidget.expandedTasks != widget.expandedTasks && widget.expandedTasks != null) {
+    if (oldWidget.expandedTasks != widget.expandedTasks &&
+        widget.expandedTasks != null) {
       if (mounted) {
         setState(() {
           // O estado já está sincronizado através do getter _expandedTasks
         });
       }
     }
-    
+
     // Recarregar contagens e subtarefas se as tarefas mudaram
     // Usar WidgetsBinding para evitar setState durante build
-    final tasksChanged = oldWidget.tasks.length != widget.tasks.length ||
-        oldWidget.tasks.map((t) => t.id).join(',') != widget.tasks.map((t) => t.id).join(',');
-    
+    final tasksChanged =
+        oldWidget.tasks.length != widget.tasks.length ||
+        oldWidget.tasks.map((t) => t.id).join(',') !=
+            widget.tasks.map((t) => t.id).join(',');
+
     if (tasksChanged && mounted) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
@@ -236,16 +257,23 @@ class _TaskTableState extends State<TaskTable> {
           // Limpar cache de subtarefas para forçar recarregamento
           _loadedSubtasks.clear();
           _loadAllSubtasks();
-          
+
           // Se todas as subtarefas devem estar colapsadas por padrão, garantir isso
           if (!(widget.allSubtasksExpanded ?? false) && mounted) {
             setState(() {
               // Remover todas as tarefas expandidas que têm subtarefas
               final mainTasksWithSubtasks = widget.tasks
-                  .where((t) => t.parentId == null && _loadedSubtasks.containsKey(t.id) && _loadedSubtasks[t.id]!.isNotEmpty)
+                  .where(
+                    (t) =>
+                        t.parentId == null &&
+                        _loadedSubtasks.containsKey(t.id) &&
+                        _loadedSubtasks[t.id]!.isNotEmpty,
+                  )
                   .map((t) => t.id)
                   .toList();
-              _expandedTasks.removeWhere((id) => mainTasksWithSubtasks.contains(id));
+              _expandedTasks.removeWhere(
+                (id) => mainTasksWithSubtasks.contains(id),
+              );
             });
           }
         }
@@ -256,8 +284,8 @@ class _TaskTableState extends State<TaskTable> {
   void _startEmptyTimer() {
     _emptyTimer?.cancel();
     _showEmptyMessage = false;
-    _emptyTimer = Timer(const Duration(seconds: 5), () {
-      if (mounted && widget.tasks.isEmpty) {
+    _emptyTimer = Timer(const Duration(seconds: 15), () {
+      if (mounted && widget.tasks.isEmpty && !widget.isLoading) {
         setState(() {
           _showEmptyMessage = true;
         });
@@ -273,23 +301,45 @@ class _TaskTableState extends State<TaskTable> {
 
     try {
       final taskIds = widget.tasks.map((t) => t.id).toList();
-      
+
       // Carregar contagens em paralelo
-      final mensagensFuture = _chatService.contarMensagensPorTarefas(taskIds);
-      final anexosFuture = _anexoService.contarAnexosPorTarefas(taskIds);
-      final notasSAPFuture = _notaSAPService.contarNotasPorTarefas(taskIds);
-      final ordensFuture = _ordemService.contarOrdensPorTarefas(taskIds);
-      final atsFuture = _atService.contarATsPorTarefas(taskIds);
-      final sisFuture = _siService.contarSIsPorTarefas(taskIds);
-      final frotasFuture = _frotaService.contarFrotasPorTarefas(taskIds);
+      final mensagensFuture = _chatService
+          .contarMensagensPorTarefas(taskIds)
+          .catchError((_) => <String, int>{});
+      final anexosFuture = _anexoService
+          .contarAnexosPorTarefas(taskIds)
+          .catchError((_) => <String, int>{});
+      final notasSAPFuture = _notaSAPService
+          .contarNotasPorTarefas(taskIds)
+          .catchError((_) => <String, int>{});
+      final ordensFuture = _ordemService
+          .contarOrdensPorTarefas(taskIds)
+          .catchError((_) => <String, int>{});
+      final atsFuture = _atService
+          .contarATsPorTarefas(taskIds)
+          .catchError((_) => <String, int>{});
+      final sisFuture = _siService
+          .contarSIsPorTarefas(taskIds)
+          .catchError((_) => <String, int>{});
+      final frotasFuture = _frotaService
+          .contarFrotasPorTarefas(taskIds)
+          .catchError((_) => <String, int>{});
       final encerramentoFuture = widget.taskService != null
-          ? widget.taskService!.getEncerramentoSapPorTarefas(taskIds)
+          ? widget.taskService!
+                .getEncerramentoSapPorTarefas(taskIds)
+                .catchError(
+                  (_) => (
+                    notasNaoEncerradas: <String, int>{},
+                    ordensNaoEncerradas: <String, int>{},
+                    atsNaoEncerradas: <String, int>{},
+                  ),
+                )
           : Future.value((
               notasNaoEncerradas: <String, int>{},
               ordensNaoEncerradas: <String, int>{},
               atsNaoEncerradas: <String, int>{},
             ));
-      
+
       final results = await Future.wait([
         mensagensFuture,
         anexosFuture,
@@ -300,7 +350,7 @@ class _TaskTableState extends State<TaskTable> {
         frotasFuture,
         encerramentoFuture,
       ]);
-      
+
       // Carregar nomes das frotas (nome - placa - modelo): preferir task.frota das tasks já carregadas (inclui marca)
       final frotasCountMap = results[6] as Map<String, int>;
       final frotasNomesMap = <String, String>{};
@@ -309,18 +359,30 @@ class _TaskTableState extends State<TaskTable> {
           if (task.frota.isNotEmpty && task.frota != '-N/A-') {
             frotasNomesMap[task.id] = task.frota;
           } else {
-            final frotaNome = await _frotaService.getFrotaNomePorTarefa(task.id);
-            if (frotaNome != null) {
-              frotasNomesMap[task.id] = frotaNome;
+            try {
+              final frotaNome = await _frotaService.getFrotaNomePorTarefa(
+                task.id,
+              );
+              if (frotaNome != null) {
+                frotasNomesMap[task.id] = frotaNome;
+              }
+            } catch (_) {
+              // Silenciar falha de rede pontual para não interromper a atualização das contagens
             }
           }
         }
       }
-      
+
       final enc = results.length > 7 ? results[7] : null;
-      final notasNaoEnc = enc != null ? Map<String, int>.from((enc as dynamic).notasNaoEncerradas as Map) : <String, int>{};
-      final ordensNaoEnc = enc != null ? Map<String, int>.from((enc as dynamic).ordensNaoEncerradas as Map) : <String, int>{};
-      final atsNaoEnc = enc != null ? Map<String, int>.from((enc as dynamic).atsNaoEncerradas as Map) : <String, int>{};
+      final notasNaoEnc = enc != null
+          ? Map<String, int>.from((enc as dynamic).notasNaoEncerradas as Map)
+          : <String, int>{};
+      final ordensNaoEnc = enc != null
+          ? Map<String, int>.from((enc as dynamic).ordensNaoEncerradas as Map)
+          : <String, int>{};
+      final atsNaoEnc = enc != null
+          ? Map<String, int>.from((enc as dynamic).atsNaoEncerradas as Map)
+          : <String, int>{};
 
       if (mounted) {
         setState(() {
@@ -337,10 +399,78 @@ class _TaskTableState extends State<TaskTable> {
           _atsNaoEncerradas = atsNaoEnc;
         });
         widget.onCountsLoaded?.call();
+
+        // Fallback: para perfis multi-segmento, algumas contagens podem vir 0.
+        // Rodar uma segunda passada por tarefa para ajustar contagens quando
+        // consultas agregadas subestimarem.
+        _fallbackLoadCountsPerTask();
       }
     } catch (e) {
       print('Erro ao carregar contagens: $e');
       if (mounted) widget.onCountsLoaded?.call();
+    }
+  }
+
+  Future<void> _fallbackLoadCountsPerTask() async {
+    // Evitar rodadas concorrentes
+    if (!mounted || widget.tasks.isEmpty) return;
+
+    // Limitar paralelismo para não sobrecarregar
+    const int batchSize = 12;
+    final tasks = widget.tasks;
+
+    Future<void> processTask(Task t) async {
+      try {
+        // NOTAS
+        if ((_notasSAPCount[t.id] ?? 0) == 0) {
+          final notas = await _notaSAPService.getNotasPorTarefa(t.id);
+          if (notas.isNotEmpty && mounted) {
+            setState(() => _notasSAPCount[t.id] = notas.length);
+          }
+        }
+        // ORDENS
+        if ((_ordensCount[t.id] ?? 0) == 0) {
+          final ordens = await _ordemService.getOrdensPorTarefa(t.id);
+          if (ordens.isNotEmpty && mounted) {
+            setState(() => _ordensCount[t.id] = ordens.length);
+          }
+        }
+        // ATs
+        if ((_atsCount[t.id] ?? 0) == 0) {
+          final ats = await _atService.getATsPorTarefa(t.id);
+          if (ats.isNotEmpty && mounted) {
+            setState(() => _atsCount[t.id] = ats.length);
+          }
+        }
+        // SIs
+        if ((_sisCount[t.id] ?? 0) == 0) {
+          final sis = await _siService.getSIsPorTarefa(t.id);
+          if (sis.isNotEmpty && mounted) {
+            setState(() => _sisCount[t.id] = sis.length);
+          }
+        }
+        // FROTAS (nome por tarefa já tratado; aqui só count)
+        if ((_frotasCount[t.id] ?? 0) == 0) {
+          // Se a task já traz frotaIds/frota, refletir como contagem mínima
+          final fallback = t.frotaIds.isNotEmpty
+              ? t.frotaIds.length
+              : ((t.frota.isNotEmpty && t.frota != '-N/A-') ? 1 : 0);
+          if (fallback > 0 && mounted) {
+            setState(() => _frotasCount[t.id] = fallback);
+          }
+        }
+      } catch (_) {
+        // Silenciar erros de rede pontuais
+      }
+    }
+
+    for (int i = 0; i < tasks.length; i += batchSize) {
+      final slice = tasks.sublist(
+        i,
+        i + batchSize > tasks.length ? tasks.length : i + batchSize,
+      );
+      await Future.wait(slice.map(processTask));
+      if (!mounted) break;
     }
   }
 
@@ -350,9 +480,7 @@ class _TaskTableState extends State<TaskTable> {
       final statusList = await _statusService.getAllStatus();
       if (mounted) {
         setState(() {
-          _statusMap = {
-            for (var status in statusList) status.codigo: status
-          };
+          _statusMap = {for (var status in statusList) status.codigo: status};
         });
       }
     } catch (e) {
@@ -365,7 +493,7 @@ class _TaskTableState extends State<TaskTable> {
     if (status == 'ANDA' || status == 'PROG') {
       return Colors.white;
     }
-    
+
     // Buscar status cadastrado
     final statusObj = _statusMap[status];
     if (statusObj != null) {
@@ -376,7 +504,7 @@ class _TaskTableState extends State<TaskTable> {
       // Usar a cor do status com opacidade bem reduzida para fundo
       return statusObj.color.withOpacity(0.5); // Bem clarinha
     }
-    
+
     // Fallback para cores padrão se não encontrar
     switch (status) {
       case 'ANDA':
@@ -397,7 +525,7 @@ class _TaskTableState extends State<TaskTable> {
       // Usar a cor do status para o badge
       return statusObj.color;
     }
-    
+
     // Fallback para cores padrão se não encontrar
     switch (status) {
       case 'ANDA':
@@ -415,11 +543,11 @@ class _TaskTableState extends State<TaskTable> {
   List<Task> _buildHierarchicalTasks() {
     final List<Task> hierarchicalTasks = [];
     final mainTasks = widget.tasks.where((t) => t.parentId == null).toList();
-    
+
     for (final mainTask in mainTasks) {
       hierarchicalTasks.add(mainTask);
       final isExpanded = _expandedTasks.contains(mainTask.id);
-      
+
       // Subtarefas vindas diretamente da lista de tasks (carregadas no pai)
       final subtasksFromWidget = widget.tasks
           .where((t) => t.parentId == mainTask.id)
@@ -433,13 +561,14 @@ class _TaskTableState extends State<TaskTable> {
           hierarchicalTasks.addAll(_loadedSubtasks[mainTask.id]!);
         }
       }
-      
+
       // Se a tarefa está expandida, criar linhas virtuais para períodos por executor e por frota
       if (isExpanded) {
         if (mainTask.executorPeriods.isNotEmpty) {
           for (var executorPeriod in mainTask.executorPeriods) {
-            final virtualTaskId = '${mainTask.id}_executor_${executorPeriod.executorId}';
-            
+            final virtualTaskId =
+                '${mainTask.id}_executor_${executorPeriod.executorId}';
+
             DateTime? minDate;
             DateTime? maxDate;
             for (var period in executorPeriod.periods) {
@@ -450,7 +579,7 @@ class _TaskTableState extends State<TaskTable> {
                 maxDate = period.dataFim;
               }
             }
-            
+
             final virtualTask = Task(
               id: virtualTaskId,
               parentId: mainTask.id,
@@ -488,7 +617,7 @@ class _TaskTableState extends State<TaskTable> {
               horasExecutadas: mainTask.horasExecutadas,
               prioridade: mainTask.prioridade,
             );
-            
+
             hierarchicalTasks.add(virtualTask);
           }
         }
@@ -551,7 +680,7 @@ class _TaskTableState extends State<TaskTable> {
         }
       }
     }
-    
+
     return hierarchicalTasks;
   }
 
@@ -562,19 +691,26 @@ class _TaskTableState extends State<TaskTable> {
     } else {
       setState(() {
         final newState = !_allSubtasksExpanded;
-        
+
         // Obter todas as tarefas principais que têm subtarefas
         final mainTasksWithSubtasks = widget.tasks
-            .where((t) => t.parentId == null && _loadedSubtasks.containsKey(t.id) && _loadedSubtasks[t.id]!.isNotEmpty)
+            .where(
+              (t) =>
+                  t.parentId == null &&
+                  _loadedSubtasks.containsKey(t.id) &&
+                  _loadedSubtasks[t.id]!.isNotEmpty,
+            )
             .map((t) => t.id)
             .toList();
-        
+
         if (newState) {
           // Expandir todas
           _expandedTasks.addAll(mainTasksWithSubtasks);
         } else {
           // Colapsar todas
-          _expandedTasks.removeWhere((id) => mainTasksWithSubtasks.contains(id));
+          _expandedTasks.removeWhere(
+            (id) => mainTasksWithSubtasks.contains(id),
+          );
         }
       });
     }
@@ -583,10 +719,10 @@ class _TaskTableState extends State<TaskTable> {
   Future<void> _toggleExpand(String taskId) async {
     final isCurrentlyExpanded = _expandedTasks.contains(taskId);
     final newExpandedState = !isCurrentlyExpanded;
-    
+
     print('   Estado atual: ${_expandedTasks.toList()}');
     print('   onTaskExpanded disponível: ${widget.onTaskExpanded != null}');
-    
+
     // Notificar o callback compartilhado se existir
     if (widget.onTaskExpanded != null) {
       print('   Chamando onTaskExpanded...');
@@ -602,9 +738,11 @@ class _TaskTableState extends State<TaskTable> {
         }
       });
     }
-    
+
     // Carregar subtarefas se ainda não foram carregadas
-    if (newExpandedState && widget.taskService != null && !_loadedSubtasks.containsKey(taskId)) {
+    if (newExpandedState &&
+        widget.taskService != null &&
+        !_loadedSubtasks.containsKey(taskId)) {
       try {
         final subtasks = await widget.taskService!.getSubtasks(taskId);
         if (mounted) {
@@ -623,11 +761,11 @@ class _TaskTableState extends State<TaskTable> {
   @override
   Widget build(BuildContext context) {
     final isMobile = Responsive.isMobile(context);
-    
+
     final hierarchicalTasks = _buildHierarchicalTasks();
-    
+
     if (hierarchicalTasks.isEmpty) {
-      if (!_showEmptyMessage) {
+      if (!_showEmptyMessage || widget.isLoading) {
         return Center(
           child: Padding(
             padding: const EdgeInsets.all(20),
@@ -654,13 +792,11 @@ class _TaskTableState extends State<TaskTable> {
         );
       }
     }
-    
+
     // Em qualquer dispositivo: faixa superior fixa (mesma altura da linha de mês do Gantt)
     // para o cabeçalho da tabela e o cabeçalho dos dias do Gantt iniciarem e terminarem na mesma altura.
     return Container(
-      decoration: BoxDecoration(
-        border: Border.all(color: Colors.grey[300]!),
-      ),
+      decoration: BoxDecoration(border: Border.all(color: Colors.grey[300]!)),
       child: Column(
         children: [
           SizedBox(height: Responsive.kActivitiesHeaderTopHeight),
@@ -671,10 +807,7 @@ class _TaskTableState extends State<TaskTable> {
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [
-                  Colors.blue[700]!,
-                  Colors.blue[600]!,
-                ],
+                colors: [Colors.blue[700]!, Colors.blue[600]!],
               ),
               boxShadow: [
                 BoxShadow(
@@ -705,7 +838,7 @@ class _TaskTableState extends State<TaskTable> {
                 // Usar a mesma largura do cabeçalho (já inclui folga de segurança)
                 final minWidth = _calculateTotalTableWidth(isMobile);
                 final effectiveWarnings = widget.warningsByTaskId ?? {};
-                
+
                 return SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
                   physics: const AlwaysScrollableScrollPhysics(),
@@ -719,19 +852,21 @@ class _TaskTableState extends State<TaskTable> {
                       itemCount: hierarchicalTasks.length,
                       itemBuilder: (context, index) {
                         final task = hierarchicalTasks[index];
-                        final previousTask = index > 0 ? hierarchicalTasks[index - 1] : null;
-                        
+                        final previousTask = index > 0
+                            ? hierarchicalTasks[index - 1]
+                            : null;
+
                         final isSubtask = task.parentId != null;
-                        final hasSubtasks = _loadedSubtasks.containsKey(task.id) 
+                        final hasSubtasks = _loadedSubtasks.containsKey(task.id)
                             ? _loadedSubtasks[task.id]!.isNotEmpty
                             : false;
                         final isExecutorRow = task.id.contains('_executor_');
                         final isFrotaRow = task.id.contains('_frota_');
-                        
+
                         // Verificar se mudou o grupo (apenas se não for PERÍODO e se não for subtarefa/executor)
                         bool mudouGrupo = false;
-                        if (widget.sortColumn != null && 
-                            widget.sortColumn != 'PERÍODO' && 
+                        if (widget.sortColumn != null &&
+                            widget.sortColumn != 'PERÍODO' &&
                             previousTask != null &&
                             !previousTask.id.contains('_executor_') &&
                             !previousTask.id.contains('_frota_') &&
@@ -741,19 +876,27 @@ class _TaskTableState extends State<TaskTable> {
                             !isFrotaRow &&
                             widget.getSortValue != null) {
                           try {
-                            final previousValue = widget.getSortValue!(previousTask);
+                            final previousValue = widget.getSortValue!(
+                              previousTask,
+                            );
                             final currentValue = widget.getSortValue!(task);
-                            mudouGrupo = previousValue.trim() != currentValue.trim();
+                            mudouGrupo =
+                                previousValue.trim() != currentValue.trim();
                           } catch (e, stackTrace) {
                             print('❌ Erro ao verificar mudança de grupo: $e');
                             print('Stack trace: $stackTrace');
                             mudouGrupo = false;
                           }
                         }
-                        
-                        final hasExecutorPeriods = !isSubtask && !isExecutorRow && task.executorPeriods.isNotEmpty;
-                        final statusBackgroundColor = _getStatusBackgroundColor(task.status);
-                        
+
+                        final hasExecutorPeriods =
+                            !isSubtask &&
+                            !isExecutorRow &&
+                            task.executorPeriods.isNotEmpty;
+                        final statusBackgroundColor = _getStatusBackgroundColor(
+                          task.status,
+                        );
+
                         return Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -769,7 +912,8 @@ class _TaskTableState extends State<TaskTable> {
                                 onTap: () => widget.onTaskSelected?.call(task),
                                 hoverColor: Colors.blue[100]!.withOpacity(0.3),
                                 child: Container(
-                                  height: 50, // Altura fixa de 50px para alinhar com Gantt
+                                  height:
+                                      50, // Altura fixa de 50px para alinhar com Gantt
                                   decoration: BoxDecoration(
                                     color: statusBackgroundColor,
                                     border: Border(
@@ -778,12 +922,21 @@ class _TaskTableState extends State<TaskTable> {
                                         width: 0.5,
                                       ),
                                       left: isExecutorRow
-                                          ? BorderSide(color: Colors.orange[400]!, width: 3)
+                                          ? BorderSide(
+                                              color: Colors.orange[400]!,
+                                              width: 3,
+                                            )
                                           : isFrotaRow
-                                              ? BorderSide(color: Colors.green[400]!, width: 3)
-                                              : isSubtask
-                                                  ? BorderSide(color: Colors.blue[300]!, width: 3)
-                                                  : BorderSide.none,
+                                          ? BorderSide(
+                                              color: Colors.green[400]!,
+                                              width: 3,
+                                            )
+                                          : isSubtask
+                                          ? BorderSide(
+                                              color: Colors.blue[300]!,
+                                              width: 3,
+                                            )
+                                          : BorderSide.none,
                                     ),
                                   ),
                                   child: _buildDataRow(
@@ -870,7 +1023,7 @@ class _TaskTableState extends State<TaskTable> {
     final atsWidth = isMobile ? 38.0 : 42.0;
     final sisWidth = isMobile ? 38.0 : 42.0;
     final alertasWidth = isMobile ? 45.0 : 50.0;
-    
+
     return Row(
       children: [
         _buildHeaderCell('AÇÕES', acoesWidth, isMobile),
@@ -907,7 +1060,7 @@ class _TaskTableState extends State<TaskTable> {
   ) {
     final baseTaskId = task.id.split('_executor_').first.split('_frota_').first;
     final taskWarnings = effectiveWarnings[baseTaskId] ?? const <TaskWarning>[];
-    
+
     // Usar as mesmas larguras fixas do cabeçalho
     final acoesWidth = isMobile ? 50.0 : 60.0;
     final statusWidth = isMobile ? 60.0 : 70.0;
@@ -932,95 +1085,147 @@ class _TaskTableState extends State<TaskTable> {
       child: ClipRect(
         child: Row(
           children: [
-          // Coluna de AÇÕES (primeira coluna)
-          _buildActionsCell(task, acoesWidth, isMobile),
-          // Coluna de STATUS com ícone de expansão
-          _buildStatusCell(task.status, statusWidth, isMobile, task, hasSubtasks, isSubtask || isFrotaRow, isExecutorRow, hasExecutorPeriods),
-          _buildCell(
-            task.locais.isNotEmpty ? task.locais.join(', ') : '',
-            localWidth,
-            isMobile,
-            hasColoredBackground: statusBackgroundColor != Colors.white,
-            fontWeight: (task.status == 'PROG' || task.status == 'ANDA') ? FontWeight.w600 : null,
-          ),
-          _buildCell(task.tipo, tipoWidth, isMobile, hasColoredBackground: statusBackgroundColor != Colors.white),
-          // Coluna TAREFA com largura fixa
-          SizedBox(
-            width: tarefaWidth,
-            child: Container(
-              padding: EdgeInsets.only(left: (isSubtask || isExecutorRow || isFrotaRow) ? (isMobile ? 20 : 24) : 0),
-              child: _buildCell(
-                task.tarefa,
-                0,
-                isMobile,
-                isSubtask: isSubtask || isFrotaRow,
-                hasColoredBackground: statusBackgroundColor != Colors.white,
-                maxLines: 2,
-                softWrap: true,
-                overflow: TextOverflow.fade,
-                fontWeight: (task.status == 'PROG' || task.status == 'ANDA') ? FontWeight.w600 : null,
+            // Coluna de AÇÕES (primeira coluna)
+            _buildActionsCell(task, acoesWidth, isMobile),
+            // Coluna de STATUS com ícone de expansão
+            _buildStatusCell(
+              task.status,
+              statusWidth,
+              isMobile,
+              task,
+              hasSubtasks,
+              isSubtask || isFrotaRow,
+              isExecutorRow,
+              hasExecutorPeriods,
+            ),
+            _buildCell(
+              task.locais.isNotEmpty ? task.locais.join(', ') : '',
+              localWidth,
+              isMobile,
+              hasColoredBackground: statusBackgroundColor != Colors.white,
+              fontWeight: (task.status == 'PROG' || task.status == 'ANDA')
+                  ? FontWeight.w600
+                  : null,
+            ),
+            _buildCell(
+              task.tipo,
+              tipoWidth,
+              isMobile,
+              hasColoredBackground: statusBackgroundColor != Colors.white,
+            ),
+            // Coluna TAREFA com largura fixa
+            SizedBox(
+              width: tarefaWidth,
+              child: Container(
+                padding: EdgeInsets.only(
+                  left: (isSubtask || isExecutorRow || isFrotaRow)
+                      ? (isMobile ? 20 : 24)
+                      : 0,
+                ),
+                child: _buildCell(
+                  task.tarefa,
+                  0,
+                  isMobile,
+                  isSubtask: isSubtask || isFrotaRow,
+                  hasColoredBackground: statusBackgroundColor != Colors.white,
+                  maxLines: 2,
+                  softWrap: true,
+                  overflow: TextOverflow.fade,
+                  fontWeight: (task.status == 'PROG' || task.status == 'ANDA')
+                      ? FontWeight.w600
+                      : null,
+                ),
               ),
             ),
-          ),
-          // Coluna EXECUTOR com largura fixa
-          SizedBox(
-            width: executorWidth,
-            child: Tooltip(
-              message: task.equipeExecutores != null && task.equipeExecutores!.isNotEmpty
-                  ? 'Equipe: ${task.equipes.isNotEmpty ? task.equipes.join(', ') : ''}\n\nExecutores:\n${task.equipeExecutores!.map((e) => '• ${e.executorNome} (${_getPapelLabel(e.papel)})').join('\n')}'
-                  : task.executores.isNotEmpty ? task.executores.join(', ') : task.executor,
+            // Coluna EXECUTOR com largura fixa
+            SizedBox(
+              width: executorWidth,
+              child: Tooltip(
+                message:
+                    task.equipeExecutores != null &&
+                        task.equipeExecutores!.isNotEmpty
+                    ? 'Equipe: ${task.equipes.isNotEmpty ? task.equipes.join(', ') : ''}\n\nExecutores:\n${task.equipeExecutores!.map((e) => '• ${e.executorNome} (${_getPapelLabel(e.papel)})').join('\n')}'
+                    : task.executores.isNotEmpty
+                    ? task.executores.join(', ')
+                    : task.executor,
+                child: _buildCell(
+                  task.equipeExecutores != null &&
+                          task.equipeExecutores!.isNotEmpty
+                      ? '${task.equipes.isNotEmpty ? task.equipes.join(', ') : ''} (${task.equipeExecutores!.length})'
+                      : task.executores.isNotEmpty
+                      ? task.executores.join(', ')
+                      : task.executor,
+                  0,
+                  isMobile,
+                  hasColoredBackground: statusBackgroundColor != Colors.white,
+                  maxLines: 2,
+                  softWrap: true,
+                  overflow: TextOverflow.fade,
+                ),
+              ),
+            ),
+            // Coluna COORDENADOR com largura fixa
+            SizedBox(
+              width: coordenadorWidth,
               child: _buildCell(
-                task.equipeExecutores != null && task.equipeExecutores!.isNotEmpty
-                    ? '${task.equipes.isNotEmpty ? task.equipes.join(', ') : ''} (${task.equipeExecutores!.length})'
-                    : task.executores.isNotEmpty ? task.executores.join(', ') : task.executor,
+                task.coordenador,
                 0,
                 isMobile,
                 hasColoredBackground: statusBackgroundColor != Colors.white,
-                maxLines: 2,
-                softWrap: true,
-                overflow: TextOverflow.fade,
               ),
             ),
-          ),
-          // Coluna COORDENADOR com largura fixa
-          SizedBox(
-            width: coordenadorWidth,
-            child: _buildCell(task.coordenador, 0, isMobile, hasColoredBackground: statusBackgroundColor != Colors.white),
-          ),
-          // Coluna de FROTA (clicável)
-          _buildFrotaCell(task, frotaWidth, isMobile, statusBackgroundColor),
-          // Coluna de CHAT (clicável)
-          _buildChatCell(task, chatWidth, isMobile, statusBackgroundColor),
-          // Coluna de ANEXOS
-          _buildCell(
-            _anexosCount[task.id] != null && _anexosCount[task.id]! > 0
-                ? '${_anexosCount[task.id]}'
-                : '',
-            anexosWidth,
-            isMobile,
-            icon: Icons.attach_file,
-            iconColor: _anexosCount[task.id] != null && _anexosCount[task.id]! > 0
-                ? Colors.green
-                : Colors.grey[400],
-            hasColoredBackground: statusBackgroundColor != Colors.white,
-          ),
-          // Coluna de NOTAS SAP (clicável)
-          _buildNotaSAPCell(task, notasSAPWidth, isMobile, statusBackgroundColor),
-          // Coluna de ORDENS (clicável)
-          _buildOrdemCell(task, ordensWidth, isMobile, statusBackgroundColor),
-          // Coluna de ATs (clicável)
-          _buildATCell(task, atsWidth, isMobile, statusBackgroundColor),
-          // Coluna de SIs (clicável)
-          _buildSICell(task, sisWidth, isMobile, statusBackgroundColor),
-          // Coluna de ALERTAS (badge + drawer/bottom sheet)
-          _buildAlertasCell(task, alertasWidth, isMobile, statusBackgroundColor, taskWarnings),
+            // Coluna de FROTA (clicável)
+            _buildFrotaCell(task, frotaWidth, isMobile, statusBackgroundColor),
+            // Coluna de CHAT (clicável)
+            _buildChatCell(task, chatWidth, isMobile, statusBackgroundColor),
+            // Coluna de ANEXOS
+            _buildCell(
+              _anexosCount[task.id] != null && _anexosCount[task.id]! > 0
+                  ? '${_anexosCount[task.id]}'
+                  : '',
+              anexosWidth,
+              isMobile,
+              icon: Icons.attach_file,
+              iconColor:
+                  _anexosCount[task.id] != null && _anexosCount[task.id]! > 0
+                  ? Colors.green
+                  : Colors.grey[400],
+              hasColoredBackground: statusBackgroundColor != Colors.white,
+            ),
+            // Coluna de NOTAS SAP (clicável)
+            _buildNotaSAPCell(
+              task,
+              notasSAPWidth,
+              isMobile,
+              statusBackgroundColor,
+            ),
+            // Coluna de ORDENS (clicável)
+            _buildOrdemCell(task, ordensWidth, isMobile, statusBackgroundColor),
+            // Coluna de ATs (clicável)
+            _buildATCell(task, atsWidth, isMobile, statusBackgroundColor),
+            // Coluna de SIs (clicável)
+            _buildSICell(task, sisWidth, isMobile, statusBackgroundColor),
+            // Coluna de ALERTAS (badge + drawer/bottom sheet)
+            _buildAlertasCell(
+              task,
+              alertasWidth,
+              isMobile,
+              statusBackgroundColor,
+              taskWarnings,
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildAlertasCell(Task task, double width, bool isMobile, Color rowBackgroundColor, List<TaskWarning> taskWarnings) {
+  Widget _buildAlertasCell(
+    Task task,
+    double width,
+    bool isMobile,
+    Color rowBackgroundColor,
+    List<TaskWarning> taskWarnings,
+  ) {
     return SizedBox(
       width: width,
       height: 50,
@@ -1034,6 +1239,8 @@ class _TaskTableState extends State<TaskTable> {
             context: context,
             taskTarefaLabel: task.tarefa,
             warnings: taskWarnings,
+            task: task,
+            allTasks: widget.tasks,
             debugTaskId: task.id,
             debugTaskStatus: task.status,
             debugTaskStatusId: task.statusId,
@@ -1055,7 +1262,7 @@ class _TaskTableState extends State<TaskTable> {
 
   String _buildTooltipText(Task task) {
     final List<String> parts = [];
-    
+
     if (task.regional.isNotEmpty) {
       parts.add('Regional: ${task.regional}');
     }
@@ -1067,10 +1274,14 @@ class _TaskTableState extends State<TaskTable> {
     }
     // Adicionar informações da equipe se houver
     if (task.equipeExecutores != null && task.equipeExecutores!.isNotEmpty) {
-      parts.add('\nEquipe: ${task.equipes.isNotEmpty ? task.equipes.join(', ') : ''}');
+      parts.add(
+        '\nEquipe: ${task.equipes.isNotEmpty ? task.equipes.join(', ') : ''}',
+      );
       parts.add('Executores:');
       for (var executor in task.equipeExecutores!) {
-        parts.add('  • ${executor.executorNome} (${_getPapelLabel(executor.papel)})');
+        parts.add(
+          '  • ${executor.executorNome} (${_getPapelLabel(executor.papel)})',
+        );
       }
     } else if (task.executores.isNotEmpty) {
       parts.add('Executores: ${task.executores.join(', ')}');
@@ -1083,7 +1294,7 @@ class _TaskTableState extends State<TaskTable> {
     if (task.si.isNotEmpty) {
       parts.add('SI: ${task.si}');
     }
-    
+
     return parts.isEmpty ? 'Sem informações adicionais' : parts.join('\n');
   }
 
@@ -1101,54 +1312,54 @@ class _TaskTableState extends State<TaskTable> {
         return papel;
     }
   }
-  
+
   Widget _buildActionsCell(Task task, double width, bool isMobile) {
     return SizedBox(
       width: width,
       child: Container(
-        padding: EdgeInsets.symmetric(horizontal: isMobile ? 3 : 6, vertical: isMobile ? 4 : 8),
+        padding: EdgeInsets.symmetric(
+          horizontal: isMobile ? 3 : 6,
+          vertical: isMobile ? 4 : 8,
+        ),
         decoration: BoxDecoration(
           border: Border(
-            right: BorderSide(
-              color: Colors.grey[300]!,
-              width: 0.5,
-            ),
+            right: BorderSide(color: Colors.grey[300]!, width: 0.5),
           ),
         ),
         child: PopupMenuButton<String>(
-              icon: const Icon(Icons.more_vert, size: 18, color: Colors.grey),
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(),
-              onSelected: (value) {
-                switch (value) {
-                  case 'view':
-                    widget.onTaskSelected?.call(task);
-                    break;
-                  case 'edit':
-                    widget.onEdit?.call(task);
-                    break;
-                  case 'delete':
-                    widget.onDelete?.call(task);
-                    break;
-                  case 'duplicate':
-                    widget.onDuplicate?.call(task);
-                    break;
-                  case 'subtask':
-                    widget.onCreateSubtask?.call(task);
-                    break;
-                }
-              },
-              itemBuilder: (context) => [
-                const PopupMenuItem(
-                  value: 'view',
-                  child: Row(
-                    children: [
-                      Icon(Icons.visibility, size: 18, color: Colors.blue),
-                      SizedBox(width: 8),
-                      Text('Visualizar'),
-                    ],
-                  ),
-                ),
+          icon: const Icon(Icons.more_vert, size: 18, color: Colors.grey),
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(),
+          onSelected: (value) {
+            switch (value) {
+              case 'view':
+                widget.onTaskSelected?.call(task);
+                break;
+              case 'edit':
+                widget.onEdit?.call(task);
+                break;
+              case 'delete':
+                widget.onDelete?.call(task);
+                break;
+              case 'duplicate':
+                widget.onDuplicate?.call(task);
+                break;
+              case 'subtask':
+                widget.onCreateSubtask?.call(task);
+                break;
+            }
+          },
+          itemBuilder: (context) => [
+            const PopupMenuItem(
+              value: 'view',
+              child: Row(
+                children: [
+                  Icon(Icons.visibility, size: 18, color: Colors.blue),
+                  SizedBox(width: 8),
+                  Text('Visualizar'),
+                ],
+              ),
+            ),
             const PopupMenuItem(
               value: 'edit',
               child: Row(
@@ -1198,13 +1409,13 @@ class _TaskTableState extends State<TaskTable> {
 
   Widget _buildHeaderCell(String text, double width, bool isMobile) {
     final cellWidget = Container(
-      padding: EdgeInsets.symmetric(horizontal: isMobile ? 3 : 6, vertical: 4), // Padding vertical reduzido para caber em 25px
+      padding: EdgeInsets.symmetric(
+        horizontal: isMobile ? 3 : 6,
+        vertical: 4,
+      ), // Padding vertical reduzido para caber em 25px
       decoration: BoxDecoration(
         border: Border(
-          right: BorderSide(
-            color: Colors.white.withOpacity(0.2),
-            width: 1,
-          ),
+          right: BorderSide(color: Colors.white.withOpacity(0.2), width: 1),
         ),
       ),
       child: Text(
@@ -1225,87 +1436,91 @@ class _TaskTableState extends State<TaskTable> {
     return cellWidget;
   }
 
-  Widget _buildStatusCell(String status, double width, bool isMobile, Task task, bool hasSubtasks, bool isSubtask, bool isExecutorRow, bool hasExecutorPeriods) {
+  Widget _buildStatusCell(
+    String status,
+    double width,
+    bool isMobile,
+    Task task,
+    bool hasSubtasks,
+    bool isSubtask,
+    bool isExecutorRow,
+    bool hasExecutorPeriods,
+  ) {
     final badgeColor = _getStatusBadgeColor(status);
     final subtasksCount = _loadedSubtasks[task.id]?.length ?? 0;
     final hasSubs = subtasksCount > 0;
     final isExpanded = _expandedTasks.contains(task.id);
-    
+
     final cellWidget = Container(
-      padding: EdgeInsets.symmetric(horizontal: isMobile ? 3 : 6, vertical: isMobile ? 4 : 8),
-      decoration: BoxDecoration(
-        border: Border(
-          right: BorderSide(
-            color: Colors.grey[300]!,
-            width: 0.5,
-          ),
-        ),
+      padding: EdgeInsets.symmetric(
+        horizontal: isMobile ? 3 : 6,
+        vertical: isMobile ? 4 : 8,
       ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Ícone de expandir/colapsar ou indentação
-            if (hasSubs || hasSubtasks || hasExecutorPeriods)
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: Icon(
-                      isExpanded ? Icons.expand_less : Icons.expand_more,
-                      size: isMobile ? 16 : 18,
-                      color: Colors.blue[700],
-                    ),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                    onPressed: () => _toggleExpand(task.id),
+      decoration: BoxDecoration(
+        border: Border(right: BorderSide(color: Colors.grey[300]!, width: 0.5)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Ícone de expandir/colapsar ou indentação
+          if (hasSubs || hasSubtasks || hasExecutorPeriods)
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: Icon(
+                    isExpanded ? Icons.expand_less : Icons.expand_more,
+                    size: isMobile ? 16 : 18,
+                    color: Colors.blue[700],
                   ),
-                  if (hasSubs && !isExpanded)
-                    Container(
-                      padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: Colors.blue[100],
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(
-                        '$subtasksCount',
-                        style: TextStyle(
-                          fontSize: isMobile ? 8 : 9,
-                          color: Colors.blue[900],
-                          fontWeight: FontWeight.bold,
-                        ),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  onPressed: () => _toggleExpand(task.id),
+                ),
+                if (hasSubs && !isExpanded)
+                  Container(
+                    padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.blue[100],
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      '$subtasksCount',
+                      style: TextStyle(
+                        fontSize: isMobile ? 8 : 9,
+                        color: Colors.blue[900],
+                        fontWeight: FontWeight.bold,
                       ),
                     ),
-                ],
-              )
-            else if (isSubtask)
-              Padding(
-                padding: EdgeInsets.only(left: isMobile ? 16 : 20),
-                child: Icon(
-                  Icons.subdirectory_arrow_right,
-                  size: isMobile ? 14 : 16,
-                  color: Colors.grey[600],
-                ),
-              )
-            else
-              const SizedBox(width: 8),
-            // Bolinha de status
-            Tooltip(
-              message: _getStatusLabel(status),
-              child: Container(
-                width: isMobile ? 12 : 14,
-                height: isMobile ? 12 : 14,
-                decoration: BoxDecoration(
-                  color: badgeColor,
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: Colors.white,
-                    width: 1.5,
                   ),
-                ),
+              ],
+            )
+          else if (isSubtask)
+            Padding(
+              padding: EdgeInsets.only(left: isMobile ? 16 : 20),
+              child: Icon(
+                Icons.subdirectory_arrow_right,
+                size: isMobile ? 14 : 16,
+                color: Colors.grey[600],
+              ),
+            )
+          else
+            const SizedBox(width: 8),
+          // Bolinha de status
+          Tooltip(
+            message: _getStatusLabel(status),
+            child: Container(
+              width: isMobile ? 12 : 14,
+              height: isMobile ? 12 : 14,
+              decoration: BoxDecoration(
+                color: badgeColor,
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 1.5),
               ),
             ),
-          ],
-        ),
+          ),
+        ],
+      ),
     );
 
     if (width > 0) {
@@ -1324,18 +1539,17 @@ class _TaskTableState extends State<TaskTable> {
     if (_statusMap.isEmpty) {
       return SizedBox(height: _getStatusLegendHeight());
     }
-    
+
     return Container(
-      height: 50, // Altura fixa de 50px para alinhar com o cabeçalho de dias do Gantt
-      padding: EdgeInsets.symmetric(horizontal: isMobile ? 8 : 12, vertical: isMobile ? 6 : 8),
+      height:
+          50, // Altura fixa de 50px para alinhar com o cabeçalho de dias do Gantt
+      padding: EdgeInsets.symmetric(
+        horizontal: isMobile ? 8 : 12,
+        vertical: isMobile ? 6 : 8,
+      ),
       decoration: BoxDecoration(
         color: Colors.grey[50],
-        border: Border(
-          bottom: BorderSide(
-            color: Colors.grey[300]!,
-            width: 1,
-          ),
-        ),
+        border: Border(bottom: BorderSide(color: Colors.grey[300]!, width: 1)),
       ),
       child: Row(
         children: [
@@ -1344,32 +1558,29 @@ class _TaskTableState extends State<TaskTable> {
               spacing: isMobile ? 8 : 12,
               runSpacing: isMobile ? 4 : 6,
               children: _statusMap.values.map((status) {
-          return Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: isMobile ? 10 : 12,
-                height: isMobile ? 10 : 12,
-                decoration: BoxDecoration(
-                  color: status.color,
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: Colors.white,
-                    width: 1.5,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 4),
-              Text(
-                status.status,
-                style: TextStyle(
-                  fontSize: isMobile ? 10 : 11,
-                  color: Colors.grey[700],
-                ),
-              ),
-            ],
-          );
-        }).toList(),
+                return Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: isMobile ? 10 : 12,
+                      height: isMobile ? 10 : 12,
+                      decoration: BoxDecoration(
+                        color: status.color,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 1.5),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      status.status,
+                      style: TextStyle(
+                        fontSize: isMobile ? 10 : 11,
+                        color: Colors.grey[700],
+                      ),
+                    ),
+                  ],
+                );
+              }).toList(),
             ),
           ),
           // Botão para expandir/colapsar todas as subtarefas (na legenda)
@@ -1379,7 +1590,9 @@ class _TaskTableState extends State<TaskTable> {
               size: isMobile ? 18 : 20,
               color: Colors.grey[700],
             ),
-            tooltip: _allSubtasksExpanded ? 'Colapsar todas as subtarefas' : 'Expandir todas as subtarefas',
+            tooltip: _allSubtasksExpanded
+                ? 'Colapsar todas as subtarefas'
+                : 'Expandir todas as subtarefas',
             onPressed: widget.onToggleAllSubtasks ?? _toggleAllSubtasks,
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(),
@@ -1391,15 +1604,13 @@ class _TaskTableState extends State<TaskTable> {
 
   Widget _buildToggleButton(bool isMobile) {
     return Container(
-      padding: EdgeInsets.symmetric(horizontal: isMobile ? 8 : 12, vertical: isMobile ? 6 : 8),
+      padding: EdgeInsets.symmetric(
+        horizontal: isMobile ? 8 : 12,
+        vertical: isMobile ? 6 : 8,
+      ),
       decoration: BoxDecoration(
         color: Colors.grey[50],
-        border: Border(
-          bottom: BorderSide(
-            color: Colors.grey[300]!,
-            width: 1,
-          ),
-        ),
+        border: Border(bottom: BorderSide(color: Colors.grey[300]!, width: 1)),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.end,
@@ -1410,7 +1621,9 @@ class _TaskTableState extends State<TaskTable> {
               size: isMobile ? 18 : 20,
               color: Colors.grey[700],
             ),
-            tooltip: _allSubtasksExpanded ? 'Colapsar todas as subtarefas' : 'Expandir todas as subtarefas',
+            tooltip: _allSubtasksExpanded
+                ? 'Colapsar todas as subtarefas'
+                : 'Expandir todas as subtarefas',
             onPressed: widget.onToggleAllSubtasks ?? _toggleAllSubtasks,
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(),
@@ -1426,7 +1639,7 @@ class _TaskTableState extends State<TaskTable> {
     if (statusObj != null) {
       return '${statusObj.codigo} - ${statusObj.status}';
     }
-    
+
     // Fallback para labels padrão
     switch (status) {
       case 'ANDA':
@@ -1444,23 +1657,39 @@ class _TaskTableState extends State<TaskTable> {
     }
   }
 
-  Widget _buildFrotaCell(Task task, double width, bool isMobile, Color statusBackgroundColor) {
-    final frotasCount = _frotasCount[task.id] ?? 0;
-    final hasFrota = frotasCount > 0;
+  Widget _buildFrotaCell(
+    Task task,
+    double width,
+    bool isMobile,
+    Color statusBackgroundColor,
+  ) {
+    // Fallback robusto: considerar também dados da própria task
+    final frotasCountService = _frotasCount[task.id] ?? 0;
+    final frotaIdsFallback = task.frotaIds.isNotEmpty
+        ? task.frotaIds.length
+        : 0;
+    final frotaTextFallback = (task.frota.isNotEmpty && task.frota != '-N/A-')
+        ? 1
+        : 0;
+    final computedCount = frotasCountService > 0
+        ? frotasCountService
+        : (frotaIdsFallback > 0 ? frotaIdsFallback : frotaTextFallback);
+    final hasFrota = computedCount > 0;
     final frotaColor = hasFrota ? Colors.green : Colors.grey[400];
-    
+
     return SizedBox(
       width: width,
       child: InkWell(
+        // Permitir clicar quando há indício de frota (service ou fallback)
         onTap: hasFrota ? () => _mostrarFrotas(task) : null,
         child: Container(
-          padding: EdgeInsets.symmetric(horizontal: isMobile ? 3 : 6, vertical: isMobile ? 4 : 8),
+          padding: EdgeInsets.symmetric(
+            horizontal: isMobile ? 3 : 6,
+            vertical: isMobile ? 4 : 8,
+          ),
           decoration: BoxDecoration(
             border: Border(
-              right: BorderSide(
-                color: Colors.grey[300]!,
-                width: 0.5,
-              ),
+              right: BorderSide(color: Colors.grey[300]!, width: 0.5),
             ),
           ),
           child: Row(
@@ -1475,10 +1704,12 @@ class _TaskTableState extends State<TaskTable> {
                 Padding(
                   padding: EdgeInsets.only(left: isMobile ? 2 : 4),
                   child: Text(
-                    '$frotasCount',
+                    '$computedCount',
                     style: TextStyle(
                       fontSize: isMobile ? 9 : 10,
-                      color: statusBackgroundColor != Colors.white ? Colors.grey[800] : Colors.black87,
+                      color: statusBackgroundColor != Colors.white
+                          ? Colors.grey[800]
+                          : Colors.black87,
                     ),
                   ),
                 ),
@@ -1489,33 +1720,34 @@ class _TaskTableState extends State<TaskTable> {
     );
   }
 
-  Widget _buildChatCell(Task task, double width, bool isMobile, Color statusBackgroundColor) {
+  Widget _buildChatCell(
+    Task task,
+    double width,
+    bool isMobile,
+    Color statusBackgroundColor,
+  ) {
     final mensagensCount = _mensagensCount[task.id] ?? 0;
     final hasMessages = mensagensCount > 0;
     final chatColor = hasMessages ? Colors.green : Colors.grey[400];
-    
+
     return SizedBox(
       width: width,
       child: InkWell(
         onTap: () => _abrirChatTarefa(task),
         child: Container(
-          padding: EdgeInsets.symmetric(horizontal: isMobile ? 3 : 6, vertical: isMobile ? 4 : 8),
+          padding: EdgeInsets.symmetric(
+            horizontal: isMobile ? 3 : 6,
+            vertical: isMobile ? 4 : 8,
+          ),
           decoration: BoxDecoration(
             border: Border(
-              right: BorderSide(
-                color: Colors.grey[300]!,
-                width: 0.5,
-              ),
+              right: BorderSide(color: Colors.grey[300]!, width: 0.5),
             ),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                Icons.chat,
-                size: isMobile ? 12 : 14,
-                color: chatColor,
-              ),
+              Icon(Icons.chat, size: isMobile ? 12 : 14, color: chatColor),
               if (hasMessages)
                 Padding(
                   padding: EdgeInsets.only(left: isMobile ? 2 : 4),
@@ -1523,7 +1755,9 @@ class _TaskTableState extends State<TaskTable> {
                     '$mensagensCount',
                     style: TextStyle(
                       fontSize: isMobile ? 9 : 10,
-                      color: statusBackgroundColor != Colors.white ? Colors.grey[800] : Colors.black87,
+                      color: statusBackgroundColor != Colors.white
+                          ? Colors.grey[800]
+                          : Colors.black87,
                     ),
                   ),
                 ),
@@ -1534,7 +1768,12 @@ class _TaskTableState extends State<TaskTable> {
     );
   }
 
-  Widget _buildNotaSAPCell(Task task, double width, bool isMobile, Color statusBackgroundColor) {
+  Widget _buildNotaSAPCell(
+    Task task,
+    double width,
+    bool isMobile,
+    Color statusBackgroundColor,
+  ) {
     final notasCount = _notasSAPCount[task.id] ?? 0;
     final hasNotas = notasCount > 0;
     final isConc = task.status.toUpperCase().trim() == 'CONC';
@@ -1542,23 +1781,24 @@ class _TaskTableState extends State<TaskTable> {
     final notaColor = !isConc
         ? (hasNotas ? Colors.black87 : Colors.grey[400]!)
         : (!hasNotas
-            ? Colors.grey[400]!
-            : notasNaoEnc > 0
-                ? Colors.red
-                : Colors.green);
-    
+              ? Colors.grey[400]!
+              : notasNaoEnc > 0
+              ? Colors.red
+              : Colors.green);
+
     return SizedBox(
       width: width,
       child: InkWell(
-        onTap: hasNotas ? () => _mostrarNotasSAP(task) : null,
+        // Abrir sempre; o modal carrega e mostra vazio se necessário
+        onTap: () => _mostrarNotasSAP(task),
         child: Container(
-          padding: EdgeInsets.symmetric(horizontal: isMobile ? 3 : 6, vertical: isMobile ? 4 : 8),
+          padding: EdgeInsets.symmetric(
+            horizontal: isMobile ? 3 : 6,
+            vertical: isMobile ? 4 : 8,
+          ),
           decoration: BoxDecoration(
             border: Border(
-              right: BorderSide(
-                color: Colors.grey[300]!,
-                width: 0.5,
-              ),
+              right: BorderSide(color: Colors.grey[300]!, width: 0.5),
             ),
           ),
           child: Row(
@@ -1576,7 +1816,9 @@ class _TaskTableState extends State<TaskTable> {
                     '$notasCount',
                     style: TextStyle(
                       fontSize: isMobile ? 9 : 10,
-                      color: statusBackgroundColor != Colors.white ? Colors.grey[800] : Colors.black87,
+                      color: statusBackgroundColor != Colors.white
+                          ? Colors.grey[800]
+                          : Colors.black87,
                     ),
                   ),
                 ),
@@ -1587,7 +1829,12 @@ class _TaskTableState extends State<TaskTable> {
     );
   }
 
-  Widget _buildOrdemCell(Task task, double width, bool isMobile, Color statusBackgroundColor) {
+  Widget _buildOrdemCell(
+    Task task,
+    double width,
+    bool isMobile,
+    Color statusBackgroundColor,
+  ) {
     final ordensCount = _ordensCount[task.id] ?? 0;
     final hasOrdens = ordensCount > 0;
     final isConc = task.status.toUpperCase().trim() == 'CONC';
@@ -1595,33 +1842,30 @@ class _TaskTableState extends State<TaskTable> {
     final ordemColor = !isConc
         ? (hasOrdens ? Colors.black87 : Colors.grey[400]!)
         : (!hasOrdens
-            ? Colors.grey[400]!
-            : ordensNaoEnc > 0
-                ? Colors.red
-                : Colors.green);
-    
+              ? Colors.grey[400]!
+              : ordensNaoEnc > 0
+              ? Colors.red
+              : Colors.green);
+
     return SizedBox(
       width: width,
       child: InkWell(
-        onTap: hasOrdens ? () => _mostrarOrdens(task) : null,
+        // Abrir sempre; o modal carrega e mostra vazio se necessário
+        onTap: () => _mostrarOrdens(task),
         child: Container(
-          padding: EdgeInsets.symmetric(horizontal: isMobile ? 3 : 6, vertical: isMobile ? 4 : 8),
+          padding: EdgeInsets.symmetric(
+            horizontal: isMobile ? 3 : 6,
+            vertical: isMobile ? 4 : 8,
+          ),
           decoration: BoxDecoration(
             border: Border(
-              right: BorderSide(
-                color: Colors.grey[300]!,
-                width: 0.5,
-              ),
+              right: BorderSide(color: Colors.grey[300]!, width: 0.5),
             ),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                Icons.list_alt,
-                size: isMobile ? 12 : 14,
-                color: ordemColor,
-              ),
+              Icon(Icons.list_alt, size: isMobile ? 12 : 14, color: ordemColor),
               if (hasOrdens)
                 Padding(
                   padding: EdgeInsets.only(left: isMobile ? 2 : 4),
@@ -1629,7 +1873,9 @@ class _TaskTableState extends State<TaskTable> {
                     '$ordensCount',
                     style: TextStyle(
                       fontSize: isMobile ? 9 : 10,
-                      color: statusBackgroundColor != Colors.white ? Colors.grey[800] : Colors.black87,
+                      color: statusBackgroundColor != Colors.white
+                          ? Colors.grey[800]
+                          : Colors.black87,
                     ),
                   ),
                 ),
@@ -1640,7 +1886,12 @@ class _TaskTableState extends State<TaskTable> {
     );
   }
 
-  Widget _buildATCell(Task task, double width, bool isMobile, Color statusBackgroundColor) {
+  Widget _buildATCell(
+    Task task,
+    double width,
+    bool isMobile,
+    Color statusBackgroundColor,
+  ) {
     final atsCount = _atsCount[task.id] ?? 0;
     final hasATs = atsCount > 0;
     final isConc = task.status.toUpperCase().trim() == 'CONC';
@@ -1648,33 +1899,30 @@ class _TaskTableState extends State<TaskTable> {
     final atColor = !isConc
         ? (hasATs ? Colors.black87 : Colors.grey[400]!)
         : (!hasATs
-            ? Colors.grey[400]!
-            : atsNaoEnc > 0
-                ? Colors.red
-                : Colors.green);
-    
+              ? Colors.grey[400]!
+              : atsNaoEnc > 0
+              ? Colors.red
+              : Colors.green);
+
     return SizedBox(
       width: width,
       child: InkWell(
-        onTap: hasATs ? () => _mostrarATs(task) : null,
+        // Abrir sempre; o modal carrega e mostra vazio se necessário
+        onTap: () => _mostrarATs(task),
         child: Container(
-          padding: EdgeInsets.symmetric(horizontal: isMobile ? 3 : 6, vertical: isMobile ? 4 : 8),
+          padding: EdgeInsets.symmetric(
+            horizontal: isMobile ? 3 : 6,
+            vertical: isMobile ? 4 : 8,
+          ),
           decoration: BoxDecoration(
             border: Border(
-              right: BorderSide(
-                color: Colors.grey[300]!,
-                width: 0.5,
-              ),
+              right: BorderSide(color: Colors.grey[300]!, width: 0.5),
             ),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                Icons.assignment,
-                size: isMobile ? 12 : 14,
-                color: atColor,
-              ),
+              Icon(Icons.assignment, size: isMobile ? 12 : 14, color: atColor),
               if (hasATs)
                 Padding(
                   padding: EdgeInsets.only(left: isMobile ? 2 : 4),
@@ -1682,7 +1930,9 @@ class _TaskTableState extends State<TaskTable> {
                     '$atsCount',
                     style: TextStyle(
                       fontSize: isMobile ? 9 : 10,
-                      color: statusBackgroundColor != Colors.white ? Colors.grey[800] : Colors.black87,
+                      color: statusBackgroundColor != Colors.white
+                          ? Colors.grey[800]
+                          : Colors.black87,
                     ),
                   ),
                 ),
@@ -1693,7 +1943,12 @@ class _TaskTableState extends State<TaskTable> {
     );
   }
 
-  Widget _buildSICell(Task task, double width, bool isMobile, Color statusBackgroundColor) {
+  Widget _buildSICell(
+    Task task,
+    double width,
+    bool isMobile,
+    Color statusBackgroundColor,
+  ) {
     final sisCount = _sisCount[task.id] ?? 0;
     final hasSIs = sisCount > 0;
     final hasSiField = task.si.isNotEmpty && task.si != '-N/A-';
@@ -1702,21 +1957,22 @@ class _TaskTableState extends State<TaskTable> {
     final iconColor = needsSi && !hasAnySi
         ? Colors.redAccent
         : hasAnySi
-            ? Colors.teal
-            : Colors.grey[400];
-    
+        ? Colors.teal
+        : Colors.grey[400];
+
     return SizedBox(
       width: width,
       child: InkWell(
-        onTap: hasSIs ? () => _mostrarSIs(task) : null,
+        // Abrir sempre; o modal carrega e mostra vazio se necessário
+        onTap: () => _mostrarSIs(task),
         child: Container(
-          padding: EdgeInsets.symmetric(horizontal: isMobile ? 3 : 6, vertical: isMobile ? 4 : 8),
+          padding: EdgeInsets.symmetric(
+            horizontal: isMobile ? 3 : 6,
+            vertical: isMobile ? 4 : 8,
+          ),
           decoration: BoxDecoration(
             border: Border(
-              right: BorderSide(
-                color: Colors.grey[300]!,
-                width: 0.5,
-              ),
+              right: BorderSide(color: Colors.grey[300]!, width: 0.5),
             ),
           ),
           child: Row(
@@ -1734,7 +1990,9 @@ class _TaskTableState extends State<TaskTable> {
                     '$sisCount',
                     style: TextStyle(
                       fontSize: isMobile ? 9 : 10,
-                      color: statusBackgroundColor != Colors.white ? Colors.grey[800] : Colors.black87,
+                      color: statusBackgroundColor != Colors.white
+                          ? Colors.grey[800]
+                          : Colors.black87,
                     ),
                   ),
                 ),
@@ -1749,20 +2007,20 @@ class _TaskTableState extends State<TaskTable> {
     try {
       final frotaNome = _frotasNomes[task.id] ?? task.frota;
       if (!mounted) return;
-      
+
       if (frotaNome.isEmpty || frotaNome == '-N/A-') {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Nenhuma frota vinculada')),
         );
         return;
       }
-      
+
       _mostrarDialogFrotas(frotaNome, task);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erro ao carregar frota: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Erro ao carregar frota: $e')));
       }
     }
   }
@@ -1771,20 +2029,27 @@ class _TaskTableState extends State<TaskTable> {
     try {
       final notas = await _notaSAPService.getNotasPorTarefa(task.id);
       if (!mounted) return;
-      
+
+      // Atualizar contagem on-demand se necessário
+      if (notas.isNotEmpty) {
+        setState(() {
+          _notasSAPCount[task.id] = notas.length;
+        });
+      }
+
       if (notas.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Nenhuma nota SAP vinculada')),
         );
         return;
       }
-      
+
       _mostrarDialogNotasSAP(notas, task);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erro ao carregar notas: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Erro ao carregar notas: $e')));
       }
     }
   }
@@ -1793,20 +2058,27 @@ class _TaskTableState extends State<TaskTable> {
     try {
       final ordens = await _ordemService.getOrdensPorTarefa(task.id);
       if (!mounted) return;
-      
+
+      // Atualizar contagem on-demand se necessário
+      if (ordens.isNotEmpty) {
+        setState(() {
+          _ordensCount[task.id] = ordens.length;
+        });
+      }
+
       if (ordens.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Nenhuma ordem vinculada')),
         );
         return;
       }
-      
+
       _mostrarDialogOrdens(ordens, task);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erro ao carregar ordens: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Erro ao carregar ordens: $e')));
       }
     }
   }
@@ -1815,20 +2087,27 @@ class _TaskTableState extends State<TaskTable> {
     try {
       final ats = await _atService.getATsPorTarefa(task.id);
       if (!mounted) return;
-      
+
+      // Atualizar contagem on-demand se necessário
+      if (ats.isNotEmpty) {
+        setState(() {
+          _atsCount[task.id] = ats.length;
+        });
+      }
+
       if (ats.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Nenhuma AT vinculada')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Nenhuma AT vinculada')));
         return;
       }
-      
+
       _mostrarDialogATs(ats, task);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erro ao carregar ATs: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Erro ao carregar ATs: $e')));
       }
     }
   }
@@ -1837,22 +2116,96 @@ class _TaskTableState extends State<TaskTable> {
     try {
       final sis = await _siService.getSIsPorTarefa(task.id);
       if (!mounted) return;
-      
+
+      // Atualizar contagem on-demand se necessário
+      if (sis.isNotEmpty) {
+        setState(() {
+          _sisCount[task.id] = sis.length;
+        });
+      }
+
       if (sis.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Nenhuma SI vinculada')),
-        );
+        // Se existir texto de SI na task, mostrar painel simples com o valor
+        if (task.si.isNotEmpty && task.si != '-N/A-') {
+          _mostrarDialogSiTexto(task.si, task);
+        } else {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('Nenhuma SI vinculada')));
+        }
         return;
       }
-      
+
       _mostrarDialogSIs(sis, task);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erro ao carregar SIs: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Erro ao carregar SIs: $e')));
       }
     }
+  }
+
+  void _mostrarDialogSiTexto(String si, Task task) {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Container(
+          width: MediaQuery.of(context).size.width * 0.6,
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.6,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.teal,
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(16),
+                    topRight: Radius.circular(16),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.description, color: Colors.white),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'SI da Tarefa',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.close, color: Colors.white),
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'SI: ',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    Expanded(child: Text(si)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   void _mostrarDialogFrotas(String frotaNome, Task task) {
@@ -1862,7 +2215,9 @@ class _TaskTableState extends State<TaskTable> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: Container(
           width: MediaQuery.of(context).size.width * 0.9,
-          constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.8,
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -1887,7 +2242,11 @@ class _TaskTableState extends State<TaskTable> {
                         color: Colors.white.withOpacity(0.2),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: const Icon(Icons.local_shipping, color: Colors.white, size: 24),
+                      child: const Icon(
+                        Icons.local_shipping,
+                        color: Colors.white,
+                        size: 24,
+                      ),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -1934,7 +2293,11 @@ class _TaskTableState extends State<TaskTable> {
                         ),
                         child: Row(
                           children: [
-                            Icon(Icons.local_shipping, color: Colors.orange[700], size: 32),
+                            Icon(
+                              Icons.local_shipping,
+                              color: Colors.orange[700],
+                              size: 32,
+                            ),
                             const SizedBox(width: 16),
                             Expanded(
                               child: Text(
@@ -1967,7 +2330,9 @@ class _TaskTableState extends State<TaskTable> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: Container(
           width: MediaQuery.of(context).size.width * 0.9,
-          constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.8,
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -1992,7 +2357,11 @@ class _TaskTableState extends State<TaskTable> {
                         color: Colors.white.withOpacity(0.2),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: const Icon(Icons.description, color: Colors.white, size: 24),
+                      child: const Icon(
+                        Icons.description,
+                        color: Colors.white,
+                        size: 24,
+                      ),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -2041,12 +2410,18 @@ class _TaskTableState extends State<TaskTable> {
     );
   }
 
-  Future<void> _copiarParaAreaTransferencia(String texto, String mensagemSucesso) async {
+  Future<void> _copiarParaAreaTransferencia(
+    String texto,
+    String mensagemSucesso,
+  ) async {
     try {
       await Clipboard.setData(ClipboardData(text: texto));
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(mensagemSucesso), duration: const Duration(seconds: 1)),
+        SnackBar(
+          content: Text(mensagemSucesso),
+          duration: const Duration(seconds: 1),
+        ),
       );
     } catch (e) {
       if (!mounted) return;
@@ -2115,7 +2490,8 @@ class _TaskTableState extends State<TaskTable> {
                                 color: Color(0xFF1E3A5F),
                               ),
                             ),
-                            if (nota.descricao != null && nota.descricao!.isNotEmpty) ...[
+                            if (nota.descricao != null &&
+                                nota.descricao!.isNotEmpty) ...[
                               const SizedBox(width: 8),
                               Expanded(
                                 child: Text(
@@ -2133,17 +2509,28 @@ class _TaskTableState extends State<TaskTable> {
                         ),
                       ),
                       IconButton(
-                        icon: const Icon(Icons.visibility, size: 18, color: Colors.purple),
+                        icon: const Icon(
+                          Icons.visibility,
+                          size: 18,
+                          color: Colors.purple,
+                        ),
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(),
                         onPressed: () => _mostrarDetalhesNotaCompleta(nota),
                         tooltip: 'Visualizar detalhes',
                       ),
                       IconButton(
-                        icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
+                        icon: const Icon(
+                          Icons.copy,
+                          size: 18,
+                          color: Colors.blue,
+                        ),
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(),
-                        onPressed: () => _copiarParaAreaTransferencia(nota.nota, 'Nota copiada!'),
+                        onPressed: () => _copiarParaAreaTransferencia(
+                          nota.nota,
+                          'Nota copiada!',
+                        ),
                         tooltip: 'Copiar nota',
                       ),
                     ],
@@ -2154,9 +2541,13 @@ class _TaskTableState extends State<TaskTable> {
                     Row(
                       children: [
                         // Status do usuário
-                        if (nota.statusUsuario != null && nota.statusUsuario!.isNotEmpty)
+                        if (nota.statusUsuario != null &&
+                            nota.statusUsuario!.isNotEmpty)
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
                             decoration: BoxDecoration(
                               color: _getStatusUsuarioColor(nota.statusUsuario),
                               borderRadius: BorderRadius.circular(6),
@@ -2164,7 +2555,9 @@ class _TaskTableState extends State<TaskTable> {
                             child: Text(
                               nota.statusUsuario!,
                               style: TextStyle(
-                                color: _getStatusUsuarioTextColor(nota.statusUsuario),
+                                color: _getStatusUsuarioTextColor(
+                                  nota.statusUsuario,
+                                ),
                                 fontSize: 12,
                                 fontWeight: FontWeight.bold,
                               ),
@@ -2172,10 +2565,14 @@ class _TaskTableState extends State<TaskTable> {
                           ),
                         // Sala
                         if (nota.sala != null && nota.sala!.isNotEmpty) ...[
-                          if (nota.statusUsuario != null && nota.statusUsuario!.isNotEmpty)
+                          if (nota.statusUsuario != null &&
+                              nota.statusUsuario!.isNotEmpty)
                             const SizedBox(width: 8),
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
                             decoration: BoxDecoration(
                               color: Colors.grey[200],
                               borderRadius: BorderRadius.circular(6),
@@ -2183,7 +2580,11 @@ class _TaskTableState extends State<TaskTable> {
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(Icons.room, size: 14, color: Colors.grey[700]),
+                                Icon(
+                                  Icons.room,
+                                  size: 14,
+                                  color: Colors.grey[700],
+                                ),
                                 const SizedBox(width: 4),
                                 Text(
                                   'Sala: ${nota.sala}',
@@ -2198,8 +2599,10 @@ class _TaskTableState extends State<TaskTable> {
                           ),
                         ],
                         // Prazo
-                        if (nota.dataVencimento != null && nota.diasRestantes != null) ...[
-                          if ((nota.statusUsuario != null && nota.statusUsuario!.isNotEmpty) ||
+                        if (nota.dataVencimento != null &&
+                            nota.diasRestantes != null) ...[
+                          if ((nota.statusUsuario != null &&
+                                  nota.statusUsuario!.isNotEmpty) ||
                               (nota.sala != null && nota.sala!.isNotEmpty))
                             const SizedBox(width: 8),
                           _buildPrazoBadgeNota(nota),
@@ -2212,9 +2615,13 @@ class _TaskTableState extends State<TaskTable> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         // Status do usuário
-                        if (nota.statusUsuario != null && nota.statusUsuario!.isNotEmpty)
+                        if (nota.statusUsuario != null &&
+                            nota.statusUsuario!.isNotEmpty)
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
                             decoration: BoxDecoration(
                               color: _getStatusUsuarioColor(nota.statusUsuario),
                               borderRadius: BorderRadius.circular(6),
@@ -2222,7 +2629,9 @@ class _TaskTableState extends State<TaskTable> {
                             child: Text(
                               nota.statusUsuario!,
                               style: TextStyle(
-                                color: _getStatusUsuarioTextColor(nota.statusUsuario),
+                                color: _getStatusUsuarioTextColor(
+                                  nota.statusUsuario,
+                                ),
                                 fontSize: 12,
                                 fontWeight: FontWeight.bold,
                               ),
@@ -2230,10 +2639,14 @@ class _TaskTableState extends State<TaskTable> {
                           ),
                         // Sala
                         if (nota.sala != null && nota.sala!.isNotEmpty) ...[
-                          if (nota.statusUsuario != null && nota.statusUsuario!.isNotEmpty)
+                          if (nota.statusUsuario != null &&
+                              nota.statusUsuario!.isNotEmpty)
                             const SizedBox(height: 6),
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
                             decoration: BoxDecoration(
                               color: Colors.grey[200],
                               borderRadius: BorderRadius.circular(6),
@@ -2241,7 +2654,11 @@ class _TaskTableState extends State<TaskTable> {
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(Icons.room, size: 14, color: Colors.grey[700]),
+                                Icon(
+                                  Icons.room,
+                                  size: 14,
+                                  color: Colors.grey[700],
+                                ),
                                 const SizedBox(width: 4),
                                 Text(
                                   'Sala: ${nota.sala}',
@@ -2256,8 +2673,10 @@ class _TaskTableState extends State<TaskTable> {
                           ),
                         ],
                         // Prazo
-                        if (nota.dataVencimento != null && nota.diasRestantes != null) ...[
-                          if ((nota.statusUsuario != null && nota.statusUsuario!.isNotEmpty) ||
+                        if (nota.dataVencimento != null &&
+                            nota.diasRestantes != null) ...[
+                          if ((nota.statusUsuario != null &&
+                                  nota.statusUsuario!.isNotEmpty) ||
                               (nota.sala != null && nota.sala!.isNotEmpty))
                             const SizedBox(height: 6),
                           _buildPrazoBadgeNota(nota),
@@ -2281,11 +2700,11 @@ class _TaskTableState extends State<TaskTable> {
 
     final diasRestantes = nota.diasRestantes!;
     final dataVencimento = nota.dataVencimento!;
-    
+
     // Determinar cor baseado nos dias restantes
     Color badgeColor;
     Color textColor;
-    
+
     if (diasRestantes <= 0) {
       // Preto: já passou da data ou vence hoje
       badgeColor = Colors.black;
@@ -2313,11 +2732,7 @@ class _TaskTableState extends State<TaskTable> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            Icons.calendar_today,
-            size: 14,
-            color: textColor,
-          ),
+          Icon(Icons.calendar_today, size: 14, color: textColor),
           const SizedBox(width: 4),
           Text(
             _formatDateNota(dataVencimento),
@@ -2336,12 +2751,12 @@ class _TaskTableState extends State<TaskTable> {
             ),
             child: Text(
               diasRestantes < 0
-                  ? '${diasRestantes} dias' // Mostrar valor negativo quando vencido
+                  ? '$diasRestantes dias' // Mostrar valor negativo quando vencido
                   : diasRestantes == 0
-                      ? 'Vence hoje'
-                      : diasRestantes == 1
-                          ? '1 dia'
-                          : '$diasRestantes dias',
+                  ? 'Vence hoje'
+                  : diasRestantes == 1
+                  ? '1 dia'
+                  : '$diasRestantes dias',
               style: const TextStyle(
                 color: Colors.black,
                 fontSize: 10,
@@ -2357,36 +2772,36 @@ class _TaskTableState extends State<TaskTable> {
   // Funções auxiliares para cores baseadas no status de usuário
   Color _getStatusUsuarioColor(String? statusUsuario) {
     if (statusUsuario == null || statusUsuario.isEmpty) return Colors.grey;
-    
+
     final status = statusUsuario.toUpperCase();
-    
+
     // CONC - Verde
     if (status.contains('CONC')) return Colors.green;
-    
+
     // CADU ou CAIM - Cinza
     if (status.contains('CADU') || status.contains('CAIM')) return Colors.grey;
-    
+
     // REGI - Laranja
     if (status.contains('REGI')) return Colors.orange;
-    
+
     // EMAM - Amarelo
     if (status.contains('EMAM')) return Colors.yellow[700] ?? Colors.amber;
-    
+
     // ANLS - Azul
     if (status.contains('ANLS')) return Colors.blue;
-    
+
     // Padrão - Cinza
     return Colors.grey;
   }
 
   Color _getStatusUsuarioTextColor(String? statusUsuario) {
     if (statusUsuario == null || statusUsuario.isEmpty) return Colors.white;
-    
+
     final status = statusUsuario.toUpperCase();
-    
+
     // Para EMAM (amarelo), usar texto preto para melhor contraste
     if (status.contains('EMAM')) return Colors.black;
-    
+
     // Para os outros, usar texto branco
     return Colors.white;
   }
@@ -2398,7 +2813,9 @@ class _TaskTableState extends State<TaskTable> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: Container(
           width: MediaQuery.of(context).size.width * 0.9,
-          constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.8,
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -2423,7 +2840,11 @@ class _TaskTableState extends State<TaskTable> {
                         color: Colors.white.withOpacity(0.2),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: const Icon(Icons.list_alt, color: Colors.white, size: 24),
+                      child: const Icon(
+                        Icons.list_alt,
+                        color: Colors.white,
+                        size: 24,
+                      ),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -2501,14 +2922,18 @@ class _TaskTableState extends State<TaskTable> {
             Expanded(
               child: Text(
                 'Ordem: ${ordem.ordem}',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
               ),
             ),
             IconButton(
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () => _copiarParaAreaTransferencia(ordem.ordem, 'Ordem copiada!'),
+              onPressed: () =>
+                  _copiarParaAreaTransferencia(ordem.ordem, 'Ordem copiada!'),
               tooltip: 'Copiar ordem',
             ),
           ],
@@ -2524,13 +2949,22 @@ class _TaskTableState extends State<TaskTable> {
                 _buildInfoRowModern('Status Sistema', ordem.statusSistema),
                 _buildInfoRowModern('Status Usuário', ordem.statusUsuario),
                 _buildInfoRowModern('Texto Breve', ordem.textoBreve),
-                _buildInfoRowModern('Denominação Local', ordem.denominacaoLocalInstalacao),
-                _buildInfoRowModern('Denominação Objeto', ordem.denominacaoObjeto),
+                _buildInfoRowModern(
+                  'Denominação Local',
+                  ordem.denominacaoLocalInstalacao,
+                ),
+                _buildInfoRowModern(
+                  'Denominação Objeto',
+                  ordem.denominacaoObjeto,
+                ),
                 _buildInfoRowModern('Local Instalação', ordem.localInstalacao),
                 _buildInfoRowModern('Código SI', ordem.codigoSI),
                 _buildInfoRowModern('GPM', ordem.gpm),
                 if (ordem.inicioBase != null)
-                  _buildInfoRowModern('Início Base', _formatDate(ordem.inicioBase!)),
+                  _buildInfoRowModern(
+                    'Início Base',
+                    _formatDate(ordem.inicioBase!),
+                  ),
                 if (ordem.fimBase != null)
                   _buildInfoRowModern('Fim Base', _formatDate(ordem.fimBase!)),
               ],
@@ -2548,7 +2982,9 @@ class _TaskTableState extends State<TaskTable> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: Container(
           width: MediaQuery.of(context).size.width * 0.9,
-          constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.8,
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -2573,7 +3009,11 @@ class _TaskTableState extends State<TaskTable> {
                         color: Colors.white.withOpacity(0.2),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: const Icon(Icons.assignment, color: Colors.white, size: 24),
+                      child: const Icon(
+                        Icons.assignment,
+                        color: Colors.white,
+                        size: 24,
+                      ),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -2651,19 +3091,25 @@ class _TaskTableState extends State<TaskTable> {
             Expanded(
               child: Text(
                 'AT: ${at.autorzTrab}',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
               ),
             ),
             IconButton(
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () => _copiarParaAreaTransferencia(at.autorzTrab, 'AT copiada!'),
+              onPressed: () =>
+                  _copiarParaAreaTransferencia(at.autorzTrab, 'AT copiada!'),
               tooltip: 'Copiar AT',
             ),
           ],
         ),
-        subtitle: at.statusSistema != null ? Text('Status: ${at.statusSistema}') : null,
+        subtitle: at.statusSistema != null
+            ? Text('Status: ${at.statusSistema}')
+            : null,
         children: [
           Padding(
             padding: const EdgeInsets.all(16),
@@ -2679,7 +3125,10 @@ class _TaskTableState extends State<TaskTable> {
                 _buildInfoRowModern('Cen', at.cen),
                 _buildInfoRowModern('SI', at.si),
                 if (at.dataInicio != null)
-                  _buildInfoRowModern('Data Início', _formatDate(at.dataInicio!)),
+                  _buildInfoRowModern(
+                    'Data Início',
+                    _formatDate(at.dataInicio!),
+                  ),
                 if (at.dataFim != null)
                   _buildInfoRowModern('Data Fim', _formatDate(at.dataFim!)),
               ],
@@ -2697,7 +3146,9 @@ class _TaskTableState extends State<TaskTable> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: Container(
           width: MediaQuery.of(context).size.width * 0.9,
-          constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.8,
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -2722,7 +3173,11 @@ class _TaskTableState extends State<TaskTable> {
                         color: Colors.white.withOpacity(0.2),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: const Icon(Icons.description, color: Colors.white, size: 24),
+                      child: const Icon(
+                        Icons.description,
+                        color: Colors.white,
+                        size: 24,
+                      ),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -2800,14 +3255,18 @@ class _TaskTableState extends State<TaskTable> {
             Expanded(
               child: Text(
                 'SI: ${si.solicitacao}',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
               ),
             ),
             IconButton(
               icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () => _copiarParaAreaTransferencia(si.solicitacao, 'SI copiada!'),
+              onPressed: () =>
+                  _copiarParaAreaTransferencia(si.solicitacao, 'SI copiada!'),
               tooltip: 'Copiar SI',
             ),
           ],
@@ -2829,7 +3288,10 @@ class _TaskTableState extends State<TaskTable> {
                 _buildInfoRowModern('Cen', si.cen),
                 _buildInfoRowModern('Atrib AT', si.atribAT),
                 if (si.dataInicio != null)
-                  _buildInfoRowModern('Data Início', _formatDate(si.dataInicio!)),
+                  _buildInfoRowModern(
+                    'Data Início',
+                    _formatDate(si.dataInicio!),
+                  ),
                 if (si.dataFim != null)
                   _buildInfoRowModern('Data Fim', _formatDate(si.dataFim!)),
               ],
@@ -2842,7 +3304,7 @@ class _TaskTableState extends State<TaskTable> {
 
   Widget _buildInfoRowModern(String label, String? value) {
     if (value == null || value.isEmpty) return const SizedBox.shrink();
-    
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Row(
@@ -2868,7 +3330,9 @@ class _TaskTableState extends State<TaskTable> {
                 height: 1.4,
               ),
               maxLines: label == 'Detalhes' ? null : 3,
-              overflow: label == 'Detalhes' ? TextOverflow.visible : TextOverflow.ellipsis,
+              overflow: label == 'Detalhes'
+                  ? TextOverflow.visible
+                  : TextOverflow.ellipsis,
             ),
           ),
         ],
@@ -2883,7 +3347,9 @@ class _TaskTableState extends State<TaskTable> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: Container(
           width: MediaQuery.of(context).size.width * 0.9,
-          constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.85),
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.85,
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -2916,7 +3382,11 @@ class _TaskTableState extends State<TaskTable> {
                         color: Colors.white.withOpacity(0.2),
                         borderRadius: BorderRadius.circular(10),
                       ),
-                      child: const Icon(Icons.description, color: Colors.white, size: 28),
+                      child: const Icon(
+                        Icons.description,
+                        color: Colors.white,
+                        size: 28,
+                      ),
                     ),
                     const SizedBox(width: 16),
                     Expanded(
@@ -2943,12 +3413,23 @@ class _TaskTableState extends State<TaskTable> {
                       ),
                     ),
                     IconButton(
-                      icon: const Icon(Icons.copy, color: Colors.white, size: 20),
-                      onPressed: () => _copiarParaAreaTransferencia(nota.nota, 'Nota copiada!'),
+                      icon: const Icon(
+                        Icons.copy,
+                        color: Colors.white,
+                        size: 20,
+                      ),
+                      onPressed: () => _copiarParaAreaTransferencia(
+                        nota.nota,
+                        'Nota copiada!',
+                      ),
                       tooltip: 'Copiar nota',
                     ),
                     IconButton(
-                      icon: const Icon(Icons.close, color: Colors.white, size: 24),
+                      icon: const Icon(
+                        Icons.close,
+                        color: Colors.white,
+                        size: 24,
+                      ),
                       onPressed: () => Navigator.of(context).pop(),
                       tooltip: 'Fechar',
                     ),
@@ -2969,37 +3450,70 @@ class _TaskTableState extends State<TaskTable> {
                       _buildInfoRowDialog('Status Usuário', nota.statusUsuario),
                       _buildInfoRowDialog('Prioridade', nota.textPrioridade),
                       _buildInfoRowDialog('Ordem', nota.ordem),
-                      _buildInfoRowDialog('Local de Instalação', nota.localInstalacao),
+                      _buildInfoRowDialog(
+                        'Local de Instalação',
+                        nota.localInstalacao,
+                      ),
                       _buildInfoRowDialog('Local', nota.local),
                       _buildInfoRowDialog('Sala', nota.sala),
                       _buildInfoRowDialog('Equipamento', nota.equipamento),
                       _buildInfoRowDialog('Centro', nota.centro),
-                      _buildInfoRowDialog('Centro Trabalho Responsável', nota.centroTrabalhoResponsavel),
+                      _buildInfoRowDialog(
+                        'Centro Trabalho Responsável',
+                        nota.centroTrabalhoResponsavel,
+                      ),
                       _buildInfoRowDialog('Executor', nota.denominacaoExecutor),
                       _buildInfoRowDialog('GPM', nota.gpm),
                       if (nota.criadoEm != null)
-                        _buildInfoRowDialog('Criado em', _formatDateNota(nota.criadoEm!)),
+                        _buildInfoRowDialog(
+                          'Criado em',
+                          _formatDateNota(nota.criadoEm!),
+                        ),
                       if (nota.inicioDesejado != null)
-                        _buildInfoRowDialog('Início Desejado', _formatDateNota(nota.inicioDesejado!)),
+                        _buildInfoRowDialog(
+                          'Início Desejado',
+                          _formatDateNota(nota.inicioDesejado!),
+                        ),
                       if (nota.conclusaoDesejada != null)
-                        _buildInfoRowDialog('Conclusão Desejada', _formatDateNota(nota.conclusaoDesejada!)),
+                        _buildInfoRowDialog(
+                          'Conclusão Desejada',
+                          _formatDateNota(nota.conclusaoDesejada!),
+                        ),
                       if (nota.dataReferencia != null)
-                        _buildInfoRowDialog('Data Referência', _formatDateNota(nota.dataReferencia!)),
+                        _buildInfoRowDialog(
+                          'Data Referência',
+                          _formatDateNota(nota.dataReferencia!),
+                        ),
                       if (nota.inicioAvaria != null)
-                        _buildInfoRowDialog('Início Avaria', _formatDateNota(nota.inicioAvaria!)),
+                        _buildInfoRowDialog(
+                          'Início Avaria',
+                          _formatDateNota(nota.inicioAvaria!),
+                        ),
                       if (nota.fimAvaria != null)
-                        _buildInfoRowDialog('Fim Avaria', _formatDateNota(nota.fimAvaria!)),
+                        _buildInfoRowDialog(
+                          'Fim Avaria',
+                          _formatDateNota(nota.fimAvaria!),
+                        ),
                       if (nota.encerramento != null)
-                        _buildInfoRowDialog('Encerramento', _formatDateNota(nota.encerramento!)),
+                        _buildInfoRowDialog(
+                          'Encerramento',
+                          _formatDateNota(nota.encerramento!),
+                        ),
                       if (nota.modificadoEm != null)
-                        _buildInfoRowDialog('Modificado em', _formatDateNota(nota.modificadoEm!)),
+                        _buildInfoRowDialog(
+                          'Modificado em',
+                          _formatDateNota(nota.modificadoEm!),
+                        ),
                     ],
                   ),
                 ),
               ),
               // Footer
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 16,
+                ),
                 decoration: BoxDecoration(
                   color: Colors.grey[50],
                   borderRadius: const BorderRadius.only(
@@ -3020,7 +3534,10 @@ class _TaskTableState extends State<TaskTable> {
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.grey[200],
                         foregroundColor: Colors.grey[800],
-                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 12,
+                        ),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(8),
                         ),
@@ -3063,7 +3580,9 @@ class _TaskTableState extends State<TaskTable> {
                 height: 1.4,
               ),
               maxLines: label == 'Detalhes' ? null : 3,
-              overflow: label == 'Detalhes' ? TextOverflow.visible : TextOverflow.ellipsis,
+              overflow: label == 'Detalhes'
+                  ? TextOverflow.visible
+                  : TextOverflow.ellipsis,
             ),
           ),
         ],
@@ -3083,21 +3602,21 @@ class _TaskTableState extends State<TaskTable> {
     try {
       // Buscar ou criar grupo de chat para a tarefa
       GrupoChat? grupoChat;
-      
+
       // Primeiro, tentar obter grupo existente
       grupoChat = await _chatService.obterGrupoPorTarefaId(task.id);
-      
+
       // Se não existir, criar um novo grupo
       if (grupoChat == null) {
         // Obter ou criar comunidade baseada na divisão e segmento da tarefa
         if (task.divisaoId != null && task.segmentoId != null) {
-          final divisaoNome = task.divisao.isNotEmpty 
-              ? task.divisao 
+          final divisaoNome = task.divisao.isNotEmpty
+              ? task.divisao
               : 'Divisão';
-          final segmentoNome = task.segmento.isNotEmpty 
-              ? task.segmento 
+          final segmentoNome = task.segmento.isNotEmpty
+              ? task.segmento
               : 'Segmento';
-          
+
           final comunidade = await _chatService.criarOuObterComunidade(
             task.regionalId ?? '',
             task.regional,
@@ -3106,7 +3625,7 @@ class _TaskTableState extends State<TaskTable> {
             task.segmentoId!,
             segmentoNome,
           );
-          
+
           if (comunidade.id != null) {
             grupoChat = await _chatService.criarOuObterGrupo(
               task.id,
@@ -3119,7 +3638,9 @@ class _TaskTableState extends State<TaskTable> {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
-                content: Text('Não é possível criar chat: tarefa precisa ter divisão e segmento configurados.'),
+                content: Text(
+                  'Não é possível criar chat: tarefa precisa ter divisão e segmento configurados.',
+                ),
                 backgroundColor: Colors.orange,
               ),
             );
@@ -3127,14 +3648,14 @@ class _TaskTableState extends State<TaskTable> {
           return;
         }
       }
-      
+
       // Abrir tela de chat em uma nova rota
       if (mounted && grupoChat != null && grupoChat.id != null) {
         Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (context) => ChatScreen(
-              grupoId: grupoChat!.id!,
-              onBack: () => Navigator.of(context).pop(),
+            builder: (context) => ChatView(
+              initialGrupoId: grupoChat!.id!,
+              initialComunidadeId: grupoChat.comunidadeId,
             ),
             fullscreenDialog: true,
           ),
@@ -3167,14 +3688,12 @@ class _TaskTableState extends State<TaskTable> {
     FontWeight? fontWeight,
   }) {
     final cellWidget = Container(
-      padding: EdgeInsets.symmetric(horizontal: isMobile ? 3 : 6, vertical: isMobile ? 4 : 8),
+      padding: EdgeInsets.symmetric(
+        horizontal: isMobile ? 3 : 6,
+        vertical: isMobile ? 4 : 8,
+      ),
       decoration: BoxDecoration(
-        border: Border(
-          right: BorderSide(
-            color: Colors.grey[300]!,
-            width: 0.5,
-          ),
-        ),
+        border: Border(right: BorderSide(color: Colors.grey[300]!, width: 0.5)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -3193,7 +3712,7 @@ class _TaskTableState extends State<TaskTable> {
               text,
               style: TextStyle(
                 fontSize: isMobile ? 9 : 10,
-                color: hasColoredBackground 
+                color: hasColoredBackground
                     ? (isSubtask ? Colors.grey[700] : Colors.grey[800])
                     : (isSubtask ? Colors.black87 : Colors.black87),
                 fontStyle: isSubtask ? FontStyle.italic : FontStyle.normal,

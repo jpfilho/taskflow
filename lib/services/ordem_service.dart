@@ -53,7 +53,7 @@ class OrdemService {
         // E contém pipes (delimitadores)
         if (linha.isNotEmpty && 
             linha.contains('|') &&
-            !linha.replaceAll('|', '').replaceAll('-', '').replaceAll(' ', '').replaceAll('_', '').isEmpty) {
+            linha.replaceAll('|', '').replaceAll('-', '').replaceAll(' ', '').replaceAll('_', '').isNotEmpty) {
           break; // Encontrou a primeira linha de dados
         }
         linhaInicioDados++;

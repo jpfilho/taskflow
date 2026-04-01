@@ -20,7 +20,7 @@ class DemandAttachment {
   });
 
   factory DemandAttachment.fromMap(Map<String, dynamic> map) {
-    DateTime? _dt(dynamic v) => v == null ? null : DateTime.parse(v as String);
+    DateTime? dt(dynamic v) => v == null ? null : DateTime.parse(v as String);
     return DemandAttachment(
       id: map['id'] as String,
       demandaId: map['demanda_id'] as String,
@@ -28,7 +28,7 @@ class DemandAttachment {
       nome: map['nome'] as String?,
       tamanhoBytes: map['tamanho_bytes'] as int?,
       contentType: map['content_type'] as String?,
-      criadoEm: _dt(map['criado_em']),
+      criadoEm: dt(map['criado_em']),
       criadoPor: map['criado_por'] as String?,
     );
   }

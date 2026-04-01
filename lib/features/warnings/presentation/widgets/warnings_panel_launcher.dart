@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../data/models/task_warning.dart';
 import 'warnings_detail_panel.dart';
+import '../../../../models/task.dart';
 
 /// Abre o painel de alertas: drawer lateral no desktop, bottom sheet no mobile.
 /// Usa addPostFrameCallback para evitar assertion no MouseTracker ao abrir durante evento de pointer.
@@ -10,6 +11,10 @@ void showWarningsPanel({
   required BuildContext context,
   required String taskTarefaLabel,
   required List<TaskWarning> warnings,
+  // Para enriquecer conflitos (W3) com os mesmos dados do Gantt
+  // passamos a tarefa atual e a lista completa de tarefas
+  Task? task,
+  List<Task>? allTasks,
   VoidCallback? onUpdateStatus,
   VoidCallback? onAdjustDates,
   VoidCallback? onSnooze,
@@ -27,6 +32,8 @@ void showWarningsPanel({
     final panel = WarningsDetailPanel(
       taskTarefaLabel: taskTarefaLabel,
       warnings: warnings,
+      task: task,
+      allTasks: allTasks,
       onClose: () => Navigator.of(context).pop(),
       onUpdateStatus: onUpdateStatus,
       onAdjustDates: onAdjustDates,
@@ -59,19 +66,24 @@ void showWarningsPanel({
           alignment: Alignment.centerRight,
           child: Material(
             elevation: 8,
-            borderRadius: const BorderRadius.horizontal(left: Radius.circular(12)),
+            borderRadius: const BorderRadius.horizontal(
+              left: Radius.circular(12),
+            ),
             child: Container(
               width: 448,
-              constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.85),
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(context).size.height * 0.85,
+              ),
               child: panel,
             ),
           ),
         ),
         transitionBuilder: (_, animation, __, child) {
           return SlideTransition(
-            position: Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero).animate(
-              CurvedAnimation(parent: animation, curve: Curves.easeOut),
-            ),
+            position: Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero)
+                .animate(
+                  CurvedAnimation(parent: animation, curve: Curves.easeOut),
+                ),
             child: child,
           );
         },

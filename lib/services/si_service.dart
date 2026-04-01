@@ -45,7 +45,7 @@ class SIService {
         final linha = linhas[linhaInicioDados].trim();
         if (linha.isNotEmpty && 
             linha.contains('|') &&
-            !linha.replaceAll('|', '').replaceAll('-', '').replaceAll(' ', '').replaceAll('_', '').isEmpty) {
+            linha.replaceAll('|', '').replaceAll('-', '').replaceAll(' ', '').replaceAll('_', '').isNotEmpty) {
           break;
         }
         linhaInicioDados++;
@@ -614,7 +614,6 @@ class SIService {
       // Log removido para evitar problemas de encoding UTF-8
 
       if ((response as List).isEmpty) {
-        print('⚠️ getSIsPorTarefa - Nenhuma SI encontrada para taskId: $taskId');
         return [];
       }
 
@@ -711,7 +710,7 @@ class SIService {
               ? DateTime.parse(item['created_at'])
               : null,
           'si': SI.fromMap(item['sis'] as Map<String, dynamic>),
-          'tarefa': item['tasks'] != null ? item['tasks'] : null,
+          'tarefa': item['tasks'],
         };
       }).toList();
     } catch (e) {

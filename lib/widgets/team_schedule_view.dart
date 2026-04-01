@@ -85,10 +85,18 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
   final ScrollController _tableVerticalScrollController = ScrollController();
   final ScrollController _ganttVerticalScrollController = ScrollController();
   final ScrollController _ganttHorizontalScrollController = ScrollController();
-  final double _rowHeight = 28.0;
+  final double _rowHeight = 30.0;
   bool _isScrolling = false;
   bool _showSegmentTexts = true; // exibe textos por padrão
   bool _showOnlyLocalText = true; // padrão: mostrar só local; botão alterna para local+tarefa
+  // Controle de verbosidade de logs desta tela (apenas em debug)
+  final bool _verboseLogs = false;
+  void _v(Object message) {
+    if (kDebugMode && _verboseLogs) {
+      // ignore: avoid_print
+      print(message);
+    }
+  }
   
   // Variáveis para tipos de atividade e cores
   final TipoAtividadeService _tipoAtividadeService = TipoAtividadeService();
@@ -631,6 +639,17 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
     try {
       final executorIds = _executores.map((e) => e.id).toList();
       print('⏱ [TeamScheduleView] Buscando execuções | executores=${executorIds.length} | período=${widget.startDate.toString().substring(0, 10)} até ${widget.endDate.toString().substring(0, 10)}');
+
+      // Pré-computar chaves normalizadas por executor (nome, nomeCompleto, login, matrícula)
+      final Map<String, Set<String>> execKeySetById = {
+        for (final e in _executores)
+          e.id: ({
+            _normalizeText(e.nome),
+            if (e.nomeCompleto != null) _normalizeText(e.nomeCompleto!),
+            if (e.login != null) _normalizeText(e.login!),
+            if (e.matricula != null) _normalizeText(e.matricula!),
+          }..removeWhere((v) => v.isEmpty))
+      };
       
       final querySw = Stopwatch()..start();
       final rows = await widget.taskService.getExecucoesDia(
@@ -645,17 +664,10 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
       var conflictDaysByExecutor = <String, Set<DateTime>>{};
       // Helpers para checar vínculo do executor com a tarefa e coletar segmentos não-EXECUÇÃO
       bool matchesExecutor(Executor executor, {String? executorId, String? executorNome}) {
-        if (executorId != null && executorId.isNotEmpty && executorId == executor.id) {
-          return true;
-        }
-        final keys = <String>{
-          _normalizeText(executor.nome),
-          if (executor.nomeCompleto != null) _normalizeText(executor.nomeCompleto!),
-          if (executor.login != null) _normalizeText(executor.login!),
-          if (executor.matricula != null) _normalizeText(executor.matricula!),
-        }..removeWhere((e) => e.isEmpty);
+        if (executorId != null && executorId.isNotEmpty && executorId == executor.id) return true;
         if (executorNome != null && executorNome.isNotEmpty) {
-          if (keys.contains(_normalizeText(executorNome))) return true;
+          final keys = execKeySetById[executor.id] ?? const {};
+          return keys.contains(_normalizeText(executorNome));
         }
         return false;
       }
@@ -664,13 +676,8 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
         // Por ID
         if (task.executorIds.any((id) => id.isNotEmpty && id == executor.id)) return true;
 
-        // Por nomes/textos livres
-        final keys = <String>{
-          _normalizeText(executor.nome),
-          if (executor.nomeCompleto != null) _normalizeText(executor.nomeCompleto!),
-          if (executor.login != null) _normalizeText(executor.login!),
-          if (executor.matricula != null) _normalizeText(executor.matricula!),
-        }..removeWhere((e) => e.isEmpty);
+        // Por nomes/textos livres (usar chaves pré-computadas)
+        final keys = execKeySetById[executor.id] ?? const {};
 
         for (final nome in task.executores) {
           if (nome.isNotEmpty && keys.contains(_normalizeText(nome))) return true;
@@ -682,15 +689,11 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
         }
         if (task.equipeExecutores != null) {
           for (final ee in task.equipeExecutores!) {
-            if (ee.executorNome.isNotEmpty && keys.contains(_normalizeText(ee.executorNome))) {
-              return true;
-            }
+            if (ee.executorNome.isNotEmpty && keys.contains(_normalizeText(ee.executorNome))) return true;
           }
         }
         for (final ep in task.executorPeriods) {
-          if (matchesExecutor(executor, executorId: ep.executorId, executorNome: ep.executorNome)) {
-            return true;
-          }
+          if (matchesExecutor(executor, executorId: ep.executorId, executorNome: ep.executorNome)) return true;
         }
         return false;
       }
@@ -705,10 +708,10 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
         final Set<String> segmentosJaIncluidos = {};
         
         // 1. Buscar em executorPeriods (períodos específicos do executor)
-        print('   🔍 Buscando em executorPeriods (${task.executorPeriods.length} períodos por executor)...');
+        _v('   🔍 Buscando em executorPeriods (${task.executorPeriods.length} períodos por executor)...');
         for (final ep in task.executorPeriods) {
           if (matchesExecutor(executor, executorId: ep.executorId, executorNome: ep.executorNome)) {
-            print('     ✅ Período encontrado para executor ${executor.nome}');
+            _v('     ✅ Período encontrado para executor ${executor.nome}');
             for (final seg in ep.periods) {
               final tipo = (seg.tipoPeriodo ?? '').toUpperCase();
               if (tipo != 'EXECUCAO' && tipo.isNotEmpty) {
@@ -716,7 +719,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                 if (!segmentosJaIncluidos.contains(key)) {
                   allNonExecSegments.add(seg);
                   segmentosJaIncluidos.add(key);
-                  print('       ✅ Segmento $tipo: ${seg.dataInicio} até ${seg.dataFim}');
+                  _v('       ✅ Segmento $tipo: ${seg.dataInicio} até ${seg.dataFim}');
                 }
               }
             }
@@ -725,7 +728,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
         
         // 2. Buscar em ganttSegments (períodos gerais da tarefa)
         // SEMPRE incluir segmentos gerais, mesmo que já existam períodos específicos
-        print('   🔍 Buscando em ganttSegments (total: ${task.ganttSegments.length})...');
+        _v('   🔍 Buscando em ganttSegments (total: ${task.ganttSegments.length})...');
         for (final seg in task.ganttSegments) {
           final tipo = (seg.tipoPeriodo ?? '').toUpperCase();
           if (tipo != 'EXECUCAO' && tipo.isNotEmpty) {
@@ -733,16 +736,16 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
             if (!segmentosJaIncluidos.contains(key)) {
               allNonExecSegments.add(seg);
               segmentosJaIncluidos.add(key);
-              print('     ✅ Segmento $tipo: ${seg.dataInicio} até ${seg.dataFim}');
+              _v('     ✅ Segmento $tipo: ${seg.dataInicio} até ${seg.dataFim}');
             }
           }
         }
         
         if (allNonExecSegments.isEmpty) {
-          print('   ⚠️ Nenhum segmento não-EXECUÇÃO encontrado');
+          _v('   ⚠️ Nenhum segmento não-EXECUÇÃO encontrado');
           return [];
         } else {
-          print('   ✅ Total de ${allNonExecSegments.length} segmentos não-EXECUÇÃO encontrados');
+          _v('   ✅ Total de ${allNonExecSegments.length} segmentos não-EXECUÇÃO encontrados');
         }
         
         // Normalizar deslocamento: apenas dia de ida (início) e dia de volta (fim)
@@ -1063,7 +1066,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
         ));
       }
       processSw.stop();
-      print('⏱ [TeamScheduleView] Processamento de executores concluído em ${processSw.elapsedMilliseconds}ms | executores=${executorCount} | tarefas=${totalTasksProcessed}');
+      print('⏱ [TeamScheduleView] Processamento de executores concluído em ${processSw.elapsedMilliseconds}ms | executores=$executorCount | tarefas=$totalTasksProcessed');
 
       final setStateSw = Stopwatch()..start();
       setState(() {
@@ -1201,7 +1204,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
         localText.isNotEmpty ? localText : taskText,
         style: TextStyle(
           color: textColor,
-          fontSize: fontSize.clamp(8.0, 10.0),
+          fontSize: fontSize.clamp(9.0, 10.0),
           fontWeight: FontWeight.w600,
           shadows: [
             Shadow(
@@ -1229,7 +1232,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
               localText,
               style: TextStyle(
                 color: textColor,
-                fontSize: fontSize.clamp(8.0, 10.0),
+                fontSize: fontSize.clamp(9.0, 10.0),
                 fontWeight: FontWeight.w600,
                 shadows: [
                   Shadow(
@@ -1250,7 +1253,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
               taskText,
               style: TextStyle(
                 color: textColor,
-                fontSize: fontSize.clamp(8.0, 10.0),
+                fontSize: fontSize.clamp(9.0, 10.0),
                 fontWeight: FontWeight.w500,
                 shadows: [
                   Shadow(
@@ -1284,14 +1287,13 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
   }
   
   double _getOptimalFontSize(double barWidth) {
-    // Tamanho mínimo: 7px, máximo: 10px (ajustado para altura reduzida)
-    // Ajustar baseado na largura da barra
+    // Tamanho mínimo elevado para melhor legibilidade; máximo mantém 10px (clamp aplicado no uso)
     if (barWidth < 30) {
-      return 7.0;
-    } else if (barWidth < 60) {
-      return 8.0;
-    } else if (barWidth < 100) {
       return 9.0;
+    } else if (barWidth < 60) {
+      return 9.5;
+    } else if (barWidth < 100) {
+      return 10.0;
     } else {
       return 10.0;
     }
@@ -1392,7 +1394,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
 
   Widget _buildMobileTabletView(List<DateTime> days) {
     // Calcular largura mínima dos dias (mínimo 30px para legibilidade)
-    final minDayWidth = 30.0;
+    final minDayWidth = 32.0;
     final totalGanttWidth = days.length * minDayWidth;
     // Largura da tabela: DIVISÃO(100) + EMPRESA(100) + FUNÇÃO(100) + MATRÍCULA(100) + TAREFAS(80) + NOME(150) = 630px
     // Adicionar margem para garantir que todas as colunas sejam visíveis
@@ -1565,7 +1567,16 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                       left: 0,
                       right: 0,
                       bottom: 0,
-                      child: _buildExecutorTableRow(row, index),
+                      child: _ExecutorTableRow(
+                        row: row,
+                        hasConflict: _hasConflictForExecutor(row.executor.id),
+                        buildCell: (text, width, {textAlign, hasConflict = false}) =>
+                            _buildCell(text, width, textAlign: textAlign, hasConflict: hasConflict),
+                        buildTasksCell: (taskCount, r, width, {hasConflict = false}) =>
+                            _buildTasksCell(taskCount, r, width, hasConflict: hasConflict),
+                        buildExecutorNameCell: (executor, width, {hasConflict = false}) =>
+                            _buildExecutorNameCell(executor, width, hasConflict: hasConflict),
+                      ),
                     ),
                   ],
                 );
@@ -1601,6 +1612,8 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
       ),
     );
   }
+
+// (movido para final do arquivo)
 
   Widget _buildGanttView(List<DateTime> days, double dayWidth) {
     final isCompact = Responsive.isMobile(context) || Responsive.isTablet(context);
@@ -3132,7 +3145,7 @@ class _DraggableExecutorSegmentState extends State<_DraggableExecutorSegment> {
             newEndDate.isAfter(widget.days.last.add(const Duration(days: 1)))) {
           return;
         }
-        print('🔄 MOVE: ${_originalStartDate} -> ${newStartDate}, ${_originalEndDate} -> ${newEndDate} (duração mantida: ${duration.inDays} dias)');
+        print('🔄 MOVE: $_originalStartDate -> $newStartDate, $_originalEndDate -> $newEndDate (duração mantida: ${duration.inDays} dias)');
         break;
       case _ExecutorDragMode.resizeStart:
         // Redimensionar pela borda esquerda: APENAS a data de início muda
@@ -3147,7 +3160,7 @@ class _DraggableExecutorSegmentState extends State<_DraggableExecutorSegment> {
         }
         // CRÍTICO: Não alterar newEndDate ao redimensionar pela esquerda
         newEndDate = _originalEndDate;
-        print('🔧 RESIZE_START: início ${_originalStartDate} -> ${newStartDate}, fim mantido: ${_originalEndDate}');
+        print('🔧 RESIZE_START: início $_originalStartDate -> $newStartDate, fim mantido: $_originalEndDate');
         break;
       case _ExecutorDragMode.resizeEnd:
         // Redimensionar pela borda direita: APENAS a data de fim muda
@@ -3163,7 +3176,7 @@ class _DraggableExecutorSegmentState extends State<_DraggableExecutorSegment> {
         }
         // CRÍTICO: Não alterar newStartDate ao redimensionar pela direita
         newStartDate = _originalStartDate;
-        print('🔧 RESIZE_END: início mantido: ${_originalStartDate}, fim ${_originalEndDate} -> ${newEndDate}');
+        print('🔧 RESIZE_END: início mantido: $_originalStartDate, fim $_originalEndDate -> $newEndDate');
         break;
     }
 
@@ -3179,8 +3192,8 @@ class _DraggableExecutorSegmentState extends State<_DraggableExecutorSegment> {
       print('   - ExecutorPeriod: ${widget.executorPeriod != null}');
       print('   - ExecutorId: ${widget.executorId}');
       print('   - SegmentIndex: ${widget.segmentIndex}');
-      print('   - Data início: ${_currentStartDate}');
-      print('   - Data fim: ${_currentEndDate}');
+      print('   - Data início: $_currentStartDate');
+      print('   - Data fim: $_currentEndDate');
       
       Task updatedTask;
       
@@ -3283,8 +3296,8 @@ class _DraggableExecutorSegmentState extends State<_DraggableExecutorSegment> {
       // que por sua vez recarrega as tarefas do banco
     } else {
       print('⚠️ _onPanEnd: Não salvou - dados incompletos');
-      print('   - _currentStartDate: ${_currentStartDate}');
-      print('   - _currentEndDate: ${_currentEndDate}');
+      print('   - _currentStartDate: $_currentStartDate');
+      print('   - _currentEndDate: $_currentEndDate');
       print('   - taskService: ${widget.taskService != null}');
     }
 
@@ -4320,5 +4333,45 @@ class _ExecutorDetailsModal extends StatelessWidget {
 
   String _formatDate(DateTime date) {
     return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
+  }
+}
+
+// Subwidget: Linha da tabela de executores (reduz rebuild e isola layout)
+class _ExecutorTableRow extends StatelessWidget {
+  final ExecutorTaskRow row;
+  final bool hasConflict;
+  final Widget Function(String, double, {TextAlign? textAlign, bool hasConflict}) buildCell;
+  final Widget Function(int, ExecutorTaskRow, double, {bool hasConflict}) buildTasksCell;
+  final Widget Function(Executor, double, {bool hasConflict}) buildExecutorNameCell;
+
+  const _ExecutorTableRow({
+    required this.row,
+    required this.hasConflict,
+    required this.buildCell,
+    required this.buildTasksCell,
+    required this.buildExecutorNameCell,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final executor = row.executor;
+    return Container(
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: Colors.grey[200]!)),
+        color: hasConflict
+            ? Colors.red[100]
+            : (row.tasks.isNotEmpty ? Colors.white : Colors.grey[50]),
+      ),
+      child: Row(
+        children: [
+          buildCell(executor.divisao ?? '-', 100, hasConflict: hasConflict),
+          buildCell(executor.empresa ?? '-', 100, hasConflict: hasConflict),
+          buildCell(executor.funcao ?? 'EXECUTOR', 100, hasConflict: hasConflict),
+          buildCell(executor.matricula ?? '-', 100, hasConflict: hasConflict),
+          buildTasksCell(row.tasks.length, row, 80, hasConflict: hasConflict),
+          buildExecutorNameCell(executor, 150, hasConflict: hasConflict),
+        ],
+      ),
+    );
   }
 }

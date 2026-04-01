@@ -272,7 +272,7 @@ class _GtdSomedayTabState extends State<GtdSomedayTab> {
                                                       ),
                                                       const SizedBox(height: 12),
                                                       DropdownButtonFormField<String?>(
-                                                        value: selectedPriority,
+                                                        initialValue: selectedPriority,
                                                         decoration: const InputDecoration(
                                                           labelText: 'Prioridade',
                                                           border: OutlineInputBorder(),

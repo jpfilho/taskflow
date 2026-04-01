@@ -103,7 +103,7 @@ class TelegramService {
           .eq('active', true);
 
       print('🔍 [Telegram] Resposta da query: $response');
-      final hasSub = response != null && (response as List).isNotEmpty;
+      final hasSub = (response as List).isNotEmpty;
       print('🔍 [Telegram] Subscription encontrada: $hasSub (${(response as List).length} subscriptions)');
       
       return hasSub;

@@ -50,7 +50,7 @@ class Versao {
           ? (dataPrevistaLancamento!.millisecondsSinceEpoch)
           : null,
       'data_lancamento':
-          dataLancamento != null ? dataLancamento!.millisecondsSinceEpoch : null,
+          dataLancamento?.millisecondsSinceEpoch,
       'ordem': ordem,
       'created_at': createdAt?.millisecondsSinceEpoch,
       'updated_at': updatedAt?.millisecondsSinceEpoch,

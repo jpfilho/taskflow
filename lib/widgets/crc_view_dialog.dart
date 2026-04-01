@@ -166,7 +166,7 @@ class _CRCViewDialogState extends State<CRCViewDialog> {
     final isMobile = MediaQuery.of(context).size.width < 600;
     
     return Dialog(
-      child: Container(
+      child: SizedBox(
         width: isMobile ? double.infinity : 900,
         height: MediaQuery.of(context).size.height * 0.9,
         child: Column(

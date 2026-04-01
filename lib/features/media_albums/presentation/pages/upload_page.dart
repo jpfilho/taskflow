@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../../application/controllers/upload_controller.dart';
@@ -1318,7 +1317,7 @@ class _UploadPageState extends State<UploadPage> {
     return Stack(
       children: [
         DropdownButtonFormField<T>(
-          value: value,
+          initialValue: value,
           items: items,
           onChanged: onChanged,
           style: TextStyle(

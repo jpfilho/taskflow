@@ -1,6 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/foundation.dart';
-import 'dart:typed_data';
 import '../../../../config/supabase_config.dart';
 import '../../../../services/auth_service_simples.dart';
 import '../../util/path_builder.dart';
@@ -128,7 +127,7 @@ class SupabaseMediaRepository {
           .select()
           .single();
 
-      return Segment.fromMap(response as Map<String, dynamic>);
+      return Segment.fromMap(response);
     } catch (e) {
       throw Exception('Erro ao criar segmento: $e');
     }
@@ -408,7 +407,7 @@ class SupabaseMediaRepository {
           .upsert(data)
           .select()
           .single();
-      return Room.fromMap(response as Map<String, dynamic>);
+      return Room.fromMap(response);
     } catch (e, stackTrace) {
       debugPrint('❌ Erro ao criar sala: $e');
       debugPrint('   Stack trace: $stackTrace');
@@ -472,6 +471,7 @@ class SupabaseMediaRepository {
     int pageSize = 20,
     String? searchQuery,
     String? segmentId,
+    String? localId,
     String? equipmentId,
     List<String>? equipmentIds,
     String? roomId,
@@ -494,6 +494,10 @@ class SupabaseMediaRepository {
 
       if (segmentId != null) {
         queryBuilder = queryBuilder.eq('segment_id', segmentId);
+      }
+
+      if (localId != null) {
+        queryBuilder = queryBuilder.eq('local_id', localId);
       }
 
       if (equipmentIds != null && equipmentIds.isNotEmpty) {
@@ -781,7 +785,7 @@ class SupabaseMediaRepository {
               .select()
               .inFilter('id', statusAlbumIds.toList());
           for (final status in statusAlbums) {
-            statusAlbumMap[status['id'] as String] = status as Map<String, dynamic>;
+            statusAlbumMap[status['id'] as String] = status;
           }
         } catch (e) {
           debugPrint('⚠️ Erro ao buscar status_albums: $e');
@@ -858,7 +862,7 @@ class SupabaseMediaRepository {
           .eq('id', id)
           .single();
 
-      var image = MediaImage.fromMap(response as Map<String, dynamic>);
+      var image = MediaImage.fromMap(response);
 
       // Buscar status_album se existir
       StatusAlbum? statusAlbumForImage;
@@ -870,7 +874,7 @@ class SupabaseMediaRepository {
               .eq('id', image.statusAlbumId!)
               .maybeSingle();
           if (statusResponse != null) {
-            statusAlbumForImage = StatusAlbum.fromMap(statusResponse as Map<String, dynamic>);
+            statusAlbumForImage = StatusAlbum.fromMap(statusResponse);
           }
         } catch (e) {
           debugPrint('⚠️ Erro ao buscar status_album: $e');
@@ -1057,7 +1061,7 @@ class SupabaseMediaRepository {
               .eq('id', image.statusAlbumId!)
               .maybeSingle();
           if (statusResponse != null) {
-            statusAlbumData = StatusAlbum.fromMap(statusResponse as Map<String, dynamic>);
+            statusAlbumData = StatusAlbum.fromMap(statusResponse);
           }
         } catch (e) {
           debugPrint('⚠️ Erro ao buscar status_album: $e');
@@ -1232,7 +1236,7 @@ class SupabaseMediaRepository {
           .single();
       
       debugPrint('   ✅ Registro criado com sucesso!');
-      final created = MediaImage.fromMap(response as Map<String, dynamic>);
+      final created = MediaImage.fromMap(response);
       debugPrint('   ID gerado: ${created.id}');
       
       return created;
@@ -1273,7 +1277,7 @@ class SupabaseMediaRepository {
           .select()
           .single();
 
-      var updatedImage = MediaImage.fromMap(response as Map<String, dynamic>);
+      var updatedImage = MediaImage.fromMap(response);
       
       // Buscar status_album se existir
       if (updatedImage.statusAlbumId != null) {
@@ -1284,7 +1288,7 @@ class SupabaseMediaRepository {
               .eq('id', updatedImage.statusAlbumId!)
               .maybeSingle();
           if (statusResponse != null) {
-            final statusAlbum = StatusAlbum.fromMap(statusResponse as Map<String, dynamic>);
+            final statusAlbum = StatusAlbum.fromMap(statusResponse);
             updatedImage = updatedImage.copyWith(statusAlbum: statusAlbum);
           }
         } catch (e) {
@@ -1530,6 +1534,176 @@ class SupabaseMediaRepository {
           .remove([path]);
     } catch (e) {
       throw Exception('Erro ao deletar arquivo: $e');
+    }
+  }
+
+  /// Retorna as combinações exclusivas de local_name e room_name 
+  /// que já possuem imagens cadastradas para o usuário.
+  Future<List<Map<String, String?>>> getAvailableAlbumFolders({
+    List<String>? userSegmentoIds,
+    List<String>? userRegionalIds,
+    List<String>? userDivisaoIds,
+  }) async {
+    try {
+      final distinctPairs = <String>{};
+      final localIdsToFetch = <String>{};
+      final roomIdsToFetch = <String>{};
+      final countsByRoom = <String, int>{};
+
+      int offset = 0;
+      const int limit = 1000;
+      bool hasMore = true;
+
+      while (hasMore) {
+        var queryBuilder = _supabase
+            .from('media_images')
+            .select('local_id, room_id');
+
+        if (userRegionalIds != null && userRegionalIds.isNotEmpty) {
+          queryBuilder = queryBuilder.inFilter('regional_id', userRegionalIds);
+        }
+        if (userDivisaoIds != null && userDivisaoIds.isNotEmpty) {
+          queryBuilder = queryBuilder.inFilter('divisao_id', userDivisaoIds);
+        }
+        if (userSegmentoIds != null && userSegmentoIds.isNotEmpty) {
+          queryBuilder = queryBuilder.inFilter('segment_id', userSegmentoIds);
+        }
+
+        final response = await queryBuilder.order('created_at').range(offset, offset + limit - 1);
+
+        for (var row in response) {
+          final localId = row['local_id'] as String?;
+          final roomId = row['room_id'] as String?;
+
+          if (localId != null && localId.trim().isNotEmpty) {
+             localIdsToFetch.add(localId);
+             if (roomId != null && roomId.trim().isNotEmpty) {
+               roomIdsToFetch.add(roomId);
+             }
+             final pair = '${localId}_${roomId ?? ""}';
+             distinctPairs.add(pair);
+             countsByRoom[pair] = (countsByRoom[pair] ?? 0) + 1;
+          }
+        }
+
+        if (response.length < limit) {
+          hasMore = false;
+        } else {
+          offset += limit;
+        }
+      }
+
+      // 2) Mapear nomes dos relacionamentos
+      final localMap = <String, String>{};
+      if (localIdsToFetch.isNotEmpty) {
+        final listIds = localIdsToFetch.toList();
+        for (var i = 0; i < listIds.length; i += 100) {
+          final chunk = listIds.sublist(i, (i + 100 > listIds.length) ? listIds.length : i + 100);
+          try {
+            final locais = await _supabase
+                .from('locais')
+                .select('id, local')
+                .inFilter('id', chunk);
+            for (final l in locais) {
+              localMap[l['id'] as String] = l['local'] as String;
+            }
+          } catch (e) {
+            debugPrint('⚠️ Erro ao buscar locais para AvailableFolders: $e');
+          }
+        }
+      }
+
+      final roomMap = <String, String>{};
+      if (roomIdsToFetch.isNotEmpty) {
+        final listIds = roomIdsToFetch.toList();
+        for (var i = 0; i < listIds.length; i += 100) {
+          final chunk = listIds.sublist(i, (i + 100 > listIds.length) ? listIds.length : i + 100);
+          try {
+            final rooms = await _supabase
+                .from('rooms')
+                .select('id, name')
+                .inFilter('id', chunk);
+            for (final room in rooms) {
+              roomMap[room['id'] as String] = room['name'] as String;
+            }
+          } catch (e) {
+            debugPrint('⚠️ Erro ao buscar rooms para AvailableFolders: $e');
+          }
+        }
+
+        final missingRoomIds = roomIdsToFetch.where((id) => !roomMap.containsKey(id)).toList();
+        if (missingRoomIds.isNotEmpty) {
+          try {
+            final equipamentosSap = await _supabase
+                .from('equipamentos_sap')
+                .select('sala, local_instalacao, localizacao')
+                .or('sala.not.is.null,localizacao.not.is.null');
+                
+            for (final item in equipamentosSap) {
+              final sala = item['sala'] as String?;
+              final localizacao = item['localizacao'] as String?;
+              final localInstalacao = item['local_instalacao'] as String?;
+              
+              if (sala != null && sala.trim().isNotEmpty) {
+                // 1) Tentar com localizacao (mesmo padrão do lazy load)
+                if (localizacao != null && localizacao.trim().isNotEmpty) {
+                  final generatedId = Room.generateDeterministicUuid('room:${sala.trim()}:${localizacao.trim()}');
+                  if (missingRoomIds.contains(generatedId) && !roomMap.containsKey(generatedId)) {
+                    roomMap[generatedId] = sala.trim();
+                  }
+                }
+                
+                // 2) Tentar com local_instalacao (mesmo padrão do lazy load — linha 762-768)
+                if (localInstalacao != null && localInstalacao.trim().isNotEmpty) {
+                  final generatedIdLI = Room.generateDeterministicUuid('room:${sala.trim()}:${localInstalacao.trim()}');
+                  if (missingRoomIds.contains(generatedIdLI) && !roomMap.containsKey(generatedIdLI)) {
+                    roomMap[generatedIdLI] = sala.trim();
+                  }
+                }
+                
+                // 3) Fallback: apenas sala (sem localizacao/local_instalacao)
+                if (localizacao == null || localizacao.trim().isEmpty) {
+                  if (localInstalacao == null || localInstalacao.trim().isEmpty) {
+                    final generatedId = Room.generateDeterministicUuid('room:${sala.trim()}');
+                    if (missingRoomIds.contains(generatedId) && !roomMap.containsKey(generatedId)) {
+                      roomMap[generatedId] = sala.trim();
+                    }
+                  }
+                }
+              }
+            }
+          } catch (e) {
+            debugPrint('⚠️ Erro em equipamentos_sap (AvailableFolders): $e');
+          }
+        }
+      }
+
+      // 3) Construir pares cruzando IDS com os NOMES descobertos
+      final result = <Map<String, String?>>[];
+      
+      for (final pair in distinctPairs) {
+         final parts = pair.split('_');
+         final localId = parts[0];
+         final roomId = parts.length > 1 && parts[1].isNotEmpty ? parts[1] : null;
+         
+         final localName = localMap[localId];
+         final roomName = roomId != null ? roomMap[roomId] : null;
+         
+         if (localName != null && localName.isNotEmpty) {
+           result.add({
+             'local_id': localId,
+             'room_id': roomId,
+             'local_name': localName,
+             'room_name': roomName,
+             'count': countsByRoom[pair]?.toString() ?? '0',
+           });
+         }
+      }
+
+      return result;
+    } catch (e) {
+      debugPrint('⚠️ Erro ao buscar pastas disponíveis: $e');
+      return [];
     }
   }
 }

@@ -152,7 +152,7 @@ class FloatingLabelDropdown<T> extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             DropdownButtonFormField<T>(
-              value: value,
+              initialValue: value,
               decoration: InputDecoration(
                 labelText: label,
                 labelStyle: TextStyle(

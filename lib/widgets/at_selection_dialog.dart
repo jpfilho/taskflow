@@ -24,7 +24,7 @@ class ATSelectionDialog extends StatefulWidget {
 class _ATSelectionDialogState extends State<ATSelectionDialog> {
   List<AT> _filteredATs = [];
   List<AT> _displayedATs = [];
-  Set<String> _selectedATIds = {}; // IDs das ats selecionadas
+  final Set<String> _selectedATIds = {}; // IDs das ats selecionadas
   String _searchQuery = '';
   String _viewMode = 'cards'; // 'cards', 'list', 'table'
   Set<String> _filterStatus = {};
@@ -288,7 +288,7 @@ class _ATSelectionDialogState extends State<ATSelectionDialog> {
 
     return Dialog(
       insetPadding: const EdgeInsets.all(16),
-      child: Container(
+      child: SizedBox(
         width: isMobile ? double.infinity : 900,
         height: isMobile ? double.infinity : 700,
         child: Column(
@@ -867,7 +867,7 @@ class _ATSelectionDialogState extends State<ATSelectionDialog> {
       child: SingleChildScrollView(
         controller: _scrollController,
         child: DataTable(
-          headingRowColor: MaterialStateProperty.all(Colors.blue[50]),
+          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
           columns: const [
             DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold))),
             DataColumn(label: Text('Local', style: TextStyle(fontWeight: FontWeight.bold))),

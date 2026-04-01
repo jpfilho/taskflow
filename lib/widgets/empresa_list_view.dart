@@ -353,7 +353,7 @@ class _EmpresaListViewState extends State<EmpresaListView> {
       scrollDirection: Axis.horizontal,
       child: SingleChildScrollView(
         child: DataTable(
-          headingRowColor: MaterialStateProperty.all(Colors.blue[50]),
+          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
           columns: const [
             DataColumn(label: Text('Empresa', style: TextStyle(fontWeight: FontWeight.bold))),
             DataColumn(label: Text('Regional', style: TextStyle(fontWeight: FontWeight.bold))),

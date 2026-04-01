@@ -263,7 +263,7 @@ class _CentroTrabalhoFormDialogState extends State<CentroTrabalhoFormDialog> {
                     const SizedBox(height: 16),
                     // Regional
                     DropdownButtonFormField<Regional>(
-                      value: _selectedRegional,
+                      initialValue: _selectedRegional,
                       decoration: const InputDecoration(
                         labelText: 'Regional *',
                         border: OutlineInputBorder(),
@@ -285,7 +285,7 @@ class _CentroTrabalhoFormDialogState extends State<CentroTrabalhoFormDialog> {
                     const SizedBox(height: 16),
                     // Divisão
                     DropdownButtonFormField<Divisao>(
-                      value: _selectedDivisao,
+                      initialValue: _selectedDivisao,
                       decoration: const InputDecoration(
                         labelText: 'Divisão *',
                         border: OutlineInputBorder(),
@@ -309,7 +309,7 @@ class _CentroTrabalhoFormDialogState extends State<CentroTrabalhoFormDialog> {
                     const SizedBox(height: 16),
                     // Segmento
                     DropdownButtonFormField<Segmento>(
-                      value: _selectedSegmento,
+                      initialValue: _selectedSegmento,
                       decoration: const InputDecoration(
                         labelText: 'Segmento *',
                         border: OutlineInputBorder(),

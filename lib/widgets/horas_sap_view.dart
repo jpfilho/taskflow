@@ -3,13 +3,16 @@ import 'dart:async';
 import '../models/hora_sap.dart';
 import '../services/hora_sap_service.dart';
 import 'horas_metas_view.dart';
+import 'confirmacao_form_dialog.dart';
 
 class HorasSAPView extends StatefulWidget {
   final String? searchQuery;
-  final String? modoVisualizacao; // Controlado pelo Main para integrar com footbar
+  final String?
+  modoVisualizacao; // Controlado pelo Main para integrar com footbar
   final ValueChanged<String>? onModoChange;
-  final VoidCallback? onRefresh; // Para acionar reload a partir de filhos (ex: HorasMetasView)
-  
+  final VoidCallback?
+  onRefresh; // Para acionar reload a partir de filhos (ex: HorasMetasView)
+
   const HorasSAPView({
     super.key,
     this.searchQuery,
@@ -52,7 +55,8 @@ class HorasSAPViewState extends State<HorasSAPView> {
       _loadHoras();
     }
 
-    if (widget.modoVisualizacao != null && widget.modoVisualizacao != _modoVisualizacao) {
+    if (widget.modoVisualizacao != null &&
+        widget.modoVisualizacao != _modoVisualizacao) {
       setState(() {
         _modoVisualizacao = widget.modoVisualizacao!;
       });
@@ -145,9 +149,7 @@ class HorasSAPViewState extends State<HorasSAPView> {
       builder: (context) => AlertDialog(
         title: Row(
           children: [
-            Expanded(
-              child: Text('Detalhes da Hora: ${hora.ordem ?? 'N/A'}'),
-            ),
+            Expanded(child: Text('Detalhes da Hora: ${hora.ordem ?? 'N/A'}')),
             IconButton(
               icon: const Icon(Icons.close, size: 18),
               onPressed: () => Navigator.of(context).pop(),
@@ -159,16 +161,28 @@ class HorasSAPViewState extends State<HorasSAPView> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              _buildInfoRow('Data Lançamento', _formatDate(hora.dataLancamento)),
+              _buildInfoRow(
+                'Data Lançamento',
+                _formatDate(hora.dataLancamento),
+              ),
               _buildInfoRow('Início Real', _formatDate(hora.inicioReal)),
               _buildInfoRow('Data Fim Real', _formatDate(hora.dataFimReal)),
-              _buildInfoRow('Hora Início Real', _formatTime(hora.horaInicioReal)),
+              _buildInfoRow(
+                'Hora Início Real',
+                _formatTime(hora.horaInicioReal),
+              ),
               _buildInfoRow('Tipo Ordem', hora.tipoOrdem),
               _buildInfoRow('Ordem', hora.ordem),
               _buildInfoRow('Operação', hora.operacao),
               _buildInfoRow('Trabalho Real', _formatDouble(hora.trabalhoReal)),
-              _buildInfoRow('Trabalho Planejado', _formatDouble(hora.trabalhoPlanejado)),
-              _buildInfoRow('Trabalho Restante', _formatDouble(hora.trabalhoRestante)),
+              _buildInfoRow(
+                'Trabalho Planejado',
+                _formatDouble(hora.trabalhoPlanejado),
+              ),
+              _buildInfoRow(
+                'Trabalho Restante',
+                _formatDouble(hora.trabalhoRestante),
+              ),
               _buildInfoRow('Tipo Atividade Real', hora.tipoAtividadeReal),
               _buildInfoRow('Número Pessoa', hora.numeroPessoa),
               _buildInfoRow('Nome Empregado', hora.nomeEmpregado),
@@ -184,6 +198,20 @@ class HorasSAPViewState extends State<HorasSAPView> {
         ),
         actions: [
           TextButton(
+            onPressed: () async {
+              Navigator.of(context).pop();
+              // Abre o formulário já com a ordem preenchida e carrega operações disponíveis
+              await showDialog<bool>(
+                context: context,
+                builder: (context) =>
+                    ConfirmacaoFormDialog(initialOrdem: hora.ordem ?? ''),
+              );
+              // Após fechar o formulário, atualiza a listagem
+              refresh();
+            },
+            child: const Text('Usar na Confirmação'),
+          ),
+          TextButton(
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('Fechar'),
           ),
@@ -193,7 +221,9 @@ class HorasSAPViewState extends State<HorasSAPView> {
   }
 
   Widget _buildInfoRow(String label, String? value) {
-    if (value == null || value.isEmpty || value == '-') return const SizedBox.shrink();
+    if (value == null || value.isEmpty || value == '-') {
+      return const SizedBox.shrink();
+    }
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
@@ -206,9 +236,7 @@ class HorasSAPViewState extends State<HorasSAPView> {
               style: const TextStyle(fontWeight: FontWeight.bold),
             ),
           ),
-          Expanded(
-            child: Text(value),
-          ),
+          Expanded(child: Text(value)),
         ],
       ),
     );
@@ -233,22 +261,30 @@ class HorasSAPViewState extends State<HorasSAPView> {
                     },
                   )
                 : _isLoading
-                    ? const Center(child: CircularProgressIndicator())
-                    : _totalHoras == 0
-                        ? Center(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                const Icon(Icons.access_time, size: 64, color: Colors.grey),
-                                const SizedBox(height: 16),
-                                const Text(
-                                  'Nenhuma hora encontrada',
-                                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.grey),
-                                ),
-                              ],
-                            ),
-                          )
-                        : _buildTabelaView(),
+                ? const Center(child: CircularProgressIndicator())
+                : _totalHoras == 0
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(
+                          Icons.access_time,
+                          size: 64,
+                          color: Colors.grey,
+                        ),
+                        const SizedBox(height: 16),
+                        const Text(
+                          'Nenhuma hora encontrada',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : _buildTabelaView(),
           ),
           // Paginação (apenas para visualização de tabela)
           if (_modoVisualizacao == 'tabela' && _totalHoras > _itensPorPagina)
@@ -269,9 +305,12 @@ class HorasSAPViewState extends State<HorasSAPView> {
                         : null,
                     icon: const Icon(Icons.chevron_left),
                   ),
-                  Text('Página ${_paginaAtual + 1} de ${(_totalHoras / _itensPorPagina).ceil()}'),
+                  Text(
+                    'Página ${_paginaAtual + 1} de ${(_totalHoras / _itensPorPagina).ceil()}',
+                  ),
                   IconButton(
-                    onPressed: (_paginaAtual + 1) * _itensPorPagina < _totalHoras
+                    onPressed:
+                        (_paginaAtual + 1) * _itensPorPagina < _totalHoras
                         ? () {
                             setState(() {
                               _paginaAtual++;
@@ -290,6 +329,8 @@ class HorasSAPViewState extends State<HorasSAPView> {
   }
 
   Widget _buildTabelaView() {
+    final isDesktop = MediaQuery.of(context).size.width >= 1100;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -297,22 +338,29 @@ class HorasSAPViewState extends State<HorasSAPView> {
         Container(
           width: double.infinity,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          color: _searchQuery.isNotEmpty ? Colors.blue[50] : Colors.orange[50], // Azul para busca, Laranja para alerta de data
+          color: _searchQuery.isNotEmpty
+              ? Colors.blue[50]
+              : Colors
+                    .orange[50], // Azul para busca, Laranja para alerta de data
           child: Row(
             children: [
               Icon(
-                _searchQuery.isNotEmpty ? Icons.search : Icons.date_range, 
-                size: 16, 
-                color: _searchQuery.isNotEmpty ? Colors.blue[800] : Colors.orange[800],
+                _searchQuery.isNotEmpty ? Icons.search : Icons.date_range,
+                size: 16,
+                color: _searchQuery.isNotEmpty
+                    ? Colors.blue[800]
+                    : Colors.orange[800],
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  _searchQuery.isNotEmpty 
-                    ? 'Buscando por "$_searchQuery" em todo o histórico'
-                    : 'Exibindo padrão: Últimos 3 meses (Use a busca para ver registros antigos)',
+                  _searchQuery.isNotEmpty
+                      ? 'Buscando por "$_searchQuery" em todo o histórico'
+                      : 'Exibindo padrão: Últimos 3 meses (Use a busca para ver registros antigos)',
                   style: TextStyle(
-                    color: _searchQuery.isNotEmpty ? Colors.blue[900] : Colors.orange[900],
+                    color: _searchQuery.isNotEmpty
+                        ? Colors.blue[900]
+                        : Colors.orange[900],
                     fontWeight: FontWeight.w500,
                     fontSize: 13,
                   ),
@@ -322,60 +370,305 @@ class HorasSAPViewState extends State<HorasSAPView> {
           ),
         ),
         Expanded(
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: SingleChildScrollView(
-              child: DataTable(
-          headingRowColor: MaterialStateProperty.all(Colors.blue[50]),
-          columns: const [
-            DataColumn(label: Text('Ações', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Data Lançamento', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Ordem', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Tipo Ordem', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Operação', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Trabalho Real', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Trabalho Planejado', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Trabalho Restante', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Tipo Atividade', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Nome Empregado', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Número Pessoa', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Centro Trabalho', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Status Sistema', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Início Real', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Fim Real', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Hora Início', style: TextStyle(fontWeight: FontWeight.bold))),
-          ],
-          rows: _horas.map((hora) {
-            return DataRow(
-              cells: [
-                DataCell(
-                  IconButton(
-                    icon: const Icon(Icons.visibility, size: 18, color: Colors.purple),
-                    onPressed: () => _mostrarDetalhesHora(hora),
-                    tooltip: 'Visualizar',
+          child: isDesktop
+              ? SingleChildScrollView(
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final dataTable = DataTable(
+                        headingRowColor: WidgetStateProperty.all(
+                          Colors.blue[50],
+                        ),
+                        columns: const [
+                          DataColumn(
+                            label: Text(
+                              'Ações',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          DataColumn(
+                            label: Text(
+                              'Data Lançamento',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          DataColumn(
+                            label: Text(
+                              'Ordem',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          DataColumn(
+                            label: Text(
+                              'Tipo Ordem',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          DataColumn(
+                            label: Text(
+                              'Operação',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          DataColumn(
+                            label: Text(
+                              'Trabalho Real',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          DataColumn(
+                            label: Text(
+                              'Trabalho Planejado',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          DataColumn(
+                            label: Text(
+                              'Trabalho Restante',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          DataColumn(
+                            label: Text(
+                              'Tipo Atividade',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          DataColumn(
+                            label: Text(
+                              'Nome Empregado',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          DataColumn(
+                            label: Text(
+                              'Número Pessoa',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          DataColumn(
+                            label: Text(
+                              'Centro Trabalho',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          DataColumn(
+                            label: Text(
+                              'Status Sistema',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          DataColumn(
+                            label: Text(
+                              'Início Real',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          DataColumn(
+                            label: Text(
+                              'Fim Real',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          DataColumn(
+                            label: Text(
+                              'Hora Início',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        ],
+                        rows: _horas.map((hora) {
+                          return DataRow(
+                            cells: [
+                              DataCell(
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.visibility,
+                                    size: 18,
+                                    color: Colors.purple,
+                                  ),
+                                  onPressed: () => _mostrarDetalhesHora(hora),
+                                  tooltip: 'Visualizar',
+                                ),
+                              ),
+                              DataCell(Text(_formatDate(hora.dataLancamento))),
+                              DataCell(Text(hora.ordem ?? '-')),
+                              DataCell(Text(hora.tipoOrdem ?? '-')),
+                              DataCell(Text(hora.operacao ?? '-')),
+                              DataCell(Text(_formatDouble(hora.trabalhoReal))),
+                              DataCell(
+                                Text(_formatDouble(hora.trabalhoPlanejado)),
+                              ),
+                              DataCell(
+                                Text(_formatDouble(hora.trabalhoRestante)),
+                              ),
+                              DataCell(Text(hora.tipoAtividadeReal ?? '-')),
+                              DataCell(Text(hora.nomeEmpregado ?? '-')),
+                              DataCell(Text(hora.numeroPessoa ?? '-')),
+                              DataCell(Text(hora.centroTrabalhoReal ?? '-')),
+                              DataCell(Text(hora.statusSistema ?? '-')),
+                              DataCell(Text(_formatDate(hora.inicioReal))),
+                              DataCell(Text(_formatDate(hora.dataFimReal))),
+                              DataCell(Text(_formatTime(hora.horaInicioReal))),
+                            ],
+                          );
+                        }).toList(),
+                      );
+                      return Container(
+                        width: constraints.maxWidth,
+                        alignment: Alignment.topLeft,
+                        child: FittedBox(
+                          alignment: Alignment.topLeft,
+                          fit: BoxFit.scaleDown,
+                          child: dataTable,
+                        ),
+                      );
+                    },
+                  ),
+                )
+              : SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: SingleChildScrollView(
+                    child: DataTable(
+                      headingRowColor: WidgetStateProperty.all(
+                        Colors.blue[50],
+                      ),
+                      columns: const [
+                        DataColumn(
+                          label: Text(
+                            'Ações',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        DataColumn(
+                          label: Text(
+                            'Data Lançamento',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        DataColumn(
+                          label: Text(
+                            'Ordem',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        DataColumn(
+                          label: Text(
+                            'Tipo Ordem',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        DataColumn(
+                          label: Text(
+                            'Operação',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        DataColumn(
+                          label: Text(
+                            'Trabalho Real',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        DataColumn(
+                          label: Text(
+                            'Trabalho Planejado',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        DataColumn(
+                          label: Text(
+                            'Trabalho Restante',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        DataColumn(
+                          label: Text(
+                            'Tipo Atividade',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        DataColumn(
+                          label: Text(
+                            'Nome Empregado',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        DataColumn(
+                          label: Text(
+                            'Número Pessoa',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        DataColumn(
+                          label: Text(
+                            'Centro Trabalho',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        DataColumn(
+                          label: Text(
+                            'Status Sistema',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        DataColumn(
+                          label: Text(
+                            'Início Real',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        DataColumn(
+                          label: Text(
+                            'Fim Real',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        DataColumn(
+                          label: Text(
+                            'Hora Início',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      ],
+                      rows: _horas.map((hora) {
+                        return DataRow(
+                          cells: [
+                            DataCell(
+                              IconButton(
+                                icon: const Icon(
+                                  Icons.visibility,
+                                  size: 18,
+                                  color: Colors.purple,
+                                ),
+                                onPressed: () => _mostrarDetalhesHora(hora),
+                                tooltip: 'Visualizar',
+                              ),
+                            ),
+                            DataCell(Text(_formatDate(hora.dataLancamento))),
+                            DataCell(Text(hora.ordem ?? '-')),
+                            DataCell(Text(hora.tipoOrdem ?? '-')),
+                            DataCell(Text(hora.operacao ?? '-')),
+                            DataCell(Text(_formatDouble(hora.trabalhoReal))),
+                            DataCell(
+                              Text(_formatDouble(hora.trabalhoPlanejado)),
+                            ),
+                            DataCell(
+                              Text(_formatDouble(hora.trabalhoRestante)),
+                            ),
+                            DataCell(Text(hora.tipoAtividadeReal ?? '-')),
+                            DataCell(Text(hora.nomeEmpregado ?? '-')),
+                            DataCell(Text(hora.numeroPessoa ?? '-')),
+                            DataCell(Text(hora.centroTrabalhoReal ?? '-')),
+                            DataCell(Text(hora.statusSistema ?? '-')),
+                            DataCell(Text(_formatDate(hora.inicioReal))),
+                            DataCell(Text(_formatDate(hora.dataFimReal))),
+                            DataCell(Text(_formatTime(hora.horaInicioReal))),
+                          ],
+                        );
+                      }).toList(),
+                    ),
                   ),
                 ),
-                DataCell(Text(_formatDate(hora.dataLancamento))),
-                DataCell(Text(hora.ordem ?? '-')),
-                DataCell(Text(hora.tipoOrdem ?? '-')),
-                DataCell(Text(hora.operacao ?? '-')),
-                DataCell(Text(_formatDouble(hora.trabalhoReal))),
-                DataCell(Text(_formatDouble(hora.trabalhoPlanejado))),
-                DataCell(Text(_formatDouble(hora.trabalhoRestante))),
-                DataCell(Text(hora.tipoAtividadeReal ?? '-')),
-                DataCell(Text(hora.nomeEmpregado ?? '-')),
-                DataCell(Text(hora.numeroPessoa ?? '-')),
-                DataCell(Text(hora.centroTrabalhoReal ?? '-')),
-                DataCell(Text(hora.statusSistema ?? '-')),
-                DataCell(Text(_formatDate(hora.inicioReal))),
-                DataCell(Text(_formatDate(hora.dataFimReal))),
-                DataCell(Text(_formatTime(hora.horaInicioReal))),
-              ],
-            );
-          }).toList(),
-        ),
-            ),
-          ),
         ),
       ],
     );

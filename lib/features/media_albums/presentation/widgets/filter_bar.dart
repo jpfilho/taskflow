@@ -319,7 +319,7 @@ class FilterBar extends StatelessWidget {
         ),
       ),
       child: DropdownButtonFormField<String>(
-        value: value,
+        initialValue: value,
         isExpanded: true,
         decoration: InputDecoration(
           contentPadding: EdgeInsets.symmetric(
@@ -389,7 +389,7 @@ class FilterBar extends StatelessWidget {
         ),
       ),
       child: DropdownButtonFormField<String>(
-        value: value,
+        initialValue: value,
         isExpanded: true,
         decoration: InputDecoration(
           contentPadding: EdgeInsets.symmetric(

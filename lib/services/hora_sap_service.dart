@@ -852,8 +852,13 @@ class HoraSAPService {
       // Agrupar horas por empregado e mês
       final Map<String, Map<String, double>> horasPorEmpregadoMes = {};
       final Map<String, Map<String, double>> horasExtrasPorEmpregadoMes = {}; // tipo_atividade_real começa com HH
-      final Map<String, Map<String, double>> horasExtrasInvestimentoPorEmpregadoMes = {}; // Novo
-      final Map<String, Map<String, double>> horasExtrasCusteioPorEmpregadoMes = {}; // Novo
+      final Map<String, Map<String, double>> horasExtrasInvestimentoPorEmpregadoMes = {}; // Total HHE
+      final Map<String, Map<String, double>> horasExtrasCusteioPorEmpregadoMes = {}; // Total HHE
+      // Quebras por adicionais 50% e 100%
+      final Map<String, Map<String, double>> horasExtras50InvestimentoPorEmpregadoMes = {};
+      final Map<String, Map<String, double>> horasExtras50CusteioPorEmpregadoMes = {};
+      final Map<String, Map<String, double>> horasExtras100InvestimentoPorEmpregadoMes = {};
+      final Map<String, Map<String, double>> horasExtras100CusteioPorEmpregadoMes = {};
       final Map<String, Map<String, double>> horasInvestimentoPorEmpregadoMes = {}; // tipo_ordem = PROJ
       final Map<String, Map<String, double>> horasCusteioPorEmpregadoMes = {}; // todos os demais tipos de ordem (PREV, INSP, ANOM, PRED, etc.)
       final Map<String, Map<String, Set<String>>> tiposAtividadePorEmpregadoMes = {}; // Tipos de atividade
@@ -919,10 +924,30 @@ class HoraSAPService {
              horasExtrasInvestimentoPorEmpregadoMes.putIfAbsent(numeroPessoa, () => {});
              horasExtrasInvestimentoPorEmpregadoMes[numeroPessoa]!.putIfAbsent(anoMes, () => 0.0);
              horasExtrasInvestimentoPorEmpregadoMes[numeroPessoa]![anoMes] = horasExtrasInvestimentoPorEmpregadoMes[numeroPessoa]![anoMes]! + hora.trabalhoReal!;
+             // 50% ou 100%
+             if (RegExp(r'HH.*050').hasMatch(tipoAtividade)) {
+               horasExtras50InvestimentoPorEmpregadoMes.putIfAbsent(numeroPessoa, () => {});
+               horasExtras50InvestimentoPorEmpregadoMes[numeroPessoa]!.putIfAbsent(anoMes, () => 0.0);
+               horasExtras50InvestimentoPorEmpregadoMes[numeroPessoa]![anoMes] = horasExtras50InvestimentoPorEmpregadoMes[numeroPessoa]![anoMes]! + hora.trabalhoReal!;
+             } else if (RegExp(r'HH.*100').hasMatch(tipoAtividade)) {
+               horasExtras100InvestimentoPorEmpregadoMes.putIfAbsent(numeroPessoa, () => {});
+               horasExtras100InvestimentoPorEmpregadoMes[numeroPessoa]!.putIfAbsent(anoMes, () => 0.0);
+               horasExtras100InvestimentoPorEmpregadoMes[numeroPessoa]![anoMes] = horasExtras100InvestimentoPorEmpregadoMes[numeroPessoa]![anoMes]! + hora.trabalhoReal!;
+             }
           } else {
              horasExtrasCusteioPorEmpregadoMes.putIfAbsent(numeroPessoa, () => {});
              horasExtrasCusteioPorEmpregadoMes[numeroPessoa]!.putIfAbsent(anoMes, () => 0.0);
              horasExtrasCusteioPorEmpregadoMes[numeroPessoa]![anoMes] = horasExtrasCusteioPorEmpregadoMes[numeroPessoa]![anoMes]! + hora.trabalhoReal!;
+             // 50% ou 100%
+             if (RegExp(r'HH.*050').hasMatch(tipoAtividade)) {
+               horasExtras50CusteioPorEmpregadoMes.putIfAbsent(numeroPessoa, () => {});
+               horasExtras50CusteioPorEmpregadoMes[numeroPessoa]!.putIfAbsent(anoMes, () => 0.0);
+               horasExtras50CusteioPorEmpregadoMes[numeroPessoa]![anoMes] = horasExtras50CusteioPorEmpregadoMes[numeroPessoa]![anoMes]! + hora.trabalhoReal!;
+             } else if (RegExp(r'HH.*100').hasMatch(tipoAtividade)) {
+               horasExtras100CusteioPorEmpregadoMes.putIfAbsent(numeroPessoa, () => {});
+               horasExtras100CusteioPorEmpregadoMes[numeroPessoa]!.putIfAbsent(anoMes, () => 0.0);
+               horasExtras100CusteioPorEmpregadoMes[numeroPessoa]![anoMes] = horasExtras100CusteioPorEmpregadoMes[numeroPessoa]![anoMes]! + hora.trabalhoReal!;
+             }
           }
         }
         
@@ -952,8 +977,10 @@ class HoraSAPService {
       print('📊 Números de pessoa únicos nas horas: ${horasCusteioPorEmpregadoMes.keys.toList()}');
 
       // Buscar horas programadas das atividades
-      final Map<String, Map<String, double>> horasProgramadasPorEmpregadoMes =
+        final Map<String, Map<String, double>> horasProgramadasPorEmpregadoMes =
           await _buscarHorasProgramadas(ano, mes, matriculasFiltro);
+        final Map<String, Map<String, Map<String, double>>> horasProgramadasNatureza =
+          await _buscarHorasProgramadasPorNatureza(ano, mes, matriculasFiltro);
 
       // Consolidar resultados
       final List<HorasEmpregadoMes> resultados = [];
@@ -1035,10 +1062,16 @@ class HoraSAPService {
                 semApontamento: true,
                 metaMensal: metaMensal,
                 horasProgramadas: horasProgramadasPorEmpregadoMes[matricula]?[anoMesStr] ?? 0.0,
+                horasProgramadasCusteio: horasProgramadasNatureza[matricula]?[anoMesStr]?['CUSTEIO'] ?? 0.0,
+                horasProgramadasInvestimento: horasProgramadasNatureza[matricula]?[anoMesStr]?['INVESTIMENTO'] ?? 0.0,
                 horasInvestimento: 0.0,
                 horasCusteio: 0.0,
-                horasExtrasInvestimento: 0.0, // Novo
-                horasExtrasCusteio: 0.0, // Novo
+                horasExtrasInvestimento: 0.0,
+                horasExtrasCusteio: 0.0,
+                horasExtras50Investimento: 0.0,
+                horasExtras50Custeio: 0.0,
+                horasExtras100Investimento: 0.0,
+                horasExtras100Custeio: 0.0,
               ));
             } catch (e) {
               print('❌ Erro ao processar mês $anoMesStr: $e');
@@ -1100,10 +1133,16 @@ class HoraSAPService {
                 tiposAtividade: tiposAtividade,
                 metaMensal: metaMensal,
                 horasProgramadas: horasProgramadasPorEmpregadoMes[matricula]?[entry.key] ?? 0.0,
+                horasProgramadasCusteio: horasProgramadasNatureza[matricula]?[entry.key]?['CUSTEIO'] ?? 0.0,
+                horasProgramadasInvestimento: horasProgramadasNatureza[matricula]?[entry.key]?['INVESTIMENTO'] ?? 0.0,
                 horasInvestimento: horasInvestimentoPorEmpregadoMes[matricula]?[entry.key] ?? 0.0,
                 horasCusteio: horasCusteioPorEmpregadoMes[matricula]?[entry.key] ?? 0.0,
                 horasExtrasInvestimento: horasExtrasInvestimentoPorEmpregadoMes[matricula]?[entry.key] ?? 0.0,
                 horasExtrasCusteio: horasExtrasCusteioPorEmpregadoMes[matricula]?[entry.key] ?? 0.0,
+                horasExtras50Investimento: horasExtras50InvestimentoPorEmpregadoMes[matricula]?[entry.key] ?? 0.0,
+                horasExtras50Custeio: horasExtras50CusteioPorEmpregadoMes[matricula]?[entry.key] ?? 0.0,
+                horasExtras100Investimento: horasExtras100InvestimentoPorEmpregadoMes[matricula]?[entry.key] ?? 0.0,
+                horasExtras100Custeio: horasExtras100CusteioPorEmpregadoMes[matricula]?[entry.key] ?? 0.0,
               ));
             } catch (e) {
               print('❌ Erro ao processar entrada ${entry.key}: $e');
@@ -1209,6 +1248,73 @@ class HoraSAPService {
     } catch (e, stackTrace) {
       print('❌ Erro ao buscar horas programadas: $e');
       print('   Stack trace: $stackTrace');
+      return {};
+    }
+  }
+
+  // Buscar horas programadas por natureza (CUSTEIO/INVESTIMENTO) usando a VIEW proposta
+  Future<Map<String, Map<String, Map<String, double>>>> _buscarHorasProgramadasPorNatureza(
+    int? ano,
+    int? mes,
+    List<String> matriculasFiltro,
+  ) async {
+    try {
+      final Map<String, Map<String, Map<String, double>>> result = {};
+
+      dynamic query = _supabase
+          .from('horas_por_empregado_mes_custeio_investimento')
+          .select('matricula, mes_ref, natureza, horas_programadas');
+
+      if (ano != null && mes != null) {
+        final primeiroDia = '${ano.toString()}-${mes.toString().padLeft(2, '0')}-01';
+        query = query.eq('mes_ref', primeiroDia);
+      } else if (ano != null) {
+        query = query
+            .gte('mes_ref', '$ano-01-01')
+            .lte('mes_ref', '$ano-12-31');
+      } else {
+        final now = DateTime.now();
+        final anoAtual = now.year;
+        final anoAnterior = anoAtual - 1;
+        query = query
+            .gte('mes_ref', '$anoAnterior-01-01')
+            .lte('mes_ref', '$anoAtual-12-31');
+      }
+
+      if (matriculasFiltro.isNotEmpty) {
+        final orConditions = matriculasFiltro.map((v) => 'matricula.eq.$v').join(',');
+        query = query.or(orConditions);
+      } else {
+        return {};
+      }
+
+      final response = await query as List<dynamic>;
+      for (var row in response) {
+        final m = row as Map<String, dynamic>;
+        final matricula = (m['matricula'] as String?)?.trim();
+        final mesRef = m['mes_ref'];
+        final natureza = (m['natureza'] as String?)?.toUpperCase().trim() ?? 'CUSTEIO';
+        final horas = (m['horas_programadas'] as num?)?.toDouble() ?? 0.0;
+        if (matricula == null || matricula.isEmpty) continue;
+
+        String anoMesStr;
+        if (mesRef is String) {
+          anoMesStr = mesRef.length >= 7 ? mesRef.substring(0, 7) : mesRef;
+        } else if (mesRef is DateTime) {
+          anoMesStr = '${mesRef.year}-${mesRef.month.toString().padLeft(2, '0')}';
+        } else {
+          continue;
+        }
+
+        result.putIfAbsent(matricula, () => {});
+        result[matricula]!.putIfAbsent(anoMesStr, () => {'CUSTEIO': 0.0, 'INVESTIMENTO': 0.0});
+        result[matricula]![anoMesStr]![natureza] =
+            (result[matricula]![anoMesStr]![natureza] ?? 0.0) + horas;
+      }
+
+      return result;
+    } catch (e) {
+      print('❌ Erro ao buscar horas programadas por natureza: $e');
       return {};
     }
   }

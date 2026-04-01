@@ -640,7 +640,7 @@ class _GtdAgoraTabState extends State<GtdAgoraTab> {
                                                         height: 8),
                                                     DropdownButtonFormField<
                                                         String?>(
-                                                      value: selectedId.value,
+                                                      initialValue: selectedId.value,
                                                       decoration:
                                                           const InputDecoration(
                                                         border:
@@ -828,7 +828,7 @@ class _GtdAgoraTabState extends State<GtdAgoraTab> {
                                                     ),
                                                     const SizedBox(height: 12),
                                                     DropdownButtonFormField<String?>(
-                                                      value: selectedPriority,
+                                                      initialValue: selectedPriority,
                                                       decoration: const InputDecoration(
                                                         labelText: 'Prioridade',
                                                         border: OutlineInputBorder(),

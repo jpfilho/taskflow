@@ -405,7 +405,7 @@ class _ConfiguracaoViewState extends State<ConfiguracaoView> {
                 SizedBox(height: isMobile ? 32 : 48),
               ],
             );
-          }).toList(),
+          }),
         ],
       ),
     );

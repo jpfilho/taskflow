@@ -18,6 +18,7 @@ class Confirmacao {
   final String? confirmacaoFinal;
   final String? sTrabRestante;
   final String? tipoAtividade;
+  final String? status; // novo campo opcional (status da confirmação)
   final DateTime? dataImportacao;
   final DateTime? createdAt;
   final DateTime? updatedAt;
@@ -42,6 +43,7 @@ class Confirmacao {
     this.confirmacaoFinal,
     this.sTrabRestante,
     this.tipoAtividade,
+    this.status,
     this.dataImportacao,
     this.createdAt,
     this.updatedAt,
@@ -115,6 +117,7 @@ class Confirmacao {
       confirmacaoFinal: normalizeString(map['confirmacao_final']),
       sTrabRestante: normalizeString(map['s_trab_restante']),
       tipoAtividade: normalizeString(map['tipo_atividade']),
+      status: normalizeString(map['status']),
       dataImportacao: parseDate(map['data_importacao']),
       createdAt: parseDate(map['created_at']),
       updatedAt: parseDate(map['updated_at']),
@@ -133,7 +136,7 @@ class Confirmacao {
       'n_pessoal': nPessoal,
       'trab_real': trabReal,
       'unid': unid,
-      'dat_inicio_exec': datInicioExec != null 
+      'dat_inicio_exec': datInicioExec != null
           ? '${datInicioExec!.year.toString().padLeft(4, '0')}-${datInicioExec!.month.toString().padLeft(2, '0')}-${datInicioExec!.day.toString().padLeft(2, '0')}'
           : null,
       'hora_inicio': horaInicio,
@@ -148,6 +151,7 @@ class Confirmacao {
       'confirmacao_final': confirmacaoFinal,
       's_trab_restante': sTrabRestante,
       'tipo_atividade': tipoAtividade,
+      'status': status,
     };
 
     if (includeId) {
@@ -177,6 +181,7 @@ class Confirmacao {
     String? confirmacaoFinal,
     String? sTrabRestante,
     String? tipoAtividade,
+    String? status,
     DateTime? dataImportacao,
     DateTime? createdAt,
     DateTime? updatedAt,
@@ -201,6 +206,7 @@ class Confirmacao {
       confirmacaoFinal: confirmacaoFinal ?? this.confirmacaoFinal,
       sTrabRestante: sTrabRestante ?? this.sTrabRestante,
       tipoAtividade: tipoAtividade ?? this.tipoAtividade,
+      status: status ?? this.status,
       dataImportacao: dataImportacao ?? this.dataImportacao,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,

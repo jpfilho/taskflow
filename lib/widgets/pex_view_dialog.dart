@@ -167,7 +167,7 @@ class _PEXViewDialogState extends State<PEXViewDialog> {
     final isMobile = MediaQuery.of(context).size.width < 600;
     
     return Dialog(
-      child: Container(
+      child: SizedBox(
         width: isMobile ? double.infinity : 1200,
         height: MediaQuery.of(context).size.height * 0.9,
         child: Column(

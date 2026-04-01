@@ -128,8 +128,9 @@ class AnnotationController extends ChangeNotifier {
     if (hasSelection) {
       _pushUndo();
       final item = _items[_selectedIndex!];
-      if (item is StrokeAnnotation) _items[_selectedIndex!] = item.withColor(value);
-      else if (item is ArrowAnnotation) _items[_selectedIndex!] = item.withColor(value);
+      if (item is StrokeAnnotation) {
+        _items[_selectedIndex!] = item.withColor(value);
+      } else if (item is ArrowAnnotation) _items[_selectedIndex!] = item.withColor(value);
       else if (item is PolygonAnnotation) _items[_selectedIndex!] = item.withColor(value);
       else if (item is TextAnnotation) _items[_selectedIndex!] = item.withColor(value);
     }
@@ -143,8 +144,9 @@ class AnnotationController extends ChangeNotifier {
       final item = selectedItem;
       if (item is StrokeAnnotation || item is ArrowAnnotation || item is PolygonAnnotation) {
         _pushUndo();
-        if (item is StrokeAnnotation) _items[_selectedIndex!] = item.withStrokeWidth(w);
-        else if (item is ArrowAnnotation) _items[_selectedIndex!] = item.withStrokeWidth(w);
+        if (item is StrokeAnnotation) {
+          _items[_selectedIndex!] = item.withStrokeWidth(w);
+        } else if (item is ArrowAnnotation) _items[_selectedIndex!] = item.withStrokeWidth(w);
         else if (item is PolygonAnnotation) _items[_selectedIndex!] = item.withStrokeWidth(w);
       }
     }

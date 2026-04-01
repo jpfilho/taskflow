@@ -22,7 +22,8 @@ import '../utils/responsive.dart';
 import 'anexos_section.dart';
 import '../services/chat_service.dart';
 import '../models/grupo_chat.dart';
-import 'chat_screen.dart';
+import '../models/si.dart';
+import 'chat_view.dart';
 import '../services/task_service.dart';
 import '../services/nota_sap_service.dart';
 import '../models/nota_sap.dart';
@@ -39,7 +40,6 @@ import '../models/ordem.dart';
 import '../services/ordem_service.dart';
 import '../models/at.dart';
 import '../services/at_service.dart';
-import '../models/si.dart';
 import '../services/si_service.dart';
 import 'pex_apr_crc_view.dart';
 
@@ -65,11 +65,12 @@ class TaskFormDialog extends StatefulWidget {
   State<TaskFormDialog> createState() => _TaskFormDialogState();
 }
 
-class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProviderStateMixin {
+class _TaskFormDialogState extends State<TaskFormDialog>
+    with SingleTickerProviderStateMixin {
   final _formKey = GlobalKey<FormState>();
   late TabController _tabController;
   bool _isUserRoot = false; // Flag para verificar se usuário é root
-  
+
   // ScrollControllers para manter a posição do scroll em cada tab
   final Map<int, ScrollController> _scrollControllers = {};
   final Map<int, double> _savedScrollPositions = {};
@@ -115,10 +116,11 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
   final AuthServiceSimples _authService = AuthServiceSimples();
   final UsuarioService _usuarioService = UsuarioService();
   final FrotaService _frotaService = FrotaService();
-  
+
   // Perfil do usuário atual
   Usuario? _usuarioAtual;
-  List<String> _segmentoIdsPerfil = []; // IDs dos segmentos permitidos no perfil
+  List<String> _segmentoIdsPerfil =
+      []; // IDs dos segmentos permitidos no perfil
   /// ID do segmento "Frota" (usuário com este segmento vê todas as frotas da regional)
   String? _segmentoFrotaId;
 
@@ -141,21 +143,23 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
   Regional? _selectedRegional;
   Divisao? _selectedDivisao;
   Set<String> _selectedLocalIds = {};
-  List<Local?> _locaisSelecionados = []; // Lista de locais selecionados (um por dropdown)
+  List<Local?> _locaisSelecionados =
+      []; // Lista de locais selecionados (um por dropdown)
   Segmento? _selectedSegmento;
   Set<String> _selectedExecutorIds = {};
-  List<Executor?> _executoresSelecionados = []; // Lista de executores selecionados (um por dropdown)
+  List<Executor?> _executoresSelecionados =
+      []; // Lista de executores selecionados (um por dropdown)
   Set<String> _selectedEquipeIds = {};
   Equipe? _selectedEquipe; // Para compatibilidade temporária
   bool _usarEquipe = false; // Toggle entre equipe e executor individual
   String? _tipoExecutorEquipe; // 'executor' ou 'equipe'
   Set<String> _selectedFrotaIds = {};
-  List<Frota?> _frotasSelecionadas = []; // Lista de frotas selecionadas (um por dropdown)
+  List<Frota?> _frotasSelecionadas =
+      []; // Lista de frotas selecionadas (um por dropdown)
 
-  
   // Lista de segmentos do Gantt (períodos de execução)
   List<GanttSegment> _ganttSegments = [];
-  
+
   // Períodos específicos por executor
   List<ExecutorPeriod> _executorPeriods = [];
   // Períodos específicos por frota
@@ -164,13 +168,15 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
   List<GanttSegment> _cloneTaskSegmentsOrFallback() {
     if (_ganttSegments.isNotEmpty) {
       return _ganttSegments
-          .map((s) => GanttSegment(
-                dataInicio: s.dataInicio,
-                dataFim: s.dataFim,
-                label: s.label,
-                tipo: s.tipo,
-                tipoPeriodo: s.tipoPeriodo,
-              ))
+          .map(
+            (s) => GanttSegment(
+              dataInicio: s.dataInicio,
+              dataFim: s.dataFim,
+              label: s.label,
+              tipo: s.tipo,
+              tipoPeriodo: s.tipoPeriodo,
+            ),
+          )
           .toList();
     }
     return [
@@ -180,33 +186,33 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         label: _tarefa,
         tipo: _mapTaskTypeToSegmentType(_tipo),
         tipoPeriodo: 'EXECUCAO',
-      )
+      ),
     ];
   }
-  
+
   // Notas SAP vinculadas
   List<NotaSAP> _notasSAPVinculadas = [];
   bool _isLoadingNotasSAP = false;
   bool _isAdicionandoNotaSAP = false;
-  
+
   // Ordens vinculadas
   final OrdemService _ordemService = OrdemService();
   List<Ordem> _ordensVinculadas = [];
   bool _isLoadingOrdens = false;
   bool _isAdicionandoOrdem = false;
-  
+
   // ATs vinculadas
   final ATService _atService = ATService();
   List<AT> _atsVinculadas = [];
   bool _isLoadingATs = false;
   bool _isAdicionandoAT = false;
-  
+
   // SIs vinculadas
   final SIService _siService = SIService();
   List<SI> _sisVinculadas = [];
   bool _isLoadingSIs = false;
   bool _isAdicionandoSI = false;
-  
+
   // Controle do grupo SAP
   String _sapSubTab = 'notas'; // 'notas', 'ordens', 'ats', 'sis'
 
@@ -221,7 +227,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
     _savedScrollPositions.clear();
     super.dispose();
   }
-  
+
   // Obter ou criar ScrollController para uma tab específica
   ScrollController _getScrollController(int tabIndex) {
     if (!_scrollControllers.containsKey(tabIndex)) {
@@ -229,7 +235,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
     }
     return _scrollControllers[tabIndex]!;
   }
-  
+
   // Salvar posição do scroll antes de fazer setState
   void _saveScrollPositions() {
     _savedScrollPositions.clear();
@@ -239,7 +245,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       }
     }
   }
-  
+
   // Restaurar posição do scroll após rebuild
   void _restoreScrollPositions() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -258,7 +264,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
     // Inicializar com 7 tabs por padrão (incluindo Frota, sem PEX/APR)
     // Será ajustado para 8 se o usuário for root
     _tabController = TabController(length: 7, vsync: this);
-    
+
     // Listener para salvar posição do scroll ao trocar de tab
     _tabController.addListener(() {
       if (!_tabController.indexIsChanging) {
@@ -266,21 +272,29 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         _saveScrollPositions();
       }
     });
-    
+
     if (widget.task != null) {
       // Modo edição
       final task = widget.task!;
       _statusId = task.statusId;
       _regionalId = task.regionalId;
       _divisaoId = task.divisaoId;
-      _localId = task.localIds.isNotEmpty ? task.localIds.first : task.localId; // Compatibilidade
+      _localId = task.localIds.isNotEmpty
+          ? task.localIds.first
+          : task.localId; // Compatibilidade
       _segmentoId = task.segmentoId;
-      _equipeId = task.equipeIds.isNotEmpty ? task.equipeIds.first : task.equipeId; // Compatibilidade
-      _usarEquipe = task.equipeIds.isNotEmpty || (task.equipeId != null && task.equipeId!.isNotEmpty);
+      _equipeId = task.equipeIds.isNotEmpty
+          ? task.equipeIds.first
+          : task.equipeId; // Compatibilidade
+      _usarEquipe =
+          task.equipeIds.isNotEmpty ||
+          (task.equipeId != null && task.equipeId!.isNotEmpty);
       _status = task.status;
       _regional = task.regional;
       _divisao = task.divisao;
-      _local = task.locais.isNotEmpty ? task.locais.join(', ') : ''; // Para exibição
+      _local = task.locais.isNotEmpty
+          ? task.locais.join(', ')
+          : ''; // Para exibição
       _selectedLocalIds = Set<String>.from(task.localIds);
       _tipo = task.tipo;
       _ordem = task.ordem;
@@ -310,21 +324,27 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           ),
         ];
       }
-      
+
       // Carregar períodos por executor
       _executorPeriods = List<ExecutorPeriod>.from(task.executorPeriods);
       // Carregar períodos por frota vindos da tarefa (pode vir vazio em alguns fluxos)
       _frotaPeriods = List<FrotaPeriod>.from(task.frotaPeriods);
       // Garantir que períodos por frota sejam buscados do Supabase caso não tenham vindo com a tarefa
       _ensureFrotaPeriodsLoaded(task.id);
-      print('📋 TaskFormDialog: Carregados ${_executorPeriods.length} períodos por executor');
+      print(
+        '📋 TaskFormDialog: Carregados ${_executorPeriods.length} períodos por executor',
+      );
       for (var ep in _executorPeriods) {
-        print('   - Executor: ${ep.executorNome} (${ep.periods.length} períodos)');
+        print(
+          '   - Executor: ${ep.executorNome} (${ep.periods.length} períodos)',
+        );
       }
-    print('📋 TaskFormDialog: Carregados ${_frotaPeriods.length} períodos por frota');
-    for (var fp in _frotaPeriods) {
-      print('   - Frota: ${fp.frotaNome} (${fp.periods.length} períodos)');
-    }
+      print(
+        '📋 TaskFormDialog: Carregados ${_frotaPeriods.length} períodos por frota',
+      );
+      for (var fp in _frotaPeriods) {
+        print('   - Frota: ${fp.frotaNome} (${fp.periods.length} períodos)');
+      }
     } else {
       // Modo criação
       _tipo = ''; // Será definido após carregar tipos de atividade
@@ -337,7 +357,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       _precisaSi = true;
       _dataInicio = widget.startDate;
       _dataFim = widget.endDate;
-      
+
       // Se há uma nota SAP, pré-preencher campos
       if (widget.notaSAP != null) {
         final nota = widget.notaSAP!;
@@ -347,9 +367,11 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         _dataInicio = nota.inicioDesejado ?? widget.startDate;
         _dataFim = nota.conclusaoDesejada ?? widget.endDate;
         // A nota SAP será vinculada após criar a tarefa
-        _notasSAPVinculadas = [nota]; // Adicionar à lista para mostrar no formulário
+        _notasSAPVinculadas = [
+          nota,
+        ]; // Adicionar à lista para mostrar no formulário
       }
-      
+
       // Se há uma ordem, pré-preencher campos
       if (widget.ordem != null) {
         final ordem = widget.ordem!;
@@ -360,18 +382,18 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         _dataFim = ordem.fimBase ?? widget.endDate;
       }
     }
-    
+
     // Carregar dados e, se for subtarefa, herdar campos da tarefa pai
     // Usar WidgetsBinding para garantir que o primeiro frame foi renderizado
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _loadData();
-      
+
       // Se for criar subtarefa, carregar tarefa pai e herdar campos
       // IMPORTANTE: Aguardar _loadData() terminar antes de carregar tarefa pai
       if (widget.parentTaskId != null && widget.task == null) {
         await _loadParentTask();
       }
-      
+
       // Inicializar segmentos para nova tarefa (apenas se não for subtarefa)
       // Se for subtarefa, os segmentos já foram herdados em _loadParentTask()
       if (widget.task == null && widget.parentTaskId == null) {
@@ -386,7 +408,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           ),
         ];
       }
-      
+
       // Carregar notas SAP, ordens, ATs e SIs vinculadas (apenas para tarefas existentes)
       if (widget.task != null) {
         _loadNotasSAP();
@@ -425,7 +447,8 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           dataFim: DateTime(dfParsed.year, dfParsed.month, dfParsed.day),
           label: item['label'] as String? ?? '',
           tipo: (item['tipo'] as String? ?? 'OUT').toUpperCase(),
-          tipoPeriodo: (item['tipo_periodo'] as String? ?? 'EXECUCAO').toUpperCase(),
+          tipoPeriodo: (item['tipo_periodo'] as String? ?? 'EXECUCAO')
+              .toUpperCase(),
         );
 
         if (frotaMap.containsKey(frotaId)) {
@@ -446,30 +469,36 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         setState(() {
           _frotaPeriods = frotaMap.values.toList();
         });
-        print('📋 TaskFormDialog: Carregados ${_frotaPeriods.length} períodos por frota (fetch direto)');
+        print(
+          '📋 TaskFormDialog: Carregados ${_frotaPeriods.length} períodos por frota (fetch direto)',
+        );
       }
     } catch (e) {
-      print('⚠️ Erro ao carregar períodos por frota diretamente do Supabase: $e');
+      print(
+        '⚠️ Erro ao carregar períodos por frota diretamente do Supabase: $e',
+      );
     }
   }
-  
+
   Future<void> _loadNotasSAP() async {
     // Carregar notas SAP se for edição ou se há uma nota SAP pré-selecionada
     if (widget.task == null && widget.notaSAP == null) {
-      print('⚠️ _loadNotasSAP: widget.task é null e widget.notaSAP é null, não carregando');
+      print(
+        '⚠️ _loadNotasSAP: widget.task é null e widget.notaSAP é null, não carregando',
+      );
       return;
     }
-    
+
     if (widget.task == null) {
       print('⚠️ _loadNotasSAP: widget.task é null, não carregando');
       return;
     }
-    
+
     print('📋 Carregando notas SAP para tarefa ${widget.task!.id}...');
     setState(() {
       _isLoadingNotasSAP = true;
     });
-    
+
     try {
       final notas = await _notaSAPService.getNotasPorTarefa(widget.task!.id);
       print('✅ Carregadas ${notas.length} notas SAP vinculadas');
@@ -489,14 +518,14 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
   // Carregar tarefa pai e herdar todos os campos
   Future<void> _loadParentTask() async {
     if (widget.parentTaskId == null) return;
-    
+
     try {
       final parentTask = await _taskService.getTaskById(widget.parentTaskId!);
       if (parentTask == null) {
         print('⚠️ Tarefa pai não encontrada: ${widget.parentTaskId}');
         return;
       }
-      
+
       print('📋 Carregando tarefa pai: ${parentTask.tarefa}');
       print('   Status: ${parentTask.status}');
       print('   Regional: ${parentTask.regional}');
@@ -511,9 +540,11 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       print('   SI: ${parentTask.si}');
       // debug silenciado
       for (var seg in parentTask.ganttSegments) {
-        print('     - ${seg.dataInicio.toString().substring(0, 10)} até ${seg.dataFim.toString().substring(0, 10)} (${seg.tipo}, ${seg.tipoPeriodo})');
+        print(
+          '     - ${seg.dataInicio.toString().substring(0, 10)} até ${seg.dataFim.toString().substring(0, 10)} (${seg.tipo}, ${seg.tipoPeriodo})',
+        );
       }
-      
+
       // Herdar todos os campos da tarefa pai
       setState(() {
         // IDs
@@ -525,16 +556,22 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         _selectedExecutorIds = Set<String>.from(parentTask.executorIds);
         _selectedEquipeIds = Set<String>.from(parentTask.equipeIds);
         _selectedFrotaIds = Set<String>.from(parentTask.frotaIds);
-        
+
         // Inicializar lista de executores selecionados para os dropdowns (será atualizado após carregar executores)
         if (_executoresList.isNotEmpty) {
-          final executoresEncontradosParent = _executoresList.where((e) => _selectedExecutorIds.contains(e.id)).toList();
-          _executoresSelecionados = executoresEncontradosParent.map<Executor?>((e) => e as Executor?).toList();
+          final executoresEncontradosParent = _executoresList
+              .where((e) => _selectedExecutorIds.contains(e.id))
+              .toList();
+          _executoresSelecionados = executoresEncontradosParent
+              .map<Executor?>((e) => e as Executor?)
+              .toList();
         }
         if (_executoresSelecionados.isEmpty) {
-          _executoresSelecionados = <Executor?>[null]; // Pelo menos um dropdown vazio
+          _executoresSelecionados = <Executor?>[
+            null,
+          ]; // Pelo menos um dropdown vazio
         }
-        
+
         // Valores de exibição
         _status = parentTask.status;
         _regional = parentTask.regional;
@@ -546,21 +583,29 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         _coordenador = parentTask.coordenador;
         _si = parentTask.si;
         _precisaSi = parentTask.precisaSi;
-        
+
         // Herdar períodos (segmentos do Gantt) da tarefa pai
         if (parentTask.ganttSegments.isNotEmpty) {
-          _ganttSegments = parentTask.ganttSegments.map((seg) => GanttSegment(
-            dataInicio: seg.dataInicio,
-            dataFim: seg.dataFim,
-            label: seg.label,
-            tipo: seg.tipo,
-            tipoPeriodo: seg.tipoPeriodo,
-          )).toList();
+          _ganttSegments = parentTask.ganttSegments
+              .map(
+                (seg) => GanttSegment(
+                  dataInicio: seg.dataInicio,
+                  dataFim: seg.dataFim,
+                  label: seg.label,
+                  tipo: seg.tipo,
+                  tipoPeriodo: seg.tipoPeriodo,
+                ),
+              )
+              .toList();
           print('✅ ${_ganttSegments.length} períodos herdados da tarefa pai');
-          
+
           // Atualizar dataInicio e dataFim da subtarefa com base nos segmentos herdados
-          _dataInicio = _ganttSegments.map((s) => s.dataInicio).reduce((a, b) => a.isBefore(b) ? a : b);
-          _dataFim = _ganttSegments.map((s) => s.dataFim).reduce((a, b) => a.isAfter(b) ? a : b);
+          _dataInicio = _ganttSegments
+              .map((s) => s.dataInicio)
+              .reduce((a, b) => a.isBefore(b) ? a : b);
+          _dataFim = _ganttSegments
+              .map((s) => s.dataFim)
+              .reduce((a, b) => a.isAfter(b) ? a : b);
         } else {
           // Se a tarefa pai não tem segmentos, criar um padrão baseado nas datas da tarefa pai
           final segmentType = _mapTaskTypeToSegmentType(parentTask.tipo);
@@ -577,9 +622,10 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           _dataFim = parentTask.dataFim;
           print('⚠️ Tarefa pai não tem segmentos. Criado período padrão.');
         }
-        
+
         // Executor/Equipe
-        if (parentTask.equipeIds.isNotEmpty || (parentTask.equipeId != null && parentTask.equipeId!.isNotEmpty)) {
+        if (parentTask.equipeIds.isNotEmpty ||
+            (parentTask.equipeId != null && parentTask.equipeId!.isNotEmpty)) {
           _usarEquipe = true;
           _tipoExecutorEquipe = 'equipe';
         } else if (parentTask.executores.isNotEmpty) {
@@ -587,64 +633,80 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           _tipoExecutorEquipe = 'executor';
           _executor = parentTask.executores.first;
         }
-        
+
         // Inicializar lista de locais selecionados para os dropdowns
-        final locaisEncontrados = _locaisList.where((l) => _selectedLocalIds.contains(l.id)).toList();
-        _locaisSelecionados = locaisEncontrados.map<Local?>((l) => l as Local?).toList();
+        final locaisEncontrados = _locaisList
+            .where((l) => _selectedLocalIds.contains(l.id))
+            .toList();
+        _locaisSelecionados = locaisEncontrados
+            .map<Local?>((l) => l as Local?)
+            .toList();
         if (_locaisSelecionados.isEmpty) {
           _locaisSelecionados = <Local?>[null]; // Pelo menos um dropdown vazio
         }
-        
+
         // Selecionar Status, Regional e Divisão nos dropdowns
         if (_statusId != null && _statusList.isNotEmpty) {
           try {
             _selectedStatus = _statusList.firstWhere((s) => s.id == _statusId);
             _status = _selectedStatus!.codigo;
           } catch (e) {
-            print('⚠️ Status ${_statusId} não encontrado na lista');
+            print('⚠️ Status $_statusId não encontrado na lista');
           }
         }
 
         if (_regionalId != null && _regionaisList.isNotEmpty) {
           try {
-            _selectedRegional = _regionaisList.firstWhere((r) => r.id == _regionalId);
+            _selectedRegional = _regionaisList.firstWhere(
+              (r) => r.id == _regionalId,
+            );
           } catch (e) {
-            print('⚠️ Regional ${_regionalId} não encontrada na lista');
+            print('⚠️ Regional $_regionalId não encontrada na lista');
           }
         }
-        
+
         if (_divisaoId != null && _divisoesList.isNotEmpty) {
           try {
-            _selectedDivisao = _divisoesList.firstWhere((d) => d.id == _divisaoId);
+            _selectedDivisao = _divisoesList.firstWhere(
+              (d) => d.id == _divisaoId,
+            );
           } catch (e) {
-            print('⚠️ Divisão ${_divisaoId} não encontrada na lista');
+            print('⚠️ Divisão $_divisaoId não encontrada na lista');
           }
         }
       });
-      
+
       // Carregar segmentos da divisão herdada (aguardar para poder selecionar o segmento)
       if (_divisaoId != null) {
         await _loadSegmentosPorDivisao();
-        
+
         // Após carregar segmentos, selecionar o segmento da tarefa pai
-        if (_segmentoId != null && _segmentoId!.isNotEmpty && _segmentosList.isNotEmpty) {
+        if (_segmentoId != null &&
+            _segmentoId!.isNotEmpty &&
+            _segmentosList.isNotEmpty) {
           setState(() {
             try {
-              _selectedSegmento = _segmentosList.firstWhere((s) => s.id == _segmentoId);
-              print('✅ Segmento da tarefa pai selecionado: ${_selectedSegmento!.segmento}');
+              _selectedSegmento = _segmentosList.firstWhere(
+                (s) => s.id == _segmentoId,
+              );
+              print(
+                '✅ Segmento da tarefa pai selecionado: ${_selectedSegmento!.segmento}',
+              );
             } catch (e) {
-              print('⚠️ Segmento ${_segmentoId} da tarefa pai não encontrado na lista');
+              print(
+                '⚠️ Segmento $_segmentoId da tarefa pai não encontrado na lista',
+              );
               _selectedSegmento = null;
             }
           });
         }
       }
-      
+
       // Carregar tipos de atividade e executores/equipes filtrados após selecionar segmento
       await _loadTiposAtividade();
       await _loadExecutoresEquipesFiltrados();
       await _loadCoordenadores();
-      
+
       print('✅ Campos da tarefa pai herdados com sucesso');
     } catch (e) {
       print('❌ Erro ao carregar tarefa pai: $e');
@@ -661,12 +723,18 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       final usuarioLogado = _authService.currentUser;
       if (usuarioLogado != null && usuarioLogado.id != null) {
         try {
-          _usuarioAtual = await _usuarioService.obterUsuarioPorId(usuarioLogado.id!);
+          _usuarioAtual = await _usuarioService.obterUsuarioPorId(
+            usuarioLogado.id!,
+          );
           if (_usuarioAtual != null && !_usuarioAtual!.isRoot) {
             _segmentoIdsPerfil = _usuarioAtual!.segmentoIds;
             _isUserRoot = false;
-            print('👤 Perfil do usuário carregado: ${_usuarioAtual!.segmentos.length} segmentos');
-            print('   Segmentos do perfil: ${_usuarioAtual!.segmentos.join(", ")}');
+            print(
+              '👤 Perfil do usuário carregado: ${_usuarioAtual!.segmentos.length} segmentos',
+            );
+            print(
+              '   Segmentos do perfil: ${_usuarioAtual!.segmentos.join(", ")}',
+            );
             print('   IDs dos segmentos: ${_segmentoIdsPerfil.join(", ")}');
           } else if (_usuarioAtual != null && _usuarioAtual!.isRoot) {
             _isUserRoot = true;
@@ -678,7 +746,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           _segmentoIdsPerfil = []; // Se houver erro, não filtrar
         }
       }
-      
+
       // Carregar dados básicos
       final futures = await Future.wait([
         _statusService.getAllStatus(),
@@ -688,7 +756,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         _equipeService.getEquipesAtivas(),
         _frotaService.getAllFrotas(),
       ]);
-      
+
       // Carregar locais filtrados pelo perfil do usuário
       // Lógica especial: considerar paraTodaRegional, paraTodaDivisao e IDs específicos
       List<Local> locaisFiltrados = [];
@@ -696,13 +764,17 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       print('   _usuarioAtual: ${_usuarioAtual != null ? "existe" : "null"}');
       if (_usuarioAtual != null) {
         print('   isRoot: ${_usuarioAtual!.isRoot}');
-        print('   temPerfilConfigurado: ${_usuarioAtual!.temPerfilConfigurado()}');
+        print(
+          '   temPerfilConfigurado: ${_usuarioAtual!.temPerfilConfigurado()}',
+        );
         print('   Regional IDs: ${_usuarioAtual!.regionalIds}');
         print('   Divisão IDs: ${_usuarioAtual!.divisaoIds}');
         print('   Segmento IDs: ${_usuarioAtual!.segmentoIds}');
       }
-      
-      if (_usuarioAtual != null && !_usuarioAtual!.isRoot && _usuarioAtual!.temPerfilConfigurado()) {
+
+      if (_usuarioAtual != null &&
+          !_usuarioAtual!.isRoot &&
+          _usuarioAtual!.temPerfilConfigurado()) {
         print('🔒 DEBUG Locais: Filtrando pelo perfil do usuário...');
         // Resolver ID do segmento "Frota" (para regra: perfil apenas Frota = só locais regional+divisão+segmento)
         if (_segmentoFrotaId == null) {
@@ -715,10 +787,17 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           } catch (_) {}
         }
         final usuario = _usuarioAtual!;
-        final regionalIdsLower = usuario.regionalIds.map((id) => id.toString().toLowerCase()).toSet();
-        final divisaoIdsLower = usuario.divisaoIds.map((id) => id.toString().toLowerCase()).toSet();
-        final segmentoIdsLower = usuario.segmentoIds.map((id) => id.toString().toLowerCase()).toSet();
-        final usuarioTemApenasSegmentoFrota = _segmentoFrotaId != null &&
+        final regionalIdsLower = usuario.regionalIds
+            .map((id) => id.toString().toLowerCase())
+            .toSet();
+        final divisaoIdsLower = usuario.divisaoIds
+            .map((id) => id.toString().toLowerCase())
+            .toSet();
+        final segmentoIdsLower = usuario.segmentoIds
+            .map((id) => id.toString().toLowerCase())
+            .toSet();
+        final usuarioTemApenasSegmentoFrota =
+            _segmentoFrotaId != null &&
             usuario.segmentoIds.length == 1 &&
             segmentoIdsLower.contains(_segmentoFrotaId!.toLowerCase());
 
@@ -726,7 +805,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         final todosLocais = await _localService.getAllLocais();
         print('   Total de locais no banco: ${todosLocais.length}');
         if (usuarioTemApenasSegmentoFrota) {
-          print('   Perfil apenas segmento Frota: mostrando só locais da Regional & Divisão & Segmento');
+          print(
+            '   Perfil apenas segmento Frota: mostrando só locais da Regional & Divisão & Segmento',
+          );
         }
 
         Set<Local> locaisUnicos = {};
@@ -734,51 +815,100 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         if (usuarioTemApenasSegmentoFrota) {
           // Perfil com APENAS segmento Frota: mostrar somente locais que batem com regional E divisão E segmento do usuário
           for (final local in todosLocais) {
-            final regOk = local.regionalId != null && local.regionalId!.isNotEmpty &&
+            final regOk =
+                local.regionalId != null &&
+                local.regionalId!.isNotEmpty &&
                 regionalIdsLower.contains(local.regionalId!.toLowerCase());
-            final divOk = local.divisaoId != null && local.divisaoId!.isNotEmpty &&
+            final divOk =
+                local.divisaoId != null &&
+                local.divisaoId!.isNotEmpty &&
                 divisaoIdsLower.contains(local.divisaoId!.toLowerCase());
-            final segOk = local.segmentoId != null && local.segmentoId!.isNotEmpty &&
+            final segOk =
+                local.segmentoId != null &&
+                local.segmentoId!.isNotEmpty &&
                 segmentoIdsLower.contains(local.segmentoId!.toLowerCase());
             if (regOk && divOk && segOk) {
               locaisUnicos.add(local);
             }
           }
         } else {
-          // Perfil geral: incluir "para toda regional", "para toda divisão" e específicos conforme antes
+          // Perfil geral: incluir "para toda regional", "para toda divisão" e específicos
+          // IMPORTANTE: sempre respeitar o filtro de Regional do usuário
           for (final local in todosLocais) {
             bool deveIncluir = false;
 
-            // 1. Verificar locais "para toda a regional"
+            // Checagem base de Regional: se o usuário possui regionais configuradas,
+            // o local só pode ser exibido se pertencer a uma dessas regionais
+            final bool possuiFiltroRegional = regionalIdsLower.isNotEmpty;
+            final bool regOk = !possuiFiltroRegional
+                ? true
+                : (local.regionalId != null &&
+                      local.regionalId!.isNotEmpty &&
+                      regionalIdsLower.contains(
+                        local.regionalId!.toLowerCase(),
+                      ));
+
+            // Se o local é específico de Regional & Divisão & Segmento,
+            // exigir correspondência simultânea dos três no perfil do usuário
+            final bool hasReg =
+                local.regionalId != null && local.regionalId!.isNotEmpty;
+            final bool hasDiv =
+                local.divisaoId != null && local.divisaoId!.isNotEmpty;
+            final bool hasSeg =
+                local.segmentoId != null && local.segmentoId!.isNotEmpty;
+            if (hasReg && hasDiv && hasSeg) {
+              final bool matchAll =
+                  regionalIdsLower.contains(local.regionalId!.toLowerCase()) &&
+                  divisaoIdsLower.contains(local.divisaoId!.toLowerCase()) &&
+                  segmentoIdsLower.contains(local.segmentoId!.toLowerCase());
+              if (matchAll) {
+                locaisUnicos.add(local);
+              }
+              // Sempre pular as demais regras para locais totalmente específicos
+              continue;
+            }
+
+            // 1. Verificar locais "para toda a regional" (já garante regional)
             if (local.paraTodaRegional && local.regionalId != null) {
               if (regionalIdsLower.contains(local.regionalId!.toLowerCase())) {
                 deveIncluir = true;
               }
             }
 
-            // 2. Verificar locais "para toda a divisão"
-            if (!deveIncluir && local.paraTodaDivisao && local.divisaoId != null) {
+            // 2. Verificar locais "para toda a divisão" (respeitando regional)
+            if (!deveIncluir &&
+                regOk &&
+                local.paraTodaDivisao &&
+                local.divisaoId != null) {
               if (divisaoIdsLower.contains(local.divisaoId!.toLowerCase())) {
                 deveIncluir = true;
               }
             }
 
-            // 3. Verificar locais com segmento específico
-            if (!deveIncluir && local.segmentoId != null && local.segmentoId!.isNotEmpty) {
+            // 3. Verificar locais com segmento específico (respeitando regional)
+            if (!deveIncluir &&
+                regOk &&
+                local.segmentoId != null &&
+                local.segmentoId!.isNotEmpty) {
               if (segmentoIdsLower.contains(local.segmentoId!.toLowerCase())) {
                 deveIncluir = true;
               }
             }
 
-            // 4. Verificar locais com divisão específica
-            if (!deveIncluir && local.divisaoId != null && local.divisaoId!.isNotEmpty) {
+            // 4. Verificar locais com divisão específica (respeitando regional)
+            if (!deveIncluir &&
+                regOk &&
+                local.divisaoId != null &&
+                local.divisaoId!.isNotEmpty) {
               if (divisaoIdsLower.contains(local.divisaoId!.toLowerCase())) {
                 deveIncluir = true;
               }
             }
 
             // 5. Verificar locais com regional específica
-            if (!deveIncluir && local.regionalId != null && local.regionalId!.isNotEmpty) {
+            if (!deveIncluir &&
+                local.regionalId != null &&
+                local.regionalId!.isNotEmpty) {
               if (regionalIdsLower.contains(local.regionalId!.toLowerCase())) {
                 deveIncluir = true;
               }
@@ -791,19 +921,27 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         }
 
         locaisFiltrados = locaisUnicos.toList();
-        print('🔒 DEBUG Locais: Total de locais únicos após filtro: ${locaisFiltrados.length}');
+        print(
+          '🔒 DEBUG Locais: Total de locais únicos após filtro: ${locaisFiltrados.length}',
+        );
         if (locaisFiltrados.isNotEmpty) {
           print('   Primeiros 3 locais:');
           for (var i = 0; i < locaisFiltrados.length && i < 3; i++) {
             final local = locaisFiltrados[i];
-            print('     - ${local.local} (paraTodaRegional: ${local.paraTodaRegional}, paraTodaDivisao: ${local.paraTodaDivisao}, regional: ${local.regionalId}, divisao: ${local.divisaoId}, segmento: ${local.segmentoId})');
+            print(
+              '     - ${local.local} (paraTodaRegional: ${local.paraTodaRegional}, paraTodaDivisao: ${local.paraTodaDivisao}, regional: ${local.regionalId}, divisao: ${local.divisaoId}, segmento: ${local.segmentoId})',
+            );
           }
         }
       } else {
-        print('👑 DEBUG Locais: Usuário root ou sem perfil, buscando todos os locais...');
+        print(
+          '👑 DEBUG Locais: Usuário root ou sem perfil, buscando todos os locais...',
+        );
         // Usuário root ou sem perfil: buscar todos os locais
         locaisFiltrados = await _localService.getAllLocais();
-        print('👑 DEBUG Locais: Total de locais encontrados: ${locaisFiltrados.length}');
+        print(
+          '👑 DEBUG Locais: Total de locais encontrados: ${locaisFiltrados.length}',
+        );
       }
 
       setState(() {
@@ -815,7 +953,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         _segmentosList = futures[3] as List<Segmento>;
         _equipesList = futures[4] as List<Equipe>;
         final todasFrotas = futures[5] as List<Frota>;
-        
+
         // Ajustar número de tabs baseado no perfil do usuário
         // 6 tabs básicas + 1 PEX/APR (apenas root) + 1 SAP = 7 ou 8
         final int numTabs = _isUserRoot ? 8 : 7;
@@ -823,18 +961,18 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           final int oldIndex = _tabController.index;
           _tabController.dispose();
           _tabController = TabController(
-            length: numTabs, 
+            length: numTabs,
             vsync: this,
             initialIndex: oldIndex < numTabs ? oldIndex : 0,
           );
         }
-        
+
         // Filtrar pelo perfil do usuário
         _regionaisList = _filtrarRegionaisPorPerfil(todasRegionais);
         _divisoesList = _filtrarDivisoesPorPerfil(todasDivisoes);
         _locaisList = locaisFiltrados; // Já filtrados pelo perfil acima
         _frotasList = _filtrarFrotasPorPerfil(todasFrotas);
-        
+
         _isLoading = false;
 
         // Selecionar valores se estiver editando
@@ -843,19 +981,25 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           // Status - verificar se existe na lista antes de atribuir
           if (task.statusId != null && task.statusId!.isNotEmpty) {
             try {
-              final found = _statusList.firstWhere((s) => s.id == task.statusId);
+              final found = _statusList.firstWhere(
+                (s) => s.id == task.statusId,
+              );
               _selectedStatus = found;
             } catch (e) {
               // Tentar por código
               try {
-                _selectedStatus = _statusList.firstWhere((s) => s.codigo == task.status);
+                _selectedStatus = _statusList.firstWhere(
+                  (s) => s.codigo == task.status,
+                );
               } catch (e2) {
                 _selectedStatus = null;
               }
             }
           } else if (_statusList.isNotEmpty && task.status.isNotEmpty) {
             try {
-              _selectedStatus = _statusList.firstWhere((s) => s.codigo == task.status);
+              _selectedStatus = _statusList.firstWhere(
+                (s) => s.codigo == task.status,
+              );
             } catch (e) {
               _selectedStatus = null;
             }
@@ -868,63 +1012,81 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           // Regional - verificar se existe na lista antes de atribuir
           if (task.regionalId != null && task.regionalId!.isNotEmpty) {
             try {
-              _selectedRegional = _regionaisList.firstWhere((r) => r.id == task.regionalId);
+              _selectedRegional = _regionaisList.firstWhere(
+                (r) => r.id == task.regionalId,
+              );
             } catch (e) {
               _selectedRegional = null;
             }
           }
-          
+
           // Divisão - verificar se existe na lista antes de atribuir
           if (task.divisaoId != null && task.divisaoId!.isNotEmpty) {
             try {
-              _selectedDivisao = _divisoesList.firstWhere((d) => d.id == task.divisaoId);
+              _selectedDivisao = _divisoesList.firstWhere(
+                (d) => d.id == task.divisaoId,
+              );
             } catch (e) {
               _selectedDivisao = null;
             }
           }
-          
+
           // Carregar múltiplos locais - filtrar apenas os que existem na lista
           _selectedLocalIds = Set<String>.from(
-            task.localIds.where((id) => _locaisList.any((l) => l.id == id))
+            task.localIds.where((id) => _locaisList.any((l) => l.id == id)),
           );
-          if (_selectedLocalIds.isEmpty && task.localId != null && task.localId!.isNotEmpty) {
+          if (_selectedLocalIds.isEmpty &&
+              task.localId != null &&
+              task.localId!.isNotEmpty) {
             if (_locaisList.any((l) => l.id == task.localId)) {
               _selectedLocalIds.add(task.localId!);
             }
           }
           // Inicializar lista de locais selecionados para os dropdowns
-          final locaisEncontrados = _locaisList.where((l) => _selectedLocalIds.contains(l.id)).toList();
+          final locaisEncontrados = _locaisList
+              .where((l) => _selectedLocalIds.contains(l.id))
+              .toList();
           // Criar lista explicitamente tipada como List<Local?>
-          _locaisSelecionados = locaisEncontrados.map<Local?>((l) => l as Local?).toList();
+          _locaisSelecionados = locaisEncontrados
+              .map<Local?>((l) => l as Local?)
+              .toList();
           if (_locaisSelecionados.isEmpty) {
-            _locaisSelecionados = <Local?>[null]; // Pelo menos um dropdown vazio
+            _locaisSelecionados = <Local?>[
+              null,
+            ]; // Pelo menos um dropdown vazio
           }
-          
+
           // Segmento - verificar se existe na lista antes de atribuir
           if (task.segmentoId != null && task.segmentoId!.isNotEmpty) {
             try {
-              _selectedSegmento = _segmentosList.firstWhere((s) => s.id == task.segmentoId);
+              _selectedSegmento = _segmentosList.firstWhere(
+                (s) => s.id == task.segmentoId,
+              );
             } catch (e) {
               _selectedSegmento = null;
             }
           }
           // Carregar múltiplas equipes
           _selectedEquipeIds = Set<String>.from(task.equipeIds);
-          if (_selectedEquipeIds.isEmpty && task.equipeId != null && task.equipeId!.isNotEmpty) {
+          if (_selectedEquipeIds.isEmpty &&
+              task.equipeId != null &&
+              task.equipeId!.isNotEmpty) {
             _selectedEquipeIds.add(task.equipeId!);
             _usarEquipe = true;
           }
-          
+
           // Carregar múltiplos executores (IDs serão usados depois que executores forem carregados)
           _selectedExecutorIds = Set<String>.from(task.executorIds);
           if (_selectedExecutorIds.isEmpty && task.executor.isNotEmpty) {
             // Tentar encontrar executor pelo nome (será feito depois que executores forem carregados)
             // Por enquanto, apenas marcar que precisa buscar pelo nome
           }
-          
+
           // Carregar múltiplas frotas (IDs serão usados depois que frotas forem carregadas)
           _selectedFrotaIds = Set<String>.from(task.frotaIds);
-          if (_selectedFrotaIds.isEmpty && task.frota.isNotEmpty && task.frota != '-N/A-') {
+          if (_selectedFrotaIds.isEmpty &&
+              task.frota.isNotEmpty &&
+              task.frota != '-N/A-') {
             // Tentar encontrar frota pelo nome (será feito depois que frotas forem carregadas)
             // Por enquanto, apenas marcar que precisa buscar pelo nome
           }
@@ -958,11 +1120,15 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
             // Status
             if (_statusId != null && _statusId!.isNotEmpty) {
               try {
-                _selectedStatus = _statusList.firstWhere((s) => s.id == _statusId);
+                _selectedStatus = _statusList.firstWhere(
+                  (s) => s.id == _statusId,
+                );
                 _status = _selectedStatus!.codigo;
               } catch (e) {
                 try {
-                  _selectedStatus = _statusList.firstWhere((s) => s.codigo == _status);
+                  _selectedStatus = _statusList.firstWhere(
+                    (s) => s.codigo == _status,
+                  );
                   _status = _selectedStatus!.codigo;
                 } catch (e2) {
                   _selectedStatus = null;
@@ -972,7 +1138,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
             // Regional
             if (_regionalId != null && _regionalId!.isNotEmpty) {
               try {
-                _selectedRegional = _regionaisList.firstWhere((r) => r.id == _regionalId);
+                _selectedRegional = _regionaisList.firstWhere(
+                  (r) => r.id == _regionalId,
+                );
               } catch (e) {
                 _selectedRegional = null;
               }
@@ -980,7 +1148,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
             // Divisão
             if (_divisaoId != null && _divisaoId!.isNotEmpty) {
               try {
-                _selectedDivisao = _divisoesList.firstWhere((d) => d.id == _divisaoId);
+                _selectedDivisao = _divisoesList.firstWhere(
+                  (d) => d.id == _divisaoId,
+                );
                 // Carregar segmentos da divisão herdada
                 _loadSegmentosPorDivisao();
               } catch (e) {
@@ -988,17 +1158,25 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
               }
             }
             // Segmento
-            if (_segmentoId != null && _segmentoId!.isNotEmpty && _segmentosList.isNotEmpty) {
+            if (_segmentoId != null &&
+                _segmentoId!.isNotEmpty &&
+                _segmentosList.isNotEmpty) {
               try {
-                _selectedSegmento = _segmentosList.firstWhere((s) => s.id == _segmentoId);
+                _selectedSegmento = _segmentosList.firstWhere(
+                  (s) => s.id == _segmentoId,
+                );
               } catch (e) {
                 _selectedSegmento = null;
               }
             }
             // Locais
             if (_selectedLocalIds.isNotEmpty) {
-              final locaisEncontrados = _locaisList.where((l) => _selectedLocalIds.contains(l.id)).toList();
-              _locaisSelecionados = locaisEncontrados.map<Local?>((l) => l as Local?).toList();
+              final locaisEncontrados = _locaisList
+                  .where((l) => _selectedLocalIds.contains(l.id))
+                  .toList();
+              _locaisSelecionados = locaisEncontrados
+                  .map<Local?>((l) => l as Local?)
+                  .toList();
               if (_locaisSelecionados.isEmpty) {
                 _locaisSelecionados = <Local?>[null];
               }
@@ -1021,7 +1199,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         }
         // Atualizar local para exibição
         if (_selectedLocalIds.isNotEmpty) {
-          final selectedLocais = _locaisList.where((l) => _selectedLocalIds.contains(l.id)).toList();
+          final selectedLocais = _locaisList
+              .where((l) => _selectedLocalIds.contains(l.id))
+              .toList();
           _local = selectedLocais.map((l) => l.local).join(', ');
           _localId = _selectedLocalIds.first; // Para compatibilidade
         }
@@ -1033,16 +1213,24 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       // Carregar segmentos da divisão selecionada (se houver)
       if (_selectedDivisao != null) {
         await _loadSegmentosPorDivisao();
-        
+
         // Após carregar segmentos, selecionar o segmento da tarefa (se houver)
-        if (widget.task != null && widget.task!.segmentoId != null && widget.task!.segmentoId!.isNotEmpty) {
+        if (widget.task != null &&
+            widget.task!.segmentoId != null &&
+            widget.task!.segmentoId!.isNotEmpty) {
           setState(() {
             try {
-              _selectedSegmento = _segmentosList.firstWhere((s) => s.id == widget.task!.segmentoId);
+              _selectedSegmento = _segmentosList.firstWhere(
+                (s) => s.id == widget.task!.segmentoId,
+              );
               _segmentoId = _selectedSegmento!.id;
-              print('✅ Segmento selecionado após carregar: ${_selectedSegmento!.segmento}');
+              print(
+                '✅ Segmento selecionado após carregar: ${_selectedSegmento!.segmento}',
+              );
             } catch (e) {
-              print('⚠️ Segmento ${widget.task!.segmentoId} não encontrado na lista de segmentos da divisão');
+              print(
+                '⚠️ Segmento ${widget.task!.segmentoId} não encontrado na lista de segmentos da divisão',
+              );
               _selectedSegmento = null;
             }
           });
@@ -1054,14 +1242,16 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
 
       // Carregar executores e equipes filtrados (mesmo sem filtros, carrega todos)
       await _loadExecutoresEquipesFiltrados();
-      
+
       // Carregar coordenadores
       await _loadCoordenadores();
-      
+
       // Carregar frotas filtradas
       await _loadFrotasFiltradas();
-      
-      print('📋 Após carregar: ${_executoresList.length} executores, ${_equipesList.length} equipes, ${_tiposAtividadeList.length} tipos de atividade');
+
+      print(
+        '📋 Após carregar: ${_executoresList.length} executores, ${_equipesList.length} equipes, ${_tiposAtividadeList.length} tipos de atividade',
+      );
 
       // Após carregar executores e equipes, tentar selecionar o executor/equipe da tarefa
       if (widget.task != null) {
@@ -1078,7 +1268,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         } else if (task.executor.isNotEmpty) {
           try {
             final executorSelecionado = _executoresList.firstWhere(
-              (e) => e.nome == task.executor || (e.nomeCompleto != null && e.nomeCompleto == task.executor),
+              (e) =>
+                  e.nome == task.executor ||
+                  (e.nomeCompleto != null && e.nomeCompleto == task.executor),
             );
             _executor = executorSelecionado.nome; // Salvar apenas o nome
             _usarEquipe = false;
@@ -1091,36 +1283,57 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
             print('⚠️ Executor não encontrado: ${task.executor}');
           }
         }
-        
+
         // AGORA que os executores foram carregados, preencher _executoresSelecionados
         // Se ainda não há IDs mas há executor (string), tentar encontrar novamente
-        if (_selectedExecutorIds.isEmpty && task.executor.isNotEmpty && !_usarEquipe) {
+        if (_selectedExecutorIds.isEmpty &&
+            task.executor.isNotEmpty &&
+            !_usarEquipe) {
           try {
             final executorEncontrado = _executoresList.firstWhere(
-              (e) => e.nome == task.executor || (e.nomeCompleto != null && e.nomeCompleto == task.executor),
+              (e) =>
+                  e.nome == task.executor ||
+                  (e.nomeCompleto != null && e.nomeCompleto == task.executor),
             );
             _selectedExecutorIds.add(executorEncontrado.id);
-            print('✅ Executor encontrado pelo nome: ${executorEncontrado.nome} (ID: ${executorEncontrado.id})');
+            print(
+              '✅ Executor encontrado pelo nome: ${executorEncontrado.nome} (ID: ${executorEncontrado.id})',
+            );
           } catch (e) {
-            print('⚠️ Executor ainda não encontrado após carregar lista: ${task.executor}');
+            print(
+              '⚠️ Executor ainda não encontrado após carregar lista: ${task.executor}',
+            );
           }
         }
-        
+
         // Preencher _executoresSelecionados com os executores encontrados
         if (_selectedExecutorIds.isNotEmpty) {
-          final executoresEncontradosEdit = _executoresList.where((e) => _selectedExecutorIds.contains(e.id)).toList();
-          _executoresSelecionados = executoresEncontradosEdit.map<Executor?>((e) => e as Executor?).toList();
+          final executoresEncontradosEdit = _executoresList
+              .where((e) => _selectedExecutorIds.contains(e.id))
+              .toList();
+          _executoresSelecionados = executoresEncontradosEdit
+              .map<Executor?>((e) => e as Executor?)
+              .toList();
           if (_executoresSelecionados.isEmpty) {
-            _executoresSelecionados = <Executor?>[null]; // Pelo menos um dropdown vazio
+            _executoresSelecionados = <Executor?>[
+              null,
+            ]; // Pelo menos um dropdown vazio
           }
-          print('✅ ${_executoresSelecionados.length} executores selecionados para os dropdowns');
+          print(
+            '✅ ${_executoresSelecionados.length} executores selecionados para os dropdowns',
+          );
         } else {
-          _executoresSelecionados = <Executor?>[null]; // Pelo menos um dropdown vazio
+          _executoresSelecionados = <Executor?>[
+            null,
+          ]; // Pelo menos um dropdown vazio
         }
-        
+
         // AGORA que as frotas foram carregadas, preencher _frotasSelecionadas
         // Se ainda não há IDs mas há frota (string), tentar encontrar
-        if (_selectedFrotaIds.isEmpty && task.frota.isNotEmpty && task.frota != '-N/A-' && _frotasList.isNotEmpty) {
+        if (_selectedFrotaIds.isEmpty &&
+            task.frota.isNotEmpty &&
+            task.frota != '-N/A-' &&
+            _frotasList.isNotEmpty) {
           try {
             // Tentar encontrar por nome completo (formato: "Nome - Placa")
             if (task.frota.contains(' - ')) {
@@ -1132,7 +1345,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                   (f) => f.nome == nome && f.placa == placa,
                 );
                 _selectedFrotaIds.add(frotaEncontrada.id);
-                print('✅ Frota encontrada pelo nome e placa: ${frotaEncontrada.nome} - ${frotaEncontrada.placa} (ID: ${frotaEncontrada.id})');
+                print(
+                  '✅ Frota encontrada pelo nome e placa: ${frotaEncontrada.nome} - ${frotaEncontrada.placa} (ID: ${frotaEncontrada.id})',
+                );
               }
             } else {
               // Tentar encontrar apenas pelo nome
@@ -1140,21 +1355,33 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                 (f) => f.nome == task.frota || f.placa == task.frota,
               );
               _selectedFrotaIds.add(frotaEncontrada.id);
-              print('✅ Frota encontrada pelo nome: ${frotaEncontrada.nome} (ID: ${frotaEncontrada.id})');
+              print(
+                '✅ Frota encontrada pelo nome: ${frotaEncontrada.nome} (ID: ${frotaEncontrada.id})',
+              );
             }
           } catch (e) {
-            print('⚠️ Frota ainda não encontrada após carregar lista: ${task.frota}');
+            print(
+              '⚠️ Frota ainda não encontrada após carregar lista: ${task.frota}',
+            );
           }
         }
-        
+
         // Preencher _frotasSelecionadas com as frotas encontradas
         if (_selectedFrotaIds.isNotEmpty) {
-          final frotasEncontradasEdit = _frotasList.where((f) => _selectedFrotaIds.contains(f.id)).toList();
-          _frotasSelecionadas = frotasEncontradasEdit.map<Frota?>((f) => f as Frota?).toList();
+          final frotasEncontradasEdit = _frotasList
+              .where((f) => _selectedFrotaIds.contains(f.id))
+              .toList();
+          _frotasSelecionadas = frotasEncontradasEdit
+              .map<Frota?>((f) => f as Frota?)
+              .toList();
           if (_frotasSelecionadas.isEmpty) {
-            _frotasSelecionadas = <Frota?>[null]; // Pelo menos um dropdown vazio
+            _frotasSelecionadas = <Frota?>[
+              null,
+            ]; // Pelo menos um dropdown vazio
           }
-          print('✅ ${_frotasSelecionadas.length} frotas selecionadas para os dropdowns');
+          print(
+            '✅ ${_frotasSelecionadas.length} frotas selecionadas para os dropdowns',
+          );
         } else {
           _frotasSelecionadas = <Frota?>[null]; // Pelo menos um dropdown vazio
         }
@@ -1170,14 +1397,16 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
   Future<void> _loadTiposAtividade() async {
     try {
       List<TipoAtividade> tipos;
-      
+
       // Se houver segmento selecionado, filtrar tipos de atividade por segmento
       if (_segmentoId != null && _segmentoId!.isNotEmpty) {
         // Buscar todos os tipos ativos e filtrar por segmento
-        final todosTipos = await _tipoAtividadeService.getTiposAtividadeAtivos();
+        final todosTipos = await _tipoAtividadeService
+            .getTiposAtividadeAtivos();
         tipos = todosTipos.where((tipo) {
           // Verificar se o tipo está associado ao segmento selecionado ou não tem segmentos específicos
-          return tipo.segmentoIds.contains(_segmentoId) || tipo.segmentoIds.isEmpty;
+          return tipo.segmentoIds.contains(_segmentoId) ||
+              tipo.segmentoIds.isEmpty;
         }).toList();
       } else {
         // Sem segmento, carregar todos os tipos ativos
@@ -1228,8 +1457,10 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
 
       print('📋 Executores carregados: ${executores.length}');
       print('📋 Equipes carregadas: ${equipes.length}');
-      print('📋 Filtros aplicados: Regional=$_regionalId, Divisão=$_divisaoId, Segmento=$_segmentoId');
-      
+      print(
+        '📋 Filtros aplicados: Regional=$_regionalId, Divisão=$_divisaoId, Segmento=$_segmentoId',
+      );
+
       if (executores.isNotEmpty) {
         print('📋 Primeiro executor: ${executores.first.nome}');
       }
@@ -1253,12 +1484,16 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
   Future<void> _loadCoordenadores() async {
     try {
       print('🔍 DEBUG Coordenadores: Iniciando carregamento...');
-      
+
       List<Executor> coordenadores = [];
-      
+
       // Se o usuário tem perfil configurado: apenas coordenadores da MESMA regional E divisão E segmento
-      if (_usuarioAtual != null && !_usuarioAtual!.isRoot && _usuarioAtual!.temPerfilConfigurado()) {
-        print('🔒 DEBUG Coordenadores: Filtrando pela mesma REGIONAL, DIVISÃO e SEGMENTO do usuário...');
+      if (_usuarioAtual != null &&
+          !_usuarioAtual!.isRoot &&
+          _usuarioAtual!.temPerfilConfigurado()) {
+        print(
+          '🔒 DEBUG Coordenadores: Filtrando pela mesma REGIONAL, DIVISÃO e SEGMENTO do usuário...',
+        );
         print('   Regional IDs: ${_usuarioAtual!.regionalIds}');
         print('   Divisão IDs: ${_usuarioAtual!.divisaoIds}');
         print('   Segmento IDs: ${_usuarioAtual!.segmentoIds}');
@@ -1267,13 +1502,19 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           divisaoIds: _usuarioAtual!.divisaoIds,
           segmentoIds: _usuarioAtual!.segmentoIds,
         );
-        print('🔒 DEBUG Coordenadores: Total após filtro (regional+divisão+segmento): ${coordenadores.length}');
+        print(
+          '🔒 DEBUG Coordenadores: Total após filtro (regional+divisão+segmento): ${coordenadores.length}',
+        );
       } else {
-        print('👑 DEBUG Coordenadores: Usuário root ou sem perfil, buscando todos os coordenadores...');
+        print(
+          '👑 DEBUG Coordenadores: Usuário root ou sem perfil, buscando todos os coordenadores...',
+        );
         coordenadores = await _executorService.getCoordenadores();
-        print('👑 DEBUG Coordenadores: Total de coordenadores encontrados: ${coordenadores.length}');
+        print(
+          '👑 DEBUG Coordenadores: Total de coordenadores encontrados: ${coordenadores.length}',
+        );
       }
-      
+
       setState(() {
         _coordenadoresList = coordenadores;
       });
@@ -1300,7 +1541,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       return todasRegionais; // Se não tem filtro, mostrar todas
     }
 
-    return todasRegionais.where((r) => regionaisPermitidas.contains(r.id)).toList();
+    return todasRegionais
+        .where((r) => regionaisPermitidas.contains(r.id))
+        .toList();
   }
 
   // Filtrar divisões pelo perfil do usuário
@@ -1316,7 +1559,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       return todasDivisoes; // Se não tem filtro, mostrar todas
     }
 
-    return todasDivisoes.where((d) => divisoesPermitidas.contains(d.id)).toList();
+    return todasDivisoes
+        .where((d) => divisoesPermitidas.contains(d.id))
+        .toList();
   }
 
   // Filtrar frotas pelo perfil do usuário
@@ -1331,24 +1576,32 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
     final segmentosPermitidos = _usuarioAtual!.segmentoIds;
 
     // Perfil com segmento "Frota": acesso a todas as frotas da regional (para cadastrar manutenção etc.)
-    final usuarioTemSegmentoFrota = _segmentoFrotaId != null &&
+    final usuarioTemSegmentoFrota =
+        _segmentoFrotaId != null &&
         segmentosPermitidos.contains(_segmentoFrotaId);
     if (usuarioTemSegmentoFrota) {
       return todasFrotas.where((frota) {
         if (!frota.ativo) return false;
-        return frota.regionalId == null || regionaisPermitidas.contains(frota.regionalId);
+        return frota.regionalId == null ||
+            regionaisPermitidas.contains(frota.regionalId);
       }).toList();
     }
 
     // Filtrar por regional, divisão e segmento do perfil
     return todasFrotas.where((frota) {
       if (!frota.ativo || frota.emManutencao) return false;
-      bool passaRegional = regionaisPermitidas.isEmpty ||
-          (frota.regionalId != null && regionaisPermitidas.contains(frota.regionalId));
-      bool passaDivisao = divisoesPermitidas.isEmpty ||
-          (frota.divisaoId != null && divisoesPermitidas.contains(frota.divisaoId));
-      bool passaSegmento = segmentosPermitidos.isEmpty ||
-          (frota.segmentoId != null && segmentosPermitidos.contains(frota.segmentoId));
+      bool passaRegional =
+          regionaisPermitidas.isEmpty ||
+          (frota.regionalId != null &&
+              regionaisPermitidas.contains(frota.regionalId));
+      bool passaDivisao =
+          divisoesPermitidas.isEmpty ||
+          (frota.divisaoId != null &&
+              divisoesPermitidas.contains(frota.divisaoId));
+      bool passaSegmento =
+          segmentosPermitidos.isEmpty ||
+          (frota.segmentoId != null &&
+              segmentosPermitidos.contains(frota.segmentoId));
       return passaRegional && passaDivisao && passaSegmento;
     }).toList();
   }
@@ -1368,7 +1621,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       // Recarregar frotas e filtrar pelo perfil
       final todasFrotas = await _frotaService.getAllFrotas();
       final frotasFiltradas = _filtrarFrotasPorPerfil(todasFrotas);
-      
+
       setState(() {
         _frotasList = frotasFiltradas;
       });
@@ -1378,7 +1631,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         try {
           // Tentar encontrar por nome ou placa
           Frota? frotaEncontrada;
-          
+
           // Primeiro, tentar match exato
           try {
             frotaEncontrada = _frotasList.firstWhere(
@@ -1404,7 +1657,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
               }
             }
           }
-          
+
           _selectedFrota = frotaEncontrada;
           if (_selectedFrota != null) {
             _frota = '${_selectedFrota!.nome} - ${_selectedFrota!.placa}';
@@ -1415,7 +1668,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         }
       }
 
-      print('🚗 Frotas filtradas carregadas: ${frotasFiltradas.length} de ${todasFrotas.length}');
+      print(
+        '🚗 Frotas filtradas carregadas: ${frotasFiltradas.length} de ${todasFrotas.length}',
+      );
     } catch (e) {
       print('❌ Erro ao carregar frotas: $e');
       setState(() {
@@ -1426,25 +1681,25 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
 
   Future<void> _abrirChatTarefa() async {
     if (widget.task == null) return;
-    
+
     try {
       // Buscar ou criar grupo de chat para a tarefa
       GrupoChat? grupoChat;
-      
+
       // Primeiro, tentar obter grupo existente
       grupoChat = await _chatService.obterGrupoPorTarefaId(widget.task!.id);
-      
+
       // Se não existir, criar um novo grupo
       if (grupoChat == null) {
         // Obter ou criar comunidade baseada na divisão e segmento da tarefa
         if (widget.task!.divisaoId != null && widget.task!.segmentoId != null) {
-          final divisaoNome = widget.task!.divisao.isNotEmpty 
-              ? widget.task!.divisao 
+          final divisaoNome = widget.task!.divisao.isNotEmpty
+              ? widget.task!.divisao
               : 'Divisão';
-          final segmentoNome = widget.task!.segmento.isNotEmpty 
-              ? widget.task!.segmento 
+          final segmentoNome = widget.task!.segmento.isNotEmpty
+              ? widget.task!.segmento
               : 'Segmento';
-          
+
           final comunidade = await _chatService.criarOuObterComunidade(
             widget.task!.regionalId ?? '',
             widget.task!.regional,
@@ -1453,7 +1708,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
             widget.task!.segmentoId!,
             segmentoNome,
           );
-          
+
           if (comunidade.id != null) {
             grupoChat = await _chatService.criarOuObterGrupo(
               widget.task!.id,
@@ -1466,7 +1721,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
-                content: Text('Não é possível criar chat: tarefa precisa ter divisão e segmento configurados.'),
+                content: Text(
+                  'Não é possível criar chat: tarefa precisa ter divisão e segmento configurados.',
+                ),
                 backgroundColor: Colors.orange,
               ),
             );
@@ -1474,14 +1731,14 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           return;
         }
       }
-      
+
       // Abrir tela de chat em uma nova rota
       if (mounted && grupoChat != null && grupoChat.id != null) {
         Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (context) => ChatScreen(
-              grupoId: grupoChat!.id!,
-              onBack: () => Navigator.of(context).pop(),
+            builder: (context) => ChatView(
+              initialGrupoId: grupoChat!.id!,
+              initialComunidadeId: grupoChat.comunidadeId,
             ),
             fullscreenDialog: true,
           ),
@@ -1503,15 +1760,13 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
   @override
   Widget build(BuildContext context) {
     final isSubtask = widget.parentTaskId != null;
-    final title = widget.task == null 
+    final title = widget.task == null
         ? (isSubtask ? 'Criar Subtarefa' : 'Criar Tarefa')
         : 'Editar Tarefa';
     final isMobile = Responsive.isMobile(context);
-    
+
     return Dialog(
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       elevation: 0,
       backgroundColor: Colors.transparent,
       child: Container(
@@ -1541,10 +1796,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                 gradient: const LinearGradient(
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
-                  colors: [
-                    Color(0xFF1E3A5F),
-                    Color(0xFF2C5282),
-                  ],
+                  colors: [Color(0xFF1E3A5F), Color(0xFF2C5282)],
                 ),
                 borderRadius: const BorderRadius.only(
                   topLeft: Radius.circular(20),
@@ -1586,7 +1838,11 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: IconButton(
-                        icon: const Icon(Icons.chat, color: Colors.white, size: 20),
+                        icon: const Icon(
+                          Icons.chat,
+                          color: Colors.white,
+                          size: 20,
+                        ),
                         tooltip: 'Abrir chat da tarefa',
                         onPressed: () => _abrirChatTarefa(),
                       ),
@@ -1597,7 +1853,11 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: IconButton(
-                      icon: const Icon(Icons.close, color: Colors.white, size: 20),
+                      icon: const Icon(
+                        Icons.close,
+                        color: Colors.white,
+                        size: 20,
+                      ),
                       onPressed: () => Navigator.of(context).pop(),
                     ),
                   ),
@@ -1628,7 +1888,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                   fontSize: isMobile ? 12 : 14,
                   fontWeight: FontWeight.w500,
                 ),
-                tabAlignment: isMobile ? TabAlignment.start : TabAlignment.fill, // Fill no desktop
+                tabAlignment: isMobile
+                    ? TabAlignment.start
+                    : TabAlignment.fill, // Fill no desktop
                 tabs: [
                   const Tab(
                     icon: Icon(Icons.info_outline, size: 20),
@@ -1691,7 +1953,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                                   decoration: BoxDecoration(
                                     color: Colors.white,
                                     borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(color: Colors.grey[200]!),
+                                    border: Border.all(
+                                      color: Colors.grey[200]!,
+                                    ),
                                     boxShadow: [
                                       BoxShadow(
                                         color: Colors.black.withOpacity(0.03),
@@ -1711,13 +1975,23 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                                           ],
                                         )
                                       : Row(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
                                           children: [
-                                            Expanded(flex: 1, child: _buildStatusDropdown()),
+                                            Expanded(
+                                              flex: 1,
+                                              child: _buildStatusDropdown(),
+                                            ),
                                             const SizedBox(width: 16),
-                                            Expanded(flex: 1, child: _buildRegionalDropdown()),
+                                            Expanded(
+                                              flex: 1,
+                                              child: _buildRegionalDropdown(),
+                                            ),
                                             const SizedBox(width: 16),
-                                            Expanded(flex: 1, child: _buildDivisaoDropdown()),
+                                            Expanded(
+                                              flex: 1,
+                                              child: _buildDivisaoDropdown(),
+                                            ),
                                           ],
                                         ),
                                 ),
@@ -1728,7 +2002,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                                   decoration: BoxDecoration(
                                     color: Colors.white,
                                     borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(color: Colors.grey[200]!),
+                                    border: Border.all(
+                                      color: Colors.grey[200]!,
+                                    ),
                                     boxShadow: [
                                       BoxShadow(
                                         color: Colors.black.withOpacity(0.03),
@@ -1739,7 +2015,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                                   ),
                                   child: Column(
                                     children: [
-                                        _buildSegmentoDropdown(),
+                                      _buildSegmentoDropdown(),
                                       const SizedBox(height: 10),
                                       _buildTipoAtividadeDropdown(),
                                       const SizedBox(height: 10),
@@ -1754,7 +2030,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                                   decoration: BoxDecoration(
                                     color: Colors.white,
                                     borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(color: Colors.grey[200]!),
+                                    border: Border.all(
+                                      color: Colors.grey[200]!,
+                                    ),
                                     boxShadow: [
                                       BoxShadow(
                                         color: Colors.black.withOpacity(0.03),
@@ -1772,7 +2050,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                                   decoration: BoxDecoration(
                                     color: Colors.white,
                                     borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(color: Colors.grey[200]!),
+                                    border: Border.all(
+                                      color: Colors.grey[200]!,
+                                    ),
                                     boxShadow: [
                                       BoxShadow(
                                         color: Colors.black.withOpacity(0.03),
@@ -1781,7 +2061,12 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                                       ),
                                     ],
                                   ),
-                                  child: _buildTextField('Tarefa', _tarefa, (value) => _tarefa = value, maxLines: 3),
+                                  child: _buildTextField(
+                                    'Tarefa',
+                                    _tarefa,
+                                    (value) => _tarefa = value,
+                                    maxLines: 3,
+                                  ),
                                 ),
                               ],
                             ),
@@ -1805,9 +2090,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                       padding: const EdgeInsets.all(16),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          _buildFrotasSection(),
-                        ],
+                        children: [_buildFrotasSection()],
                       ),
                     ),
                     // Aba 4: Datas e Horas (Períodos de Execução)
@@ -1853,11 +2136,19 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                                 Row(
                                   children: [
                                     Expanded(
-                                      child: _buildNumberField('Horas Previstas', _horasPrevistas, (value) => _horasPrevistas = value),
+                                      child: _buildNumberField(
+                                        'Horas Previstas',
+                                        _horasPrevistas,
+                                        (value) => _horasPrevistas = value,
+                                      ),
                                     ),
                                     const SizedBox(width: 16),
                                     Expanded(
-                                      child: _buildNumberField('Horas Executadas', _horasExecutadas, (value) => _horasExecutadas = value),
+                                      child: _buildNumberField(
+                                        'Horas Executadas',
+                                        _horasExecutadas,
+                                        (value) => _horasExecutadas = value,
+                                      ),
                                     ),
                                   ],
                                 ),
@@ -1885,7 +2176,12 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                             ),
                           ],
                         ),
-                        child: _buildTextField('Observações', _observacoes ?? '', (value) => _observacoes = value, maxLines: 10),
+                        child: _buildTextField(
+                          'Observações',
+                          _observacoes ?? '',
+                          (value) => _observacoes = value,
+                          maxLines: 10,
+                        ),
                       ),
                     ),
                     // Aba 6: Anexos (apenas para tarefas existentes)
@@ -1914,7 +2210,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                                   decoration: BoxDecoration(
                                     color: Colors.grey[100],
                                     borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(color: Colors.grey[300]!),
+                                    border: Border.all(
+                                      color: Colors.grey[300]!,
+                                    ),
                                   ),
                                   child: Column(
                                     children: [
@@ -1955,9 +2253,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                               padding: const EdgeInsets.all(16),
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  PEXAPRCRCView(task: widget.task!),
-                                ],
+                                children: [PEXAPRCRCView(task: widget.task!)],
                               ),
                             )
                           : SingleChildScrollView(
@@ -1971,7 +2267,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                                     decoration: BoxDecoration(
                                       color: Colors.grey[100],
                                       borderRadius: BorderRadius.circular(8),
-                                      border: Border.all(color: Colors.grey[300]!),
+                                      border: Border.all(
+                                        color: Colors.grey[300]!,
+                                      ),
                                     ),
                                     child: const Column(
                                       children: [
@@ -1984,14 +2282,17 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                                         Text(
                                           'Documentos PEX, APR e CRC podem ser criados após salvar a tarefa',
                                           textAlign: TextAlign.center,
-                                          style: TextStyle(fontSize: 14, color: Colors.grey),
-                                      ),
-                                    ],
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            color: Colors.grey,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
-                          ),
                     // Aba 7: Grupo SAP
                     _buildSAPGroupContent(),
                   ],
@@ -2017,7 +2318,10 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                   TextButton(
                     onPressed: () => Navigator.of(context).pop(),
                     style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 12,
+                      ),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8),
                       ),
@@ -2036,7 +2340,10 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF1E3A5F),
                       foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 32,
+                        vertical: 12,
+                      ),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8),
                       ),
@@ -2047,7 +2354,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(
-                          widget.task == null ? Icons.add_circle_outline : Icons.save_outlined,
+                          widget.task == null
+                              ? Icons.add_circle_outline
+                              : Icons.save_outlined,
                           size: 18,
                         ),
                         const SizedBox(width: 8),
@@ -2076,33 +2385,35 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
     Status? statusValue;
     if (_selectedStatus != null && _statusList.isNotEmpty) {
       try {
-        final found = _statusList.firstWhere((s) => s.id == _selectedStatus!.id);
+        final found = _statusList.firstWhere(
+          (s) => s.id == _selectedStatus!.id,
+        );
         statusValue = found;
       } catch (e) {
         statusValue = null;
       }
     }
-    
+
     // Criar uma cópia da lista de itens para evitar problemas de referência
     final itemsList = List<Status>.from(_statusList);
-    
+
     return DropdownSearch<Status>(
       popupProps: PopupProps.menu(
         showSearchBox: true,
         searchFieldProps: TextFieldProps(
           decoration: InputDecoration(
             hintText: 'Digite para buscar status...',
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 10,
             ),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           ),
         ),
-        menuProps: const MenuProps(
-          elevation: 4,
-        ),
+        menuProps: const MenuProps(elevation: 4),
         constraints: BoxConstraints(
-          maxHeight: MediaQuery.of(context).size.height * 0.6, // 60% da altura da tela
+          maxHeight:
+              MediaQuery.of(context).size.height * 0.6, // 60% da altura da tela
           minHeight: 200,
         ),
       ),
@@ -2143,10 +2454,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             child: Text(
               'Digite para buscar status...',
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.grey[600],
-              ),
+              style: TextStyle(fontSize: 14, color: Colors.grey[600]),
             ),
           );
         }
@@ -2161,10 +2469,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                 decoration: BoxDecoration(
                   color: selectedItem.color,
                   shape: BoxShape.circle,
-                  border: Border.all(
-                    color: Colors.grey[300]!,
-                    width: 0.5,
-                  ),
+                  border: Border.all(color: Colors.grey[300]!, width: 0.5),
                 ),
               ),
               const SizedBox(width: 12),
@@ -2172,10 +2477,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
               Expanded(
                 child: Text(
                   selectedItem.status,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    color: Colors.black87,
-                  ),
+                  style: const TextStyle(fontSize: 14, color: Colors.black87),
                 ),
               ),
             ],
@@ -2196,7 +2498,10 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
             borderRadius: BorderRadius.circular(12),
             borderSide: BorderSide(color: Colors.grey[300]!),
           ),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 10,
+          ),
           filled: true,
           fillColor: Colors.white,
           enabledBorder: OutlineInputBorder(
@@ -2215,10 +2520,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
             borderRadius: BorderRadius.circular(12),
             borderSide: const BorderSide(color: Colors.red, width: 2),
           ),
-          suffixIcon: Icon(
-            Icons.arrow_drop_down,
-            color: Colors.grey[600],
-          ),
+          suffixIcon: Icon(Icons.arrow_drop_down, color: Colors.grey[600]),
         ),
       ),
     );
@@ -2230,13 +2532,15 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
     Regional? regionalValue;
     if (_selectedRegional != null && _regionaisList.isNotEmpty) {
       try {
-        final found = _regionaisList.firstWhere((r) => r.id == _selectedRegional!.id);
+        final found = _regionaisList.firstWhere(
+          (r) => r.id == _selectedRegional!.id,
+        );
         regionalValue = found;
       } catch (e) {
         regionalValue = null;
       }
     }
-    
+
     return _buildSearchableDropdown<Regional>(
       label: 'Regional',
       value: regionalValue,
@@ -2273,13 +2577,15 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
     Divisao? divisaoValue;
     if (_selectedDivisao != null && _divisoesList.isNotEmpty) {
       try {
-        final found = _divisoesList.firstWhere((d) => d.id == _selectedDivisao!.id);
+        final found = _divisoesList.firstWhere(
+          (d) => d.id == _selectedDivisao!.id,
+        );
         divisaoValue = found;
       } catch (e) {
         divisaoValue = null;
       }
     }
-    
+
     return _buildSearchableDropdown<Divisao>(
       label: 'Divisão',
       value: divisaoValue,
@@ -2321,7 +2627,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
     if (_locaisSelecionados.isEmpty) {
       _locaisSelecionados = <Local?>[null];
     }
-    
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2338,21 +2644,31 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
               child: InkWell(
                 onTap: () {
                   print('🔵 DEBUG: Botão adicionar local pressionado');
-                  print('🔵 DEBUG: _locaisSelecionados antes: ${_locaisSelecionados.length} itens');
-                  print('🔵 DEBUG: _selectedLocalIds antes: ${_selectedLocalIds.length} itens');
+                  print(
+                    '🔵 DEBUG: _locaisSelecionados antes: ${_locaisSelecionados.length} itens',
+                  );
+                  print(
+                    '🔵 DEBUG: _selectedLocalIds antes: ${_selectedLocalIds.length} itens',
+                  );
                   print('🔵 DEBUG: Conteúdo antes: $_locaisSelecionados');
                   setState(() {
                     // Adicionar um novo dropdown vazio
                     print('🔵 DEBUG: Adicionando novo dropdown vazio');
                     _locaisSelecionados.add(null as Local?);
-                    print('🔵 DEBUG: _locaisSelecionados depois: ${_locaisSelecionados.length} itens');
+                    print(
+                      '🔵 DEBUG: _locaisSelecionados depois: ${_locaisSelecionados.length} itens',
+                    );
                     print('🔵 DEBUG: Conteúdo depois: $_locaisSelecionados');
                   });
                 },
                 borderRadius: BorderRadius.circular(20),
                 child: Container(
                   padding: const EdgeInsets.all(8),
-                  child: const Icon(Icons.add_circle, size: 24, color: Colors.blue),
+                  child: const Icon(
+                    Icons.add_circle,
+                    size: 24,
+                    color: Colors.blue,
+                  ),
                 ),
               ),
             ),
@@ -2362,7 +2678,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         // Lista de dropdowns lado a lado
         Builder(
           builder: (context) {
-            print('🔵 DEBUG: Wrap builder - _locaisSelecionados.length = ${_locaisSelecionados.length}');
+            print(
+              '🔵 DEBUG: Wrap builder - _locaisSelecionados.length = ${_locaisSelecionados.length}',
+            );
             return Wrap(
               spacing: 8,
               runSpacing: 8,
@@ -2379,21 +2697,25 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
 
   Widget _buildSingleLocalDropdown(int index) {
     print('🔵 DEBUG: _buildSingleLocalDropdown chamado para índice $index');
-    print('🔵 DEBUG: _locaisSelecionados.length = ${_locaisSelecionados.length}');
-    
+    print(
+      '🔵 DEBUG: _locaisSelecionados.length = ${_locaisSelecionados.length}',
+    );
+
     // Verificar se o índice é válido
     if (index >= _locaisSelecionados.length) {
       print('⚠️ DEBUG: Índice $index inválido! Retornando SizedBox.shrink()');
       return const SizedBox.shrink();
     }
-    
+
     final localSelecionado = _locaisSelecionados[index];
-    print('🔵 DEBUG: localSelecionado[$index] = ${localSelecionado?.local ?? "null"}');
-    
+    print(
+      '🔵 DEBUG: localSelecionado[$index] = ${localSelecionado?.local ?? "null"}',
+    );
+
     // Filtrar locais disponíveis (todos os locais menos os já selecionados em outros dropdowns)
     // IMPORTANTE: Sempre incluir o local selecionado neste dropdown específico
     final localSelecionadoId = localSelecionado?.id;
-    
+
     // Criar lista de IDs já selecionados em OUTROS dropdowns (não este)
     final outrosLocalIds = <String>{};
     for (int i = 0; i < _locaisSelecionados.length; i++) {
@@ -2401,7 +2723,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         outrosLocalIds.add(_locaisSelecionados[i]!.id);
       }
     }
-    
+
     final locaisDisponiveis = _locaisList.where((local) {
       // Sempre incluir o local selecionado neste dropdown específico
       if (localSelecionadoId != null && local.id == localSelecionadoId) {
@@ -2410,20 +2732,28 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       // Excluir apenas locais selecionados em OUTROS dropdowns
       return !outrosLocalIds.contains(local.id);
     }).toList();
-    
+
     // Verificar se o valor selecionado está na lista de disponíveis
     // Se não estiver, usar null para evitar erro de assertion
     Local? valorValido;
     if (localSelecionado != null && localSelecionadoId != null) {
       try {
-        valorValido = locaisDisponiveis.firstWhere((l) => l.id == localSelecionadoId);
-        print('✅ DEBUG: Local encontrado na lista de disponíveis: ${valorValido.local}');
+        valorValido = locaisDisponiveis.firstWhere(
+          (l) => l.id == localSelecionadoId,
+        );
+        print(
+          '✅ DEBUG: Local encontrado na lista de disponíveis: ${valorValido.local}',
+        );
       } catch (e) {
-        print('⚠️ DEBUG: Local não encontrado na lista de disponíveis: ${localSelecionado.local}');
+        print(
+          '⚠️ DEBUG: Local não encontrado na lista de disponíveis: ${localSelecionado.local}',
+        );
         // Se não encontrou, verificar se o local ainda existe na lista completa
         try {
           _locaisList.firstWhere((l) => l.id == localSelecionadoId);
-          print('✅ DEBUG: Local existe na lista completa, mas não está disponível');
+          print(
+            '✅ DEBUG: Local existe na lista completa, mas não está disponível',
+          );
           // Se existe na lista completa mas não está disponível, usar null
           valorValido = null;
           // Limpar a seleção inválida de forma assíncrona para evitar problemas de estado
@@ -2451,7 +2781,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         }
       }
     }
-    
+
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       child: SizedBox(
@@ -2464,40 +2794,55 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                 label: 'Local ${index + 1}',
                 value: valorValido,
                 items: locaisDisponiveis,
-                getDisplayText: (local) => local.descricao != null && local.descricao!.isNotEmpty
+                getDisplayText: (local) =>
+                    local.descricao != null && local.descricao!.isNotEmpty
                     ? '${local.local} - ${local.descricao}'
                     : local.local,
                 onChanged: (Local? value) {
                   print('🔵 DEBUG: onChanged chamado para índice $index');
-                  print('🔵 DEBUG: Valor selecionado: ${value?.local ?? "null"}');
-                  print('🔵 DEBUG: _locaisSelecionados.length antes: ${_locaisSelecionados.length}');
-                  
+                  print(
+                    '🔵 DEBUG: Valor selecionado: ${value?.local ?? "null"}',
+                  );
+                  print(
+                    '🔵 DEBUG: _locaisSelecionados.length antes: ${_locaisSelecionados.length}',
+                  );
+
                   if (!mounted) {
                     print('⚠️ DEBUG: Widget não está montado, retornando');
                     return;
                   }
-                  
+
                   setState(() {
                     // Remover o local anterior da lista de selecionados se existir
                     final localAnterior = _locaisSelecionados[index];
-                    print('🔵 DEBUG: Local anterior: ${localAnterior?.local ?? "null"}');
-                    
+                    print(
+                      '🔵 DEBUG: Local anterior: ${localAnterior?.local ?? "null"}',
+                    );
+
                     if (localAnterior != null) {
-                      print('🔵 DEBUG: Removendo ${localAnterior.id} de _selectedLocalIds');
+                      print(
+                        '🔵 DEBUG: Removendo ${localAnterior.id} de _selectedLocalIds',
+                      );
                       _selectedLocalIds.remove(localAnterior.id);
                     }
-                    
+
                     // Adicionar o novo local se não for null
                     if (value != null) {
-                      print('🔵 DEBUG: Adicionando ${value.id} a _selectedLocalIds');
+                      print(
+                        '🔵 DEBUG: Adicionando ${value.id} a _selectedLocalIds',
+                      );
                       _selectedLocalIds.add(value.id);
-                      
+
                       // Atualizar a lista garantindo o tipo correto
                       if (index < _locaisSelecionados.length) {
-                        print('🔵 DEBUG: Atualizando _locaisSelecionados[$index] = ${value.local}');
+                        print(
+                          '🔵 DEBUG: Atualizando _locaisSelecionados[$index] = ${value.local}',
+                        );
                         _locaisSelecionados[index] = value;
                       } else {
-                        print('⚠️ DEBUG: Índice $index fora dos limites! Adicionando ao final');
+                        print(
+                          '⚠️ DEBUG: Índice $index fora dos limites! Adicionando ao final',
+                        );
                         _locaisSelecionados.add(value);
                       }
                     } else {
@@ -2506,17 +2851,25 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                       if (index < _locaisSelecionados.length) {
                         _locaisSelecionados[index] = null as Local?;
                       } else {
-                        print('⚠️ DEBUG: Índice $index fora dos limites ao limpar!');
+                        print(
+                          '⚠️ DEBUG: Índice $index fora dos limites ao limpar!',
+                        );
                         _locaisSelecionados.add(null as Local?);
                       }
                     }
-                    
-                    print('🔵 DEBUG: _locaisSelecionados.length depois: ${_locaisSelecionados.length}');
-                    print('🔵 DEBUG: _selectedLocalIds.length depois: ${_selectedLocalIds.length}');
-                    
+
+                    print(
+                      '🔵 DEBUG: _locaisSelecionados.length depois: ${_locaisSelecionados.length}',
+                    );
+                    print(
+                      '🔵 DEBUG: _selectedLocalIds.length depois: ${_selectedLocalIds.length}',
+                    );
+
                     // Atualizar exibição
                     if (_selectedLocalIds.isNotEmpty) {
-                      final selectedLocais = _locaisList.where((l) => _selectedLocalIds.contains(l.id)).toList();
+                      final selectedLocais = _locaisList
+                          .where((l) => _selectedLocalIds.contains(l.id))
+                          .toList();
                       _local = selectedLocais.map((l) => l.local).join(', ');
                       _localId = _selectedLocalIds.first;
                     } else {
@@ -2546,19 +2899,23 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                         if (localParaRemover != null) {
                           _selectedLocalIds.remove(localParaRemover.id);
                         }
-                        
+
                         // Remover o dropdown
                         _locaisSelecionados.removeAt(index);
-                        
+
                         // Garantir que sempre há pelo menos um dropdown
                         if (_locaisSelecionados.isEmpty) {
                           _locaisSelecionados = <Local?>[null];
                         }
-                        
+
                         // Atualizar exibição
                         if (_selectedLocalIds.isNotEmpty) {
-                          final selectedLocais = _locaisList.where((l) => _selectedLocalIds.contains(l.id)).toList();
-                          _local = selectedLocais.map((l) => l.local).join(', ');
+                          final selectedLocais = _locaisList
+                              .where((l) => _selectedLocalIds.contains(l.id))
+                              .toList();
+                          _local = selectedLocais
+                              .map((l) => l.local)
+                              .join(', ');
                           _localId = _selectedLocalIds.first;
                         } else {
                           _local = '';
@@ -2569,14 +2926,18 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                     borderRadius: BorderRadius.circular(20),
                     child: Container(
                       padding: const EdgeInsets.all(4),
-                      child: const Icon(Icons.remove_circle, color: Colors.red, size: 24),
+                      child: const Icon(
+                        Icons.remove_circle,
+                        color: Colors.red,
+                        size: 24,
+                      ),
                     ),
                   ),
                 ),
               ),
-            ],
-          ),
+          ],
         ),
+      ),
     );
   }
 
@@ -2591,30 +2952,48 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
     }
 
     try {
-      final segmentos = await _segmentoService.getSegmentosPorDivisao(_selectedDivisao!.id);
-      
+      final segmentos = await _segmentoService.getSegmentosPorDivisao(
+        _selectedDivisao!.id,
+      );
+
       // Filtrar segmentos pelo perfil do usuário (se não for root e tiver segmentos configurados)
       List<Segmento> segmentosFiltrados = segmentos;
-      if (_usuarioAtual != null && !_usuarioAtual!.isRoot && _segmentoIdsPerfil.isNotEmpty) {
-        segmentosFiltrados = segmentos.where((s) => _segmentoIdsPerfil.contains(s.id)).toList();
-        print('🔒 Segmentos filtrados pelo perfil: ${segmentosFiltrados.length} de ${segmentos.length}');
+      if (_usuarioAtual != null &&
+          !_usuarioAtual!.isRoot &&
+          _segmentoIdsPerfil.isNotEmpty) {
+        segmentosFiltrados = segmentos
+            .where((s) => _segmentoIdsPerfil.contains(s.id))
+            .toList();
+        print(
+          '🔒 Segmentos filtrados pelo perfil: ${segmentosFiltrados.length} de ${segmentos.length}',
+        );
       }
-      
+
       setState(() {
         _segmentosList = segmentosFiltrados;
-        
+
         // Se houver um segmentoId da tarefa e ele estiver na lista, selecioná-lo
-        if (widget.task != null && widget.task!.segmentoId != null && widget.task!.segmentoId!.isNotEmpty) {
+        if (widget.task != null &&
+            widget.task!.segmentoId != null &&
+            widget.task!.segmentoId!.isNotEmpty) {
           try {
-            final segmentoDaTarefa = segmentosFiltrados.firstWhere((s) => s.id == widget.task!.segmentoId);
+            final segmentoDaTarefa = segmentosFiltrados.firstWhere(
+              (s) => s.id == widget.task!.segmentoId,
+            );
             _selectedSegmento = segmentoDaTarefa;
             _segmentoId = segmentoDaTarefa.id;
-            print('✅ Segmento da tarefa selecionado: ${segmentoDaTarefa.segmento}');
+            print(
+              '✅ Segmento da tarefa selecionado: ${segmentoDaTarefa.segmento}',
+            );
           } catch (e) {
-            print('⚠️ Segmento da tarefa (${widget.task!.segmentoId}) não encontrado na lista');
+            print(
+              '⚠️ Segmento da tarefa (${widget.task!.segmentoId}) não encontrado na lista',
+            );
             // Se o segmento selecionado anteriormente não estiver mais na lista, limpar seleção
             if (_selectedSegmento != null) {
-              final aindaExiste = segmentosFiltrados.any((s) => s.id == _selectedSegmento!.id);
+              final aindaExiste = segmentosFiltrados.any(
+                (s) => s.id == _selectedSegmento!.id,
+              );
               if (!aindaExiste) {
                 _selectedSegmento = null;
                 _segmentoId = null;
@@ -2625,11 +3004,15 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           // Se for criar nova tarefa e houver apenas um segmento no perfil, pré-selecionar
           _selectedSegmento = segmentosFiltrados.first;
           _segmentoId = _selectedSegmento!.id;
-          print('✅ Segmento único do perfil pré-selecionado: ${_selectedSegmento!.segmento}');
+          print(
+            '✅ Segmento único do perfil pré-selecionado: ${_selectedSegmento!.segmento}',
+          );
         } else {
           // Se o segmento selecionado anteriormente não estiver mais na lista, limpar seleção
           if (_selectedSegmento != null) {
-            final aindaExiste = segmentosFiltrados.any((s) => s.id == _selectedSegmento!.id);
+            final aindaExiste = segmentosFiltrados.any(
+              (s) => s.id == _selectedSegmento!.id,
+            );
             if (!aindaExiste) {
               _selectedSegmento = null;
               _segmentoId = null;
@@ -2653,13 +3036,15 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
     Segmento? segmentoValue;
     if (_selectedSegmento != null && _segmentosList.isNotEmpty) {
       try {
-        final found = _segmentosList.firstWhere((s) => s.id == _selectedSegmento!.id);
+        final found = _segmentosList.firstWhere(
+          (s) => s.id == _selectedSegmento!.id,
+        );
         segmentoValue = found;
       } catch (e) {
         segmentoValue = null;
       }
     }
-    
+
     return _buildSearchableDropdown<Segmento>(
       label: 'Segmento',
       value: segmentoValue,
@@ -2707,11 +3092,13 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       label: 'Coordenador',
       value: coordenadorSelecionado,
       items: _coordenadoresList,
-      getDisplayText: (coordenador) => coordenador.nomeCompleto ?? coordenador.nome,
+      getDisplayText: (coordenador) =>
+          coordenador.nomeCompleto ?? coordenador.nome,
       onChanged: (Executor? value) {
         setState(() {
           if (value != null) {
-            _coordenador = value.nome; // Salvar apenas o nome, não o nome completo
+            _coordenador =
+                value.nome; // Salvar apenas o nome, não o nome completo
           } else {
             _coordenador = '';
           }
@@ -2723,7 +3110,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
 
   /// Texto exibido no dropdown de frota: nome - placa (- modelo/marca se houver).
   String _frotaDisplayText(Frota frota) {
-    final modelo = (frota.marca != null && frota.marca!.trim().isNotEmpty) ? ' - ${frota.marca!.trim()}' : '';
+    final modelo = (frota.marca != null && frota.marca!.trim().isNotEmpty)
+        ? ' - ${frota.marca!.trim()}'
+        : '';
     return '${frota.nome} - ${frota.placa}$modelo';
   }
 
@@ -2732,7 +3121,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
     if (_frotasSelecionadas.isEmpty) {
       _frotasSelecionadas = <Frota?>[null];
     }
-    
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2763,13 +3152,18 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                 borderRadius: BorderRadius.circular(20),
                 child: Container(
                   padding: const EdgeInsets.all(8),
-                  child: const Icon(Icons.add_circle, size: 24, color: Colors.blue),
+                  child: const Icon(
+                    Icons.add_circle,
+                    size: 24,
+                    color: Colors.blue,
+                  ),
                 ),
               ),
             ),
           ],
         ),
-        if (_frotasList.isEmpty && (_regionalId != null || _divisaoId != null || _segmentoId != null))
+        if (_frotasList.isEmpty &&
+            (_regionalId != null || _divisaoId != null || _segmentoId != null))
           Padding(
             padding: const EdgeInsets.only(top: 8.0),
             child: Text(
@@ -2788,13 +3182,13 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
     if (index >= _frotasSelecionadas.length) {
       return const SizedBox.shrink();
     }
-    
+
     final frotaSelecionada = _frotasSelecionadas[index];
-    
+
     // Filtrar frotas disponíveis (todas as frotas menos as já selecionadas em outros dropdowns)
     // IMPORTANTE: Sempre incluir a frota selecionada neste dropdown específico
     final frotaSelecionadaId = frotaSelecionada?.id;
-    
+
     // Criar lista de IDs já selecionados em OUTROS dropdowns (não este)
     final outrasFrotaIds = <String>{};
     for (int i = 0; i < _frotasSelecionadas.length; i++) {
@@ -2802,7 +3196,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         outrasFrotaIds.add(_frotasSelecionadas[i]!.id);
       }
     }
-    
+
     final frotasDisponiveis = _frotasList.where((frota) {
       // Sempre incluir a frota selecionada neste dropdown específico
       if (frotaSelecionadaId != null && frota.id == frotaSelecionadaId) {
@@ -2811,7 +3205,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       // Excluir apenas frotas selecionadas em OUTROS dropdowns
       return !outrasFrotaIds.contains(frota.id);
     }).toList();
-    
+
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       child: SizedBox(
@@ -2831,7 +3225,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                     if (frotaAnterior != null) {
                       _selectedFrotaIds.remove(frotaAnterior.id);
                     }
-                    
+
                     _frotasSelecionadas[index] = value;
                     if (value != null) {
                       _selectedFrotaIds.add(value.id);
@@ -2909,19 +3303,24 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
     );
   }
 
-  Widget _buildFrotaDropdown() { // Deprecated - manter para compatibilidade
+  Widget _buildFrotaDropdown() {
+    // Deprecated - manter para compatibilidade
     // Encontrar a frota selecionada na lista
     Frota? frotaSelecionada = _selectedFrota;
-    
+
     // Se não há frota selecionada mas há texto em _frota, tentar encontrar
-    if (frotaSelecionada == null && _frota.isNotEmpty && _frota != '-N/A-' && _frotasList.isNotEmpty) {
+    if (frotaSelecionada == null &&
+        _frota.isNotEmpty &&
+        _frota != '-N/A-' &&
+        _frotasList.isNotEmpty) {
       try {
         frotaSelecionada = _frotasList.firstWhere(
-          (f) => f.nome == _frota || 
-                 f.placa == _frota ||
-                 '${f.nome} - ${f.placa}' == _frota ||
-                 f.nome.contains(_frota) ||
-                 _frota.contains(f.nome),
+          (f) =>
+              f.nome == _frota ||
+              f.placa == _frota ||
+              '${f.nome} - ${f.placa}' == _frota ||
+              f.nome.contains(_frota) ||
+              _frota.contains(f.nome),
         );
         _selectedFrota = frotaSelecionada;
       } catch (e) {
@@ -2954,7 +3353,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
 
   Widget _buildTipoAtividadeDropdown() {
     TipoAtividade? tipoSelecionado;
-    
+
     // Tentar encontrar o tipo selecionado na lista
     // Se não encontrar ou a lista estiver vazia, usar null
     if (_tipo.isNotEmpty && _tiposAtividadeList.isNotEmpty) {
@@ -3012,9 +3411,14 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
     );
   }
 
-  Widget _buildDropdown(String label, String value, List<String> options, ValueChanged<String?> onChanged) {
+  Widget _buildDropdown(
+    String label,
+    String value,
+    List<String> options,
+    ValueChanged<String?> onChanged,
+  ) {
     return DropdownButtonFormField<String>(
-      value: value,
+      initialValue: value,
       decoration: InputDecoration(
         labelText: label,
         labelStyle: TextStyle(
@@ -3026,7 +3430,10 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide(color: Colors.grey[300]!),
         ),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 10,
+        ),
         filled: true,
         fillColor: Colors.white,
         enabledBorder: OutlineInputBorder(
@@ -3038,12 +3445,11 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           borderSide: const BorderSide(color: Color(0xFF1E3A5F), width: 2),
         ),
       ),
-      items: options.map((option) => DropdownMenuItem(value: option, child: Text(option))).toList(),
+      items: options
+          .map((option) => DropdownMenuItem(value: option, child: Text(option)))
+          .toList(),
       onChanged: onChanged,
-      style: const TextStyle(
-        fontSize: 14,
-        color: Colors.black87,
-      ),
+      style: const TextStyle(fontSize: 14, color: Colors.black87),
     );
   }
 
@@ -3061,24 +3467,24 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
   }) {
     // Criar uma cópia da lista de itens para evitar problemas de referência
     final itemsList = List<T>.from(items);
-    
+
     return DropdownSearch<T>(
       popupProps: PopupProps.menu(
         showSearchBox: true,
         searchFieldProps: TextFieldProps(
           decoration: InputDecoration(
             hintText: hintText ?? 'Digite para buscar...',
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 10,
             ),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           ),
         ),
-        menuProps: const MenuProps(
-          elevation: 4,
-        ),
+        menuProps: const MenuProps(elevation: 4),
         constraints: BoxConstraints(
-          maxHeight: MediaQuery.of(context).size.height * 0.6, // 60% da altura da tela
+          maxHeight:
+              MediaQuery.of(context).size.height * 0.6, // 60% da altura da tela
           minHeight: 200,
         ),
       ),
@@ -3089,10 +3495,12 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       selectedItem: value,
       onChanged: onChanged,
       itemAsString: getDisplayText,
-      compareFn: compareFn ?? (T item1, T item2) {
-        // Comparação padrão usando o texto de exibição
-        return getDisplayText(item1) == getDisplayText(item2);
-      },
+      compareFn:
+          compareFn ??
+          (T item1, T item2) {
+            // Comparação padrão usando o texto de exibição
+            return getDisplayText(item1) == getDisplayText(item2);
+          },
       filterFn: (T item, String filter) {
         // Função de filtro que é chamada para cada item
         if (filter.isEmpty || filter.trim().isEmpty) {
@@ -3117,7 +3525,10 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
             borderRadius: BorderRadius.circular(12),
             borderSide: BorderSide(color: Colors.grey[300]!),
           ),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 10,
+          ),
           filled: true,
           fillColor: Colors.white,
           enabledBorder: OutlineInputBorder(
@@ -3136,16 +3547,18 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
             borderRadius: BorderRadius.circular(12),
             borderSide: const BorderSide(color: Colors.red, width: 2),
           ),
-          suffixIcon: Icon(
-            Icons.arrow_drop_down,
-            color: Colors.grey[600],
-          ),
+          suffixIcon: Icon(Icons.arrow_drop_down, color: Colors.grey[600]),
         ),
       ),
     );
   }
 
-  Widget _buildTextField(String label, String? value, ValueChanged<String> onChanged, {int maxLines = 1}) {
+  Widget _buildTextField(
+    String label,
+    String? value,
+    ValueChanged<String> onChanged, {
+    int maxLines = 1,
+  }) {
     return TextFormField(
       initialValue: value ?? '',
       decoration: InputDecoration(
@@ -3159,7 +3572,10 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide(color: Colors.grey[300]!),
         ),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 10,
+        ),
         filled: true,
         fillColor: Colors.white,
         enabledBorder: OutlineInputBorder(
@@ -3181,10 +3597,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       ),
       maxLines: maxLines,
       onChanged: onChanged,
-      style: const TextStyle(
-        fontSize: 14,
-        color: Colors.black87,
-      ),
+      style: const TextStyle(fontSize: 14, color: Colors.black87),
       validator: (value) {
         if (value == null || value.isEmpty) {
           if (label == 'Tarefa') {
@@ -3196,7 +3609,12 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
     );
   }
 
-  Widget _buildDateRangeField(String label, DateTime startDate, DateTime endDate, void Function(DateTime, DateTime) onChanged) {
+  Widget _buildDateRangeField(
+    String label,
+    DateTime startDate,
+    DateTime endDate,
+    void Function(DateTime, DateTime) onChanged,
+  ) {
     return InkWell(
       onTap: () async {
         final dateRange = await showDateRangePicker(
@@ -3235,7 +3653,10 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
             borderRadius: BorderRadius.circular(12),
             borderSide: BorderSide(color: Colors.grey[300]!),
           ),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 10,
+          ),
           filled: true,
           fillColor: Colors.white,
           enabledBorder: OutlineInputBorder(
@@ -3256,7 +3677,11 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
     );
   }
 
-  Widget _buildDateField(String label, DateTime value, ValueChanged<DateTime> onChanged) {
+  Widget _buildDateField(
+    String label,
+    DateTime value,
+    ValueChanged<DateTime> onChanged,
+  ) {
     return InkWell(
       onTap: () async {
         final date = await showDatePicker(
@@ -3279,7 +3704,10 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
             borderRadius: BorderRadius.circular(12),
             borderSide: BorderSide(color: Colors.grey[300]!),
           ),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 10,
+          ),
           filled: true,
           fillColor: Colors.white,
           enabledBorder: OutlineInputBorder(
@@ -3300,7 +3728,11 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
     );
   }
 
-  Widget _buildNumberField(String label, double? value, ValueChanged<double?> onChanged) {
+  Widget _buildNumberField(
+    String label,
+    double? value,
+    ValueChanged<double?> onChanged,
+  ) {
     return TextFormField(
       initialValue: value?.toString() ?? '',
       decoration: InputDecoration(
@@ -3314,7 +3746,10 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide(color: Colors.grey[300]!),
         ),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 10,
+        ),
         filled: true,
         fillColor: Colors.white,
         enabledBorder: OutlineInputBorder(
@@ -3335,10 +3770,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         ),
       ),
       keyboardType: TextInputType.number,
-      style: const TextStyle(
-        fontSize: 14,
-        color: Colors.black87,
-      ),
+      style: const TextStyle(fontSize: 14, color: Colors.black87),
       onChanged: (value) {
         if (value.isEmpty) {
           onChanged(null);
@@ -3360,17 +3792,17 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       );
       return;
     }
-    
+
     if (_formKey.currentState!.validate()) {
       // Criar segmento inicial apenas para novas tarefas
       // Cada tarefa precisa ter pelo menos um segmento representando o período de execução
       List<GanttSegment> ganttSegments;
-      
+
       final isSubtask = widget.parentTaskId != null;
-      
+
       // Usar os segmentos editados no formulário
       ganttSegments = _ganttSegments;
-      
+
       // Garantir que sempre há pelo menos um segmento
       if (ganttSegments.isEmpty) {
         String segmentType = _mapTaskTypeToSegmentType(_tipo);
@@ -3384,23 +3816,37 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           ),
         ];
       }
-      
+
       // Atualizar dataInicio e dataFim da tarefa baseado nos segmentos
       if (ganttSegments.isNotEmpty) {
-        _dataInicio = ganttSegments.map((s) => s.dataInicio).reduce((a, b) => a.isBefore(b) ? a : b);
-        _dataFim = ganttSegments.map((s) => s.dataFim).reduce((a, b) => a.isAfter(b) ? a : b);
+        _dataInicio = ganttSegments
+            .map((s) => s.dataInicio)
+            .reduce((a, b) => a.isBefore(b) ? a : b);
+        _dataFim = ganttSegments
+            .map((s) => s.dataFim)
+            .reduce((a, b) => a.isAfter(b) ? a : b);
       }
-      
-      print('💾 TaskFormDialog: Salvando tarefa com ${ganttSegments.length} segmentos');
+
+      print(
+        '💾 TaskFormDialog: Salvando tarefa com ${ganttSegments.length} segmentos',
+      );
       for (var seg in ganttSegments) {
-        print('   - ${seg.dataInicio.toString().substring(0, 10)} até ${seg.dataFim.toString().substring(0, 10)} (${seg.tipo}, ${seg.tipoPeriodo})');
+        print(
+          '   - ${seg.dataInicio.toString().substring(0, 10)} até ${seg.dataFim.toString().substring(0, 10)} (${seg.tipo}, ${seg.tipoPeriodo})',
+        );
       }
-      
-      print('💾 TaskFormDialog: Salvando ${_executorPeriods.length} períodos por executor');
+
+      print(
+        '💾 TaskFormDialog: Salvando ${_executorPeriods.length} períodos por executor',
+      );
       for (var ep in _executorPeriods) {
-        print('   - Executor: ${ep.executorNome} (${ep.periods.length} períodos)');
+        print(
+          '   - Executor: ${ep.executorNome} (${ep.periods.length} períodos)',
+        );
       }
-      print('💾 TaskFormDialog: Salvando ${_frotaPeriods.length} períodos por frota');
+      print(
+        '💾 TaskFormDialog: Salvando ${_frotaPeriods.length} períodos por frota',
+      );
       for (var fp in _frotaPeriods) {
         print('   - Frota: ${fp.frotaNome} (${fp.periods.length} períodos)');
       }
@@ -3412,30 +3858,54 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         divisaoId: _divisaoId,
         segmentoId: _segmentoId,
         localIds: _selectedLocalIds.toList(),
-        executorIds: _tipoExecutorEquipe == 'executor' ? _selectedExecutorIds.toList() : [],
+        executorIds: _tipoExecutorEquipe == 'executor'
+            ? _selectedExecutorIds.toList()
+            : [],
         frotaIds: _selectedFrotaIds.toList(),
-        equipeIds: _tipoExecutorEquipe == 'equipe' ? _selectedEquipeIds.toList() : [],
-        localId: _selectedLocalIds.isNotEmpty ? _selectedLocalIds.first : null, // Compatibilidade
-        equipeId: _selectedEquipeIds.isNotEmpty ? _selectedEquipeIds.first : null, // Compatibilidade
+        equipeIds: _tipoExecutorEquipe == 'equipe'
+            ? _selectedEquipeIds.toList()
+            : [],
+        localId: _selectedLocalIds.isNotEmpty
+            ? _selectedLocalIds.first
+            : null, // Compatibilidade
+        equipeId: _selectedEquipeIds.isNotEmpty
+            ? _selectedEquipeIds.first
+            : null, // Compatibilidade
         status: _status,
         statusNome: _selectedStatus?.status ?? '',
         regional: _regional,
         divisao: _divisao,
-        locais: _locaisList.where((l) => _selectedLocalIds.contains(l.id)).map((l) => l.local).toList(),
+        locais: _locaisList
+            .where((l) => _selectedLocalIds.contains(l.id))
+            .map((l) => l.local)
+            .toList(),
         tipo: _tipo,
         ordem: _ordem,
         tarefa: _tarefa,
-        executores: _tipoExecutorEquipe == 'executor' 
-            ? _executoresList.where((e) => _selectedExecutorIds.contains(e.id)).map((e) => e.nome).toList() // Salvar apenas o nome
+        executores: _tipoExecutorEquipe == 'executor'
+            ? _executoresList
+                  .where((e) => _selectedExecutorIds.contains(e.id))
+                  .map((e) => e.nome)
+                  .toList() // Salvar apenas o nome
             : [],
         equipes: _tipoExecutorEquipe == 'equipe'
-            ? _equipesList.where((e) => _selectedEquipeIds.contains(e.id)).map((e) => e.nome).toList()
+            ? _equipesList
+                  .where((e) => _selectedEquipeIds.contains(e.id))
+                  .map((e) => e.nome)
+                  .toList()
             : [],
-        executor: _tipoExecutorEquipe == 'executor' && _selectedExecutorIds.isNotEmpty
-            ? _executoresList.firstWhere((e) => _selectedExecutorIds.contains(e.id), orElse: () => _executoresList.first).nome // Salvar apenas o nome
+        executor:
+            _tipoExecutorEquipe == 'executor' && _selectedExecutorIds.isNotEmpty
+            ? _executoresList
+                  .where((e) => _selectedExecutorIds.contains(e.id))
+                  .map((e) => e.nome)
+                  .join(', ') // Salvar TODOS os nomes separados por vírgula para manter compatibilidade
             : '', // Compatibilidade
-        frota: _selectedFrotaIds.isNotEmpty 
-            ? _frotasList.where((f) => _selectedFrotaIds.contains(f.id)).map((f) => '${f.nome} - ${f.placa}').join(', ')
+        frota: _selectedFrotaIds.isNotEmpty
+            ? _frotasList
+                  .where((f) => _selectedFrotaIds.contains(f.id))
+                  .map((f) => '${f.nome} - ${f.placa}')
+                  .join(', ')
             : (_frota.isNotEmpty && _frota != '-N/A-' ? _frota : ''),
         coordenador: _coordenador,
         si: _si,
@@ -3454,11 +3924,11 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
 
       // Salvar posição do scroll antes de fechar o dialog
       _saveScrollPositions();
-      
+
       Navigator.of(context).pop(task);
     }
   }
-  
+
   Widget _buildExecutorEquipeDropdown() {
     // Inicializar tipoSelecionado se ainda não foi definido
     if (_tipoExecutorEquipe == null) {
@@ -3470,7 +3940,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
     }
 
     Executor? executorSelecionado;
-    
+
     // Tentar encontrar o executor na lista se já houver um selecionado
     // Sempre verificar se está na lista antes de usar para evitar erro de assertion
     if (_tipoExecutorEquipe == 'executor' && _executoresList.isNotEmpty) {
@@ -3485,12 +3955,14 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           executorSelecionado = null;
         }
       }
-      
+
       // Se não encontrou por ID, tentar por nome
       if (executorSelecionado == null && _executor.isNotEmpty) {
         try {
           final found = _executoresList.firstWhere(
-            (e) => e.nome == _executor || (e.nomeCompleto != null && e.nomeCompleto == _executor),
+            (e) =>
+                e.nome == _executor ||
+                (e.nomeCompleto != null && e.nomeCompleto == _executor),
           );
           executorSelecionado = found;
         } catch (e) {
@@ -3511,7 +3983,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           const CircularProgressIndicator()
         else
           DropdownButtonFormField<String>(
-            value: _tipoExecutorEquipe,
+            initialValue: _tipoExecutorEquipe,
             decoration: InputDecoration(
               labelText: 'Tipo',
               labelStyle: TextStyle(
@@ -3523,7 +3995,10 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                 borderRadius: BorderRadius.circular(12),
                 borderSide: BorderSide(color: Colors.grey[300]!),
               ),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 10,
+              ),
               filled: true,
               fillColor: Colors.white,
               enabledBorder: OutlineInputBorder(
@@ -3532,11 +4007,17 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: Color(0xFF1E3A5F), width: 2),
+                borderSide: const BorderSide(
+                  color: Color(0xFF1E3A5F),
+                  width: 2,
+                ),
               ),
             ),
             items: const [
-              DropdownMenuItem(value: 'executor', child: Text('Executor Individual')),
+              DropdownMenuItem(
+                value: 'executor',
+                child: Text('Executor Individual'),
+              ),
               DropdownMenuItem(value: 'equipe', child: Text('Equipe')),
             ],
             onChanged: (value) {
@@ -3570,25 +4051,33 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                 )
               else
                 DropdownButtonFormField<Equipe>(
-                  value: _equipesList.isEmpty || 
-                      (_selectedEquipe != null && !_equipesList.any((e) => e.id == _selectedEquipe!.id))
+                  initialValue:
+                      _equipesList.isEmpty ||
+                          (_selectedEquipe != null &&
+                              !_equipesList.any(
+                                (e) => e.id == _selectedEquipe!.id,
+                              ))
                       ? null
                       : _selectedEquipe,
                   decoration: InputDecoration(
                     labelText: 'Equipe *',
                     border: const OutlineInputBorder(),
-                    errorText: _equipesList.isEmpty 
-                        ? null 
-                        : (_tipoExecutorEquipe == 'equipe' && _selectedEquipe == null && _equipesList.isNotEmpty
-                            ? 'Selecione uma equipe'
-                            : null),
+                    errorText: _equipesList.isEmpty
+                        ? null
+                        : (_tipoExecutorEquipe == 'equipe' &&
+                                  _selectedEquipe == null &&
+                                  _equipesList.isNotEmpty
+                              ? 'Selecione uma equipe'
+                              : null),
                   ),
                   items: _equipesList.isEmpty
                       ? [
                           const DropdownMenuItem<Equipe>(
                             value: null,
                             enabled: false,
-                            child: Text('Nenhuma equipe disponível para os filtros selecionados'),
+                            child: Text(
+                              'Nenhuma equipe disponível para os filtros selecionados',
+                            ),
                           ),
                         ]
                       : [
@@ -3601,15 +4090,20 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                               value: equipe,
                               child: Tooltip(
                                 message: equipe.executores.isNotEmpty
-                                    ? equipe.executores.map((e) => '${e.executorNome} (${e.papel})').join('\n')
+                                    ? equipe.executores
+                                          .map(
+                                            (e) =>
+                                                '${e.executorNome} (${e.papel})',
+                                          )
+                                          .join('\n')
                                     : 'Sem executores',
                                 child: Text(equipe.nome),
                               ),
                             );
                           }),
                         ],
-                  onChanged: _equipesList.isEmpty 
-                      ? null 
+                  onChanged: _equipesList.isEmpty
+                      ? null
                       : (Equipe? value) {
                           setState(() {
                             _selectedEquipe = value;
@@ -3624,7 +4118,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                           });
                         },
                   validator: (value) {
-                    if (_tipoExecutorEquipe == 'equipe' && value == null && _equipesList.isNotEmpty) {
+                    if (_tipoExecutorEquipe == 'equipe' &&
+                        value == null &&
+                        _equipesList.isNotEmpty) {
                       return 'Selecione uma equipe';
                     }
                     return null;
@@ -3635,12 +4131,19 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                   padding: const EdgeInsets.only(top: 8.0),
                   child: Row(
                     children: [
-                      Icon(Icons.info_outline, size: 16, color: Colors.orange[700]),
+                      Icon(
+                        Icons.info_outline,
+                        size: 16,
+                        color: Colors.orange[700],
+                      ),
                       const SizedBox(width: 4),
                       Expanded(
                         child: Text(
                           'Nenhuma equipe disponível para os filtros selecionados.',
-                          style: TextStyle(fontSize: 12, color: Colors.orange[700]),
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.orange[700],
+                          ),
                         ),
                       ),
                     ],
@@ -3656,7 +4159,11 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
               children: [
                 Text(
                   'Selecione o tipo (Executor Individual ou Equipe) para continuar.',
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600], fontStyle: FontStyle.italic),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey[600],
+                    fontStyle: FontStyle.italic,
+                  ),
                 ),
                 if (!_isLoadingExecutoresEquipes) ...[
                   const SizedBox(height: 8),
@@ -3672,7 +4179,8 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
               ],
             ),
           ),
-        if (_selectedEquipe != null && _selectedEquipe!.executores.isNotEmpty) ...[
+        if (_selectedEquipe != null &&
+            _selectedEquipe!.executores.isNotEmpty) ...[
           const SizedBox(height: 8),
           const Text(
             'Executores da equipe:',
@@ -3712,7 +4220,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
     if (_executoresSelecionados.isEmpty) {
       _executoresSelecionados = <Executor?>[null];
     }
-    
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -3743,13 +4251,18 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                 borderRadius: BorderRadius.circular(20),
                 child: Container(
                   padding: const EdgeInsets.all(8),
-                  child: const Icon(Icons.add_circle, size: 24, color: Colors.blue),
+                  child: const Icon(
+                    Icons.add_circle,
+                    size: 24,
+                    color: Colors.blue,
+                  ),
                 ),
               ),
             ),
           ],
         ),
-        if (_executoresList.isEmpty && (_regionalId != null || _divisaoId != null || _segmentoId != null))
+        if (_executoresList.isEmpty &&
+            (_regionalId != null || _divisaoId != null || _segmentoId != null))
           Padding(
             padding: const EdgeInsets.only(top: 8.0),
             child: Text(
@@ -3768,13 +4281,13 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
     if (index >= _executoresSelecionados.length) {
       return const SizedBox.shrink();
     }
-    
+
     final executorSelecionado = _executoresSelecionados[index];
-    
+
     // Filtrar executores disponíveis (todos os executores menos os já selecionados em outros dropdowns)
     // IMPORTANTE: Sempre incluir o executor selecionado neste dropdown específico
     final executorSelecionadoId = executorSelecionado?.id;
-    
+
     // Criar lista de IDs já selecionados em OUTROS dropdowns (não este)
     final outrosExecutorIds = <String>{};
     for (int i = 0; i < _executoresSelecionados.length; i++) {
@@ -3782,16 +4295,17 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         outrosExecutorIds.add(_executoresSelecionados[i]!.id);
       }
     }
-    
+
     final executoresDisponiveis = _executoresList.where((executor) {
       // Sempre incluir o executor selecionado neste dropdown específico
-      if (executorSelecionadoId != null && executor.id == executorSelecionadoId) {
+      if (executorSelecionadoId != null &&
+          executor.id == executorSelecionadoId) {
         return true;
       }
       // Excluir apenas executores selecionados em OUTROS dropdowns
       return !outrosExecutorIds.contains(executor.id);
     }).toList();
-    
+
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       child: SizedBox(
@@ -3804,14 +4318,15 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                 label: 'Executor ${index + 1}',
                 value: executorSelecionado,
                 items: executoresDisponiveis,
-                getDisplayText: (executor) => executor.nomeCompleto ?? executor.nome,
+                getDisplayText: (executor) =>
+                    executor.nomeCompleto ?? executor.nome,
                 onChanged: (Executor? value) {
                   setState(() {
                     final executorAnterior = _executoresSelecionados[index];
                     if (executorAnterior != null) {
                       _selectedExecutorIds.remove(executorAnterior.id);
                     }
-                    
+
                     _executoresSelecionados[index] = value;
                     if (value != null) {
                       _selectedExecutorIds.add(value.id);
@@ -3905,13 +4420,22 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
   String _mapTaskTypeToSegmentType(String taskType) {
     // Tipos válidos para segmentos: 'BEA', 'FER', 'COMP', 'TRN', 'BSL', 'APO', 'OUT', 'ADM'
     final upperType = taskType.toUpperCase();
-    
+
     // Se o tipo da tarefa já é um tipo válido de segmento, usar diretamente
-    const validSegmentTypes = ['BEA', 'FER', 'COMP', 'TRN', 'BSL', 'APO', 'OUT', 'ADM'];
+    const validSegmentTypes = [
+      'BEA',
+      'FER',
+      'COMP',
+      'TRN',
+      'BSL',
+      'APO',
+      'OUT',
+      'ADM',
+    ];
     if (validSegmentTypes.contains(upperType)) {
       return upperType;
     }
-    
+
     // Mapear tipos comuns de tarefa para tipos de segmento
     // Se não encontrar correspondência, usar 'OUT' (Outros) como padrão
     final typeMap = {
@@ -3923,10 +4447,10 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       'ADM': 'ADM',
       'BEA': 'BEA',
     };
-    
+
     return typeMap[upperType] ?? 'OUT';
   }
-  
+
   // Widget para gerenciar períodos de execução (segmentos do Gantt)
   Widget _buildPeriodosSection() {
     return Column(
@@ -3955,12 +4479,14 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                     onTap: () {
                       setState(() {
                         // Adicionar novo período baseado nas datas atuais ou último segmento
-                        final lastSegment = _ganttSegments.isNotEmpty 
-                            ? _ganttSegments.last 
+                        final lastSegment = _ganttSegments.isNotEmpty
+                            ? _ganttSegments.last
                             : null;
-                        final newStart = lastSegment?.dataFim.add(const Duration(days: 1)) ?? _dataInicio;
+                        final newStart =
+                            lastSegment?.dataFim.add(const Duration(days: 1)) ??
+                            _dataInicio;
                         final newEnd = newStart.add(const Duration(days: 1));
-                        
+
                         _ganttSegments.add(
                           GanttSegment(
                             dataInicio: newStart,
@@ -3975,7 +4501,11 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                     borderRadius: BorderRadius.circular(20),
                     child: Container(
                       padding: const EdgeInsets.all(8),
-                      child: const Icon(Icons.add_circle, size: 24, color: Colors.blue),
+                      child: const Icon(
+                        Icons.add_circle,
+                        size: 24,
+                        color: Colors.blue,
+                      ),
                     ),
                   ),
                 ),
@@ -3995,12 +4525,14 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                   onTap: () {
                     setState(() {
                       // Adicionar novo período baseado nas datas atuais ou último segmento
-                      final lastSegment = _ganttSegments.isNotEmpty 
-                          ? _ganttSegments.last 
+                      final lastSegment = _ganttSegments.isNotEmpty
+                          ? _ganttSegments.last
                           : null;
-                      final newStart = lastSegment?.dataFim.add(const Duration(days: 1)) ?? _dataInicio;
+                      final newStart =
+                          lastSegment?.dataFim.add(const Duration(days: 1)) ??
+                          _dataInicio;
                       final newEnd = newStart.add(const Duration(days: 1));
-                      
+
                       _ganttSegments.add(
                         GanttSegment(
                           dataInicio: newStart,
@@ -4016,7 +4548,11 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                   child: Container(
                     padding: const EdgeInsets.all(8),
                     margin: const EdgeInsets.only(top: 8),
-                    child: const Icon(Icons.add_circle, size: 24, color: Colors.blue),
+                    child: const Icon(
+                      Icons.add_circle,
+                      size: 24,
+                      color: Colors.blue,
+                    ),
                   ),
                 ),
               ),
@@ -4031,7 +4567,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       ],
     );
   }
-  
+
   // Widget para gerenciar períodos específicos por executor
   Widget _buildExecutorPeriodsSection() {
     return Column(
@@ -4063,13 +4599,15 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                     if (_selectedExecutorIds.isEmpty) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
-                          content: Text('Selecione pelo menos um executor primeiro'),
+                          content: Text(
+                            'Selecione pelo menos um executor primeiro',
+                          ),
                           backgroundColor: Colors.orange,
                         ),
                       );
                       return;
                     }
-                    
+
                     setState(() {
                       // Criar períodos para cada executor selecionado
                       for (var executorId in _selectedExecutorIds) {
@@ -4080,7 +4618,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                             nome: 'Executor $executorId',
                           ),
                         );
-                        
+
                         // Criar período inicial baseado no primeiro segmento ou datas da tarefa
                         final baseSegments = _cloneTaskSegmentsOrFallback();
                         _executorPeriods.add(
@@ -4110,28 +4648,36 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                   if (_selectedExecutorIds.isEmpty) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
-                        content: Text('Selecione pelo menos um executor primeiro'),
+                        content: Text(
+                          'Selecione pelo menos um executor primeiro',
+                        ),
                         backgroundColor: Colors.orange,
                       ),
                     );
                     return;
                   }
-                  
+
                   // Verificar se o executor já tem período
-                  final availableExecutors = _selectedExecutorIds.where((executorId) {
-                    return !_executorPeriods.any((ep) => ep.executorId == executorId);
+                  final availableExecutors = _selectedExecutorIds.where((
+                    executorId,
+                  ) {
+                    return !_executorPeriods.any(
+                      (ep) => ep.executorId == executorId,
+                    );
                   }).toList();
-                  
+
                   if (availableExecutors.isEmpty) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
-                        content: Text('Todos os executores já têm períodos configurados'),
+                        content: Text(
+                          'Todos os executores já têm períodos configurados',
+                        ),
                         backgroundColor: Colors.orange,
                       ),
                     );
                     return;
                   }
-                  
+
                   setState(() {
                     // Adicionar período para o primeiro executor disponível
                     final executorId = availableExecutors.first;
@@ -4142,7 +4688,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                         nome: 'Executor $executorId',
                       ),
                     );
-                    
+
                     final baseSegments = _cloneTaskSegmentsOrFallback();
                     _executorPeriods.add(
                       ExecutorPeriod(
@@ -4164,11 +4710,11 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       ],
     );
   }
-  
+
   // Widget para exibir e editar períodos de um executor específico
   Widget _buildExecutorPeriodCard(int index) {
     final executorPeriod = _executorPeriods[index];
-    
+
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       color: Colors.blue[50],
@@ -4212,7 +4758,11 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                 padding: const EdgeInsets.all(8.0),
                 child: Row(
                   children: [
-                    const Icon(Icons.info_outline, size: 16, color: Colors.grey),
+                    const Icon(
+                      Icons.info_outline,
+                      size: 16,
+                      color: Colors.grey,
+                    ),
                     const SizedBox(width: 8),
                     const Text(
                       'Nenhum período configurado. Use os períodos gerais da tarefa.',
@@ -4236,27 +4786,43 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
             else
               Column(
                 children: [
-                  ...List.generate(executorPeriod.periods.length, (periodIndex) {
+                  ...List.generate(executorPeriod.periods.length, (
+                    periodIndex,
+                  ) {
                     return _buildExecutorPeriodItemCard(index, periodIndex);
                   }),
                   TextButton.icon(
                     onPressed: () {
                       setState(() {
-                        final lastPeriod = executorPeriod.periods.isNotEmpty 
-                            ? executorPeriod.periods.last 
+                        final lastPeriod = executorPeriod.periods.isNotEmpty
+                            ? executorPeriod.periods.last
                             : null;
-                        final newStart = lastPeriod?.dataFim.add(const Duration(days: 1)) ?? _dataInicio;
+                        final newStart =
+                            lastPeriod?.dataFim.add(const Duration(days: 1)) ??
+                            _dataInicio;
                         // Manter horário do último fim ou usar 08:00 -> 17:00 padrão
                         final startHour = lastPeriod?.dataInicio.hour ?? 8;
                         final startMin = lastPeriod?.dataInicio.minute ?? 0;
                         final endHour = lastPeriod?.dataFim.hour ?? 17;
                         final endMin = lastPeriod?.dataFim.minute ?? 0;
-                        final startWithTime = DateTime(newStart.year, newStart.month, newStart.day, startHour, startMin);
-                        final endWithTime = DateTime(newStart.year, newStart.month, newStart.day, endHour, endMin);
+                        final startWithTime = DateTime(
+                          newStart.year,
+                          newStart.month,
+                          newStart.day,
+                          startHour,
+                          startMin,
+                        );
+                        final endWithTime = DateTime(
+                          newStart.year,
+                          newStart.month,
+                          newStart.day,
+                          endHour,
+                          endMin,
+                        );
                         final newEnd = endWithTime.isAfter(startWithTime)
                             ? endWithTime
                             : startWithTime.add(const Duration(hours: 1));
-                        
+
                         final newPeriod = GanttSegment(
                           dataInicio: startWithTime,
                           dataFim: newEnd,
@@ -4264,7 +4830,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                           tipo: _mapTaskTypeToSegmentType(_tipo),
                           tipoPeriodo: 'EXECUCAO',
                         );
-                        
+
                         _executorPeriods[index] = executorPeriod.copyWith(
                           periods: [...executorPeriod.periods, newPeriod],
                         );
@@ -4280,13 +4846,13 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       ),
     );
   }
-  
+
   // Widget para exibir e editar um período específico de um executor
   Widget _buildExecutorPeriodItemCard(int executorIndex, int periodIndex) {
     final executorPeriod = _executorPeriods[executorIndex];
     final segment = executorPeriod.periods[periodIndex];
 
-    String _formatDateTime(DateTime dt) {
+    String formatDateTime(DateTime dt) {
       final day = dt.day.toString().padLeft(2, '0');
       final month = dt.month.toString().padLeft(2, '0');
       final year = dt.year.toString().substring(2);
@@ -4294,7 +4860,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       final minute = dt.minute.toString().padLeft(2, '0');
       return '$day/$month/$year $hour:$minute';
     }
-    
+
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       child: Padding(
@@ -4307,15 +4873,26 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
               children: [
                 Text(
                   'Período ${periodIndex + 1}',
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                  ),
                 ),
                 IconButton(
-                  icon: const Icon(Icons.delete_outline, size: 18, color: Colors.red),
+                  icon: const Icon(
+                    Icons.delete_outline,
+                    size: 18,
+                    color: Colors.red,
+                  ),
                   onPressed: () {
                     setState(() {
-                      final periods = List<GanttSegment>.from(executorPeriod.periods);
+                      final periods = List<GanttSegment>.from(
+                        executorPeriod.periods,
+                      );
                       periods.removeAt(periodIndex);
-                      _executorPeriods[executorIndex] = executorPeriod.copyWith(periods: periods);
+                      _executorPeriods[executorIndex] = executorPeriod.copyWith(
+                        periods: periods,
+                      );
                     });
                   },
                   tooltip: 'Remover Período',
@@ -4351,12 +4928,16 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                       segment.dataFim.hour,
                       segment.dataFim.minute,
                     );
-                    final periods = List<GanttSegment>.from(executorPeriod.periods);
+                    final periods = List<GanttSegment>.from(
+                      executorPeriod.periods,
+                    );
                     periods[periodIndex] = segment.copyWith(
                       dataInicio: startWithTime,
                       dataFim: endWithTime,
                     );
-                    _executorPeriods[executorIndex] = executorPeriod.copyWith(periods: periods);
+                    _executorPeriods[executorIndex] = executorPeriod.copyWith(
+                      periods: periods,
+                    );
                   });
                 }
               },
@@ -4371,7 +4952,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                     const Icon(Icons.calendar_today, size: 16),
                     const SizedBox(width: 8),
                     Text(
-                      '${_formatDateTime(segment.dataInicio)} - ${_formatDateTime(segment.dataFim)}',
+                      '${formatDateTime(segment.dataInicio)} - ${formatDateTime(segment.dataFim)}',
                       style: const TextStyle(fontSize: 12),
                     ),
                   ],
@@ -4385,11 +4966,16 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                 Expanded(
                   child: OutlinedButton.icon(
                     icon: const Icon(Icons.access_time),
-                    label: Text('Início ${_formatDateTime(segment.dataInicio).split(' ').last}'),
+                    label: Text(
+                      'Início ${formatDateTime(segment.dataInicio).split(' ').last}',
+                    ),
                     onPressed: () async {
                       final picked = await showTimePicker(
                         context: context,
-                        initialTime: TimeOfDay(hour: segment.dataInicio.hour, minute: segment.dataInicio.minute),
+                        initialTime: TimeOfDay(
+                          hour: segment.dataInicio.hour,
+                          minute: segment.dataInicio.minute,
+                        ),
                       );
                       if (picked != null) {
                         setState(() {
@@ -4404,12 +4990,15 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                           if (newEnd.isBefore(newStart)) {
                             newEnd = newStart.add(const Duration(hours: 1));
                           }
-                          final periods = List<GanttSegment>.from(executorPeriod.periods);
+                          final periods = List<GanttSegment>.from(
+                            executorPeriod.periods,
+                          );
                           periods[periodIndex] = segment.copyWith(
                             dataInicio: newStart,
                             dataFim: newEnd,
                           );
-                          _executorPeriods[executorIndex] = executorPeriod.copyWith(periods: periods);
+                          _executorPeriods[executorIndex] = executorPeriod
+                              .copyWith(periods: periods);
                         });
                       }
                     },
@@ -4419,11 +5008,16 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                 Expanded(
                   child: OutlinedButton.icon(
                     icon: const Icon(Icons.access_time_filled),
-                    label: Text('Fim ${_formatDateTime(segment.dataFim).split(' ').last}'),
+                    label: Text(
+                      'Fim ${formatDateTime(segment.dataFim).split(' ').last}',
+                    ),
                     onPressed: () async {
                       final picked = await showTimePicker(
                         context: context,
-                        initialTime: TimeOfDay(hour: segment.dataFim.hour, minute: segment.dataFim.minute),
+                        initialTime: TimeOfDay(
+                          hour: segment.dataFim.hour,
+                          minute: segment.dataFim.minute,
+                        ),
                       );
                       if (picked != null) {
                         setState(() {
@@ -4436,14 +5030,19 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                           );
                           DateTime newStart = segment.dataInicio;
                           if (newEnd.isBefore(newStart)) {
-                            newStart = newEnd.subtract(const Duration(hours: 1));
+                            newStart = newEnd.subtract(
+                              const Duration(hours: 1),
+                            );
                           }
-                          final periods = List<GanttSegment>.from(executorPeriod.periods);
+                          final periods = List<GanttSegment>.from(
+                            executorPeriod.periods,
+                          );
                           periods[periodIndex] = segment.copyWith(
                             dataInicio: newStart,
                             dataFim: newEnd,
                           );
-                          _executorPeriods[executorIndex] = executorPeriod.copyWith(periods: periods);
+                          _executorPeriods[executorIndex] = executorPeriod
+                              .copyWith(periods: periods);
                         });
                       }
                     },
@@ -4458,12 +5057,18 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
               const ['EXECUCAO', 'PLANEJAMENTO', 'DESLOCAMENTO'],
               (value) {
                 setState(() {
-                  final periods = List<GanttSegment>.from(executorPeriod.periods);
+                  final periods = List<GanttSegment>.from(
+                    executorPeriod.periods,
+                  );
                   periods[periodIndex] = segment.copyWith(
                     tipoPeriodo: value,
-                    dataFim: value == 'DESLOCAMENTO' ? segment.dataInicio : segment.dataFim,
+                    dataFim: value == 'DESLOCAMENTO'
+                        ? segment.dataInicio
+                        : segment.dataFim,
                   );
-                  _executorPeriods[executorIndex] = executorPeriod.copyWith(periods: periods);
+                  _executorPeriods[executorIndex] = executorPeriod.copyWith(
+                    periods: periods,
+                  );
                 });
               },
             ),
@@ -4503,7 +5108,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                     if (_selectedFrotaIds.isEmpty) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
-                          content: Text('Selecione pelo menos uma frota primeiro'),
+                          content: Text(
+                            'Selecione pelo menos uma frota primeiro',
+                          ),
                           backgroundColor: Colors.orange,
                         ),
                       );
@@ -4548,27 +5155,31 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                   if (_selectedFrotaIds.isEmpty) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
-                        content: Text('Selecione pelo menos uma frota primeiro'),
+                        content: Text(
+                          'Selecione pelo menos uma frota primeiro',
+                        ),
                         backgroundColor: Colors.orange,
                       ),
                     );
                     return;
                   }
-                  
+
                   final availableFrotas = _selectedFrotaIds.where((frotaId) {
                     return !_frotaPeriods.any((fp) => fp.frotaId == frotaId);
                   }).toList();
-                  
+
                   if (availableFrotas.isEmpty) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
-                        content: Text('Todas as frotas já têm períodos configurados'),
+                        content: Text(
+                          'Todas as frotas já têm períodos configurados',
+                        ),
                         backgroundColor: Colors.orange,
                       ),
                     );
                     return;
                   }
-                  
+
                   setState(() {
                     final frotaId = availableFrotas.first;
                     final frota = _frotasList.firstWhere(
@@ -4647,7 +5258,11 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                 padding: const EdgeInsets.all(8.0),
                 child: Row(
                   children: [
-                    const Icon(Icons.info_outline, size: 16, color: Colors.grey),
+                    const Icon(
+                      Icons.info_outline,
+                      size: 16,
+                      color: Colors.grey,
+                    ),
                     const SizedBox(width: 8),
                     const Text(
                       'Nenhum período configurado. Use os períodos gerais da tarefa.',
@@ -4677,20 +5292,34 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                   TextButton.icon(
                     onPressed: () {
                       setState(() {
-                        final lastPeriod = frotaPeriod.periods.isNotEmpty 
-                            ? frotaPeriod.periods.last 
+                        final lastPeriod = frotaPeriod.periods.isNotEmpty
+                            ? frotaPeriod.periods.last
                             : null;
-                        final newStart = lastPeriod?.dataFim.add(const Duration(days: 1)) ?? _dataInicio;
+                        final newStart =
+                            lastPeriod?.dataFim.add(const Duration(days: 1)) ??
+                            _dataInicio;
                         final startHour = lastPeriod?.dataInicio.hour ?? 8;
                         final startMin = lastPeriod?.dataInicio.minute ?? 0;
                         final endHour = lastPeriod?.dataFim.hour ?? 17;
                         final endMin = lastPeriod?.dataFim.minute ?? 0;
-                        final startWithTime = DateTime(newStart.year, newStart.month, newStart.day, startHour, startMin);
-                        final endWithTime = DateTime(newStart.year, newStart.month, newStart.day, endHour, endMin);
+                        final startWithTime = DateTime(
+                          newStart.year,
+                          newStart.month,
+                          newStart.day,
+                          startHour,
+                          startMin,
+                        );
+                        final endWithTime = DateTime(
+                          newStart.year,
+                          newStart.month,
+                          newStart.day,
+                          endHour,
+                          endMin,
+                        );
                         final newEnd = endWithTime.isAfter(startWithTime)
                             ? endWithTime
                             : startWithTime.add(const Duration(hours: 1));
-                        
+
                         final newPeriod = GanttSegment(
                           dataInicio: startWithTime,
                           dataFim: newEnd,
@@ -4698,7 +5327,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                           tipo: _mapTaskTypeToSegmentType(_tipo),
                           tipoPeriodo: 'EXECUCAO',
                         );
-                        
+
                         _frotaPeriods[index] = frotaPeriod.copyWith(
                           periods: [...frotaPeriod.periods, newPeriod],
                         );
@@ -4719,7 +5348,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
     final frotaPeriod = _frotaPeriods[frotaIndex];
     final segment = frotaPeriod.periods[periodIndex];
 
-    String _formatDateTime(DateTime dt) {
+    String formatDateTime(DateTime dt) {
       final day = dt.day.toString().padLeft(2, '0');
       final month = dt.month.toString().padLeft(2, '0');
       final year = dt.year.toString().substring(2);
@@ -4727,7 +5356,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       final minute = dt.minute.toString().padLeft(2, '0');
       return '$day/$month/$year $hour:$minute';
     }
-    
+
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       child: Padding(
@@ -4740,15 +5369,26 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
               children: [
                 Text(
                   'Período ${periodIndex + 1}',
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                  ),
                 ),
                 IconButton(
-                  icon: const Icon(Icons.delete_outline, size: 18, color: Colors.red),
+                  icon: const Icon(
+                    Icons.delete_outline,
+                    size: 18,
+                    color: Colors.red,
+                  ),
                   onPressed: () {
                     setState(() {
-                      final periods = List<GanttSegment>.from(frotaPeriod.periods);
+                      final periods = List<GanttSegment>.from(
+                        frotaPeriod.periods,
+                      );
                       periods.removeAt(periodIndex);
-                      _frotaPeriods[frotaIndex] = frotaPeriod.copyWith(periods: periods);
+                      _frotaPeriods[frotaIndex] = frotaPeriod.copyWith(
+                        periods: periods,
+                      );
                     });
                   },
                   tooltip: 'Remover Período',
@@ -4783,18 +5423,25 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                       segment.dataFim.hour,
                       segment.dataFim.minute,
                     );
-                    
-                    final periods = List<GanttSegment>.from(frotaPeriod.periods);
+
+                    final periods = List<GanttSegment>.from(
+                      frotaPeriod.periods,
+                    );
                     periods[periodIndex] = segment.copyWith(
                       dataInicio: startWithTime,
                       dataFim: endWithTime,
                     );
-                    _frotaPeriods[frotaIndex] = frotaPeriod.copyWith(periods: periods);
+                    _frotaPeriods[frotaIndex] = frotaPeriod.copyWith(
+                      periods: periods,
+                    );
                   });
                 }
               },
               child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                padding: const EdgeInsets.symmetric(
+                  vertical: 8,
+                  horizontal: 12,
+                ),
                 decoration: BoxDecoration(
                   color: Colors.grey[100],
                   borderRadius: BorderRadius.circular(8),
@@ -4805,11 +5452,15 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                     const Icon(Icons.date_range, size: 16, color: Colors.grey),
                     const SizedBox(width: 8),
                     Text(
-                      '${_formatDateTime(segment.dataInicio)}  —  ${_formatDateTime(segment.dataFim)}',
+                      '${formatDateTime(segment.dataInicio)}  —  ${formatDateTime(segment.dataFim)}',
                       style: const TextStyle(fontSize: 12),
                     ),
                     const Spacer(),
-                    const Icon(Icons.edit_calendar, size: 16, color: Colors.blue),
+                    const Icon(
+                      Icons.edit_calendar,
+                      size: 16,
+                      color: Colors.blue,
+                    ),
                   ],
                 ),
               ),
@@ -4835,14 +5486,20 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                           );
                           DateTime updatedEnd = segment.dataFim;
                           if (!segment.dataFim.isAfter(updatedStart)) {
-                            updatedEnd = updatedStart.add(const Duration(hours: 1));
+                            updatedEnd = updatedStart.add(
+                              const Duration(hours: 1),
+                            );
                           }
-                          final periods = List<GanttSegment>.from(frotaPeriod.periods);
+                          final periods = List<GanttSegment>.from(
+                            frotaPeriod.periods,
+                          );
                           periods[periodIndex] = segment.copyWith(
                             dataInicio: updatedStart,
                             dataFim: updatedEnd,
                           );
-                          _frotaPeriods[frotaIndex] = frotaPeriod.copyWith(periods: periods);
+                          _frotaPeriods[frotaIndex] = frotaPeriod.copyWith(
+                            periods: periods,
+                          );
                         });
                       }
                     },
@@ -4868,13 +5525,19 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                             endTime.minute,
                           );
                           if (!updatedEnd.isAfter(segment.dataInicio)) {
-                            updatedEnd = segment.dataInicio.add(const Duration(hours: 1));
+                            updatedEnd = segment.dataInicio.add(
+                              const Duration(hours: 1),
+                            );
                           }
-                          final periods = List<GanttSegment>.from(frotaPeriod.periods);
+                          final periods = List<GanttSegment>.from(
+                            frotaPeriod.periods,
+                          );
                           periods[periodIndex] = segment.copyWith(
                             dataFim: updatedEnd,
                           );
-                          _frotaPeriods[frotaIndex] = frotaPeriod.copyWith(periods: periods);
+                          _frotaPeriods[frotaIndex] = frotaPeriod.copyWith(
+                            periods: periods,
+                          );
                         });
                       }
                     },
@@ -4889,10 +5552,10 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       ),
     );
   }
-  
+
   Widget _buildPeriodoCard(int index) {
     final segment = _ganttSegments[index];
-    
+
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: Padding(
@@ -4914,8 +5577,12 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                       _ganttSegments.removeAt(index);
                       // Atualizar dataInicio e dataFim da tarefa baseado nos segmentos restantes
                       if (_ganttSegments.isNotEmpty) {
-                        _dataInicio = _ganttSegments.map((s) => s.dataInicio).reduce((a, b) => a.isBefore(b) ? a : b);
-                        _dataFim = _ganttSegments.map((s) => s.dataFim).reduce((a, b) => a.isAfter(b) ? a : b);
+                        _dataInicio = _ganttSegments
+                            .map((s) => s.dataInicio)
+                            .reduce((a, b) => a.isBefore(b) ? a : b);
+                        _dataFim = _ganttSegments
+                            .map((s) => s.dataFim)
+                            .reduce((a, b) => a.isAfter(b) ? a : b);
                       } else {
                         // Se não houver mais segmentos, manter as datas atuais ou usar valores padrão
                         _dataInicio = widget.startDate;
@@ -4930,7 +5597,8 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
             const SizedBox(height: 8),
             // Para EXECUCAO e PLANEJAMENTO: usar DateRangePicker
             // Para DESLOCAMENTO: usar dois DatePickers separados (ida e volta)
-            if (segment.tipoPeriodo == 'EXECUCAO' || segment.tipoPeriodo == 'PLANEJAMENTO')
+            if (segment.tipoPeriodo == 'EXECUCAO' ||
+                segment.tipoPeriodo == 'PLANEJAMENTO')
               _buildDateRangeField(
                 'Período',
                 segment.dataInicio,
@@ -4943,8 +5611,12 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                     );
                     // Atualizar dataInicio e dataFim da tarefa
                     if (_ganttSegments.isNotEmpty) {
-                      _dataInicio = _ganttSegments.map((s) => s.dataInicio).reduce((a, b) => a.isBefore(b) ? a : b);
-                      _dataFim = _ganttSegments.map((s) => s.dataFim).reduce((a, b) => a.isAfter(b) ? a : b);
+                      _dataInicio = _ganttSegments
+                          .map((s) => s.dataInicio)
+                          .reduce((a, b) => a.isBefore(b) ? a : b);
+                      _dataFim = _ganttSegments
+                          .map((s) => s.dataFim)
+                          .reduce((a, b) => a.isAfter(b) ? a : b);
                     }
                   });
                 },
@@ -4954,39 +5626,37 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
               Row(
                 children: [
                   Expanded(
-                    child: _buildDateField(
-                      'Data de Ida',
-                      segment.dataInicio,
-                      (date) {
-                        setState(() {
-                          _ganttSegments[index] = segment.copyWith(
-                            dataInicio: date,
-                          );
-                          // Atualizar dataInicio da tarefa
-                          if (_ganttSegments.isNotEmpty) {
-                            _dataInicio = _ganttSegments.map((s) => s.dataInicio).reduce((a, b) => a.isBefore(b) ? a : b);
-                          }
-                        });
-                      },
-                    ),
+                    child: _buildDateField('Data de Ida', segment.dataInicio, (
+                      date,
+                    ) {
+                      setState(() {
+                        _ganttSegments[index] = segment.copyWith(
+                          dataInicio: date,
+                        );
+                        // Atualizar dataInicio da tarefa
+                        if (_ganttSegments.isNotEmpty) {
+                          _dataInicio = _ganttSegments
+                              .map((s) => s.dataInicio)
+                              .reduce((a, b) => a.isBefore(b) ? a : b);
+                        }
+                      });
+                    }),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: _buildDateField(
-                      'Data de Volta',
-                      segment.dataFim,
-                      (date) {
-                        setState(() {
-                          _ganttSegments[index] = segment.copyWith(
-                            dataFim: date,
-                          );
-                          // Atualizar dataFim da tarefa
-                          if (_ganttSegments.isNotEmpty) {
-                            _dataFim = _ganttSegments.map((s) => s.dataFim).reduce((a, b) => a.isAfter(b) ? a : b);
-                          }
-                        });
-                      },
-                    ),
+                    child: _buildDateField('Data de Volta', segment.dataFim, (
+                      date,
+                    ) {
+                      setState(() {
+                        _ganttSegments[index] = segment.copyWith(dataFim: date);
+                        // Atualizar dataFim da tarefa
+                        if (_ganttSegments.isNotEmpty) {
+                          _dataFim = _ganttSegments
+                              .map((s) => s.dataFim)
+                              .reduce((a, b) => a.isAfter(b) ? a : b);
+                        }
+                      });
+                    }),
                   ),
                 ],
               ),
@@ -4998,8 +5668,8 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
               (value) {
                 setState(() {
                   // Se mudou para DESLOCAMENTO, fazer data fim igual à data início
-                  final newDataFim = value == 'DESLOCAMENTO' 
-                      ? segment.dataInicio 
+                  final newDataFim = value == 'DESLOCAMENTO'
+                      ? segment.dataInicio
                       : segment.dataFim;
                   _ganttSegments[index] = segment.copyWith(
                     tipoPeriodo: value,
@@ -5007,7 +5677,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                   );
                   // Atualizar dataFim da tarefa
                   if (_ganttSegments.isNotEmpty) {
-                    _dataFim = _ganttSegments.map((s) => s.dataFim).reduce((a, b) => a.isAfter(b) ? a : b);
+                    _dataFim = _ganttSegments
+                        .map((s) => s.dataFim)
+                        .reduce((a, b) => a.isAfter(b) ? a : b);
                   }
                 });
               },
@@ -5017,7 +5689,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       ),
     );
   }
-  
+
   Widget _buildNotasSAPSection() {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
@@ -5032,7 +5704,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
               ),
               ElevatedButton.icon(
-                onPressed: _isAdicionandoNotaSAP ? null : () => _adicionarNotaSAP(),
+                onPressed: _isAdicionandoNotaSAP
+                    ? null
+                    : () => _adicionarNotaSAP(),
                 icon: const Icon(Icons.add),
                 label: _isAdicionandoNotaSAP
                     ? const SizedBox(
@@ -5040,7 +5714,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                         height: 18,
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            Colors.white,
+                          ),
                         ),
                       )
                     : const Text('Adicionar Nota'),
@@ -5083,7 +5759,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                   margin: const EdgeInsets.only(bottom: 8),
                   child: ListTile(
                     leading: CircleAvatar(
-                      backgroundColor: _getStatusUsuarioColor(nota.statusUsuario),
+                      backgroundColor: _getStatusUsuarioColor(
+                        nota.statusUsuario,
+                      ),
                       child: Text(
                         nota.tipo ?? '?',
                         style: TextStyle(
@@ -5144,7 +5822,10 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                             padding: const EdgeInsets.only(top: 2),
                             child: Text(
                               'Criado: ${_formatDateNotaSAP(nota.criadoEm!)}',
-                              style: const TextStyle(fontSize: 12, color: Colors.grey),
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey,
+                              ),
                             ),
                           ),
                       ],
@@ -5162,7 +5843,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       ),
     );
   }
-  
+
   String _formatDateNotaSAP(DateTime date) {
     return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
   }
@@ -5170,24 +5851,24 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
   // Retorna a cor do avatar baseada no status do usuário da nota
   Color _getStatusUsuarioColor(String? statusUsuario) {
     if (statusUsuario == null || statusUsuario.isEmpty) return Colors.grey;
-    
+
     final status = statusUsuario.toUpperCase();
-    
+
     // CONC - Verde
     if (status.contains('CONC')) return Colors.green;
-    
+
     // CADU ou CAIM - Cinza
     if (status.contains('CADU') || status.contains('CAIM')) return Colors.grey;
-    
+
     // REGI - Laranja
     if (status.contains('REGI')) return Colors.orange;
-    
+
     // EMAM - Amarelo
     if (status.contains('EMAM')) return Colors.yellow;
-    
+
     // ANLS - Azul
     if (status.contains('ANLS')) return Colors.blue;
-    
+
     // Padrão: cinza
     return Colors.grey;
   }
@@ -5195,104 +5876,107 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
   // Retorna a cor do texto do avatar baseada no status do usuário da nota
   Color _getStatusUsuarioTextColor(String? statusUsuario) {
     if (statusUsuario == null || statusUsuario.isEmpty) return Colors.white;
-    
+
     final status = statusUsuario.toUpperCase();
-    
+
     // Para EMAM (amarelo), usar texto preto para melhor contraste
     if (status.contains('EMAM')) return Colors.black;
-    
+
     // Para os outros, usar texto branco
     return Colors.white;
   }
-  
+
   Future<void> _adicionarNotaSAP() async {
     if (widget.task == null) return;
     setState(() {
       _isAdicionandoNotaSAP = true;
     });
     try {
-    // Buscar todas as notas disponíveis
-    final todasNotas = await _notaSAPService.getAllNotas(limit: 1000);
-    
-    // Filtrar notas já vinculadas
-    var notasDisponiveis = todasNotas
-        .where((n) => !_notasSAPVinculadas.any((v) => v.id == n.id))
-        .toList();
+      // Buscar todas as notas disponíveis
+      final todasNotas = await _notaSAPService.getAllNotas(limit: 1000);
 
-    // Excluir notas cujo status_sistema contenha MSEN (concluídas)
-    notasDisponiveis = notasDisponiveis.where((n) {
-      final status = n.statusSistema?.toUpperCase() ?? '';
-      return !status.contains('MSEN');
-    }).toList();
+      // Filtrar notas já vinculadas
+      var notasDisponiveis = todasNotas
+          .where((n) => !_notasSAPVinculadas.any((v) => v.id == n.id))
+          .toList();
 
-    // Restringir ao mesmo local da tarefa, se houver locais definidos
-    final locaisTarefa = widget.task?.locais
-            .where((l) => l.trim().isNotEmpty)
-            .toList() ??
-        [];
-    if (locaisTarefa.isNotEmpty) {
-      final localSet = locaisTarefa
-          .map((l) => l.trim().toLowerCase())
-          .where((l) => l.isNotEmpty)
-          .toSet();
+      // Excluir notas cujo status_sistema contenha MSEN (concluídas)
       notasDisponiveis = notasDisponiveis.where((n) {
-        final notaLocalRaw = (n.local ?? n.localInstalacao ?? '').trim().toLowerCase();
-        if (notaLocalRaw.isEmpty) return false;
-        return localSet.any((loc) =>
-            notaLocalRaw.contains(loc) || loc.contains(notaLocalRaw));
+        final status = n.statusSistema?.toUpperCase() ?? '';
+        return !status.contains('MSEN');
       }).toList();
-    }
-    
-    if (notasDisponiveis.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Todas as notas já estão vinculadas ou não há notas disponíveis para este local'),
-            backgroundColor: Colors.orange,
-          ),
-        );
+
+      // Restringir ao mesmo local da tarefa, se houver locais definidos
+      final locaisTarefa =
+          widget.task?.locais.where((l) => l.trim().isNotEmpty).toList() ?? [];
+      if (locaisTarefa.isNotEmpty) {
+        final localSet = locaisTarefa
+            .map((l) => l.trim().toLowerCase())
+            .where((l) => l.isNotEmpty)
+            .toSet();
+        notasDisponiveis = notasDisponiveis.where((n) {
+          final notaLocalRaw = (n.local ?? n.localInstalacao ?? '')
+              .trim()
+              .toLowerCase();
+          if (notaLocalRaw.isEmpty) return false;
+          return localSet.any(
+            (loc) => notaLocalRaw.contains(loc) || loc.contains(notaLocalRaw),
+          );
+        }).toList();
       }
-      return;
-    }
-    
-    // Mostrar diálogo melhorado para selecionar nota(s)
-    final notasSelecionadas = await showDialog<List<NotaSAP>>(
-      context: context,
-      builder: (context) => NotaSAPSelectionDialog(
-        notas: notasDisponiveis,
-        title: 'Selecionar Nota(s) SAP',
-        taskTarefa: widget.task?.tarefa,
-      ),
-    );
-    
-    if (notasSelecionadas != null && notasSelecionadas.isNotEmpty) {
-      try {
-        // Vincular todas as notas selecionadas
-        for (final nota in notasSelecionadas) {
-          await _notaSAPService.vincularNotaATarefa(widget.task!.id, nota.id);
-        }
-        await _loadNotasSAP();
+
+      if (notasDisponiveis.isEmpty) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
+            const SnackBar(
               content: Text(
-                notasSelecionadas.length == 1
-                    ? 'Nota ${notasSelecionadas.first.nota} vinculada com sucesso'
-                    : '${notasSelecionadas.length} notas vinculadas com sucesso',
+                'Todas as notas já estão vinculadas ou não há notas disponíveis para este local',
               ),
-              backgroundColor: Colors.green,
+              backgroundColor: Colors.orange,
             ),
           );
         }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Erro ao vincular nota: $e'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
+        return;
+      }
+
+      // Mostrar diálogo melhorado para selecionar nota(s)
+      final notasSelecionadas = await showDialog<List<NotaSAP>>(
+        context: context,
+        builder: (context) => NotaSAPSelectionDialog(
+          notas: notasDisponiveis,
+          title: 'Selecionar Nota(s) SAP',
+          taskTarefa: widget.task?.tarefa,
+        ),
+      );
+
+      if (notasSelecionadas != null && notasSelecionadas.isNotEmpty) {
+        try {
+          // Vincular todas as notas selecionadas
+          for (final nota in notasSelecionadas) {
+            await _notaSAPService.vincularNotaATarefa(widget.task!.id, nota.id);
+          }
+          await _loadNotasSAP();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  notasSelecionadas.length == 1
+                      ? 'Nota ${notasSelecionadas.first.nota} vinculada com sucesso'
+                      : '${notasSelecionadas.length} notas vinculadas com sucesso',
+                ),
+                backgroundColor: Colors.green,
+              ),
+            );
+          }
+        } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Erro ao vincular nota: $e'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
         }
       }
     } finally {
@@ -5305,10 +5989,10 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       }
     }
   }
-  
+
   Future<void> _removerNotaSAP(NotaSAP nota) async {
     if (widget.task == null) return;
-    
+
     final confirmar = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -5327,7 +6011,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         ],
       ),
     );
-    
+
     if (confirmar == true) {
       try {
         await _notaSAPService.desvincularNotaDeTarefa(widget.task!.id, nota.id);
@@ -5352,7 +6036,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       }
     }
   }
-  
+
   void _visualizarNotaSAP(NotaSAP nota) {
     showDialog(
       context: context,
@@ -5374,11 +6058,20 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
               _buildInfoRowNotaSAP('Centro', nota.centro),
               _buildInfoRowNotaSAP('Executor', nota.denominacaoExecutor),
               if (nota.criadoEm != null)
-                _buildInfoRowNotaSAP('Criado em', _formatDateNotaSAP(nota.criadoEm!)),
+                _buildInfoRowNotaSAP(
+                  'Criado em',
+                  _formatDateNotaSAP(nota.criadoEm!),
+                ),
               if (nota.inicioDesejado != null)
-                _buildInfoRowNotaSAP('Início Desejado', _formatDateNotaSAP(nota.inicioDesejado!)),
+                _buildInfoRowNotaSAP(
+                  'Início Desejado',
+                  _formatDateNotaSAP(nota.inicioDesejado!),
+                ),
               if (nota.conclusaoDesejada != null)
-                _buildInfoRowNotaSAP('Conclusão Desejada', _formatDateNotaSAP(nota.conclusaoDesejada!)),
+                _buildInfoRowNotaSAP(
+                  'Conclusão Desejada',
+                  _formatDateNotaSAP(nota.conclusaoDesejada!),
+                ),
             ],
           ),
         ),
@@ -5391,19 +6084,19 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       ),
     );
   }
-  
+
   // Métodos para Ordens Vinculadas
   Future<void> _loadOrdens() async {
     if (widget.task == null) {
       print('⚠️ _loadOrdens: widget.task é null, não carregando');
       return;
     }
-    
+
     print('📋 Carregando ordens para tarefa ${widget.task!.id}...');
     setState(() {
       _isLoadingOrdens = true;
     });
-    
+
     try {
       final ordens = await _ordemService.getOrdensPorTarefa(widget.task!.id);
       print('✅ Carregadas ${ordens.length} ordens vinculadas');
@@ -5422,11 +6115,11 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
 
   Future<void> _adicionarOrdem() async {
     if (widget.task == null) return;
-    
+
     setState(() {
       _isAdicionandoOrdem = true;
     });
-    
+
     try {
       final todasOrdens = await _ordemService.getAllOrdens(
         limit: null,
@@ -5437,19 +6130,21 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       final ordensDisponiveis = todasOrdens
           .where((o) => !_ordensVinculadas.any((v) => v.id == o.id))
           .toList();
-      
+
       if (ordensDisponiveis.isEmpty) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Todas as ordens já estão vinculadas ou não há ordens disponíveis'),
+              content: Text(
+                'Todas as ordens já estão vinculadas ou não há ordens disponíveis',
+              ),
               backgroundColor: Colors.orange,
             ),
           );
         }
         return;
       }
-      
+
       // Usar o diálogo de seleção de ordens
       final ordensSelecionadas = await showDialog<List<Ordem>>(
         context: context,
@@ -5462,7 +6157,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
               : null,
         ),
       );
-      
+
       if (ordensSelecionadas != null && ordensSelecionadas.isNotEmpty) {
         try {
           for (final ordem in ordensSelecionadas) {
@@ -5472,7 +6167,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('${ordensSelecionadas.length} ordem(ns) vinculada(s) com sucesso'),
+                content: Text(
+                  '${ordensSelecionadas.length} ordem(ns) vinculada(s) com sucesso',
+                ),
                 backgroundColor: Colors.green,
               ),
             );
@@ -5497,8 +6194,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           ),
         );
       }
-    }
-    finally {
+    } finally {
       if (mounted) {
         setState(() {
           _isAdicionandoOrdem = false;
@@ -5511,7 +6207,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
 
   Future<void> _removerOrdem(Ordem ordem) async {
     if (widget.task == null) return;
-    
+
     final confirmar = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -5530,7 +6226,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         ],
       ),
     );
-    
+
     if (confirmar == true) {
       try {
         await _ordemService.desvincularOrdemDeTarefa(widget.task!.id, ordem.id);
@@ -5578,7 +6274,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                         height: 18,
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            Colors.white,
+                          ),
                         ),
                       )
                     : const Text('Adicionar Ordem'),
@@ -5621,28 +6319,36 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                   margin: const EdgeInsets.only(bottom: 8),
                   child: ListTile(
                     leading: CircleAvatar(
-                      backgroundColor: ordem.statusSistema?.contains('ABER') == true
+                      backgroundColor:
+                          ordem.statusSistema?.contains('ABER') == true
                           ? Colors.orange
                           : ordem.statusSistema?.contains('LIB') == true
-                              ? Colors.green
-                              : Colors.grey,
+                          ? Colors.green
+                          : Colors.grey,
                       child: Text(
                         ordem.tipo ?? '?',
-                        style: const TextStyle(color: Colors.white, fontSize: 12),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                        ),
                       ),
                     ),
                     title: Row(
                       children: [
-                        Expanded(
-                          child: Text('Ordem: ${ordem.ordem}'),
-                        ),
+                        Expanded(child: Text('Ordem: ${ordem.ordem}')),
                         IconButton(
-                          icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
+                          icon: const Icon(
+                            Icons.copy,
+                            size: 18,
+                            color: Colors.blue,
+                          ),
                           padding: EdgeInsets.zero,
                           constraints: const BoxConstraints(),
                           onPressed: () async {
                             try {
-                              await Clipboard.setData(ClipboardData(text: ordem.ordem));
+                              await Clipboard.setData(
+                                ClipboardData(text: ordem.ordem),
+                              );
                               if (!mounted) return;
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(
@@ -5654,7 +6360,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                               if (!mounted) return;
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
-                                  content: Text('Não foi possível copiar a ordem: $e'),
+                                  content: Text(
+                                    'Não foi possível copiar a ordem: $e',
+                                  ),
                                   backgroundColor: Colors.red,
                                 ),
                               );
@@ -5681,7 +6389,10 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                         if (ordem.inicioBase != null)
                           Text(
                             'Início: ${_formatDateOrdem(ordem.inicioBase!)}',
-                            style: const TextStyle(fontSize: 12, color: Colors.grey),
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey,
+                            ),
                           ),
                       ],
                     ),
@@ -5708,12 +6419,12 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       print('⚠️ _loadATs: widget.task é null, não carregando');
       return;
     }
-    
+
     print('📋 Carregando ATs para tarefa ${widget.task!.id}...');
     setState(() {
       _isLoadingATs = true;
     });
-    
+
     try {
       final ats = await _atService.getATsPorTarefa(widget.task!.id);
       print('✅ Carregadas ${ats.length} ATs vinculadas');
@@ -5732,34 +6443,33 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
 
   Future<void> _adicionarAT() async {
     if (widget.task == null) return;
-    
+
     setState(() {
       _isAdicionandoAT = true;
     });
-    
+
     try {
       // Buscar todas as ATs (já filtradas por centro de trabalho no serviço)
-      final todasATs = await _atService.getAllATs(
-        limit: 1000,
-        offset: null,
-      );
-      
+      final todasATs = await _atService.getAllATs(limit: 1000, offset: null);
+
       final atsDisponiveis = todasATs
           .where((at) => !_atsVinculadas.any((v) => v.id == at.id))
           .toList();
-      
+
       if (atsDisponiveis.isEmpty) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Todas as ATs já estão vinculadas ou não há ATs disponíveis'),
+              content: Text(
+                'Todas as ATs já estão vinculadas ou não há ATs disponíveis',
+              ),
               backgroundColor: Colors.orange,
             ),
           );
         }
         return;
       }
-      
+
       // Usar o diálogo de seleção de ATs
       final atsSelecionadas = await showDialog<List<AT>>(
         context: context,
@@ -5772,7 +6482,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
               : null,
         ),
       );
-      
+
       if (atsSelecionadas != null && atsSelecionadas.isNotEmpty) {
         try {
           for (final at in atsSelecionadas) {
@@ -5782,7 +6492,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('${atsSelecionadas.length} AT(s) vinculada(s) com sucesso'),
+                content: Text(
+                  '${atsSelecionadas.length} AT(s) vinculada(s) com sucesso',
+                ),
                 backgroundColor: Colors.green,
               ),
             );
@@ -5807,8 +6519,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           ),
         );
       }
-    }
-    finally {
+    } finally {
       if (mounted) {
         setState(() {
           _isAdicionandoAT = false;
@@ -5821,7 +6532,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
 
   Future<void> _removerAT(AT at) async {
     if (widget.task == null) return;
-    
+
     final confirmar = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -5840,7 +6551,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         ],
       ),
     );
-    
+
     if (confirmar == true) {
       try {
         await _atService.desvincularATDeTarefa(widget.task!.id, at.id);
@@ -5888,7 +6599,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                         height: 18,
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            Colors.white,
+                          ),
                         ),
                       )
                     : const Text('Adicionar AT'),
@@ -5931,14 +6644,18 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                   margin: const EdgeInsets.only(bottom: 8),
                   child: ListTile(
                     leading: CircleAvatar(
-                      backgroundColor: at.statusSistema?.contains('ABER') == true
+                      backgroundColor:
+                          at.statusSistema?.contains('ABER') == true
                           ? Colors.orange
                           : at.statusSistema?.contains('LIB') == true
-                              ? Colors.green
-                              : Colors.grey,
+                          ? Colors.green
+                          : Colors.grey,
                       child: Text(
                         at.statusSistema?.substring(0, 1) ?? '?',
-                        style: const TextStyle(color: Colors.white, fontSize: 12),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                        ),
                       ),
                     ),
                     title: Text('AT: ${at.autorzTrab}'),
@@ -5960,13 +6677,28 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                               children: [
                                 _buildInfoRowAT('Texto Breve', at.textoBreve),
                                 _buildInfoRowAT('Local', at.localInstalacao),
-                                _buildInfoRowAT('Status Sistema', at.statusSistema),
-                                _buildInfoRowAT('Status Usuário', at.statusUsuario),
-                                _buildInfoRowAT('Centro de Trabalho', at.cntrTrab),
+                                _buildInfoRowAT(
+                                  'Status Sistema',
+                                  at.statusSistema,
+                                ),
+                                _buildInfoRowAT(
+                                  'Status Usuário',
+                                  at.statusUsuario,
+                                ),
+                                _buildInfoRowAT(
+                                  'Centro de Trabalho',
+                                  at.cntrTrab,
+                                ),
                                 if (at.dataInicio != null)
-                                  _buildInfoRowAT('Data Início', _formatDateAT(at.dataInicio!)),
+                                  _buildInfoRowAT(
+                                    'Data Início',
+                                    _formatDateAT(at.dataInicio!),
+                                  ),
                                 if (at.dataFim != null)
-                                  _buildInfoRowAT('Data Fim', _formatDateAT(at.dataFim!)),
+                                  _buildInfoRowAT(
+                                    'Data Fim',
+                                    _formatDateAT(at.dataFim!),
+                                  ),
                               ],
                             ),
                           ),
@@ -6001,9 +6733,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
               style: const TextStyle(fontWeight: FontWeight.bold),
             ),
           ),
-          Expanded(
-            child: Text(value ?? '-'),
-          ),
+          Expanded(child: Text(value ?? '-')),
         ],
       ),
     );
@@ -6039,19 +6769,19 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       print('⚠️ _loadSIs: widget.task é null, não carregando');
       return;
     }
-    
+
     if (!mounted) return;
-    
+
     print('📋 Carregando SIs para tarefa ${widget.task!.id}...');
-    
+
     try {
       setState(() {
         _isLoadingSIs = true;
       });
-      
+
       final sis = await _siService.getSIsPorTarefa(widget.task!.id);
       print('✅ Carregadas ${sis.length} SIs vinculadas');
-      
+
       if (mounted) {
         setState(() {
           _sisVinculadas = sis;
@@ -6070,33 +6800,33 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
 
   Future<void> _adicionarSI() async {
     if (widget.task == null) return;
-    
+
     setState(() {
       _isAdicionandoSI = true;
     });
-    
+
     try {
       // Buscar todas as SIs (já filtradas por centro de trabalho no serviço)
-      final todasSIs = await _siService.getAllSIs(
-        limit: 1000,
-      );
-      
+      final todasSIs = await _siService.getAllSIs(limit: 1000);
+
       final sisDisponiveis = todasSIs
           .where((si) => !_sisVinculadas.any((v) => v.id == si.id))
           .toList();
-      
+
       if (sisDisponiveis.isEmpty) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Todas as SIs já estão vinculadas ou não há SIs disponíveis'),
+              content: Text(
+                'Todas as SIs já estão vinculadas ou não há SIs disponíveis',
+              ),
               backgroundColor: Colors.orange,
             ),
           );
         }
         return;
       }
-      
+
       // Usar o diálogo de seleção de SIs
       final sisSelecionadas = await showDialog<List<SI>>(
         context: context,
@@ -6109,7 +6839,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
               : null,
         ),
       );
-      
+
       if (sisSelecionadas != null && sisSelecionadas.isNotEmpty) {
         try {
           for (final si in sisSelecionadas) {
@@ -6119,7 +6849,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('${sisSelecionadas.length} SI(s) vinculada(s) com sucesso'),
+                content: Text(
+                  '${sisSelecionadas.length} SI(s) vinculada(s) com sucesso',
+                ),
                 backgroundColor: Colors.green,
               ),
             );
@@ -6144,8 +6876,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
           ),
         );
       }
-    }
-    finally {
+    } finally {
       if (mounted) {
         setState(() {
           _isAdicionandoSI = false;
@@ -6158,7 +6889,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
 
   Future<void> _removerSI(SI si) async {
     if (widget.task == null) return;
-    
+
     final confirmar = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -6176,7 +6907,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
         ],
       ),
     );
-    
+
     if (confirmar == true) {
       try {
         await _siService.desvincularSITarefa(widget.task!.id, si.id);
@@ -6224,7 +6955,9 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                         height: 18,
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            Colors.white,
+                          ),
                         ),
                       )
                     : const Text('Adicionar SI'),
@@ -6270,11 +7003,14 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                       backgroundColor: si.statusSistema?.contains('CRI') == true
                           ? Colors.orange
                           : si.statusSistema?.contains('PREP') == true
-                              ? Colors.green
-                              : Colors.grey,
+                          ? Colors.green
+                          : Colors.grey,
                       child: Text(
                         si.statusSistema?.substring(0, 1) ?? '?',
-                        style: const TextStyle(color: Colors.white, fontSize: 12),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                        ),
                       ),
                     ),
                     title: Text('SI: ${si.solicitacao}'),
@@ -6296,14 +7032,29 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                               children: [
                                 _buildInfoRowSI('Texto Breve', si.textoBreve),
                                 _buildInfoRowSI('Local', si.localInstalacao),
-                                _buildInfoRowSI('Status Sistema', si.statusSistema),
-                                _buildInfoRowSI('Status Usuário', si.statusUsuario),
+                                _buildInfoRowSI(
+                                  'Status Sistema',
+                                  si.statusSistema,
+                                ),
+                                _buildInfoRowSI(
+                                  'Status Usuário',
+                                  si.statusUsuario,
+                                ),
                                 _buildInfoRowSI('Tipo', si.tipo),
-                                _buildInfoRowSI('Centro de Trabalho', si.cntrTrab),
+                                _buildInfoRowSI(
+                                  'Centro de Trabalho',
+                                  si.cntrTrab,
+                                ),
                                 if (si.dataInicio != null)
-                                  _buildInfoRowSI('Data Início', _formatDateSI(si.dataInicio!)),
+                                  _buildInfoRowSI(
+                                    'Data Início',
+                                    _formatDateSI(si.dataInicio!),
+                                  ),
                                 if (si.dataFim != null)
-                                  _buildInfoRowSI('Data Fim', _formatDateSI(si.dataFim!)),
+                                  _buildInfoRowSI(
+                                    'Data Fim',
+                                    _formatDateSI(si.dataFim!),
+                                  ),
                               ],
                             ),
                           ),
@@ -6338,9 +7089,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
               style: const TextStyle(fontWeight: FontWeight.bold),
             ),
           ),
-          Expanded(
-            child: Text(value ?? '-'),
-          ),
+          Expanded(child: Text(value ?? '-')),
         ],
       ),
     );
@@ -6360,7 +7109,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
     final isDesktop = Responsive.isDesktop(context);
     final iconSize = isDesktop ? 20.0 : 18.0;
     final fontSize = isDesktop ? 13.0 : 11.0;
-    
+
     return Tab(
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -6380,12 +7129,12 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
             SizedBox(width: isDesktop ? 4 : 3),
             Container(
               padding: EdgeInsets.symmetric(
-                horizontal: count > 9 ? (isDesktop ? 5 : 4) : (isDesktop ? 6 : 5),
+                horizontal: count > 9
+                    ? (isDesktop ? 5 : 4)
+                    : (isDesktop ? 6 : 5),
                 vertical: 1,
               ),
-              constraints: BoxConstraints(
-                minWidth: isDesktop ? 18.0 : 16.0,
-              ),
+              constraints: BoxConstraints(minWidth: isDesktop ? 18.0 : 16.0),
               decoration: BoxDecoration(
                 color: Colors.red,
                 borderRadius: BorderRadius.circular(10),
@@ -6444,11 +7193,12 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
   // Método para construir a tab do grupo SAP
   Widget _buildSAPGroupTab(BuildContext context) {
     final isDesktop = Responsive.isDesktop(context);
-    final totalCount = _notasSAPVinculadas.length + 
-                      _ordensVinculadas.length + 
-                      _atsVinculadas.length + 
-                      _sisVinculadas.length;
-    
+    final totalCount =
+        _notasSAPVinculadas.length +
+        _ordensVinculadas.length +
+        _atsVinculadas.length +
+        _sisVinculadas.length;
+
     return Tab(
       child: Builder(
         builder: (tabContext) => PopupMenuButton<String>(
@@ -6500,10 +7250,7 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                 ),
               ),
               SizedBox(width: isDesktop ? 2 : 1),
-              Icon(
-                Icons.arrow_drop_down,
-                size: isDesktop ? 16.0 : 14.0,
-              ),
+              Icon(Icons.arrow_drop_down, size: isDesktop ? 16.0 : 14.0),
             ],
           ),
           itemBuilder: (context) => [
@@ -6511,24 +7258,28 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
               value: 'notas',
               child: Row(
                 children: [
-                  const Icon(Icons.description, size: 20, color: Color(0xFF1E3A5F)),
+                  const Icon(
+                    Icons.description,
+                    size: 20,
+                    color: Color(0xFF1E3A5F),
+                  ),
                   const SizedBox(width: 12),
                   const Expanded(
-                    child: Text(
-                      'Notas SAP',
-                      style: TextStyle(fontSize: 14),
-                    ),
+                    child: Text('Notas SAP', style: TextStyle(fontSize: 14)),
                   ),
-                  if (_notasSAPVinculadas.length > 0)
+                  if (_notasSAPVinculadas.isNotEmpty)
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.red,
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Text(
-                        _notasSAPVinculadas.length > 99 
-                            ? '99+' 
+                        _notasSAPVinculadas.length > 99
+                            ? '99+'
                             : _notasSAPVinculadas.length.toString(),
                         style: const TextStyle(
                           color: Colors.white,
@@ -6544,24 +7295,28 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
               value: 'ordens',
               child: Row(
                 children: [
-                  const Icon(Icons.receipt_long, size: 20, color: Color(0xFF1E3A5F)),
+                  const Icon(
+                    Icons.receipt_long,
+                    size: 20,
+                    color: Color(0xFF1E3A5F),
+                  ),
                   const SizedBox(width: 12),
                   const Expanded(
-                    child: Text(
-                      'Ordens',
-                      style: TextStyle(fontSize: 14),
-                    ),
+                    child: Text('Ordens', style: TextStyle(fontSize: 14)),
                   ),
-                  if (_ordensVinculadas.length > 0)
+                  if (_ordensVinculadas.isNotEmpty)
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.red,
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Text(
-                        _ordensVinculadas.length > 99 
-                            ? '99+' 
+                        _ordensVinculadas.length > 99
+                            ? '99+'
                             : _ordensVinculadas.length.toString(),
                         style: const TextStyle(
                           color: Colors.white,
@@ -6577,24 +7332,28 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
               value: 'ats',
               child: Row(
                 children: [
-                  const Icon(Icons.assignment, size: 20, color: Color(0xFF1E3A5F)),
+                  const Icon(
+                    Icons.assignment,
+                    size: 20,
+                    color: Color(0xFF1E3A5F),
+                  ),
                   const SizedBox(width: 12),
                   const Expanded(
-                    child: Text(
-                      'ATs',
-                      style: TextStyle(fontSize: 14),
-                    ),
+                    child: Text('ATs', style: TextStyle(fontSize: 14)),
                   ),
-                  if (_atsVinculadas.length > 0)
+                  if (_atsVinculadas.isNotEmpty)
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.red,
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Text(
-                        _atsVinculadas.length > 99 
-                            ? '99+' 
+                        _atsVinculadas.length > 99
+                            ? '99+'
                             : _atsVinculadas.length.toString(),
                         style: const TextStyle(
                           color: Colors.white,
@@ -6613,21 +7372,21 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
                   const Icon(Icons.info, size: 20, color: Color(0xFF1E3A5F)),
                   const SizedBox(width: 12),
                   const Expanded(
-                    child: Text(
-                      'SIs',
-                      style: TextStyle(fontSize: 14),
-                    ),
+                    child: Text('SIs', style: TextStyle(fontSize: 14)),
                   ),
-                  if (_sisVinculadas.length > 0)
+                  if (_sisVinculadas.isNotEmpty)
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.red,
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Text(
-                        _sisVinculadas.length > 99 
-                            ? '99+' 
+                        _sisVinculadas.length > 99
+                            ? '99+'
                             : _sisVinculadas.length.toString(),
                         style: const TextStyle(
                           color: Colors.white,
@@ -6659,6 +7418,4 @@ class _TaskFormDialogState extends State<TaskFormDialog> with SingleTickerProvid
       ),
     );
   }
-
 }
-

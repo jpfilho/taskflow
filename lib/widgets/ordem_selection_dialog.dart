@@ -24,14 +24,14 @@ class OrdemSelectionDialog extends StatefulWidget {
 class _OrdemSelectionDialogState extends State<OrdemSelectionDialog> {
   List<Ordem> _filteredOrdens = [];
   List<Ordem> _displayedOrdens = [];
-  Set<String> _selectedOrdemIds = {}; // IDs das ordens selecionadas
+  final Set<String> _selectedOrdemIds = {}; // IDs das ordens selecionadas
   String _searchQuery = '';
   String _viewMode = 'cards'; // 'cards', 'list', 'table'
-  Set<String> _filterStatusUsuario = {};
-  Set<String> _filterTipo = {};
-  Set<String> _filterLocal = {};
-  Set<String> _filterSala = {};
-  Set<String> _filterOrdem = {};
+  final Set<String> _filterStatusUsuario = {};
+  final Set<String> _filterTipo = {};
+  final Set<String> _filterLocal = {};
+  final Set<String> _filterSala = {};
+  final Set<String> _filterOrdem = {};
   bool _filtersExpanded = false;
   final int _itemsPerPage = 50;
   int _currentPage = 0;
@@ -277,7 +277,7 @@ class _OrdemSelectionDialogState extends State<OrdemSelectionDialog> {
           // dias
           Text(
             diasRestantes < 0
-                ? '${diasRestantes} dias'
+                ? '$diasRestantes dias'
                 : diasRestantes == 0
                     ? 'Vence hoje'
                     : diasRestantes == 1
@@ -309,7 +309,7 @@ class _OrdemSelectionDialogState extends State<OrdemSelectionDialog> {
 
     return Dialog(
       insetPadding: const EdgeInsets.all(16),
-      child: Container(
+      child: SizedBox(
         width: isMobile ? double.infinity : 1100,
         height: isMobile ? double.infinity : 700,
         child: Column(
@@ -1040,7 +1040,7 @@ class _OrdemSelectionDialogState extends State<OrdemSelectionDialog> {
           headingRowHeight: 38,
           dataRowMinHeight: 26,
           dataRowMaxHeight: 42,
-          headingRowColor: MaterialStateProperty.all(Colors.blue[50]),
+          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
           columns: const [
             DataColumn(label: Text('Local', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
             DataColumn(label: Text('Tipo', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),

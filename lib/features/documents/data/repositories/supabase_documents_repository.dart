@@ -1,4 +1,3 @@
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -186,7 +185,7 @@ class SupabaseDocumentsRepository {
     final from = page * pageSize;
     final to = from + pageSize - 1;
     final hasSearch = searchQuery != null && searchQuery.trim().isNotEmpty;
-    final searchLower = hasSearch ? searchQuery!.trim().toLowerCase() : '';
+    final searchLower = hasSearch ? searchQuery.trim().toLowerCase() : '';
 
     var query = _supabase.from('documents').select();
 
@@ -260,7 +259,7 @@ class SupabaseDocumentsRepository {
   Future<Document> getDocumentById(String id) async {
     final resp = await _supabase.from('documents').select().eq('id', id).maybeSingle();
     if (resp == null) throw Exception('Documento não encontrado');
-    final doc = Document.fromMap(resp as Map<String, dynamic>);
+    final doc = Document.fromMap(resp);
     final enriched = await _enrichDocuments([doc]);
     // Buscar versões
     final versionsResp = await _supabase
@@ -284,7 +283,7 @@ class SupabaseDocumentsRepository {
         .insert(document.toInsertMap())
         .select()
         .single();
-    return Document.fromMap(response as Map<String, dynamic>);
+    return Document.fromMap(response);
   }
 
   Future<DocumentVersion> createVersion({
@@ -317,7 +316,7 @@ class SupabaseDocumentsRepository {
       'file_ext': file.extension,
       'checksum': file.checksum,
     }).eq('id', documentId);
-    return DocumentVersion.fromMap(resp as Map<String, dynamic>);
+    return DocumentVersion.fromMap(resp);
   }
 
   /// Upload + criação de documento em uma chamada.
@@ -527,7 +526,7 @@ class SupabaseDocumentsRepository {
         .eq('document_id', documentId)
         .order('version', ascending: false)
         .limit(1);
-    if (resp is List && resp.isNotEmpty) {
+    if (resp.isNotEmpty) {
       final v = (resp.first['version'] as int?) ?? 1;
       return v + 1;
     }
@@ -700,7 +699,7 @@ class SupabaseDocumentsRepository {
             .select()
             .inFilter('id', statusIds.toList());
         for (final s in res) {
-          final status = DocumentStatus.fromMap(s as Map<String, dynamic>);
+          final status = DocumentStatus.fromMap(s);
           statusMap[status.id] = status;
         }
       }

@@ -152,7 +152,7 @@ class _MelhoriaBugFormDialogState extends State<MelhoriaBugFormDialog> {
                     ),
                     const SizedBox(height: 16),
                     DropdownButtonFormField<String>(
-                      value: _tipo,
+                      initialValue: _tipo,
                       decoration: _inputDecoration('Tipo'),
                       borderRadius: BorderRadius.circular(12),
                       items: const [
@@ -164,7 +164,7 @@ class _MelhoriaBugFormDialogState extends State<MelhoriaBugFormDialog> {
                     if (isEdit) ...[
                       const SizedBox(height: 16),
                       DropdownButtonFormField<String>(
-                        value: _status,
+                        initialValue: _status,
                         decoration: _inputDecoration('Status'),
                         borderRadius: BorderRadius.circular(12),
                         items: kMelhoriasBugsStatusCodes
@@ -178,7 +178,7 @@ class _MelhoriaBugFormDialogState extends State<MelhoriaBugFormDialog> {
                     ],
                     const SizedBox(height: 16),
                     DropdownButtonFormField<String?>(
-                      value: _prioridade,
+                      initialValue: _prioridade,
                       decoration: _inputDecoration('Prioridade'),
                       borderRadius: BorderRadius.circular(12),
                       items: [

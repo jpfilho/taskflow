@@ -141,17 +141,17 @@ class _FilterBarState extends State<FilterBar> {
     _frotasTotais = [];
     _coordenadoresTotais = [];
 
-    String _normalize(String s) => s.trim();
-    void _splitAndAdd(Set<String> target, String raw) {
+    String normalize(String s) => s.trim();
+    void splitAndAdd(Set<String> target, String raw) {
       if (raw.isEmpty) return;
       for (final part in raw.split(',')) {
-        final v = _normalize(part);
+        final v = normalize(part);
         if (v.isNotEmpty) target.add(v);
       }
     }
-    void _splitListAndAdd(Set<String> target, Iterable<String> values) {
+    void splitListAndAdd(Set<String> target, Iterable<String> values) {
       for (final v in values) {
-        _splitAndAdd(target, v);
+        splitAndAdd(target, v);
       }
     }
 
@@ -167,13 +167,13 @@ class _FilterBarState extends State<FilterBar> {
     for (final t in effective) {
       if (t.regional.isNotEmpty) regionais.add(t.regional);
       if (t.divisao.isNotEmpty) divisoes.add(t.divisao);
-      if (t.status.isNotEmpty) _splitAndAdd(status, t.status);
+      if (t.status.isNotEmpty) splitAndAdd(status, t.status);
       if (t.locais.isNotEmpty) locais.addAll(t.locais.where((e) => e.isNotEmpty));
-      if (t.tipo.isNotEmpty) _splitAndAdd(tipos, t.tipo); // tipos também podem vir concatenados
-      if (t.executor.isNotEmpty) _splitAndAdd(executores, t.executor);
-      if (t.executores.isNotEmpty) _splitListAndAdd(executores, t.executores.where((e) => e.isNotEmpty));
+      if (t.tipo.isNotEmpty) splitAndAdd(tipos, t.tipo); // tipos também podem vir concatenados
+      if (t.executor.isNotEmpty) splitAndAdd(executores, t.executor);
+      if (t.executores.isNotEmpty) splitListAndAdd(executores, t.executores.where((e) => e.isNotEmpty));
       if (t.frota.isNotEmpty) frotas.add(t.frota);
-      if (t.coordenador.isNotEmpty) _splitAndAdd(coordenadores, t.coordenador);
+      if (t.coordenador.isNotEmpty) splitAndAdd(coordenadores, t.coordenador);
     }
 
     List<String> sortSet(Set<String> s) {
@@ -555,7 +555,7 @@ class _FilterBarState extends State<FilterBar> {
           children: [
             // Indicador de loading
             if (widget.isFiltering)
-              Container(
+              SizedBox(
                 height: 3,
                 child: LinearProgressIndicator(
                   backgroundColor: Colors.grey[300],
@@ -726,7 +726,7 @@ class _FilterBarState extends State<FilterBar> {
                     top: 0,
                     left: 0,
                     right: 0,
-                    child: Container(
+                    child: SizedBox(
                       height: 3,
                       child: LinearProgressIndicator(
                         backgroundColor: Colors.grey[300],

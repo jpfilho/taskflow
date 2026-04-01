@@ -1,174 +1,64 @@
 # ============================================
 # Script de Deploy Rapido - Windows PowerShell
 # ============================================
-# Execute este script para fazer deploy
-# dos arquivos build/web/ para o servidor
+# Usa ssh/scp nativos do Windows (sem Posh-SSH)
+# Voce sera solicitado a digitar a senha SSH
+# (maximo 2 vezes: 1x scp + 1x ssh)
 
 param(
     [switch]$NoBuild
 )
 
 # Configuracoes do servidor
-$SERVER = "root@212.85.0.249"
+$SSH_USER = "root"
+$SSH_HOST = "212.85.0.249"
+$SSH_PORT = 22
 $REMOTE_PATH = "/var/www/html/task2026"
-$SSH_PORT = 22  # Porta SSH (padrao: 22, altere se necessario)
-
-# Configuracao de autenticacao
-# Opcao 1: Use chave SSH (recomendado - mais seguro)
-# Nao precisa configurar senha se usar chave SSH
-
-# Opcao 2: Use senha (menos seguro - nao recomendado para producao)
-# Descomente a linha abaixo e coloque sua senha:
-$PASSWORD = "Elen@264259281091"
-
-# Se usar senha, instale o modulo Posh-SSH primeiro:
-# Install-Module -Name Posh-SSH -Scope CurrentUser -Force
 
 Write-Host "==========================================" -ForegroundColor Green
 Write-Host "Deploy da Aplicacao para Producao" -ForegroundColor Green
 Write-Host "==========================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "Servidor: $SERVER" -ForegroundColor Cyan
+Write-Host "Servidor: ${SSH_USER}@${SSH_HOST}" -ForegroundColor Cyan
 Write-Host "Caminho remoto: $REMOTE_PATH" -ForegroundColor Cyan
 Write-Host ""
 
-# Verificar se precisa usar autenticacao por senha
-$USE_PASSWORD = $false
-$SSH_SESSION = $null
-if ($PSBoundParameters.ContainsKey('PASSWORD') -or (Get-Variable -Name PASSWORD -ErrorAction SilentlyContinue)) {
-    if ($PASSWORD) {
-        $USE_PASSWORD = $true
-        # Verificar se o modulo Posh-SSH esta instalado
-        if (-not (Get-Module -ListAvailable -Name Posh-SSH)) {
-            Write-Host "ERRO: Modulo Posh-SSH nao encontrado!" -ForegroundColor Red
-            Write-Host "   Instale com: Install-Module -Name Posh-SSH -Scope CurrentUser -Force" -ForegroundColor Yellow
-            exit 1
-        }
-        Import-Module Posh-SSH -Force
-        Write-Host "Usando autenticacao por senha" -ForegroundColor Yellow
-        
-        # Extrair hostname e usuario do SERVER
-        if ($SERVER -match '^(.+)@(.+)$') {
-            $SSH_USER = $matches[1]
-            $SSH_HOST = $matches[2]
-        } else {
-            $SSH_USER = "root"
-            $SSH_HOST = $SERVER
-        }
-        
-        # Testar conectividade basica
-        Write-Host "Testando conectividade com $SSH_HOST:$SSH_PORT..." -ForegroundColor Cyan
-        $tcpClient = New-Object System.Net.Sockets.TcpClient
-        try {
-            $connect = $tcpClient.BeginConnect($SSH_HOST, $SSH_PORT, $null, $null)
-            $wait = $connect.AsyncWaitHandle.WaitOne(5000, $false)
-            if ($wait) {
-                $tcpClient.EndConnect($connect)
-                Write-Host "   Porta $SSH_PORT esta acessivel" -ForegroundColor Green
-                $tcpClient.Close()
-            } else {
-                Write-Host "   AVISO: Timeout ao testar porta $SSH_PORT" -ForegroundColor Yellow
-                Write-Host "   Continuando mesmo assim..." -ForegroundColor Yellow
-                $tcpClient.Close()
-            }
-        } catch {
-            Write-Host "   AVISO: Nao foi possivel testar conectividade: $_" -ForegroundColor Yellow
-            Write-Host "   Continuando mesmo assim..." -ForegroundColor Yellow
-        }
-        
-        # Criar credenciais e conectar
-        Write-Host "Conectando ao servidor $SSH_HOST:$SSH_PORT..." -ForegroundColor Cyan
-        $securePassword = ConvertTo-SecureString $PASSWORD -AsPlainText -Force
-        $credential = New-Object System.Management.Automation.PSCredential($SSH_USER, $securePassword)
-        
-        try {
-            # Tentar conectar com timeout aumentado (30 segundos)
-            $SSH_SESSION = New-SSHSession -ComputerName $SSH_HOST -Port $SSH_PORT -Credential $credential -AcceptKey -ConnectionTimeout 30
-            
-            if (-not $SSH_SESSION) {
-                Write-Host "ERRO: Falha ao conectar ao servidor!" -ForegroundColor Red
-                Write-Host "   Verifique:" -ForegroundColor Yellow
-                Write-Host "   - Se o servidor esta acessivel" -ForegroundColor Yellow
-                Write-Host "   - Se a porta SSH esta correta (atual: $SSH_PORT)" -ForegroundColor Yellow
-                Write-Host "   - Se a senha esta correta" -ForegroundColor Yellow
-                exit 1
-            }
-            Write-Host "Conexao estabelecida com sucesso!" -ForegroundColor Green
-        } catch {
-            Write-Host "ERRO ao conectar: $_" -ForegroundColor Red
-            Write-Host "   Verifique:" -ForegroundColor Yellow
-            Write-Host "   - Se o servidor esta acessivel" -ForegroundColor Yellow
-            Write-Host "   - Se a porta SSH esta correta (atual: $SSH_PORT)" -ForegroundColor Yellow
-            Write-Host "   - Se a senha esta correta" -ForegroundColor Yellow
-            Write-Host "   - Se o firewall permite conexoes SSH" -ForegroundColor Yellow
-            exit 1
-        }
-    }
-} else {
-    Write-Host "Usando autenticacao por chave SSH" -ForegroundColor Green
+# Verificar se ssh e scp estao disponiveis
+if (-not (Get-Command ssh -ErrorAction SilentlyContinue)) {
+    Write-Host "ERRO: Comando 'ssh' nao encontrado!" -ForegroundColor Red
+    Write-Host "   Instale o OpenSSH Client nas Configuracoes do Windows" -ForegroundColor Yellow
+    exit 1
 }
-Write-Host ""
-
-# Funcoes auxiliares para SSH e SCP
-function Invoke-RemoteCommand {
-    param([string]$Command)
-    if ($USE_PASSWORD -and $SSH_SESSION) {
-        try {
-            $result = Invoke-SSHCommand -SessionId $SSH_SESSION.SessionId -Command $Command -TimeOut 60
-            if ($result.ExitStatus -ne 0) {
-                Write-Host "   AVISO: Comando retornou codigo de erro: $($result.ExitStatus)" -ForegroundColor Yellow
-                Write-Host "   Erro: $($result.Error)" -ForegroundColor Yellow
-            }
-            return $result.Output
-        } catch {
-            Write-Host "   ERRO ao executar comando remoto: $_" -ForegroundColor Red
-            return ""
-        }
-    } else {
-        $output = ssh $SERVER $Command 2>&1
-        return $output
-    }
-}
-
-function Copy-FilesToServer {
-    param([string]$LocalPath, [string]$RemotePath)
-    if ($USE_PASSWORD -and $SSH_SESSION) {
-        Set-SCPFile -SessionId $SSH_SESSION.SessionId -LocalFile $LocalPath -RemotePath $RemotePath
-    } else {
-        scp -r $LocalPath "${SERVER}:${RemotePath}/"
-    }
+if (-not (Get-Command scp -ErrorAction SilentlyContinue)) {
+    Write-Host "ERRO: Comando 'scp' nao encontrado!" -ForegroundColor Red
+    exit 1
 }
 
 # Verificar se deve fazer build
-$DO_BUILD = -not $NoBuild
-
 if ($NoBuild) {
     Write-Host "AVISO: Pulando build (usando build existente)" -ForegroundColor Yellow
     Write-Host ""
-}
-
-# Fazer build se necessario
-if ($DO_BUILD) {
+} else {
     Write-Host "Fazendo build da aplicacao..." -ForegroundColor Cyan
     Write-Host ""
-    
+
     # Limpar build anterior
     Write-Host "   Limpando build anterior..." -ForegroundColor Gray
     flutter clean | Out-Null
-    
+
     # Obter dependencias
     Write-Host "   Obtendo dependencias..." -ForegroundColor Gray
     flutter pub get | Out-Null
-    
+
     # Build para web
     Write-Host "   Compilando para web (release)..." -ForegroundColor Gray
     flutter build web --release --base-href="/task2026/"
-    
+
     if (-not (Test-Path "build\web")) {
         Write-Host "ERRO: Build falhou! Diretorio build/web nao encontrado!" -ForegroundColor Red
         exit 1
     }
-    
+
     Write-Host "   Build concluido!" -ForegroundColor Green
     Write-Host ""
 }
@@ -228,89 +118,78 @@ $htaccessContent = @"
 $htaccessContent | Out-File -FilePath "build\web\.htaccess" -NoNewline -Encoding UTF8
 
 Write-Host ""
-Write-Host "Arquivos para deploy:" -ForegroundColor Cyan
 $size = (Get-ChildItem -Path "build\web" -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
-Write-Host "   $([math]::Round($size, 2)) MB" -ForegroundColor Gray
+Write-Host "Arquivos para deploy: $([math]::Round($size, 2)) MB" -ForegroundColor Cyan
 Write-Host ""
 
-# Criar diretorio remoto se nao existir
-Write-Host "Criando diretorio remoto (se necessario)..." -ForegroundColor Cyan
-Invoke-RemoteCommand "mkdir -p $REMOTE_PATH && chmod 755 $REMOTE_PATH" | Out-Null
+# ---- Empacotar em .tar.gz para transferencia rapida ----
+$archiveName = "task2026_web_$BUILD_TIMESTAMP.tar.gz"
+$archivePath = Join-Path $env:TEMP $archiveName
+if (Test-Path $archivePath) { Remove-Item $archivePath -Force }
 
-# Fazer backup do que ja existe (simplificado)
-Write-Host ""
-Write-Host "Fazendo backup do conteudo atual..." -ForegroundColor Cyan
-$backupCmd = "if [ -d '$REMOTE_PATH' ]; then sudo cp -r '$REMOTE_PATH' '${REMOTE_PATH}_backup_`$(date +%Y%m%d_%H%M%S)'; fi"
-Invoke-RemoteCommand $backupCmd | Out-Null
-
-# Transferir arquivos usando SCP
-Write-Host ""
-Write-Host "Transferindo arquivos..." -ForegroundColor Cyan
-Write-Host "   Isso pode levar alguns minutos..." -ForegroundColor Gray
-Write-Host ""
-
-# Limpar destino primeiro
-Invoke-RemoteCommand "rm -rf $REMOTE_PATH/*" | Out-Null
-
-# Transferir arquivos
-Write-Host "   Transferindo arquivos..." -ForegroundColor Gray
-$transferSuccess = $false
-if ($USE_PASSWORD -and $SSH_SESSION) {
-    # Usar SCP do Posh-SSH (transferencia recursiva)
-    try {
-        $files = Get-ChildItem -Path "build\web" -Recurse -File
-        $totalFiles = $files.Count
-        $currentFile = 0
-        foreach ($file in $files) {
-            $currentFile++
-            $relativePath = $file.FullName.Substring((Resolve-Path "build\web").Path.Length + 1)
-            $remoteFile = "$REMOTE_PATH/$relativePath".Replace('\', '/')
-            $remoteDir = Split-Path $remoteFile -Parent
-            Invoke-RemoteCommand "mkdir -p `"$remoteDir`"" | Out-Null
-            Set-SCPFile -SessionId $SSH_SESSION.SessionId -LocalFile $file.FullName -RemotePath $remoteFile -ErrorAction Stop
-            if ($currentFile % 10 -eq 0) {
-                Write-Host "   Progresso: $currentFile/$totalFiles arquivos..." -ForegroundColor Gray
-            }
-        }
-        $transferSuccess = $true
-    } catch {
-        Write-Host "   ERRO na transferencia: $_" -ForegroundColor Red
-        $transferSuccess = $false
-    }
-} else {
-    # Usar SCP nativo
-    scp -r build\web\* "${SERVER}:${REMOTE_PATH}/"
-    $transferSuccess = ($LASTEXITCODE -eq 0)
+Write-Host "Empacotando arquivos..." -ForegroundColor Cyan
+tar -czf "$archivePath" -C build\web .
+if (-not (Test-Path $archivePath)) {
+    Write-Host "ERRO: Falha ao criar pacote $archiveName" -ForegroundColor Red
+    exit 1
 }
+$pkgSize = [math]::Round((Get-Item $archivePath).Length / 1MB, 2)
+Write-Host "   Pacote: $archiveName ($pkgSize MB)" -ForegroundColor Gray
+Write-Host ""
 
-if (-not $transferSuccess) {
-    Write-Host ""
-    Write-Host "ERRO ao transferir arquivos!" -ForegroundColor Red
-    if ($USE_PASSWORD -and $SSH_SESSION) {
-        Remove-SSHSession -SessionId $SSH_SESSION.SessionId | Out-Null
-    }
+# ---- Transferir via SCP (1 prompt de senha) ----
+Write-Host "Transferindo pacote para o servidor..." -ForegroundColor Cyan
+Write-Host "   (Digite a senha SSH quando solicitado)" -ForegroundColor Yellow
+Write-Host ""
+scp -P $SSH_PORT "$archivePath" "${SSH_USER}@${SSH_HOST}:/tmp/$archiveName"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERRO: Falha ao transferir o pacote!" -ForegroundColor Red
+    Remove-Item $archivePath -Force -ErrorAction SilentlyContinue
     exit 1
 }
 
-# Verificar se os arquivos foram transferidos
+# Limpar pacote local
+Remove-Item $archivePath -Force -ErrorAction SilentlyContinue
+Write-Host "   Transferencia concluida!" -ForegroundColor Green
 Write-Host ""
-Write-Host "Verificando arquivos transferidos..." -ForegroundColor Cyan
-$REMOTE_VERSION = Invoke-RemoteCommand "cat $REMOTE_PATH/version.txt 2>/dev/null || echo 'N/A'"
-if ($REMOTE_VERSION -eq $BUILD_TIMESTAMP) {
-    Write-Host "   Versao confirmada no servidor: $REMOTE_VERSION" -ForegroundColor Green
-} else {
-    Write-Host "   AVISO: Versao no servidor: $REMOTE_VERSION (esperado: $BUILD_TIMESTAMP)" -ForegroundColor Yellow
+
+# ---- Executar comandos remotos (1 prompt de senha) ----
+Write-Host "Extraindo e configurando no servidor..." -ForegroundColor Cyan
+Write-Host "   (Digite a senha SSH novamente)" -ForegroundColor Yellow
+Write-Host ""
+
+# Comando composto: backup + limpar + extrair + permissoes + limpar pacote
+$remoteCmd = @"
+set -e
+echo '   Fazendo backup...'
+if [ -d '$REMOTE_PATH' ] && [ -f '$REMOTE_PATH/index.html' ]; then
+  cp -r '$REMOTE_PATH' '${REMOTE_PATH}_backup_$(date +%Y%m%d_%H%M%S)' 2>/dev/null || true
+fi
+echo '   Limpando destino...'
+mkdir -p '$REMOTE_PATH'
+rm -rf $REMOTE_PATH/*
+echo '   Extraindo pacote...'
+tar -xzf '/tmp/$archiveName' -C '$REMOTE_PATH'
+echo '   Ajustando permissoes...'
+chown -R www-data:www-data '$REMOTE_PATH'
+chmod -R 755 '$REMOTE_PATH'
+echo '   Limpando pacote temporario...'
+rm -f '/tmp/$archiveName'
+echo '   Verificando versao...'
+cat '$REMOTE_PATH/version.txt' 2>/dev/null || echo 'N/A'
+"@
+
+$result = ssh -p $SSH_PORT "${SSH_USER}@${SSH_HOST}" $remoteCmd
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "AVISO: Alguns comandos remotos podem ter falhado" -ForegroundColor Yellow
 }
 
-# Ajustar permissoes
-Write-Host ""
-Write-Host "Ajustando permissoes..." -ForegroundColor Cyan
-Invoke-RemoteCommand "sudo chown -R www-data:www-data $REMOTE_PATH" | Out-Null
-Invoke-RemoteCommand "sudo chmod -R 755 $REMOTE_PATH" | Out-Null
-
-# Fechar sessao SSH se foi aberta
-if ($USE_PASSWORD -and $SSH_SESSION) {
-    Remove-SSHSession -SessionId $SSH_SESSION.SessionId | Out-Null
+# Verificar versao
+$remoteVersion = ($result | Select-Object -Last 1).Trim()
+if ($remoteVersion -eq $BUILD_TIMESTAMP) {
+    Write-Host "   Versao confirmada no servidor: $remoteVersion" -ForegroundColor Green
+} else {
+    Write-Host "   Versao no servidor: $remoteVersion (esperado: $BUILD_TIMESTAMP)" -ForegroundColor Yellow
 }
 
 Write-Host ""
