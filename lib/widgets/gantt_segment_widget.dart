@@ -1,0 +1,763 @@
+// gantt_segment_widget.dart
+//
+// Widget extraído de gantt_chart.dart para permitir reuso no ActivityGanttView.
+// Representa uma barra arrastável no Gantt (execução, planejamento, deslocamento).
+// Suporta drag-to-move, drag-to-resize, context menu (editar, duplicar, excluir)
+// e exibição de conflitos de executor e frota.
+
+import 'dart:async';
+import 'dart:math' as math;
+import 'package:flutter/material.dart';
+import '../models/task.dart';
+import '../services/task_service.dart';
+import 'gantt_chart.dart' show GanttPeriod;
+
+/// Widget público para barras arrastáveis do Gantt.
+/// Equivale ao antigo `_DraggableSegment` (privado em gantt_chart.dart).
+class GanttSegmentWidget extends StatefulWidget {
+  final Task task;
+  final int segmentIndex;
+  final GanttSegment segment;
+  final DateTime normalizedStartDate;
+  final DateTime normalizedEndDate;
+  final double barWidth;
+  final double dayWidth;
+  final List<GanttPeriod> periods;
+  final Color color;
+  final Color textColor;
+  final List<DateTime>? conflictDays;
+
+  /// Mensagem completa do tooltip (todos os dias); usado quando não há mapa por dia.
+  final String? conflictTooltipMessage;
+
+  /// Tooltip por dia: ao passar o mouse no dia, mostra só os conflitos daquele dia.
+  final Map<DateTime, String>? conflictTooltipMessageByDay;
+
+  /// Dias de conflito de FROTA (exibição em preto com letras brancas).
+  final List<DateTime>? conflictDaysFrota;
+  final String? conflictTooltipMessageFrota;
+  final Map<DateTime, String>? conflictTooltipMessageByDayFrota;
+  final TaskService? taskService;
+  final Function()? onTasksUpdated;
+  final Function(Task)? onTaskUpdated;
+  final VoidCallback? onDragStart;
+  final VoidCallback? onDragEnd;
+  final ValueNotifier<int>? conflictsVersionNotifier;
+
+  const GanttSegmentWidget({
+    super.key,
+    required this.task,
+    required this.segmentIndex,
+    required this.segment,
+    required this.normalizedStartDate,
+    required this.normalizedEndDate,
+    required this.barWidth,
+    required this.dayWidth,
+    required this.periods,
+    required this.color,
+    this.textColor = Colors.white,
+    this.conflictDays,
+    this.conflictTooltipMessage,
+    this.conflictTooltipMessageByDay,
+    this.conflictDaysFrota,
+    this.conflictTooltipMessageFrota,
+    this.conflictTooltipMessageByDayFrota,
+    this.taskService,
+    this.onTasksUpdated,
+    this.onTaskUpdated,
+    this.onDragStart,
+    this.onDragEnd,
+    this.conflictsVersionNotifier,
+  });
+
+  @override
+  State<GanttSegmentWidget> createState() => _GanttSegmentWidgetState();
+}
+
+enum _DragMode { move, resizeStart, resizeEnd }
+
+class _GanttSegmentWidgetState extends State<GanttSegmentWidget> {
+  double? _dragStartX;
+  DateTime? _originalStartDate;
+  DateTime? _originalEndDate;
+  DateTime? _currentStartDate;
+  DateTime? _currentEndDate;
+  bool _isDragging = false;
+  _DragMode? _dragMode;
+  static const double _resizeHandleWidth = 8.0;
+  OverlayEntry? _dayTooltipOverlay;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.conflictsVersionNotifier?.addListener(_onConflictsVersionChanged);
+  }
+
+  void _onConflictsVersionChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    widget.conflictsVersionNotifier?.removeListener(_onConflictsVersionChanged);
+    _hideDayTooltipOverlay();
+    super.dispose();
+  }
+
+  void _showDayTooltipOverlay(Offset global, String message) {
+    _hideDayTooltipOverlay();
+    const double tooltipMaxWidth = 320;
+    const double gap = 12;
+    final left = (global.dx - tooltipMaxWidth - gap).clamp(8.0, global.dx - gap - 60);
+    _dayTooltipOverlay = OverlayEntry(
+      builder: (context) => Positioned(
+        left: left,
+        top: global.dy + 8,
+        width: tooltipMaxWidth,
+        child: Material(
+          elevation: 4,
+          borderRadius: BorderRadius.circular(4),
+          color: Colors.grey[850],
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Text(message, style: const TextStyle(color: Colors.white, fontSize: 12)),
+          ),
+        ),
+      ),
+    );
+    Overlay.of(context).insert(_dayTooltipOverlay!);
+  }
+
+  void _hideDayTooltipOverlay() {
+    _dayTooltipOverlay?.remove();
+    _dayTooltipOverlay = null;
+  }
+
+  @override
+  void didUpdateWidget(GanttSegmentWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final segmentChanged =
+        oldWidget.segment.dataInicio != widget.segment.dataInicio ||
+        oldWidget.segment.dataFim != widget.segment.dataFim ||
+        oldWidget.color != widget.color;
+    final conflictsChanged =
+        _listsNotEqual(oldWidget.conflictDays, widget.conflictDays) ||
+        _listsNotEqual(oldWidget.conflictDaysFrota, widget.conflictDaysFrota) ||
+        oldWidget.conflictTooltipMessage != widget.conflictTooltipMessage ||
+        oldWidget.conflictTooltipMessageFrota != widget.conflictTooltipMessageFrota;
+    if (segmentChanged || conflictsChanged) {
+      setState(() {
+        if (!_isDragging && segmentChanged) {
+          _currentStartDate = null;
+          _currentEndDate = null;
+        }
+      });
+    }
+  }
+
+  bool _listsNotEqual(List<DateTime>? a, List<DateTime>? b) {
+    if ((a == null) != (b == null)) return true;
+    if (a == null) return false;
+    if (a.length != b!.length) return true;
+    for (int i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return true;
+    }
+    return false;
+  }
+
+  _DragMode _getDragMode(double x) {
+    if (x < _resizeHandleWidth) return _DragMode.resizeStart;
+    if (x > widget.barWidth - _resizeHandleWidth) return _DragMode.resizeEnd;
+    return _DragMode.move;
+  }
+
+  void _onPanStart(DragStartDetails details) {
+    _hideDayTooltipOverlay();
+    final dragMode = _getDragMode(details.localPosition.dx);
+    setState(() {
+      _dragStartX = details.localPosition.dx;
+      _originalStartDate = widget.segment.dataInicio;
+      _originalEndDate = widget.segment.dataFim;
+      _isDragging = true;
+      _dragMode = dragMode;
+    });
+    widget.onDragStart?.call();
+  }
+
+  void _onPanUpdate(DragUpdateDetails details) {
+    if (_dragStartX == null || _dragMode == null || widget.taskService == null) return;
+
+    final deltaX = details.localPosition.dx - _dragStartX!;
+    final daysDelta = deltaX / widget.dayWidth;
+
+    if (_dragMode == _DragMode.move && daysDelta.abs() < 0.5) return;
+
+    int roundedDaysDelta;
+    if (_dragMode == _DragMode.resizeStart || _dragMode == _DragMode.resizeEnd) {
+      if (daysDelta.abs() >= 0.2) {
+        roundedDaysDelta = daysDelta.round();
+        if (roundedDaysDelta == 0) roundedDaysDelta = daysDelta > 0 ? 1 : -1;
+      } else {
+        return;
+      }
+    } else {
+      roundedDaysDelta = daysDelta.round();
+    }
+
+    if (roundedDaysDelta == 0) return;
+
+    DateTime? newStartDate = _originalStartDate;
+    DateTime? newEndDate = _originalEndDate;
+
+    switch (_dragMode!) {
+      case _DragMode.move:
+        newStartDate = _originalStartDate!.add(Duration(days: roundedDaysDelta));
+        final duration = _originalEndDate!.difference(_originalStartDate!);
+        newEndDate = newStartDate.add(duration);
+        final minStart = widget.periods.isNotEmpty ? widget.periods.first.start : newStartDate;
+        final maxEnd = widget.periods.isNotEmpty ? widget.periods.last.end : newEndDate;
+        if (newStartDate.isBefore(minStart) || newEndDate.isAfter(maxEnd)) return;
+        break;
+      case _DragMode.resizeStart:
+        newStartDate = _originalStartDate!.add(Duration(days: roundedDaysDelta));
+        if (newStartDate.isAfter(_originalEndDate!)) newStartDate = _originalEndDate!.subtract(const Duration(days: 1));
+        if (widget.periods.isNotEmpty && newStartDate.isBefore(widget.periods.first.start)) newStartDate = widget.periods.first.start;
+        break;
+      case _DragMode.resizeEnd:
+        newEndDate = _originalEndDate!.add(Duration(days: roundedDaysDelta));
+        if (newEndDate.isBefore(_originalStartDate!)) newEndDate = _originalStartDate!.add(const Duration(days: 1));
+        if (widget.periods.isNotEmpty) {
+          final maxDate = widget.periods.last.end;
+          if (newEndDate.isAfter(maxDate)) newEndDate = maxDate;
+        }
+        break;
+    }
+
+    DateTime normalizeDate(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
+
+    setState(() {
+      _currentStartDate = newStartDate != null ? normalizeDate(newStartDate) : null;
+      _currentEndDate = newEndDate != null ? normalizeDate(newEndDate) : null;
+    });
+  }
+
+  void _onPanEnd(DragEndDetails details) async {
+    if (_currentStartDate != null && _currentEndDate != null && widget.taskService != null) {
+      final normalizedStart = DateTime(_currentStartDate!.year, _currentStartDate!.month, _currentStartDate!.day);
+      final normalizedEnd = DateTime(_currentEndDate!.year, _currentEndDate!.month, _currentEndDate!.day);
+      final isExecutorRow = widget.task.id.contains('_executor_');
+
+      if (isExecutorRow) {
+        final parts = widget.task.id.split('_executor_');
+        if (parts.length != 2) return;
+        final mainTaskId = parts[0];
+        final executorId = parts[1];
+
+        final mainTask = await widget.taskService!.getTaskById(mainTaskId);
+        if (mainTask == null) return;
+
+        final updatedExecutorPeriods = List<ExecutorPeriod>.from(mainTask.executorPeriods);
+        final epIndex = updatedExecutorPeriods.indexWhere((ep) => ep.executorId == executorId);
+
+        if (epIndex >= 0) {
+          final ep = updatedExecutorPeriods[epIndex];
+          final updatedPeriods = List<GanttSegment>.from(ep.periods);
+          if (widget.segmentIndex < updatedPeriods.length) {
+            updatedPeriods[widget.segmentIndex] = GanttSegment(
+              label: widget.segment.label,
+              tipo: widget.segment.tipo,
+              tipoPeriodo: widget.segment.tipoPeriodo,
+              dataInicio: _currentStartDate!,
+              dataFim: _currentEndDate!,
+            );
+            updatedExecutorPeriods[epIndex] = ExecutorPeriod(
+              executorId: ep.executorId,
+              executorNome: ep.executorNome,
+              periods: updatedPeriods,
+            );
+          }
+        }
+
+        final updatedTask = mainTask.copyWith(executorPeriods: updatedExecutorPeriods, dataAtualizacao: DateTime.now());
+        await widget.taskService!.updateTask(mainTaskId, updatedTask);
+      } else {
+        final updatedSegments = List<GanttSegment>.from(widget.task.ganttSegments);
+        updatedSegments[widget.segmentIndex] = GanttSegment(
+          label: widget.segment.label,
+          tipo: widget.segment.tipo,
+          tipoPeriodo: widget.segment.tipoPeriodo,
+          dataInicio: normalizedStart,
+          dataFim: normalizedEnd,
+        );
+        final updatedTask = widget.task.copyWith(
+          ganttSegments: updatedSegments,
+          dataInicio: updatedSegments.map((s) => s.dataInicio).reduce((a, b) => a.isBefore(b) ? a : b),
+          dataFim: updatedSegments.map((s) => s.dataFim).reduce((a, b) => a.isAfter(b) ? a : b),
+          dataAtualizacao: DateTime.now(),
+        );
+        final savedTask = await widget.taskService!.updateTask(widget.task.id, updatedTask);
+        if (savedTask != null) {
+          widget.onTaskUpdated?.call(savedTask);
+        } else {
+          widget.onTasksUpdated?.call();
+        }
+      }
+    }
+
+    setState(() {
+      _dragStartX = null;
+      _originalStartDate = null;
+      _originalEndDate = null;
+      _isDragging = false;
+      _dragMode = null;
+    });
+    widget.onDragEnd?.call();
+  }
+
+  void _showContextMenu(BuildContext context, Offset position) {
+    final RenderBox overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    showMenu<void>(
+      context: context,
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(position.dx, position.dy, 0, 0),
+        Rect.fromLTWH(0, 0, overlay.size.width, overlay.size.height),
+      ),
+      items: [
+        PopupMenuItem<void>(
+          child: const Row(children: [Icon(Icons.content_copy, size: 20), SizedBox(width: 8), Text('Duplicar Período')]),
+          onTap: () => Future.delayed(const Duration(milliseconds: 100), () => _duplicatePeriod()),
+        ),
+        PopupMenuItem<void>(
+          child: const Row(children: [Icon(Icons.edit, size: 20), SizedBox(width: 8), Text('Editar Período')]),
+          onTap: () => Future.delayed(const Duration(milliseconds: 100), () => _showEditPeriodDialog(context)),
+        ),
+        PopupMenuItem<void>(
+          child: const Row(children: [Icon(Icons.info_outline, size: 20), SizedBox(width: 8), Text('Ver Detalhes')]),
+          onTap: () => Future.delayed(const Duration(milliseconds: 100), () => _showSegmentDetails(context)),
+        ),
+        const PopupMenuDivider(),
+        PopupMenuItem<void>(
+          child: const Row(children: [Icon(Icons.delete_outline, size: 20, color: Colors.red), SizedBox(width: 8), Text('Excluir Período', style: TextStyle(color: Colors.red))]),
+          onTap: () => Future.delayed(const Duration(milliseconds: 100), () => _deletePeriod(context)),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _duplicatePeriod() async {
+    if (widget.taskService == null) return;
+    final duration = widget.segment.dataFim.difference(widget.segment.dataInicio).inDays + 1;
+    final normalizedEnd = DateTime(widget.segment.dataFim.year, widget.segment.dataFim.month, widget.segment.dataFim.day);
+    final newStart = DateTime(normalizedEnd.year, normalizedEnd.month, normalizedEnd.day).add(const Duration(days: 3));
+    final newEnd = newStart.add(Duration(days: duration - 1));
+    final newSegment = GanttSegment(label: widget.segment.label, tipo: widget.segment.tipo, tipoPeriodo: widget.segment.tipoPeriodo, dataInicio: newStart, dataFim: newEnd);
+    final updatedSegments = List<GanttSegment>.from(widget.task.ganttSegments)..add(newSegment);
+    final updatedTask = widget.task.copyWith(
+      ganttSegments: updatedSegments,
+      dataInicio: updatedSegments.map((s) => s.dataInicio).reduce((a, b) => a.isBefore(b) ? a : b),
+      dataFim: updatedSegments.map((s) => s.dataFim).reduce((a, b) => a.isAfter(b) ? a : b),
+      dataAtualizacao: DateTime.now(),
+    );
+    final savedTask = await widget.taskService!.updateTask(widget.task.id, updatedTask);
+    if (savedTask != null) {
+      widget.onTaskUpdated?.call(savedTask);
+    } else {
+      widget.onTasksUpdated?.call();
+    }
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Período duplicado adicionado à tarefa "${widget.task.tarefa}"!'), duration: const Duration(seconds: 2)),
+      );
+    }
+  }
+
+  void _showEditPeriodDialog(BuildContext context) {
+    DateTime newStart = widget.segment.dataInicio;
+    DateTime newEnd = widget.segment.dataFim;
+    String selectedTipo = widget.segment.tipo.toUpperCase().trim();
+    const validSegmentTypes = ['BEA', 'FER', 'COMP', 'TRN', 'BSL', 'APO', 'OUT', 'ADM'];
+    if (!validSegmentTypes.contains(selectedTipo)) selectedTipo = 'OUT';
+    String selectedTipoPeriodo = widget.segment.tipoPeriodo.toUpperCase().trim();
+    const validPeriodTypes = ['EXECUCAO', 'PLANEJAMENTO', 'DESLOCAMENTO'];
+    if (!validPeriodTypes.contains(selectedTipoPeriodo)) selectedTipoPeriodo = 'EXECUCAO';
+
+    final tiposSegmento = [
+      {'codigo': 'BEA', 'descricao': 'BEA'}, {'codigo': 'FER', 'descricao': 'Ferramenta'},
+      {'codigo': 'COMP', 'descricao': 'Componente'}, {'codigo': 'TRN', 'descricao': 'Linha de Transmissão'},
+      {'codigo': 'BSL', 'descricao': 'Baseline'}, {'codigo': 'APO', 'descricao': 'Apoio'},
+      {'codigo': 'ADM', 'descricao': 'Administrativo'}, {'codigo': 'OUT', 'descricao': 'Outros'},
+    ];
+    final tiposPeriodo = [
+      {'codigo': 'EXECUCAO', 'descricao': 'Execução'}, {'codigo': 'PLANEJAMENTO', 'descricao': 'Planejamento'},
+      {'codigo': 'DESLOCAMENTO', 'descricao': 'Deslocamento'},
+    ];
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Editar Período'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Segmento: ${widget.segment.label}'),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<String>(
+                  initialValue: selectedTipo,
+                  decoration: const InputDecoration(labelText: 'Tipo do Segmento', border: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
+                  items: tiposSegmento.map((t) => DropdownMenuItem<String>(value: t['codigo'] as String, child: Text('${t['codigo']} - ${t['descricao']}'))).toList(),
+                  onChanged: (v) { if (v != null) setDialogState(() => selectedTipo = v); },
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<String>(
+                  initialValue: selectedTipoPeriodo,
+                  decoration: const InputDecoration(labelText: 'Tipo de Período', border: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
+                  items: tiposPeriodo.map((t) => DropdownMenuItem<String>(value: t['codigo'] as String, child: Text('${t['codigo']} - ${t['descricao']}'))).toList(),
+                  onChanged: (v) {
+                    if (v != null) setDialogState(() {
+                      selectedTipoPeriodo = v;
+                      if (v == 'DESLOCAMENTO') newEnd = newStart;
+                    });
+                  },
+                ),
+                const SizedBox(height: 16),
+                if (selectedTipoPeriodo == 'EXECUCAO' || selectedTipoPeriodo == 'PLANEJAMENTO')
+                  ListTile(
+                    title: const Text('Período'),
+                    subtitle: Text('${newStart.day}/${newStart.month}/${newStart.year} - ${newEnd.day}/${newEnd.month}/${newEnd.year}'),
+                    trailing: const Icon(Icons.date_range),
+                    onTap: () async {
+                      final dr = await showDateRangePicker(
+                        context: context,
+                        initialDateRange: DateTimeRange(start: newStart, end: newEnd),
+                        firstDate: DateTime(2020), lastDate: DateTime(2030),
+                      );
+                      if (dr != null) setDialogState(() { newStart = dr.start; newEnd = dr.end; });
+                    },
+                  )
+                else
+                  Column(children: [
+                    ListTile(
+                      title: const Text('Data de Ida'),
+                      subtitle: Text('${newStart.day}/${newStart.month}/${newStart.year}'),
+                      trailing: const Icon(Icons.calendar_today),
+                      onTap: () async {
+                        final d = await showDatePicker(context: context, initialDate: newStart, firstDate: DateTime(2020), lastDate: DateTime(2030));
+                        if (d != null) setDialogState(() => newStart = d);
+                      },
+                    ),
+                    ListTile(
+                      title: const Text('Data de Volta'),
+                      subtitle: Text('${newEnd.day}/${newEnd.month}/${newEnd.year}'),
+                      trailing: const Icon(Icons.calendar_today),
+                      onTap: () async {
+                        final d = await showDatePicker(context: context, initialDate: newEnd, firstDate: newStart, lastDate: DateTime(2030));
+                        if (d != null) setDialogState(() { newEnd = d; if (newEnd.isBefore(newStart)) newStart = newEnd.subtract(const Duration(days: 1)); });
+                      },
+                    ),
+                  ]),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+            ElevatedButton(
+              onPressed: () async {
+                if (widget.taskService == null) return;
+                final tipoFinal = validSegmentTypes.contains(selectedTipo.toUpperCase().trim()) ? selectedTipo.toUpperCase().trim() : 'OUT';
+                final tipoPeriodoFinal = validPeriodTypes.contains(selectedTipoPeriodo.toUpperCase().trim()) ? selectedTipoPeriodo.toUpperCase().trim() : 'EXECUCAO';
+                final finalDataFim = tipoPeriodoFinal == 'DESLOCAMENTO' ? newStart : newEnd;
+                final updatedSegments = List<GanttSegment>.from(widget.task.ganttSegments);
+                updatedSegments[widget.segmentIndex] = GanttSegment(label: widget.segment.label, tipo: tipoFinal, tipoPeriodo: tipoPeriodoFinal, dataInicio: newStart, dataFim: finalDataFim);
+                final updatedTask = widget.task.copyWith(
+                  ganttSegments: updatedSegments,
+                  dataInicio: updatedSegments.map((s) => s.dataInicio).reduce((a, b) => a.isBefore(b) ? a : b),
+                  dataFim: updatedSegments.map((s) => s.dataFim).reduce((a, b) => a.isAfter(b) ? a : b),
+                  dataAtualizacao: DateTime.now(),
+                );
+                final savedTask = await widget.taskService!.updateTask(widget.task.id, updatedTask);
+                if (savedTask != null) { widget.onTaskUpdated?.call(savedTask); } else { widget.onTasksUpdated?.call(); }
+                Navigator.pop(context);
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Período atualizado com sucesso!')));
+              },
+              child: const Text('Salvar'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showSegmentDetails(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(widget.segment.label),
+        content: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _detailRow('Tarefa', widget.task.tarefa),
+            _detailRow('Tipo', widget.segment.tipo),
+            _detailRow('Início', '${widget.segment.dataInicio.day}/${widget.segment.dataInicio.month}/${widget.segment.dataInicio.year}'),
+            _detailRow('Fim', '${widget.segment.dataFim.day}/${widget.segment.dataFim.month}/${widget.segment.dataFim.year}'),
+            _detailRow('Duração', '${widget.segment.dataFim.difference(widget.segment.dataInicio).inDays + 1} dias'),
+          ],
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Fechar'))],
+      ),
+    );
+  }
+
+  Widget _detailRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(width: 80, child: Text('$label:', style: const TextStyle(fontWeight: FontWeight.bold))),
+          Expanded(child: Text(value)),
+        ],
+      ),
+    );
+  }
+
+  void _deletePeriod(BuildContext context) {
+    if (widget.task.ganttSegments.length <= 1) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Não é possível excluir o último período da tarefa!'), backgroundColor: Colors.orange));
+      return;
+    }
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Confirmar Exclusão'),
+        content: Text('Deseja realmente excluir o período "${widget.segment.label}"?\n\nEsta ação não pode ser desfeita.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+          ElevatedButton(
+            onPressed: () { Navigator.pop(context); _confirmDeletePeriod(); },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+            child: const Text('Excluir'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmDeletePeriod() async {
+    if (widget.taskService == null) return;
+    final updatedSegments = List<GanttSegment>.from(widget.task.ganttSegments)..removeAt(widget.segmentIndex);
+    if (updatedSegments.isEmpty) return;
+    final updatedTask = widget.task.copyWith(ganttSegments: updatedSegments, dataAtualizacao: DateTime.now());
+    final savedTask = await widget.taskService!.updateTask(widget.task.id, updatedTask);
+    if (savedTask != null) { widget.onTaskUpdated?.call(savedTask); } else { widget.onTasksUpdated?.call(); }
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Período "${widget.segment.label}" excluído com sucesso!'), backgroundColor: Colors.green, duration: const Duration(seconds: 2)));
+  }
+
+  int _getPeriodIndexForDate(DateTime date) {
+    final d = DateTime(date.year, date.month, date.day);
+    for (int i = 0; i < widget.periods.length; i++) {
+      final p = widget.periods[i];
+      if (!d.isBefore(p.start) && d.isBefore(p.end)) return i;
+    }
+    if (widget.periods.isEmpty) return 0;
+    if (d.isBefore(widget.periods.first.start)) return 0;
+    return widget.periods.length - 1;
+  }
+
+  bool _periodOverlapsConflict(GanttPeriod p, List<DateTime> conflictDays) {
+    for (final d in conflictDays) {
+      final day = DateTime(d.year, d.month, d.day);
+      if (!day.isBefore(p.start) && day.isBefore(p.end)) return true;
+    }
+    return false;
+  }
+
+  double _getOffsetForDate(DateTime date) {
+    if (widget.periods.isEmpty) return 0;
+    return _getPeriodIndexForDate(date) * widget.dayWidth;
+  }
+
+  double _getBarWidthForRange(DateTime start, DateTime end) {
+    if (widget.periods.isEmpty) return widget.dayWidth;
+    final dStart = DateTime(start.year, start.month, start.day);
+    final dEnd = DateTime(end.year, end.month, end.day);
+    int i0 = _getPeriodIndexForDate(dStart);
+    int i1 = _getPeriodIndexForDate(dEnd);
+    if (i0 > i1) i1 = i0;
+    const padding = 0.5;
+    return math.max(widget.dayWidth * 0.5, (i1 - i0 + 1) * widget.dayWidth - widget.dayWidth * padding);
+  }
+
+  double _getCurrentBarWidth() {
+    if (_currentStartDate != null && _currentEndDate != null) return _getBarWidthForRange(_currentStartDate!, _currentEndDate!);
+    return widget.barWidth;
+  }
+
+  double _getCurrentOffset() {
+    if (_currentStartDate != null) return _getOffsetForDate(_currentStartDate!) - _getOffsetForDate(widget.segment.dataInicio);
+    return 0.0;
+  }
+
+  Widget _buildSegmentContent(double barWidth, {Color? segmentTextColorOverride}) {
+    final textColor = segmentTextColorOverride ?? widget.textColor;
+    final tipoPeriodo = widget.segment.tipoPeriodo.toUpperCase();
+    if (tipoPeriodo == 'PLANEJAMENTO' || tipoPeriodo == 'DESLOCAMENTO') {
+      final iconData = tipoPeriodo == 'PLANEJAMENTO' ? Icons.calendar_today : Icons.directions_car;
+      return Icon(iconData, color: textColor, size: _getOptimalFontSize(barWidth) * 1.5,
+        shadows: [Shadow(offset: const Offset(0.5, 0.5), blurRadius: 1.0, color: Colors.black.withOpacity(0.5))]);
+    }
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (widget.task.locais.isNotEmpty)
+          Text(_getTruncatedText(widget.task.locais.join(', '), barWidth),
+            style: TextStyle(color: textColor, fontSize: _getOptimalFontSize(barWidth), fontWeight: FontWeight.normal,
+              shadows: [Shadow(offset: const Offset(0.5, 0.5), blurRadius: 1.0, color: Colors.black.withOpacity(0.5))]),
+            overflow: TextOverflow.ellipsis, maxLines: 1, textAlign: TextAlign.center),
+        if (widget.task.tarefa.isNotEmpty)
+          Text(_getTruncatedText(widget.task.tarefa, barWidth),
+            style: TextStyle(color: textColor, fontSize: _getOptimalFontSize(barWidth), fontWeight: FontWeight.normal,
+              shadows: [Shadow(offset: const Offset(0.5, 0.5), blurRadius: 1.0, color: Colors.black.withOpacity(0.5))]),
+            overflow: TextOverflow.ellipsis, maxLines: 1, textAlign: TextAlign.center),
+      ],
+    );
+  }
+
+  String _getTruncatedText(String text, double barWidth) {
+    final availableWidth = barWidth - 8;
+    if (availableWidth < 20) return '';
+    final maxChars = (availableWidth / 5).floor();
+    return text.length > maxChars ? '${text.substring(0, maxChars - 3)}...' : text;
+  }
+
+  double _getOptimalFontSize(double barWidth) {
+    if (barWidth < 50) return 7.0;
+    if (barWidth < 80) return 8.0;
+    if (barWidth < 120) return 9.0;
+    if (barWidth < 180) return 10.0;
+    return 11.0;
+  }
+
+  String _getExecutorLabel() {
+    final t = widget.task;
+    if (t.executor.trim().isNotEmpty) return t.executor.trim();
+    if (t.executores.isNotEmpty) return t.executores.map((e) => e.trim()).where((e) => e.isNotEmpty).join(', ');
+    if (t.executorPeriods.isNotEmpty) return t.executorPeriods.map((ep) => ep.executorNome.trim()).where((e) => e.isNotEmpty).join(', ');
+    return 'Executor(es) desta tarefa';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isResizing = _dragMode == _DragMode.resizeStart || _dragMode == _DragMode.resizeEnd;
+    final cursorType = isResizing ? SystemMouseCursors.resizeLeftRight : SystemMouseCursors.move;
+    final currentBarWidth = _getCurrentBarWidth();
+    final currentOffset = _getCurrentOffset();
+    final effectiveStartDate = _currentStartDate ?? widget.normalizedStartDate;
+    final effectiveEndDate = _currentEndDate ?? widget.normalizedEndDate;
+    final effectiveEndDateExclusive = DateTime(effectiveEndDate.year, effectiveEndDate.month, effectiveEndDate.day).add(const Duration(days: 1));
+    final segmentPeriods = widget.periods.where((p) => effectiveStartDate.isBefore(p.end) && effectiveEndDateExclusive.isAfter(p.start)).toList();
+
+    return Transform.translate(
+      offset: Offset(currentOffset, 0),
+      child: MouseRegion(
+        cursor: _isDragging ? cursorType : SystemMouseCursors.click,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onPanStart: _onPanStart,
+          onPanUpdate: _onPanUpdate,
+          onPanEnd: _onPanEnd,
+          onLongPress: () {
+            final RenderBox? rb = context.findRenderObject() as RenderBox?;
+            if (rb != null) {
+              final pos = rb.localToGlobal(Offset(rb.size.width / 2, rb.size.height / 2));
+              _showContextMenu(context, pos);
+            }
+          },
+          child: _buildSegmentStack(segmentPeriods, currentBarWidth, isResizing),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSegmentStack(List<GanttPeriod> segmentPeriods, double currentBarWidth, bool isResizing) {
+    final hasConflict = widget.conflictDays != null && widget.conflictDays!.isNotEmpty;
+    final hasConflictFrota = widget.conflictDaysFrota != null && widget.conflictDaysFrota!.isNotEmpty;
+    final tooltipMessage = widget.conflictTooltipMessage?.isNotEmpty == true
+        ? widget.conflictTooltipMessage!
+        : (hasConflict ? 'Conflito de agenda nos dias em vermelho.\nExecutor(es) em conflito: ${_getExecutorLabel()}' : '');
+    final tooltipMessageFrota = widget.conflictTooltipMessageFrota ?? (hasConflictFrota ? 'Conflito de frota nos dias em preto.' : '');
+    final usePerDayTooltip =
+        (widget.conflictTooltipMessageByDay != null && widget.conflictTooltipMessageByDay!.isNotEmpty) ||
+        (widget.conflictTooltipMessageByDayFrota != null && widget.conflictTooltipMessageByDayFrota!.isNotEmpty);
+
+    final stack = Stack(
+      children: [
+        Row(
+          children: segmentPeriods.map((p) {
+            final isConflictDayFrota = widget.conflictDaysFrota != null && _periodOverlapsConflict(p, widget.conflictDaysFrota!);
+            final isConflictDay = widget.conflictDays != null && _periodOverlapsConflict(p, widget.conflictDays!);
+            final cellColor = isConflictDayFrota ? Colors.black : isConflictDay ? Colors.red[600]! : (_isDragging ? widget.color.withOpacity(0.7) : widget.color);
+            return Container(
+              width: widget.dayWidth, height: 48.0,
+              decoration: BoxDecoration(color: cellColor, borderRadius: BorderRadius.circular(2)),
+            );
+          }).toList(),
+        ),
+        Center(
+          child: Container(
+            width: currentBarWidth - 1, height: 48.0,
+            decoration: BoxDecoration(
+              color: Colors.transparent, borderRadius: BorderRadius.circular(2),
+              border: _isDragging ? Border.all(color: isResizing ? Colors.orange : Colors.blue, width: 2) : null,
+            ),
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 3.0, vertical: 1.0),
+                child: currentBarWidth < 40 ? const SizedBox.shrink() : _buildSegmentContent(currentBarWidth, segmentTextColorOverride: hasConflictFrota ? Colors.white : null),
+              ),
+            ),
+          ),
+        ),
+        Positioned(left: 0, top: 0, bottom: 0, width: _resizeHandleWidth, child: Container(color: Colors.transparent, child: MouseRegion(cursor: SystemMouseCursors.resizeLeftRight, child: Container()))),
+        Positioned(right: 0, top: 0, bottom: 0, width: _resizeHandleWidth, child: Container(color: Colors.transparent, child: MouseRegion(cursor: SystemMouseCursors.resizeLeftRight, child: Container()))),
+        if (!_isDragging) ...[
+          Positioned(left: 0, top: 0, bottom: 0, width: 2, child: Container(decoration: BoxDecoration(color: Colors.white.withOpacity(0.3), borderRadius: const BorderRadius.only(topLeft: Radius.circular(2), bottomLeft: Radius.circular(2))))),
+          Positioned(right: 0, top: 0, bottom: 0, width: 2, child: Container(decoration: BoxDecoration(color: Colors.white.withOpacity(0.3), borderRadius: const BorderRadius.only(topRight: Radius.circular(2), bottomRight: Radius.circular(2))))),
+        ],
+      ],
+    );
+
+    final combinedTooltip = [
+      if (hasConflict && tooltipMessage.isNotEmpty) tooltipMessage,
+      if (hasConflictFrota && tooltipMessageFrota.isNotEmpty) tooltipMessageFrota,
+    ].join('\n\n');
+
+    if ((hasConflict || hasConflictFrota) && combinedTooltip.isNotEmpty && !usePerDayTooltip) {
+      return Tooltip(message: combinedTooltip, preferBelow: false, child: stack);
+    }
+    if (usePerDayTooltip) {
+      return MouseRegion(
+        onHover: (event) {
+          final i = (event.localPosition.dx / widget.dayWidth).floor();
+          final idx = i.clamp(0, segmentPeriods.length - 1);
+          if (idx >= 0 && idx < segmentPeriods.length) {
+            final p = segmentPeriods[idx];
+            final day = DateTime(p.start.year, p.start.month, p.start.day);
+            final msgExec = widget.conflictTooltipMessageByDay?[day];
+            final msgFrota = widget.conflictTooltipMessageByDayFrota?[day];
+            final parts = [if (msgExec != null && msgExec.isNotEmpty) msgExec, if (msgFrota != null && msgFrota.isNotEmpty) msgFrota];
+            if (parts.isNotEmpty) { _showDayTooltipOverlay(event.position, parts.join('\n\n')); return; }
+          }
+          _hideDayTooltipOverlay();
+        },
+        onExit: (_) => _hideDayTooltipOverlay(),
+        child: stack,
+      );
+    }
+    return stack;
+  }
+}

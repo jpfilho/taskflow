@@ -18,6 +18,7 @@ import 'widgets/filter_bar.dart';
 import 'widgets/sidebar.dart';
 import 'widgets/task_table.dart';
 import 'widgets/gantt_chart.dart';
+import 'widgets/activity_gantt_view.dart';
 import 'widgets/hourly_calendar_view.dart';
 import 'widgets/task_cards_view.dart';
 import 'widgets/planner_view.dart';
@@ -1944,125 +1945,34 @@ class _MainScreenState extends State<MainScreen> {
             },
           );
         }
-        // Desktop: Sempre mostrar tabela completa primeiro e depois o Gantt (verticalmente)
-        // Caso contrário, mostrar Tabela e Gantt (ou apenas Tabela se _showGantt for false)
-        if (!_showGantt) {
-          return TaskTable(
-                isLoading: _isTasksLoading,
-            key: ValueKey('task_table_$_tasksVersion'),
-            tasks: _tasksForTable,
-            warningsByTaskId: _warningsByTaskIdForTable,
-            scrollController: _tableScrollController,
-            taskService: _taskService,
-            allSubtasksExpanded: _allSubtasksExpanded,
-            onToggleAllSubtasks: _toggleAllSubtasks,
-            expandedTasks: _expandedTasks,
-            onTaskExpanded: _onTaskExpanded,
-            sortColumn: _sortColumn,
-            getSortValue: _getSortValue,
-            onTaskSelected: (task) {
-              _showTaskDetails(task);
-            },
-            onEdit: (task) => _editTaskById(task.id),
-            onDelete: (task) => _deleteTaskById(task.id),
-            onDuplicate: (task) => _duplicateTask(task),
-            onCreateSubtask: (task) {
-              if (task.isMainTask) {
-                _createSubtask(task.id);
-              }
-            },
-          );
-        }
-        // Desktop: Layout horizontal - tabela à esquerda, Gantt colado na lateral direita
-        return LayoutBuilder(
-          builder: (context, constraints) {
-            // Calcular largura mínima da tabela (soma de todas as colunas)
-            // Valores baseados em task_table.dart: acoes(60) + status(70) + local(90) + tipo(100) + 
-            // tarefa(200) + executor(150) + coordenador(130) + frota(50) + chat(50) + anexos(50) + 
-            // notasSAP(50) + ordens(50) + ats(50) + sis(50) = 1270px
-            final tableMinWidth = 1300.0;
-            // Limitar a largura da tabela ao máximo de 63% da tela ou largura mínima, o que for maior
-            final screenWidth = constraints.maxWidth;
-            final tableWidth = tableMinWidth.clamp(400.0, screenWidth * 0.62);
-            
-            return Row(
-              children: [
-                // Tabela: largura fixa baseada no conteúdo necessário
-                SizedBox(
-                  width: tableWidth,
-                  child: TaskTable(
-                isLoading: _isTasksLoading,
-                    key: ValueKey('task_table_$_tasksVersion'),
-                    tasks: _tasksForTable,
-                    warningsByTaskId: _warningsByTaskIdForTable,
-                    scrollController: _tableScrollController,
-                    taskService: _taskService,
-                    allSubtasksExpanded: _allSubtasksExpanded,
-                    onToggleAllSubtasks: _toggleAllSubtasks,
-                    expandedTasks: _expandedTasks,
-                    onTaskExpanded: _onTaskExpanded,
-                    sortColumn: _sortColumn,
-                    getSortValue: _getSortValue,
-                    onTaskSelected: (task) {
-                      _showTaskDetails(task);
-                    },
-                    onEdit: (task) => _editTaskById(task.id),
-                    onDelete: (task) => _deleteTaskById(task.id),
-                    onDuplicate: (task) => _duplicateTask(task),
-                    onCreateSubtask: (task) {
-                      if (task.isMainTask) {
-                        _createSubtask(task.id);
-                      }
-                    },
-                  ),
-                ),
-                // Gantt: ocupar TODO o espaço restante até a lateral direita
-                Expanded(
-                  child: _ganttScale == GanttScale.hourly
-                      ? HourlyCalendarView(
-                          tasks: _tasksForTable,
-                          startDate: _startDate,
-                          endDate: _endDate,
-                        )
-                      : GanttChart(
-                    key: ValueKey('gantt_chart_${_tasksVersion}_${_expandedTasks.length}_${_expandedTasks.toList()..sort()}'),
-                    tasks: _tasksForTable,
-                    startDate: _startDate,
-                    endDate: _endDate,
-                    scale: _ganttScale,
-                    onScaleChanged: (v) => setState(() => _ganttScale = v),
-                    scrollController: _ganttScrollController,
-                    taskService: _taskService,
-                    allSubtasksExpanded: _allSubtasksExpanded,
-                    onToggleAllSubtasks: _toggleAllSubtasks,
-                    expandedTasks: _expandedTasks,
-                    onTaskExpanded: _onTaskExpanded,
-                    sortColumn: _sortColumn,
-                    getSortValue: _getSortValue,
-                    tasksForConflictDetection: _tasksSemFiltros.isNotEmpty ? _tasksSemFiltros : _tasks,
-                    conflictService: _conflictService,
-                    onTasksUpdated: () async {
-                      // Não fazer nada aqui - a atualização será feita via onTaskUpdated específico
-                      print('🔄 GanttChart onTasksUpdated: Atualização otimizada (sem reload completo)');
-                    },
-                    onTaskUpdated: (task) async {
-                      // Atualizar apenas a tarefa específica sem recarregar tudo
-                      await _updateTaskInList(task.id);
-                    },
-                    onEdit: (task) => _editTaskById(task.id),
-                    onDelete: (task) => _deleteTaskById(task.id),
-                    onDuplicate: (task) => _duplicateTask(task),
-                    onCreateSubtask: (task) {
-                      if (task.isMainTask) {
-                        _createSubtask(task.id);
-                      }
-                    },
-                    showHourlyView: _showHourlyView,
-                    onHourlyViewChanged: (_) => _toggleHourlyView(),
-                  ),
-                ),
-              ],
-            );
+        // Desktop: widget unificado que elimina dessincronização vertical
+        return ActivityGanttView(
+          key: ValueKey('activity_gantt_${_tasksVersion}_${_expandedTasks.length}'),
+          tasks: _tasksForTable,
+          startDate: _startDate,
+          endDate: _endDate,
+          scale: _ganttScale,
+          onScaleChanged: (v) => setState(() => _ganttScale = v),
+          taskService: _taskService,
+          conflictService: _conflictService,
+          tasksForConflictDetection: _tasksSemFiltros.isNotEmpty ? _tasksSemFiltros : _tasks,
+          allSubtasksExpanded: _allSubtasksExpanded,
+          onToggleAllSubtasks: _toggleAllSubtasks,
+          expandedTasks: _expandedTasks,
+          onTaskExpanded: _onTaskExpanded,
+          sortColumn: _sortColumn,
+          getSortValue: _getSortValue,
+          warningsByTaskId: _warningsByTaskIdForTable,
+          isLoading: _isTasksLoading,
+          onTaskSelected: (task) => _showTaskDetails(task),
+          onEdit: (task) => _editTaskById(task.id),
+          onDelete: (task) => _deleteTaskById(task.id),
+          onDuplicate: (task) => _duplicateTask(task),
+          onCreateSubtask: (task) {
+            if (task.isMainTask) _createSubtask(task.id);
+          },
+          onTasksUpdated: () async {
+            await _updateTaskInList('');
           },
         );
       }
