@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/gestures.dart';
 import '../models/mensagem.dart';
 import '../models/grupo_chat.dart';
 import '../services/chat_service.dart';
@@ -1387,38 +1388,53 @@ class _ChatScreenState extends State<ChatScreen> {
   
   Widget _buildConteudoComMencoes(Mensagem mensagem) {
     final conteudo = mensagem.conteudo;
-    final usuariosMencionados = mensagem.usuariosMencionados ?? [];
     
-    if (usuariosMencionados.isEmpty) {
-      return Text(
-        conteudo,
-        style: const TextStyle(fontSize: 14),
-      );
-    }
-    
-    // Destacar menções no texto
+    // Destacar menções e links no texto
     final spans = <TextSpan>[];
-    final regex = RegExp(r'@(\w+)');
+    final regex = RegExp(r'(@\w+)|(https?:\/\/[^\s]+|www\.[^\s]+)');
     int lastIndex = 0;
     
     for (final match in regex.allMatches(conteudo)) {
-      // Texto antes da menção
+      // Texto antes da menção/link
       if (match.start > lastIndex) {
         spans.add(TextSpan(
           text: conteudo.substring(lastIndex, match.start),
-          style: const TextStyle(fontSize: 14),
+          style: const TextStyle(fontSize: 14, color: Colors.black87),
         ));
       }
       
-      // Menção destacada
-      spans.add(TextSpan(
-        text: match.group(0),
-        style: const TextStyle(
-          fontSize: 14,
-          fontWeight: FontWeight.bold,
-          color: Colors.blue,
-        ),
-      ));
+      final textOrig = match.group(0)!;
+      if (textOrig.startsWith('@')) {
+        // Menção destacada
+        spans.add(TextSpan(
+          text: textOrig,
+          style: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.bold,
+            color: Colors.blue,
+          ),
+        ));
+      } else {
+        // Link destacado
+        spans.add(TextSpan(
+          text: textOrig,
+          style: const TextStyle(
+            fontSize: 14,
+            color: Colors.blue,
+            decoration: TextDecoration.underline,
+          ),
+          recognizer: TapGestureRecognizer()..onTap = () async {
+            String url = textOrig;
+            if (!url.startsWith('http')) {
+              url = 'https://$url';
+            }
+            final uri = Uri.parse(url);
+            if (await canLaunchUrl(uri)) {
+              await launchUrl(uri, mode: LaunchMode.externalApplication);
+            }
+          },
+        ));
+      }
       
       lastIndex = match.end;
     }
@@ -1427,12 +1443,19 @@ class _ChatScreenState extends State<ChatScreen> {
     if (lastIndex < conteudo.length) {
       spans.add(TextSpan(
         text: conteudo.substring(lastIndex),
-        style: const TextStyle(fontSize: 14),
+        style: const TextStyle(fontSize: 14, color: Colors.black87),
       ));
     }
     
-    return RichText(
-      text: TextSpan(children: spans),
+    if (spans.isEmpty) {
+      return Text(
+        conteudo,
+        style: const TextStyle(fontSize: 14),
+      );
+    }
+    
+    return SelectableText.rich(
+      TextSpan(children: spans),
     );
   }
 

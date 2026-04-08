@@ -130,6 +130,7 @@ dependencies:
 
   shared_preferences: any
   js: any
+  flutter_linkify: ^6.0.0
 dependency_overrides:
   record_platform_interface: ^1.4.0
 

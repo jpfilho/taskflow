@@ -124,8 +124,7 @@ Write-Host ""
 
 # ---- Empacotar em .tar.gz para transferencia rapida ----
 $archiveName = "task2026_web_$BUILD_TIMESTAMP.tar.gz"
-$archivePath = Join-Path $env:TEMP $archiveName
-if (Test-Path $archivePath) { Remove-Item $archivePath -Force }
+$archivePath = Join-Path $PWD $archiveName
 
 Write-Host "Empacotando arquivos..." -ForegroundColor Cyan
 tar -czf "$archivePath" -C build\web .
@@ -141,15 +140,14 @@ Write-Host ""
 Write-Host "Transferindo pacote para o servidor..." -ForegroundColor Cyan
 Write-Host "   (Digite a senha SSH quando solicitado)" -ForegroundColor Yellow
 Write-Host ""
-scp -P $SSH_PORT "$archivePath" "${SSH_USER}@${SSH_HOST}:/tmp/$archiveName"
+scp -o PubkeyAuthentication=no -o IPQoS=none -o KexAlgorithms=curve25519-sha256@libssh.org -P $SSH_PORT "$archivePath" "${SSH_USER}@${SSH_HOST}:/tmp/$archiveName"
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERRO: Falha ao transferir o pacote!" -ForegroundColor Red
-    Remove-Item $archivePath -Force -ErrorAction SilentlyContinue
+    Write-Host "ERRO: Falha ao transferir o pacote via rede!" -ForegroundColor Red
+    Write-Host "O pacote foi MANTIDO em: $archivePath" -ForegroundColor Yellow
+    Write-Host "Voce pode fazer o upload manual pelo painel da Hostinger!" -ForegroundColor Yellow
     exit 1
 }
 
-# Limpar pacote local
-Remove-Item $archivePath -Force -ErrorAction SilentlyContinue
 Write-Host "   Transferencia concluida!" -ForegroundColor Green
 Write-Host ""
 
@@ -163,7 +161,7 @@ $remoteCmd = @"
 set -e
 echo '   Fazendo backup...'
 if [ -d '$REMOTE_PATH' ] && [ -f '$REMOTE_PATH/index.html' ]; then
-  cp -r '$REMOTE_PATH' '${REMOTE_PATH}_backup_$(date +%Y%m%d_%H%M%S)' 2>/dev/null || true
+  cp -r '$REMOTE_PATH' '${REMOTE_PATH}_backup_$BUILD_TIMESTAMP' 2>/dev/null || true
 fi
 echo '   Limpando destino...'
 mkdir -p '$REMOTE_PATH'
@@ -179,7 +177,7 @@ echo '   Verificando versao...'
 cat '$REMOTE_PATH/version.txt' 2>/dev/null || echo 'N/A'
 "@
 
-$result = ssh -p $SSH_PORT "${SSH_USER}@${SSH_HOST}" $remoteCmd
+$result = ssh -o PubkeyAuthentication=no -o IPQoS=none -o KexAlgorithms=curve25519-sha256@libssh.org -p $SSH_PORT "${SSH_USER}@${SSH_HOST}" $remoteCmd
 if ($LASTEXITCODE -ne 0) {
     Write-Host "AVISO: Alguns comandos remotos podem ter falhado" -ForegroundColor Yellow
 }
