@@ -289,6 +289,7 @@ class _TaskFormDialogState extends State<TaskFormDialog>
       _usarEquipe =
           task.equipeIds.isNotEmpty ||
           (task.equipeId != null && task.equipeId!.isNotEmpty);
+      _tipoExecutorEquipe = _usarEquipe ? 'equipe' : 'executor';
       _status = task.status;
       _regional = task.regional;
       _divisao = task.divisao;
@@ -296,6 +297,9 @@ class _TaskFormDialogState extends State<TaskFormDialog>
           ? task.locais.join(', ')
           : ''; // Para exibição
       _selectedLocalIds = Set<String>.from(task.localIds);
+      _selectedExecutorIds = Set<String>.from(task.executorIds);
+      _selectedEquipeIds = Set<String>.from(task.equipeIds);
+      _selectedFrotaIds = Set<String>.from(task.frotaIds);
       _tipo = task.tipo;
       _ordem = task.ordem;
       _tarefa = task.tarefa;
