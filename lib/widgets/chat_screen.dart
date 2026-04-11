@@ -1399,7 +1399,7 @@ class _ChatScreenState extends State<ChatScreen> {
       if (match.start > lastIndex) {
         spans.add(TextSpan(
           text: conteudo.substring(lastIndex, match.start),
-          style: const TextStyle(fontSize: 14, color: Colors.black87),
+          style: const TextStyle(fontSize: 16, color: Colors.black87),
         ));
       }
       
@@ -1409,7 +1409,7 @@ class _ChatScreenState extends State<ChatScreen> {
         spans.add(TextSpan(
           text: textOrig,
           style: const TextStyle(
-            fontSize: 14,
+            fontSize: 16,
             fontWeight: FontWeight.bold,
             color: Colors.blue,
           ),
@@ -1419,7 +1419,7 @@ class _ChatScreenState extends State<ChatScreen> {
         spans.add(TextSpan(
           text: textOrig,
           style: const TextStyle(
-            fontSize: 14,
+            fontSize: 16,
             color: Colors.blue,
             decoration: TextDecoration.underline,
           ),
@@ -1443,14 +1443,14 @@ class _ChatScreenState extends State<ChatScreen> {
     if (lastIndex < conteudo.length) {
       spans.add(TextSpan(
         text: conteudo.substring(lastIndex),
-        style: const TextStyle(fontSize: 14, color: Colors.black87),
+        style: const TextStyle(fontSize: 16, color: Colors.black87),
       ));
     }
     
     if (spans.isEmpty) {
       return Text(
         conteudo,
-        style: const TextStyle(fontSize: 14),
+        style: const TextStyle(fontSize: 16),
       );
     }
     
