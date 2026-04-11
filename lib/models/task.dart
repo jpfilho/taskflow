@@ -40,16 +40,28 @@ class GanttSegment {
     };
   }
 
+  static DateTime _parseDateInvariant(String? dateStr) {
+    if (dateStr == null || dateStr.isEmpty) return DateTime.now();
+    var clean = dateStr;
+    if (clean.length >= 19) {
+      clean = clean.substring(0, 19);
+    } else if (clean.length == 10) {
+      clean = clean + 'T00:00:00';
+    }
+    return DateTime.parse(clean);
+  }
+
   factory GanttSegment.fromMap(Map<String, dynamic> map) {
     return GanttSegment(
-      dataInicio: DateTime.parse(map['dataInicio'] as String),
-      dataFim: DateTime.parse(map['dataFim'] as String),
+      dataInicio: _parseDateInvariant(map['dataInicio'] as String?),
+      dataFim: _parseDateInvariant(map['dataFim'] as String?),
       label: map['label'] as String? ?? '',
       tipo: map['tipo'] as String,
       tipoPeriodo: map['tipoPeriodo'] as String? ?? 'EXECUCAO',
     );
   }
 }
+
 
 // Classe para representar períodos específicos de um executor
 class ExecutorPeriod {
