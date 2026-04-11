@@ -603,10 +603,7 @@ class _GanttSegmentWidgetState extends State<GanttSegmentWidget> {
   Widget _buildSegmentContent(double barWidth, {Color? segmentTextColorOverride}) {
     final textColor = segmentTextColorOverride ?? widget.textColor;
     final tipoPeriodo = widget.segment.tipoPeriodo.toUpperCase().trim();
-    if (tipoPeriodo == 'DESLOCAMENTO') {
-      return Icon(Icons.directions_car, color: textColor, size: _getOptimalFontSize(barWidth) * 1.5,
-        shadows: [Shadow(offset: const Offset(0.5, 0.5), blurRadius: 1.0, color: Colors.black.withOpacity(0.5))]);
-    } else if (tipoPeriodo == 'PLANEJAMENTO') {
+    if (tipoPeriodo == 'DESLOCAMENTO' || tipoPeriodo == 'PLANEJAMENTO') {
       return const SizedBox.shrink(); // No text and no icon
     }
     return Column(
