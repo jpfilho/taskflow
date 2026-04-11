@@ -1978,6 +1978,19 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                         }
 
                         final segColor = _getSegmentColorByPeriod(seg, task, parentTask: parentTask, isSubtask: isSubtask);
+                        
+                        Color segTextColor = Colors.white;
+                        if (task.tipo.isNotEmpty) {
+                          final tipoAtividade = _tipoAtividadeMap[task.tipo];
+                          if (tipoAtividade != null &&
+                              tipoAtividade.corTextoSegmento != null &&
+                              tipoAtividade.corTextoSegmento!.isNotEmpty) {
+                            try {
+                              segTextColor = tipoAtividade.segmentTextColor;
+                            } catch (_) {}
+                          }
+                        }
+
                         final conflictListReady = widget.tasksForConflictDetection?.isNotEmpty ?? false;
                         final backendExecReady = widget.conflictService != null && _conflictMapFromBackend != null;
                         final conflictDays = (widget.scale == GanttScale.daily && (backendExecReady || (conflictListReady && _conflictPaintReady)))
@@ -2002,7 +2015,7 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                             dayWidth: periodWidth,
                             periods: periods,
                             color: segColor,
-                            textColor: Colors.white,
+                            textColor: segTextColor,
                             conflictDays: conflictDays,
                             conflictTooltipMessage: null,
                             conflictTooltipMessageByDay: null,
