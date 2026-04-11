@@ -362,6 +362,13 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
           _ganttHorizController.jumpTo(
             offset.clamp(0.0, _ganttHorizController.position.maxScrollExtent),
           );
+          if (_ganttHeaderHorizController.hasClients) {
+            try {
+              _ganttHeaderHorizController.jumpTo(
+                offset.clamp(0.0, _ganttHeaderHorizController.position.maxScrollExtent),
+              );
+            } catch (_) {}
+          }
           for (var other in _rowScrollControllers) {
             if (other != ctrl && other.hasClients) {
               try {
@@ -568,95 +575,193 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
         result.addAll(_loadedSubtasks[main.id]!);
       }
 
-      if (isExpanded && main.executorPeriods.isNotEmpty) {
-        for (var ep in main.executorPeriods) {
-          DateTime? minDate, maxDate;
-          for (var p in ep.periods) {
-            if (minDate == null || p.dataInicio.isBefore(minDate)) minDate = p.dataInicio;
-            if (maxDate == null || p.dataFim.isAfter(maxDate)) maxDate = p.dataFim;
-          }
-          result.add(Task(
-            id: '${main.id}_executor_${ep.executorId}',
-            parentId: main.id,
-            statusId: main.statusId,
-            regionalId: main.regionalId,
-            divisaoId: main.divisaoId,
-            segmentoId: main.segmentoId,
-            localIds: main.localIds,
-            executorIds: [ep.executorId],
-            equipeIds: main.equipeIds,
-            localId: main.localId,
-            equipeId: main.equipeId,
-            status: main.status,
-            statusNome: main.statusNome,
-            regional: main.regional,
-            divisao: main.divisao,
-            locais: main.locais,
-            tipo: main.tipo,
-            ordem: main.ordem,
-            tarefa: '${ep.executorNome} - ${main.tarefa}',
-            executores: [ep.executorNome],
-            equipes: main.equipes,
-            executor: ep.executorNome,
-            frota: main.frota,
-            coordenador: main.coordenador,
-            si: main.si,
-            dataInicio: minDate ?? main.dataInicio,
-            dataFim: maxDate ?? main.dataFim,
-            ganttSegments: ep.periods,
-            executorPeriods: [],
-            observacoes: main.observacoes,
-            horasPrevistas: main.horasPrevistas,
-            horasExecutadas: main.horasExecutadas,
-            prioridade: main.prioridade,
-          ));
-        }
-      }
+      if (isExpanded) {
+        final _addedExecutors = <String>{};
 
-      if (isExpanded && main.frotaPeriods.isNotEmpty) {
-        for (var fp in main.frotaPeriods) {
-          DateTime? minDate, maxDate;
-          for (var p in fp.periods) {
-            if (minDate == null || p.dataInicio.isBefore(minDate)) minDate = p.dataInicio;
-            if (maxDate == null || p.dataFim.isAfter(maxDate)) maxDate = p.dataFim;
+        if (main.executorPeriods.isNotEmpty) {
+          for (var ep in main.executorPeriods) {
+            _addedExecutors.add(ep.executorId);
+            DateTime? minDate, maxDate;
+            for (var p in ep.periods) {
+              if (minDate == null || p.dataInicio.isBefore(minDate)) minDate = p.dataInicio;
+              if (maxDate == null || p.dataFim.isAfter(maxDate)) maxDate = p.dataFim;
+            }
+            result.add(Task(
+              id: '${main.id}_executor_${ep.executorId}',
+              parentId: main.id,
+              statusId: main.statusId,
+              regionalId: main.regionalId,
+              divisaoId: main.divisaoId,
+              segmentoId: main.segmentoId,
+              localIds: main.localIds,
+              executorIds: [ep.executorId],
+              equipeIds: main.equipeIds,
+              localId: main.localId,
+              equipeId: main.equipeId,
+              status: main.status,
+              statusNome: main.statusNome,
+              regional: main.regional,
+              divisao: main.divisao,
+              locais: main.locais,
+              tipo: main.tipo,
+              ordem: main.ordem,
+              tarefa: '${ep.executorNome} - ${main.tarefa}',
+              executores: [ep.executorNome],
+              equipes: main.equipes,
+              executor: ep.executorNome,
+              frota: main.frota,
+              coordenador: main.coordenador,
+              si: main.si,
+              dataInicio: minDate ?? main.dataInicio,
+              dataFim: maxDate ?? main.dataFim,
+              ganttSegments: ep.periods,
+              executorPeriods: const [],
+              observacoes: main.observacoes,
+              horasPrevistas: main.horasPrevistas,
+              horasExecutadas: main.horasExecutadas,
+              prioridade: main.prioridade,
+            ));
           }
-          result.add(Task(
-            id: '${main.id}_frota_${fp.frotaId}',
-            parentId: main.id,
-            statusId: main.statusId,
-            regionalId: main.regionalId,
-            divisaoId: main.divisaoId,
-            segmentoId: main.segmentoId,
-            localIds: main.localIds,
-            executorIds: main.executorIds,
-            equipeIds: main.equipeIds,
-            frotaIds: [fp.frotaId],
-            localId: main.localId,
-            equipeId: main.equipeId,
-            status: main.status,
-            statusNome: main.statusNome,
-            regional: main.regional,
-            divisao: main.divisao,
-            locais: main.locais,
-            tipo: main.tipo,
-            ordem: main.ordem,
-            tarefa: '${fp.frotaNome} - ${main.tarefa}',
-            executores: main.executores,
-            equipes: main.equipes,
-            executor: main.executor,
-            frota: fp.frotaNome,
-            coordenador: main.coordenador,
-            si: main.si,
-            dataInicio: minDate ?? main.dataInicio,
-            dataFim: maxDate ?? main.dataFim,
-            ganttSegments: fp.periods,
-            executorPeriods: const [],
-            frotaPeriods: const [],
-            observacoes: main.observacoes,
-            horasPrevistas: main.horasPrevistas,
-            horasExecutadas: main.horasExecutadas,
-            prioridade: main.prioridade,
-          ));
+        }
+
+        if (main.executorIds.isNotEmpty) {
+          for (int i = 0; i < main.executorIds.length; i++) {
+            final exId = main.executorIds[i];
+            if (_addedExecutors.contains(exId)) continue;
+            final exName = i < main.executores.length ? main.executores[i] : 'Executor';
+            result.add(Task(
+              id: '${main.id}_executor_$exId',
+              parentId: main.id,
+              statusId: main.statusId,
+              regionalId: main.regionalId,
+              divisaoId: main.divisaoId,
+              segmentoId: main.segmentoId,
+              localIds: main.localIds,
+              executorIds: [exId],
+              equipeIds: main.equipeIds,
+              localId: main.localId,
+              equipeId: main.equipeId,
+              status: main.status,
+              statusNome: main.statusNome,
+              regional: main.regional,
+              divisao: main.divisao,
+              locais: main.locais,
+              tipo: main.tipo,
+              ordem: main.ordem,
+              tarefa: '$exName - ${main.tarefa}',
+              executores: [exName],
+              equipes: main.equipes,
+              executor: exName,
+              frota: main.frota,
+              coordenador: main.coordenador,
+              si: main.si,
+              dataInicio: main.dataInicio,
+              dataFim: main.dataFim,
+              ganttSegments: main.ganttSegments, // Herda do main
+              executorPeriods: const [],
+              observacoes: main.observacoes,
+              horasPrevistas: main.horasPrevistas,
+              horasExecutadas: main.horasExecutadas,
+              prioridade: main.prioridade,
+            ));
+          }
+        }
+
+        final _addedFrotas = <String>{};
+
+        if (main.frotaPeriods.isNotEmpty) {
+          for (var fp in main.frotaPeriods) {
+            _addedFrotas.add(fp.frotaId);
+            DateTime? minDate, maxDate;
+            for (var p in fp.periods) {
+              if (minDate == null || p.dataInicio.isBefore(minDate)) minDate = p.dataInicio;
+              if (maxDate == null || p.dataFim.isAfter(maxDate)) maxDate = p.dataFim;
+            }
+            result.add(Task(
+              id: '${main.id}_frota_${fp.frotaId}',
+              parentId: main.id,
+              statusId: main.statusId,
+              regionalId: main.regionalId,
+              divisaoId: main.divisaoId,
+              segmentoId: main.segmentoId,
+              localIds: main.localIds,
+              executorIds: main.executorIds,
+              equipeIds: main.equipeIds,
+              frotaIds: [fp.frotaId],
+              localId: main.localId,
+              equipeId: main.equipeId,
+              status: main.status,
+              statusNome: main.statusNome,
+              regional: main.regional,
+              divisao: main.divisao,
+              locais: main.locais,
+              tipo: main.tipo,
+              ordem: main.ordem,
+              tarefa: '${fp.frotaNome} - ${main.tarefa}',
+              executores: main.executores,
+              equipes: main.equipes,
+              executor: main.executor,
+              frota: fp.frotaNome,
+              coordenador: main.coordenador,
+              si: main.si,
+              dataInicio: minDate ?? main.dataInicio,
+              dataFim: maxDate ?? main.dataFim,
+              ganttSegments: fp.periods,
+              executorPeriods: const [],
+              frotaPeriods: const [],
+              observacoes: main.observacoes,
+              horasPrevistas: main.horasPrevistas,
+              horasExecutadas: main.horasExecutadas,
+              prioridade: main.prioridade,
+            ));
+          }
+        }
+
+        if (main.frotaIds.isNotEmpty) {
+          for (int i = 0; i < main.frotaIds.length; i++) {
+            final fId = main.frotaIds[i];
+            if (_addedFrotas.contains(fId)) continue;
+            // The frota name can be retrieved from existing lists if there are lists. But currently we just use the name from main if it's there.
+            // Wait, we need the actual name of the frota. ActivityGanttView has `_frotasNomes`.
+            // But we can just pass the generic name from main or use ID. _buildTableRowPanel looks up the name!
+            result.add(Task(
+              id: '${main.id}_frota_$fId',
+              parentId: main.id,
+              statusId: main.statusId,
+              regionalId: main.regionalId,
+              divisaoId: main.divisaoId,
+              segmentoId: main.segmentoId,
+              localIds: main.localIds,
+              executorIds: main.executorIds,
+              equipeIds: main.equipeIds,
+              frotaIds: [fId],
+              localId: main.localId,
+              equipeId: main.equipeId,
+              status: main.status,
+              statusNome: main.statusNome,
+              regional: main.regional,
+              divisao: main.divisao,
+              locais: main.locais,
+              tipo: main.tipo,
+              ordem: main.ordem,
+              tarefa: 'Frota - ${main.tarefa}',
+              executores: main.executores,
+              equipes: main.equipes,
+              executor: main.executor,
+              frota: main.frota,
+              coordenador: main.coordenador,
+              si: main.si,
+              dataInicio: main.dataInicio,
+              dataFim: main.dataFim,
+              ganttSegments: main.ganttSegments, // Herda do main
+              executorPeriods: const [],
+              frotaPeriods: const [],
+              observacoes: main.observacoes,
+              horasPrevistas: main.horasPrevistas,
+              horasExecutadas: main.horasExecutadas,
+              prioridade: main.prioridade,
+            ));
+          }
         }
       }
     }
@@ -691,7 +796,7 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
       final month = _getMonthAbbr(cur.month);
       result.add(GanttPeriod(
         start: cur,
-        end: cur,
+        end: cur.add(const Duration(days: 1)),
         label: '${cur.day}',
         groupLabel: '$month/${cur.year}',
       ));
@@ -709,7 +814,7 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
       final label = _getPeriodLabel(cur, scale);
       final group = _getPeriodGroup(cur, scale);
       result.add(GanttPeriod(start: cur, end: periodEnd, label: label, groupLabel: group));
-      cur = periodEnd.add(const Duration(days: 1));
+      cur = periodEnd;
     }
     return result;
   }
@@ -717,19 +822,19 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
   DateTime _getPeriodEnd(DateTime start, GanttScale scale) {
     switch (scale) {
       case GanttScale.weekly:
-        return start.add(const Duration(days: 6));
+        return start.add(const Duration(days: 7));
       case GanttScale.biweekly:
-        return start.add(const Duration(days: 13));
+        return start.add(const Duration(days: 14));
       case GanttScale.monthly:
-        return DateTime(start.year, start.month + 1, 0);
+        return DateTime(start.year, start.month + 1, 1);
       case GanttScale.quarterly:
         final endMonth = ((start.month - 1) ~/ 3 + 1) * 3;
-        return DateTime(start.year, endMonth + 1, 0);
+        return DateTime(start.year, endMonth + 1, 1);
       case GanttScale.semiAnnual:
         final endMonth = start.month <= 6 ? 6 : 12;
-        return DateTime(start.year, endMonth + 1, 0);
+        return DateTime(start.year, endMonth + 1, 1);
       default:
-        return start;
+        return start.add(const Duration(days: 1));
     }
   }
 
@@ -745,8 +850,9 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
         return 'T${((date.month - 1) ~/ 3) + 1}';
       case GanttScale.semiAnnual:
         return date.month <= 6 ? '1S' : '2S';
+      case GanttScale.daily:
       default:
-        return '${date.day}';
+        return date.day.toString().padLeft(2, '0');
     }
   }
 
@@ -853,7 +959,7 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
   }
 
   Color _getSegmentColorByPeriod(GanttSegment segment, Task task, {Task? parentTask, bool isSubtask = false}) {
-    switch (segment.tipoPeriodo.toUpperCase()) {
+    switch (segment.tipoPeriodo.toUpperCase().trim()) {
       case 'PLANEJAMENTO':
         return Colors.orange[600]!;
       case 'DESLOCAMENTO':
@@ -951,43 +1057,68 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
   // =========================================================================
 
   Widget _buildTableHeader(bool isMobile) {
-    return Container(
-      height: Responsive.kActivitiesHeaderRowHeight,
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [Colors.blue[700]!, Colors.blue[600]!],
-        ),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 2, offset: const Offset(0, 2)),
-        ],
-      ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        controller: _tableHeaderHorizController,
-        physics: const NeverScrollableScrollPhysics(),
-        child: SizedBox(
-          width: _calcTableWidth(isMobile),
-          child: Row(
-            children: [
-              _buildTableHeaderCell('AÇÕES', _tableColWidths(isMobile).acoes, isMobile),
-              _buildTableHeaderCell('STATUS', _tableColWidths(isMobile).status, isMobile),
-              _buildTableHeaderCell('LOCAL', _tableColWidths(isMobile).local, isMobile),
-              _buildTableHeaderCell('TIPO', _tableColWidths(isMobile).tipo, isMobile),
-              _buildTableHeaderCell('TAREFA', _tableColWidths(isMobile).tarefa, isMobile),
-              _buildTableHeaderCell('EXECUTOR', _tableColWidths(isMobile).executor, isMobile),
-              _buildTableHeaderCell('COORDENADOR', _tableColWidths(isMobile).coordenador, isMobile),
-              _buildTableHeaderCell('FROTA', _tableColWidths(isMobile).frota, isMobile),
-              _buildTableHeaderCell('CHAT', _tableColWidths(isMobile).chat, isMobile),
-              _buildTableHeaderCell('ANEXOS', _tableColWidths(isMobile).anexos, isMobile),
-              _buildTableHeaderCell('NOTA', _tableColWidths(isMobile).notasSAP, isMobile),
-              _buildTableHeaderCell('ORDEM', _tableColWidths(isMobile).ordens, isMobile),
-              _buildTableHeaderCell('AT', _tableColWidths(isMobile).ats, isMobile),
-              _buildTableHeaderCell('SI', _tableColWidths(isMobile).sis, isMobile),
-              _buildTableHeaderCell('ALERTAS', _tableColWidths(isMobile).alertas, isMobile),
-            ],
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Faixa superior alinhada com a linha de mês do cabeçalho do Gantt
+        Container(
+          height: Responsive.kActivitiesHeaderTopHeight,
+          decoration: BoxDecoration(
+            color: Colors.grey[100],
+            border: Border(bottom: BorderSide(color: Colors.grey[300]!, width: 1)),
+          ),
+          child: Center(
+            child: Text(
+              'ATIVIDADES',
+              style: TextStyle(
+                fontSize: isMobile ? 9 : 10,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey[500],
+                letterSpacing: 1.0,
+              ),
+            ),
           ),
         ),
-      ),
+        // Linha de colunas (alinhada com a linha de dias do Gantt)
+        Container(
+          height: Responsive.kActivitiesHeaderRowHeight,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [Colors.blue[700]!, Colors.blue[600]!],
+            ),
+            boxShadow: [
+              BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 2, offset: const Offset(0, 2)),
+            ],
+          ),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            controller: _tableHeaderHorizController,
+            physics: const NeverScrollableScrollPhysics(),
+            child: SizedBox(
+              width: _calcTableWidth(isMobile),
+              child: Row(
+                children: [
+                  _buildTableHeaderCell('AÇÕES', _tableColWidths(isMobile).acoes, isMobile),
+                  _buildTableHeaderCell('STATUS', _tableColWidths(isMobile).status, isMobile),
+                  _buildTableHeaderCell('LOCAL', _tableColWidths(isMobile).local, isMobile),
+                  _buildTableHeaderCell('TIPO', _tableColWidths(isMobile).tipo, isMobile),
+                  _buildTableHeaderCell('TAREFA', _tableColWidths(isMobile).tarefa, isMobile),
+                  _buildTableHeaderCell('EXECUTOR', _tableColWidths(isMobile).executor, isMobile),
+                  _buildTableHeaderCell('COORDENADOR', _tableColWidths(isMobile).coordenador, isMobile),
+                  _buildTableHeaderCell('FROTA', _tableColWidths(isMobile).frota, isMobile),
+                  _buildTableHeaderCell('CHAT', _tableColWidths(isMobile).chat, isMobile),
+                  _buildTableHeaderCell('ANEXOS', _tableColWidths(isMobile).anexos, isMobile),
+                  _buildTableHeaderCell('NOTA', _tableColWidths(isMobile).notasSAP, isMobile),
+                  _buildTableHeaderCell('ORDEM', _tableColWidths(isMobile).ordens, isMobile),
+                  _buildTableHeaderCell('AT', _tableColWidths(isMobile).ats, isMobile),
+                  _buildTableHeaderCell('SI', _tableColWidths(isMobile).sis, isMobile),
+                  _buildTableHeaderCell('ALERTAS', _tableColWidths(isMobile).alertas, isMobile),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1015,6 +1146,7 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
 
   Widget _buildGanttHeader(List<GanttPeriod> periods, double periodWidth, double totalWidth, double todayOffset) {
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         // Linha 1: grupos (mês/ano)
         Container(
@@ -1074,24 +1206,27 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                 height: Responsive.kActivitiesHeaderRowHeight,
                 child: Stack(
                   children: [
-                    Row(
-                      children: periods.map((p) {
-                        final isDay = widget.scale == GanttScale.daily;
-                        final isWeekend = isDay && _isWeekend(p.start);
-                        final isFeriado = isDay && _isFeriado(p.start);
-                        return Container(
-                          width: periodWidth,
-                          height: Responsive.kActivitiesHeaderRowHeight,
+                    SizedBox(width: totalWidth, height: 1),
+                    ...List.generate(periods.length, (i) {
+                      final p = periods[i];
+                      final isDay = widget.scale == GanttScale.daily;
+                      final isWeekend = isDay && _isWeekend(p.start);
+                      final isFeriado = isDay && _isFeriado(p.start);
+                      return Positioned(
+                        left: i * periodWidth,
+                        top: 0,
+                        bottom: 0,
+                        width: periodWidth,
+                        child: Container(
                           decoration: BoxDecoration(
                             color: isFeriado ? Colors.purple[100] : isWeekend ? Colors.grey[200] : Colors.white,
                             border: Border.all(color: Colors.grey[300]!, width: 1),
                           ),
-                          alignment: Alignment.centerLeft,
-                          padding: const EdgeInsets.only(left: 2),
+                          alignment: Alignment.center,
                           child: Text(p.label, style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis),
-                        );
-                      }).toList(),
-                    ),
+                        ),
+                      );
+                    }),
                     ..._buildGroupSeparators(periods, periodWidth),
                     if (todayOffset >= 0)
                       Positioned(
@@ -1235,12 +1370,25 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
     // Sincronizar posição horizontal ao montar
     if (_hasInitializedScroll && _ganttHorizController.hasClients) {
       final target = _ganttHorizController.offset;
-      if (rowController.hasClients && (rowController.offset - target).abs() > 1.0) {
+      if (rowController.hasClients) {
+        if ((rowController.offset - target).abs() > 1.0) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (rowController.hasClients) {
+              try {
+                rowController.jumpTo(target.clamp(0.0, rowController.position.maxScrollExtent));
+              } catch (_) {}
+            }
+          });
+        }
+      } else {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (rowController.hasClients) {
-            try {
-              rowController.jumpTo(target.clamp(0.0, rowController.position.maxScrollExtent));
-            } catch (_) {}
+          if (rowController.hasClients && mounted) {
+            final targetPost = _ganttHorizController.hasClients ? _ganttHorizController.offset : target;
+            if ((rowController.offset - targetPost).abs() > 1.0) {
+              try {
+                rowController.jumpTo(targetPost.clamp(0.0, rowController.position.maxScrollExtent));
+              } catch (_) {}
+            }
           }
         });
       }
@@ -1780,22 +1928,24 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                     fit: StackFit.loose,
                     children: [
                       // Grid de dias
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: periods.map((p) {
-                          final isDay = widget.scale == GanttScale.daily;
-                          final isWknd = isDay && _isWeekend(p.start);
-                          final isFer = isDay && _isFeriado(p.start);
-                          return Container(
-                            width: periodWidth,
-                            height: 50,
+                      ...List.generate(periods.length, (i) {
+                        final p = periods[i];
+                        final isDay = widget.scale == GanttScale.daily;
+                        final isWknd = isDay && _isWeekend(p.start);
+                        final isFer = isDay && _isFeriado(p.start);
+                        return Positioned(
+                          left: i * periodWidth,
+                          top: 0,
+                          bottom: 0,
+                          width: periodWidth,
+                          child: Container(
                             decoration: BoxDecoration(
                               color: isFer ? Colors.purple[100] : isWknd ? Colors.grey[200] : Colors.white,
                               border: Border.all(color: Colors.grey[300]!, width: 1),
                             ),
-                          );
-                        }).toList(),
-                      ),
+                          ),
+                        );
+                      }),
                       ..._buildGroupSeparators(periods, periodWidth),
                       // Segmentos (barras)
                       ...task.ganttSegments.asMap().entries.map((entry) {
@@ -1806,6 +1956,7 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                         end = _normalizeLegacyEndDate(task, start, end);
 
                         if (end.isBefore(widget.startDate) || start.isAfter(widget.endDate)) {
+                          print('DEBUG RENDER [$segIdx] ${seg.tipoPeriodo}: FORA DO PERIODO (start: $start, end: $end)');
                           return const SizedBox.shrink();
                         }
 
