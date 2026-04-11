@@ -1450,15 +1450,26 @@ class _TaskFormDialogState extends State<TaskFormDialog>
           divisaoId: _divisaoId,
           segmentoId: _segmentoId,
         ),
-        _equipeService.getEquipesFiltradas(
-          regionalId: _regionalId,
-          divisaoId: _divisaoId,
-          segmentoId: _segmentoId,
-        ),
+        _equipeService.getEquipesAtivas(),
       ]);
 
       final executores = results[0] as List<Executor>;
-      final equipes = results[1] as List<Equipe>;
+      final allEquipes = results[1] as List<Equipe>;
+
+      // Filtrar equipes: Uma equipe só é válida para estes filtros se ela tiver
+      // a mesma regional_id/divisao_id ESTRITA definida no seu cadastro (se houver),
+      // OU se ela for genérica (null) E possuir pelo menos um executor na lista de executores filtrados.
+      final validExecutorIds = executores.map((e) => e.id).toSet();
+      final equipes = allEquipes.where((equipe) {
+        // Se a equipe tiver uma tag estrita na sua entidade, usar a tag estrita
+        if (equipe.regionalId != null && equipe.regionalId != _regionalId) return false;
+        if (equipe.divisaoId != null && equipe.divisaoId != _divisaoId) return false;
+        if (equipe.segmentoId != null && equipe.segmentoId != _segmentoId) return false;
+        
+        // Se for "genérica" (td null), exigir que cruze com os executores atuais (ter ao menos 1)
+        if (equipe.executores.isEmpty) return false;
+        return equipe.executores.any((eqExec) => validExecutorIds.contains(eqExec.executorId));
+      }).toList();
 
       print('📋 Executores carregados: ${executores.length}');
       print('📋 Equipes carregadas: ${equipes.length}');
