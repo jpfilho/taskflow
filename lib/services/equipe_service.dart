@@ -21,6 +21,9 @@ class EquipeService {
       'nome': equipe.nome,
       'descricao': equipe.descricao,
       'tipo': equipe.tipo,
+      'regional_id': equipe.regionalId,
+      'divisao_id': equipe.divisaoId,
+      'segmento_id': equipe.segmentoId,
       'ativo': equipe.ativo,
     };
   }
