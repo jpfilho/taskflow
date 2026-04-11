@@ -896,26 +896,37 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
     return periods.isEmpty ? 40.0 : ((ganttWidth / desired) * 0.7).clamp(min, max);
   }
 
-  double _getDateOffsetFromPeriods(DateTime date, List<GanttPeriod> periods, double periodWidth) {
-    final normalized = DateTime(date.year, date.month, date.day);
+  int _getPeriodIndexForDate(DateTime date, List<GanttPeriod> periods) {
+    if (periods.isEmpty) return 0;
+    final d = DateTime(date.year, date.month, date.day);
     for (int i = 0; i < periods.length; i++) {
-      final ps = DateTime(periods[i].start.year, periods[i].start.month, periods[i].start.day);
-      final pe = DateTime(periods[i].end.year, periods[i].end.month, periods[i].end.day);
-      if (!normalized.isBefore(ps) && !normalized.isAfter(pe)) {
-        return i * periodWidth;
-      }
+      final p = periods[i];
+      if (!d.isBefore(p.start) && d.isBefore(p.end)) return i;
     }
-    return -1;
+    if (d.isBefore(periods.first.start)) return 0;
+    return periods.length - 1;
+  }
+
+  double _getDateOffsetFromPeriods(DateTime date, List<GanttPeriod> periods, double periodWidth) {
+    if (periods.isEmpty) return -1;
+    final d = DateTime(date.year, date.month, date.day);
+    if (d.isBefore(periods.first.start) || !d.isBefore(periods.last.end)) {
+      return -1;
+    }
+    return _getPeriodIndexForDate(date, periods) * periodWidth;
   }
 
   double _getBarWidthForRange(DateTime start, DateTime end, List<GanttPeriod> periods, double periodWidth) {
-    int count = 0;
-    for (var p in periods) {
-      final ps = DateTime(p.start.year, p.start.month, p.start.day);
-      final pe = DateTime(p.end.year, p.end.month, p.end.day);
-      if (!pe.isBefore(start) && !ps.isAfter(end)) count++;
-    }
-    return count * periodWidth;
+    if (periods.isEmpty) return periodWidth;
+    final startNorm = DateTime(start.year, start.month, start.day);
+    final endNorm = DateTime(end.year, end.month, end.day);
+    int i0 = _getPeriodIndexForDate(startNorm, periods);
+    int i1 = _getPeriodIndexForDate(endNorm, periods);
+    if (i0 > i1) i1 = i0;
+    final span = (i1 - i0 + 1);
+    final width = span * periodWidth;
+    const padding = 0.5;
+    return width - periodWidth * padding;
   }
 
   double _getTodayOffset(List<GanttPeriod> periods, double periodWidth) {
