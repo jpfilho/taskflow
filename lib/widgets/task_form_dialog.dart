@@ -4111,13 +4111,34 @@ class _TaskFormDialogState extends State<TaskFormDialog>
                       ? null
                       : (Equipe? value) {
                           setState(() {
-                            _selectedEquipe = value;
                             if (value != null) {
-                              _selectedEquipeIds = {value.id};
-                              _usarEquipe = true;
-                              _executor = '';
+                              // Opção A: Atalho visual que quebra a equipe em executores individuais
+                              _tipoExecutorEquipe = 'executor';
+                              _usarEquipe = false;
+                              _selectedEquipe = null;
+                              _selectedEquipeIds.clear();
+                              
+                              _executoresSelecionados.clear();
                               _selectedExecutorIds.clear();
+                              
+                              for (var equipeExecutor in value.executores) {
+                                Executor? ex;
+                                try {
+                                  ex = _executoresList.firstWhere((e) => e.id == equipeExecutor.executorId);
+                                } catch (_) {
+                                  ex = Executor(id: equipeExecutor.executorId, nome: equipeExecutor.executorNome);
+                                }
+                                _executoresSelecionados.add(ex);
+                                if (ex.id != null) {
+                                  _selectedExecutorIds.add(ex.id!);
+                                }
+                              }
+                              
+                              if (_executoresSelecionados.isEmpty) {
+                                _executoresSelecionados.add(null);
+                              }
                             } else {
+                              _selectedEquipe = null;
                               _selectedEquipeIds.clear();
                             }
                           });
