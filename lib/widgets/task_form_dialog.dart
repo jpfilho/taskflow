@@ -1260,10 +1260,11 @@ class _TaskFormDialogState extends State<TaskFormDialog>
       // Após carregar executores e equipes, tentar selecionar o executor/equipe da tarefa
       if (widget.task != null) {
         final task = widget.task!;
-        if (task.equipeId != null && task.equipeId!.isNotEmpty) {
+        if (task.equipeIds.isNotEmpty || (task.equipeId != null && task.equipeId!.isNotEmpty)) {
+          final selectId = task.equipeIds.isNotEmpty ? task.equipeIds.first : task.equipeId;
           try {
             _selectedEquipe = _equipesList.firstWhere(
-              (e) => e.id == task.equipeId,
+              (e) => e.id == selectId,
             );
             _usarEquipe = true;
           } catch (e) {

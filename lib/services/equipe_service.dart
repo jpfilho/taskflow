@@ -306,17 +306,17 @@ class EquipeService {
 
       // Filtrar por regional
       if (regionalId != null && regionalId.isNotEmpty) {
-        query = query.eq('regional_id', regionalId);
+        query = query.or('regional_id.eq.$regionalId,regional_id.is.null');
       }
 
       // Filtrar por divisão
       if (divisaoId != null && divisaoId.isNotEmpty) {
-        query = query.eq('divisao_id', divisaoId);
+        query = query.or('divisao_id.eq.$divisaoId,divisao_id.is.null');
       }
 
       // Filtrar por segmento
       if (segmentoId != null && segmentoId.isNotEmpty) {
-        query = query.eq('segmento_id', segmentoId);
+        query = query.or('segmento_id.eq.$segmentoId,segmento_id.is.null');
       }
 
       final response = await query
