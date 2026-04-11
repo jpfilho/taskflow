@@ -606,6 +606,8 @@ class _GanttSegmentWidgetState extends State<GanttSegmentWidget> {
     if (tipoPeriodo == 'DESLOCAMENTO') {
       return Icon(Icons.directions_car, color: textColor, size: _getOptimalFontSize(barWidth) * 1.5,
         shadows: [Shadow(offset: const Offset(0.5, 0.5), blurRadius: 1.0, color: Colors.black.withOpacity(0.5))]);
+    } else if (tipoPeriodo == 'PLANEJAMENTO') {
+      return const SizedBox.shrink(); // No text and no icon
     }
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
