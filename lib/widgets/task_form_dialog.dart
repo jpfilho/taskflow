@@ -4118,19 +4118,23 @@ class _TaskFormDialogState extends State<TaskFormDialog>
                               _selectedEquipe = null;
                               _selectedEquipeIds.clear();
                               
-                              _executoresSelecionados.clear();
-                              _selectedExecutorIds.clear();
+                              // Remover caixinhas em branco antes de adicionar
+                              _executoresSelecionados.removeWhere((item) => item == null);
                               
                               for (var equipeExecutor in value.executores) {
-                                Executor? ex;
-                                try {
-                                  ex = _executoresList.firstWhere((e) => e.id == equipeExecutor.executorId);
-                                } catch (_) {
-                                  ex = Executor(id: equipeExecutor.executorId, nome: equipeExecutor.executorNome);
-                                }
-                                _executoresSelecionados.add(ex);
-                                if (ex.id != null) {
-                                  _selectedExecutorIds.add(ex.id!);
+                                // Garantir que não duplique pessoas já selecionadas
+                                if (!_selectedExecutorIds.contains(equipeExecutor.executorId)) {
+                                  Executor? ex;
+                                  try {
+                                    ex = _executoresList.firstWhere((e) => e.id == equipeExecutor.executorId);
+                                  } catch (_) {
+                                    ex = Executor(id: equipeExecutor.executorId, nome: equipeExecutor.executorNome);
+                                  }
+                                  
+                                  _executoresSelecionados.add(ex);
+                                  if (ex.id != null) {
+                                    _selectedExecutorIds.add(ex.id!);
+                                  }
                                 }
                               }
                               
