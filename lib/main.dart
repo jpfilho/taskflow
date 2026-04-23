@@ -56,6 +56,8 @@ import 'widgets/home_shortcuts_screen.dart';
 import 'features/warnings/warnings.dart';
 import 'widgets/resizable_panel.dart';
 import 'services/auth_service_simples.dart';
+import 'services/nota_sap_service.dart';
+import 'services/ordem_service.dart';
 import 'utils/responsive.dart';
 import 'config/app_menu_config.dart';
 
@@ -70,6 +72,7 @@ import 'features/documents/presentation/pages/documents_page.dart';
 import 'modules/gtd/domain/gtd_session.dart';
 import 'modules/gtd/presentation/screens/gtd_home_page.dart';
 import 'modules/melhorias_bugs/presentation/screens/melhorias_bugs_home_screen.dart';
+import 'widgets/activity_report_view.dart';
 // sqflite: factory obrigatória antes de qualquer openDatabase (web e desktop)
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart';
@@ -436,12 +439,15 @@ class _MainScreenState extends State<MainScreen> {
   final ExecutorService _executorService = ExecutorService();
   final FrotaService _frotaService = FrotaService();
   final AuthServiceSimples _authService = AuthServiceSimples();
+  final NotaSAPService _notaSapService = NotaSAPService();
+  final OrdemService _ordemService = OrdemService();
   
   List<Task> _tasks = []; // Tarefas filtradas (para telas gerais)
   bool _isTasksLoading = true; // Flag para indicar carregamento em andamento
   List<Task> _tasksSemFiltros = []; // Tarefas sem filtros (para tela de equipes)
   Task? _selectedTask; // Tarefa selecionada para edição/deleção
   Map<String, String?> _currentFilters = {}; // Filtros ativos (tela Atividades)
+  bool _isFiltering = false; // Indica se os filtros estão sendo processados (feedback visual)
   Map<String, String?> _fleetFilters = {}; // Filtros da tela Frota (Regional, Divisão, Frota, Local)
   Map<String, List<String>>? _fleetFilterOptions; // Opções dos dropdowns da Frota (regionais, divisoes, frotas, locais)
   Map<String, String?> _teamFilters = {}; // Filtros da tela Equipes (divisao, empresa, funcao, matricula, nome)
@@ -451,7 +457,7 @@ class _MainScreenState extends State<MainScreen> {
   late DateTime _startDate;
   late DateTime _endDate;
   int _selectedTab = 0; // Para mobile: 0 = Tabela, 1 = Gantt, 2 = Planner, 3 = Calendário, 4 = Feed, 5 = Dashboard
-  String _viewMode = 'split'; // 'split', 'table', 'gantt', 'planner', 'calendar', 'feed'
+  String _viewMode = 'split'; // 'split', 'table', 'gantt', 'planner', 'calendar', 'feed', 'report'
   bool _sidebarExpanded = false; // Estado da sidebar (expandida/retraída)
   int _sidebarSelectedIndex = 0; // Índice selecionado na sidebar (0 = Grid/Tabela)
   bool _allSubtasksExpanded = false; // Estado compartilhado: todas as subtarefas expandidas ou colapsadas
@@ -1010,22 +1016,10 @@ class _MainScreenState extends State<MainScreen> {
   int get _warningsTotalCount => _warningsByTaskId?.length ?? 0;
 
   Future<void> _loadWarnings() async {
-    const bool debugWarnings = true; // DEBUG: por que warnings não refletem no Flutter
     try {
       final map = await TaskWarningsService.getWarningsByTaskId();
-      if (kDebugMode && debugWarnings) {
-        final totalW = map.values.fold<int>(0, (s, l) => s + l.length);
-        final taskIdsInList = _tasks.map((t) => t.id).toSet();
-        final warningTaskIds = map.keys.toSet();
-        final intersection = warningTaskIds.intersection(taskIdsInList);
-        debugPrint('[WARNINGS DEBUG] main: ${map.length} tarefas c/ warnings ($totalW alertas); ${_tasks.length} tarefas na lista; interseção=${intersection.length} (warnings c/ tarefa na tabela)');
-        if (map.isNotEmpty && intersection.isEmpty) {
-          debugPrint('[WARNINGS DEBUG] ⚠️ Nenhum task_id dos warnings está na lista de tarefas exibidas. Possível causa: RPC get_task_warnings_for_user filtra por usuário (root/gerente/executor); ou período/filtros excluem essas tarefas.');
-        }
-      }
       if (mounted) setState(() => _warningsByTaskId = map);
     } catch (e) {
-      if (kDebugMode && debugWarnings) debugPrint('[WARNINGS DEBUG] main _loadWarnings erro: $e');
       if (mounted) setState(() => _warningsByTaskId = {});
     }
   }
@@ -1471,8 +1465,8 @@ class _MainScreenState extends State<MainScreen> {
                       setState(() {
                         _startDate = start;
                         _endDate = end;
-                        _applyFilters(_currentFilters);
                       });
+                      _loadTasks();
                     },
                     onCreate: () => _createTask(),
                     onEdit: () => _editTask(),
@@ -1589,7 +1583,7 @@ class _MainScreenState extends State<MainScreen> {
                       onSortChanged: _updateSorting,
                       currentSortColumn: _sortColumn,
                       currentSortAscending: _sortAscending,
-                      isFiltering: false,
+                      isFiltering: _isFiltering,
                       filterOnlyWithWarnings: _filterOnlyWithWarnings,
                       onFilterOnlyWithWarnings: (v) => setState(() => _filterOnlyWithWarnings = v),
                       warningsCountInTable: _tasksWithWarningsCount,
@@ -1659,8 +1653,8 @@ class _MainScreenState extends State<MainScreen> {
                           setState(() {
                             _startDate = start;
                             _endDate = end;
-                            _applyFilters(_currentFilters);
                           });
+                          _loadTasks();
                         },
                         onCreate: () => _createTask(),
                         onEdit: () => _editTask(),
@@ -1775,7 +1769,7 @@ class _MainScreenState extends State<MainScreen> {
                           onSortChanged: _updateSorting,
                           currentSortColumn: _sortColumn,
                           currentSortAscending: _sortAscending,
-                          isFiltering: false,
+                          isFiltering: _isFiltering,
                           filterOnlyWithWarnings: _filterOnlyWithWarnings,
                           onFilterOnlyWithWarnings: (v) => setState(() => _filterOnlyWithWarnings = v),
                           warningsCountInTable: _tasksWithWarningsCount,
@@ -1943,6 +1937,17 @@ class _MainScreenState extends State<MainScreen> {
                 _createSubtask(task.id);
               }
             },
+          );
+        }
+        // Modo relatório de impressão
+        if (_viewMode == 'report') {
+          return ActivityReportView(
+            key: ValueKey('report_${_tasksVersion}_${_startDate}_${_endDate}'),
+            tasks: _tasks,
+            startDate: _startDate,
+            endDate: _endDate,
+            notaSapService: _notaSapService,
+            ordemService: _ordemService,
           );
         }
         // Desktop: widget unificado que elimina dessincronização vertical
@@ -3115,180 +3120,166 @@ class _MainScreenState extends State<MainScreen> {
     return list.isEmpty ? null : list;
   }
 
+  /// Converte string CSV em Set<String> (usado na filtragem client-side)
+  Set<String> _parseFilterSet(String? value) {
+    if (value == null || value.trim().isEmpty) return {};
+    return value.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
+  }
+
   // Aplicar filtros
   Future<void> _applyFilters(Map<String, String?> filters) async {
+    if (mounted) setState(() => _isFiltering = true);
     try {
       _currentFilters = filters;
 
-      // Sempre manter lista base sem filtros (apenas janela de datas) para a tela de equipes
-      final baseTasks = await _taskService.filterTasks(
-        status: null,
-        regional: null,
-        divisao: null,
-        local: null,
-        tipo: null,
-        executor: null,
-        coordenador: null,
-        frota: null,
-        dataInicioMin: _startDate,
-        dataFimMax: _endDate,
-      );
-      List<Task> filtered;
-      
-      // Detectar se há filtros (além de "minhasTarefas") para evitar chamada extra desnecessária
-      final hasFieldFilters = filters.entries.any((entry) {
-        if (entry.key == 'minhasTarefas') return false;
-        final value = entry.value;
-        return value != null && value.isNotEmpty;
-      });
+      // ─── Filtragem 100% no cliente usando _tasksSemFiltros já em memória ───
+      // Nenhuma query ao banco — _tasksSemFiltros é a lista base carregada por
+      // _loadTasks() com a janela de datas atual. Só vai ao banco quando a janela
+      // de datas muda (via _loadTasks).
+      List<Task> filtered = List.from(_tasksSemFiltros);
+
+      // Pré-processar conjuntos de filtros (multiseleção separada por vírgula)
+      final statusSet      = _parseFilterSet(filters['status']);
+      final regionalSet    = _parseFilterSet(filters['regional']);
+      final divisaoSet     = _parseFilterSet(filters['divisao']);
+      final localSet       = _parseFilterSet(filters['local']);
+      final tipoSet        = _parseFilterSet(filters['tipo']);
+      final executorSet    = _parseFilterSet(filters['executor']);
+      final coordenadorSet = _parseFilterSet(filters['coordenador']);
+      final frotaSet       = _parseFilterSet(filters['frota']);
+      final minhasTarefas  = filters['minhasTarefas'] == 'true';
+
+      final hasFieldFilters = statusSet.isNotEmpty ||
+          regionalSet.isNotEmpty || divisaoSet.isNotEmpty ||
+          localSet.isNotEmpty    || tipoSet.isNotEmpty    ||
+          executorSet.isNotEmpty || coordenadorSet.isNotEmpty ||
+          frotaSet.isNotEmpty;
 
       if (hasFieldFilters) {
-        // Aplicar filtros específicos (multiseleção: valores em lista)
-        filtered = await _taskService.filterTasks(
-          status: _parseFilterList(filters['status']),
-          regional: _parseFilterList(filters['regional']),
-          divisao: _parseFilterList(filters['divisao']),
-          local: _parseFilterList(filters['local']),
-          tipo: _parseFilterList(filters['tipo']),
-          executor: _parseFilterList(filters['executor']),
-          coordenador: _parseFilterList(filters['coordenador']),
-          frota: _parseFilterList(filters['frota']),
-          dataInicioMin: _startDate,
-          dataFimMax: _endDate,
-        );
-      } else {
-        // Sem filtros (ou apenas "Minhas Tarefas"): usar base para evitar nova consulta
-        filtered = baseTasks;
-      }
-    
-    // Aplicar filtro de "Minhas Tarefas" se ativo
-    if (filters['minhasTarefas'] == 'true') {
-      final authService = AuthServiceSimples();
-      final usuario = authService.currentUser;
-      final loginUsuario = usuario?.email ?? authService.getUserEmail() ?? '';
-      
-      if (loginUsuario.isNotEmpty) {
-        // Usar cache se o login não mudou
-        Set<String> executorIdsDoUsuario;
-        Set<String> nomesExecutoresDoUsuario;
-        
-        if (_cachedLoginUsuario == loginUsuario && _cachedExecutorIds != null && _cachedExecutorNomes != null) {
-          // Usar cache
-          executorIdsDoUsuario = _cachedExecutorIds!;
-          nomesExecutoresDoUsuario = _cachedExecutorNomes!;
-          
-          // Se cache está vazio, não há tarefas para mostrar
-          if (executorIdsDoUsuario.isEmpty) {
-            filtered = [];
-          } else {
-            // Filtrar tarefas - lógica simplificada e otimizada
-            filtered = filtered.where((task) {
-              // Verificar se algum executor_id da tarefa está na lista de IDs do usuário
-              if (task.executorIds.any((execId) => executorIdsDoUsuario.contains(execId))) {
-                return true;
-              }
-              
-              // Verificar se o nome do executor na tarefa corresponde (comparação exata, case-insensitive)
-              final executorLower = task.executor.toLowerCase().trim();
-              if (executorLower.isNotEmpty && nomesExecutoresDoUsuario.contains(executorLower)) {
-                return true;
-              }
-              
-              // Verificar se algum nome na lista de executores corresponde (comparação exata)
-              if (task.executores.any((execNome) {
-                return nomesExecutoresDoUsuario.contains(execNome.toLowerCase().trim());
-              })) {
-                return true;
-              }
-              
-              // Verificar coordenador (comparação exata, case-insensitive)
-              final coordenadorLower = task.coordenador.toLowerCase().trim();
-              if (coordenadorLower.isNotEmpty && nomesExecutoresDoUsuario.contains(coordenadorLower)) {
-                return true;
-              }
-              
-              return false;
-            }).toList();
+        filtered = filtered.where((task) {
+          if (statusSet.isNotEmpty) {
+            final s = (task.statusNome.isNotEmpty ? task.statusNome : task.status).toLowerCase();
+            if (!statusSet.any((f) => s.contains(f.toLowerCase()))) return false;
           }
-        } else {
-          // Buscar executores que têm o mesmo login (case-insensitive) - OTIMIZADO
-          final executoresDoUsuario = await _executorService.getExecutoresPorLogin(loginUsuario);
-          
-          if (executoresDoUsuario.isEmpty) {
-            // Se não encontrou executores com esse login, não mostrar nenhuma tarefa
-            filtered = [];
-            _cachedLoginUsuario = loginUsuario;
-            _cachedExecutorIds = {};
-            _cachedExecutorNomes = {};
+          if (regionalSet.isNotEmpty) {
+            final r = task.regional.toLowerCase();
+            if (!regionalSet.any((f) => r.contains(f.toLowerCase()))) return false;
+          }
+          if (divisaoSet.isNotEmpty) {
+            final d = task.divisao.toLowerCase();
+            if (!divisaoSet.any((f) => d.contains(f.toLowerCase()))) return false;
+          }
+          if (localSet.isNotEmpty) {
+            if (!task.locais.any((l) => localSet.any((f) => l.toLowerCase().contains(f.toLowerCase())))) return false;
+          }
+          if (tipoSet.isNotEmpty) {
+            final t = task.tipo.toLowerCase();
+            if (!tipoSet.any((f) => t.contains(f.toLowerCase()))) return false;
+          }
+          if (executorSet.isNotEmpty) {
+            final execMatch = executorSet.any((f) {
+              final fl = f.toLowerCase();
+              return task.executor.toLowerCase().contains(fl) ||
+                  task.executores.any((e) => e.toLowerCase().contains(fl));
+            });
+            if (!execMatch) return false;
+          }
+          if (coordenadorSet.isNotEmpty) {
+            final c = task.coordenador.toLowerCase();
+            if (!coordenadorSet.any((f) => c.contains(f.toLowerCase()))) return false;
+          }
+          if (frotaSet.isNotEmpty) {
+            final frotaMatch = frotaSet.any((f) {
+              final fl = f.toLowerCase();
+              return (task.frota?.toLowerCase().contains(fl) ?? false) ||
+                  task.frotaIds.any((id) => id.toLowerCase().contains(fl));
+            });
+            if (!frotaMatch) return false;
+          }
+          return true;
+        }).toList();
+      }
+
+      // Filtro "Minhas Tarefas"
+      if (minhasTarefas) {
+        final authService = AuthServiceSimples();
+        final usuario = authService.currentUser;
+        final loginUsuario = usuario?.email ?? authService.getUserEmail() ?? '';
+
+        if (loginUsuario.isNotEmpty) {
+          Set<String> executorIdsDoUsuario;
+          Set<String> nomesExecutoresDoUsuario;
+
+          if (_cachedLoginUsuario == loginUsuario &&
+              _cachedExecutorIds != null &&
+              _cachedExecutorNomes != null) {
+            executorIdsDoUsuario = _cachedExecutorIds!;
+            nomesExecutoresDoUsuario = _cachedExecutorNomes!;
           } else {
-            // Extrair IDs e nomes dos executores encontrados (normalizados)
-            executorIdsDoUsuario = executoresDoUsuario.map((e) => e.id).toSet();
-            nomesExecutoresDoUsuario = executoresDoUsuario.map((e) => e.nome.toLowerCase().trim()).toSet();
-            
-            // Atualizar cache
-            _cachedLoginUsuario = loginUsuario;
-            _cachedExecutorIds = executorIdsDoUsuario;
-            _cachedExecutorNomes = nomesExecutoresDoUsuario;
-            
-            // Filtrar tarefas - lógica simplificada e otimizada
+            final executoresDoUsuario =
+                await _executorService.getExecutoresPorLogin(loginUsuario);
+            if (executoresDoUsuario.isEmpty) {
+              filtered = [];
+              _cachedLoginUsuario = loginUsuario;
+              _cachedExecutorIds = {};
+              _cachedExecutorNomes = {};
+              executorIdsDoUsuario = {};
+              nomesExecutoresDoUsuario = {};
+            } else {
+              executorIdsDoUsuario =
+                  executoresDoUsuario.map((e) => e.id).toSet();
+              nomesExecutoresDoUsuario = executoresDoUsuario
+                  .map((e) => e.nome.toLowerCase().trim())
+                  .toSet();
+              _cachedLoginUsuario = loginUsuario;
+              _cachedExecutorIds = executorIdsDoUsuario;
+              _cachedExecutorNomes = nomesExecutoresDoUsuario;
+            }
+          }
+
+          if (executorIdsDoUsuario.isNotEmpty) {
             filtered = filtered.where((task) {
-              // Verificar se algum executor_id da tarefa está na lista de IDs do usuário
-              if (task.executorIds.any((execId) => executorIdsDoUsuario.contains(execId))) {
-                return true;
-              }
-              
-              // Verificar se o nome do executor na tarefa corresponde (comparação exata, case-insensitive)
-              final executorLower = task.executor.toLowerCase().trim();
-              if (executorLower.isNotEmpty && nomesExecutoresDoUsuario.contains(executorLower)) {
-                return true;
-              }
-              
-              // Verificar se algum nome na lista de executores corresponde (comparação exata)
-              if (task.executores.any((execNome) {
-                return nomesExecutoresDoUsuario.contains(execNome.toLowerCase().trim());
-              })) {
-                return true;
-              }
-              
-              // Verificar coordenador (comparação exata, case-insensitive)
-              final coordenadorLower = task.coordenador.toLowerCase().trim();
-              if (coordenadorLower.isNotEmpty && nomesExecutoresDoUsuario.contains(coordenadorLower)) {
-                return true;
-              }
-              
+              if (task.executorIds.any((id) => executorIdsDoUsuario.contains(id))) return true;
+              final execLower = task.executor.toLowerCase().trim();
+              if (execLower.isNotEmpty && nomesExecutoresDoUsuario.contains(execLower)) return true;
+              if (task.executores.any((n) => nomesExecutoresDoUsuario.contains(n.toLowerCase().trim()))) return true;
+              final coordLower = task.coordenador.toLowerCase().trim();
+              if (coordLower.isNotEmpty && nomesExecutoresDoUsuario.contains(coordLower)) return true;
               return false;
             }).toList();
           }
         }
+      } else {
+        _cachedLoginUsuario = null;
+        _cachedExecutorIds = null;
+        _cachedExecutorNomes = null;
       }
-    } else {
-      // Limpar cache quando o filtro não está ativo
-      _cachedLoginUsuario = null;
-      _cachedExecutorIds = null;
-      _cachedExecutorNomes = null;
-    }
-    
-    // Depois aplicar a busca se houver termo de busca
-    if (_searchQuery.isNotEmpty) {
-      final lowerQuery = _searchQuery.toLowerCase();
-      filtered = filtered.where((task) {
-        return task.tarefa.toLowerCase().contains(lowerQuery) ||
-            (task.ordem?.toLowerCase().contains(lowerQuery) ?? false) ||
-            task.executor.toLowerCase().contains(lowerQuery) ||
-            task.coordenador.toLowerCase().contains(lowerQuery) ||
-            task.locais.any((l) => l.toLowerCase().contains(lowerQuery));
-      }).toList();
-    }
-    
-      setState(() {
-        _tasksSemFiltros = baseTasks;
-        _tasks = filtered;
-        _tasksVersion++; // Incrementar versão para forçar rebuild dos widgets
-      });
+
+      // Busca por texto livre
+      if (_searchQuery.isNotEmpty) {
+        final lowerQuery = _searchQuery.toLowerCase();
+        filtered = filtered.where((task) {
+          return task.tarefa.toLowerCase().contains(lowerQuery) ||
+              (task.ordem?.toLowerCase().contains(lowerQuery) ?? false) ||
+              task.executor.toLowerCase().contains(lowerQuery) ||
+              task.coordenador.toLowerCase().contains(lowerQuery) ||
+              task.locais.any((l) => l.toLowerCase().contains(lowerQuery));
+        }).toList();
+      }
+
+      if (mounted) {
+        setState(() {
+          _tasks = filtered;
+          _tasksVersion++;
+        });
+      }
     } catch (e) {
       print('❌ Erro ao aplicar filtros: $e');
+    } finally {
+      if (mounted) setState(() => _isFiltering = false);
     }
   }
+
 
   // Exportar dados - Mostrar diálogo de escolha de formato
   Future<void> _exportData() async {

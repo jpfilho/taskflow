@@ -40,28 +40,16 @@ class GanttSegment {
     };
   }
 
-  static DateTime _parseDateInvariant(String? dateStr) {
-    if (dateStr == null || dateStr.isEmpty) return DateTime.now();
-    var clean = dateStr;
-    if (clean.length >= 19) {
-      clean = clean.substring(0, 19);
-    } else if (clean.length == 10) {
-      clean = clean + 'T00:00:00';
-    }
-    return DateTime.parse(clean);
-  }
-
   factory GanttSegment.fromMap(Map<String, dynamic> map) {
     return GanttSegment(
-      dataInicio: _parseDateInvariant(map['dataInicio'] as String?),
-      dataFim: _parseDateInvariant(map['dataFim'] as String?),
+      dataInicio: DateTime.parse(map['dataInicio'] as String),
+      dataFim: DateTime.parse(map['dataFim'] as String),
       label: map['label'] as String? ?? '',
       tipo: map['tipo'] as String,
       tipoPeriodo: map['tipoPeriodo'] as String? ?? 'EXECUCAO',
     );
   }
 }
-
 
 // Classe para representar períodos específicos de um executor
 class ExecutorPeriod {
@@ -99,9 +87,11 @@ class ExecutorPeriod {
     return ExecutorPeriod(
       executorId: map['executorId'] as String,
       executorNome: map['executorNome'] as String,
-      periods: (map['periods'] as List<dynamic>?)
-          ?.map((p) => GanttSegment.fromMap(p as Map<String, dynamic>))
-          .toList() ?? [],
+      periods:
+          (map['periods'] as List<dynamic>?)
+              ?.map((p) => GanttSegment.fromMap(p as Map<String, dynamic>))
+              .toList() ??
+          [],
     );
   }
 }
@@ -142,7 +132,8 @@ class FrotaPeriod {
     return FrotaPeriod(
       frotaId: map['frotaId'] as String,
       frotaNome: map['frotaNome'] as String,
-      periods: (map['periods'] as List<dynamic>?)
+      periods:
+          (map['periods'] as List<dynamic>?)
               ?.map((p) => GanttSegment.fromMap(p as Map<String, dynamic>))
               .toList() ??
           [],
@@ -155,16 +146,13 @@ class EquipeExecutorInfo {
   final String executorNome;
   final String papel; // 'FISCAL', 'TST', 'ENCARREGADO', 'EXECUTOR'
 
-  EquipeExecutorInfo({
-    required this.executorNome,
-    required this.papel,
-  });
+  EquipeExecutorInfo({required this.executorNome, required this.papel});
 }
 
 // Classe principal para representar uma tarefa
 class Task {
   final String id;
-  
+
   // IDs de relacionamento (novos campos)
   final String? statusId;
   final String? regionalId;
@@ -174,11 +162,11 @@ class Task {
   final List<String> executorIds;
   final List<String> equipeIds;
   final List<String> frotaIds;
-  
+
   // Campos antigos (deprecated, para compatibilidade)
   final String? localId;
   final String? equipeId;
-  
+
   // Campos de texto (nomes)
   final String status; // 'ANDA', 'CONC', 'PROG', 'CANC', 'RPAR'
   final String statusNome;
@@ -188,7 +176,7 @@ class Task {
   final String segmento;
   final List<String> equipes;
   final List<EquipeExecutorInfo>? equipeExecutores;
-  
+
   // Campos principais da tarefa
   final String tipo;
   final String? ordem;
@@ -198,21 +186,21 @@ class Task {
   final String frota;
   final String coordenador;
   final String si;
-  
+
   // Datas
   final DateTime dataInicio;
   final DateTime dataFim;
   final DateTime? dataCriacao;
   final DateTime? dataAtualizacao;
-  
+
   // Segmentos do Gantt
   final List<GanttSegment> ganttSegments;
-  
+
   // Períodos específicos por executor (permite que cada executor tenha períodos diferentes)
   final List<ExecutorPeriod> executorPeriods;
   // Períodos específicos por frota (quando houver mais de uma frota na tarefa)
   final List<FrotaPeriod> frotaPeriods;
-  
+
   // Campos adicionais
   final String? observacoes;
   final double? horasPrevistas;

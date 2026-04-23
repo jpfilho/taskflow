@@ -713,7 +713,19 @@ class _FilterBarState extends State<FilterBar> {
         ),
       );
     } else {
-      // Desktop e tablet: usar todo o espaço horizontal com Expanded (altura suficiente para label + valor sem overflow)
+      // Desktop e tablet: usar todo o espaço horizontal com Expanded
+      final activeFiltersCount = [
+        _selectedRegional.isNotEmpty,
+        _selectedDivisao.isNotEmpty,
+        _selectedStatus.isNotEmpty,
+        _selectedLocal.isNotEmpty,
+        _selectedTipo.isNotEmpty,
+        _selectedExecutor.isNotEmpty,
+        _selectedFrota.isNotEmpty,
+        _selectedCoordenador.isNotEmpty,
+        widget.filterOnlyWithWarnings == true,
+      ].where((f) => f).length;
+
       return Container(
         width: double.infinity,
         height: 72,
@@ -818,6 +830,77 @@ class _FilterBarState extends State<FilterBar> {
                           isMobile: false,
                         ),
                       ),
+                      // ── Botão Limpar (aparece quando há filtros ativos) ──
+                      if (activeFiltersCount > 0) ...[
+                        const SizedBox(width: 12),
+                        Center(
+                          child: InkWell(
+                            onTap: () {
+                              setState(() {
+                                _selectedRegional = {};
+                                _selectedDivisao = {};
+                                _selectedStatus = {};
+                                _selectedLocal = {};
+                                _selectedTipo = {};
+                                _selectedExecutor = {};
+                                _selectedFrota = {};
+                                _selectedCoordenador = {};
+                                _minhasTarefas = false;
+                                widget.onFilterOnlyWithWarnings?.call(false);
+                                _updateFilters();
+                              });
+                            },
+                            borderRadius: BorderRadius.circular(6),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: Colors.red[50],
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: Colors.red[200]!, width: 1),
+                              ),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.filter_alt_off, size: 13, color: Colors.red[700]),
+                                      const SizedBox(width: 3),
+                                      // Badge com contagem
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                        decoration: BoxDecoration(
+                                          color: Colors.red[600],
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: Text(
+                                          '$activeFiltersCount',
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 9,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'Limpar',
+                                    style: TextStyle(
+                                      fontSize: 9,
+                                      color: Colors.red[700],
+                                      fontWeight: FontWeight.w600,
+                                      height: 1.1,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -826,6 +909,8 @@ class _FilterBarState extends State<FilterBar> {
           );
     }
   }
+
+
 
   Widget _buildMultiSelectFilterField(
     String label,

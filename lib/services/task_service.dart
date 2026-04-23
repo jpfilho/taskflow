@@ -11,6 +11,19 @@ import 'tab_sync_service.dart';
 import 'package:sqflite/sqflite.dart';
 
 class TaskService {
+  /// Resolve o fuso horário forçando que a data vinda do Supabase seja
+  /// analisada literalmente na timezone do dispositivo, ignorando deslocamentos UTC.
+  DateTime _parseDateInvariant(String dateStr) {
+    if (dateStr.isEmpty) return DateTime.now();
+    var clean = dateStr;
+    if (clean.length >= 19) {
+      clean = clean.substring(0, 19);
+    } else if (clean.length == 10) {
+      clean = clean + 'T00:00:00';
+    }
+    return DateTime.parse(clean);
+  }
+
   static final TaskService _instance = TaskService._internal();
   factory TaskService() => _instance;
   TaskService._internal();
@@ -45,50 +58,15 @@ class TaskService {
   }) async {
     if (executorIds.isEmpty) return [];
 
-    final sw = Stopwatch()..start();
-    _logDebug(
-      '⏱ [getExecucoesDia] Iniciando | executores=${executorIds.length} | período=${startDate.toString().substring(0, 10)} até ${endDate.toString().substring(0, 10)}',
-    );
-
     try {
-      // Tentar usar a view normal (não materializada) primeiro - atualiza automaticamente
-      final querySw = Stopwatch()..start();
-      final rows = await _supabase
+      final rawRows = await _supabase
           .from('v_execucoes_dia_completa')
           .select()
           .inFilter('executor_id', executorIds)
-          .gte(
-            'day',
-            DateTime(
-              startDate.year,
-              startDate.month,
-              startDate.day,
-            ).toIso8601String(),
-          )
-          .lte(
-            'day',
-            DateTime(
-              endDate.year,
-              endDate.month,
-              endDate.day,
-            ).toIso8601String(),
-          );
-      querySw.stop();
-      _logDebug(
-        '⏱ [getExecucoesDia] Query Supabase concluída em ${querySw.elapsedMilliseconds}ms | registros=${rows.length}',
-      );
+          .gte('day', DateTime(startDate.year, startDate.month, startDate.day).toIso8601String())
+          .lte('day', DateTime(endDate.year,   endDate.month,   endDate.day  ).toIso8601String());
 
-      // rows é List<dynamic> vindo do supabase
-      final mapSw = Stopwatch()..start();
-      final result = (rows as List)
-          .map((e) => e as Map<String, dynamic>)
-          .toList();
-      mapSw.stop();
-      sw.stop();
-      _logDebug(
-        '⏱ [getExecucoesDia] Mapeamento concluído em ${mapSw.elapsedMilliseconds}ms | total=${sw.elapsedMilliseconds}ms | registros=${result.length}',
-      );
-      return result;
+      return (rawRows as List).cast<Map<String, dynamic>>();
     } catch (e) {
       // Fallback para view materializada se a normal não existir
       _logDebug(
@@ -287,8 +265,8 @@ class TaskService {
           final taskId = row['task_id'] as String?;
           if (taskId == null) continue;
           final seg = GanttSegment(
-            dataInicio: DateTime.parse(row['data_inicio'] as String),
-            dataFim: DateTime.parse(row['data_fim'] as String),
+            dataInicio: _parseDateInvariant(row['data_inicio'] as String),
+            dataFim: _parseDateInvariant(row['data_fim'] as String),
             label: row['label']?.toString() ?? '',
             tipo: row['tipo']?.toString() ?? 'OUT',
             tipoPeriodo: row['tipo_periodo']?.toString() ?? 'EXECUCAO',
@@ -406,7 +384,7 @@ class TaskService {
             taskIdToLocalIds.putIfAbsent(taskId, () => []).add(localId);
           }
         }
-              if (kDebugMode) {
+        if (kDebugMode) {
           _logDebug(
             '[LOCAL] tasks_locais retornou ${taskIdToLocalIds.length} tarefas com vínculos (${taskIdsSemLocalIds.length} consultadas)',
           );
@@ -494,44 +472,47 @@ class TaskService {
     if (!_useSupabase) return {};
 
     try {
-      final rows = await _supabase
-          .from('frota_periods')
-          .select()
-          .filter('task_id', 'in', taskIds)
-          .order('frota_nome', ascending: true)
-          .order('data_inicio', ascending: true);
-
       // Agrupa por tarefa e por frota, acumulando segmentos
       final taskFrotaMap = <String, Map<String, FrotaPeriod>>{};
 
-      for (final row in rows as List) {
-        try {
-          final taskId = row['task_id']?.toString();
-          final frotaId = row['frota_id']?.toString();
-          if (taskId == null || frotaId == null) continue;
+      for (var i = 0; i < taskIds.length; i += _ganttSegmentsChunkSize) {
+        final chunk = taskIds.skip(i).take(_ganttSegmentsChunkSize).toList();
+        final rows = await _supabase
+            .from('frota_periods')
+            .select()
+            .filter('task_id', 'in', chunk)
+            .order('frota_nome', ascending: true)
+            .order('data_inicio', ascending: true);
 
-          final frotaNome = row['frota_nome']?.toString() ?? '';
-          final segment = _segmentFromMap(row as Map<String, dynamic>);
+        for (final row in rows as List) {
+          try {
+            final taskId = row['task_id']?.toString();
+            final frotaId = row['frota_id']?.toString();
+            if (taskId == null || frotaId == null) continue;
 
-          final byFrota = taskFrotaMap.putIfAbsent(
-            taskId,
-            () => <String, FrotaPeriod>{},
-          );
+            final frotaNome = row['frota_nome']?.toString() ?? '';
+            final segment = _segmentFromMap(row as Map<String, dynamic>);
 
-          if (byFrota.containsKey(frotaId)) {
-            final existing = byFrota[frotaId]!;
-            byFrota[frotaId] = existing.copyWith(
-              periods: [...existing.periods, segment],
+            final byFrota = taskFrotaMap.putIfAbsent(
+              taskId,
+              () => <String, FrotaPeriod>{},
             );
-          } else {
-            byFrota[frotaId] = FrotaPeriod(
-              frotaId: frotaId,
-              frotaNome: frotaNome,
-              periods: [segment],
-            );
+
+            if (byFrota.containsKey(frotaId)) {
+              final existing = byFrota[frotaId]!;
+              byFrota[frotaId] = existing.copyWith(
+                periods: [...existing.periods, segment],
+              );
+            } else {
+              byFrota[frotaId] = FrotaPeriod(
+                frotaId: frotaId,
+                frotaNome: frotaNome,
+                periods: [segment],
+              );
+            }
+          } catch (e) {
+            _logDebug('⚠️ [_loadFrotaPeriodsBatch] Linha ignorada: $e');
           }
-        } catch (e) {
-          _logDebug('⚠️ [_loadFrotaPeriodsBatch] Linha ignorada: $e');
         }
       }
 
@@ -563,8 +544,8 @@ class TaskService {
   // Converter Map do Supabase para Task
   Task _taskFromMap(Map<String, dynamic> map) {
     // Normalizar datas ao carregar do Supabase (remover hora/timezone)
-    final dataInicioParsed = DateTime.parse(map['data_inicio'] as String);
-    final dataFimParsed = DateTime.parse(map['data_fim'] as String);
+    final dataInicioParsed = _parseDateInvariant(map['data_inicio'] as String);
+    final dataFimParsed = _parseDateInvariant(map['data_fim'] as String);
 
     final dataInicio = DateTime(
       dataInicioParsed.year,
@@ -943,10 +924,10 @@ class TaskService {
           : null,
       prioridade: map['prioridade'] as String?,
       dataCriacao: map['data_criacao'] != null
-          ? DateTime.parse(map['data_criacao'] as String)
+          ? _parseDateInvariant(map['data_criacao'] as String)
           : null,
       dataAtualizacao: map['data_atualizacao'] != null
-          ? DateTime.parse(map['data_atualizacao'] as String)
+          ? _parseDateInvariant(map['data_atualizacao'] as String)
           : null,
       parentId: map['parent_id'] as String?,
       ganttSegments: [], // Será carregado separadamente
@@ -1027,9 +1008,10 @@ class TaskService {
 
   // Converter Map do Supabase para GanttSegment
   GanttSegment _segmentFromMap(Map<String, dynamic> map) {
+
     // Normalizar datas ao carregar do Supabase (remover hora/timezone)
-    final dataInicioParsed = DateTime.parse(map['data_inicio'] as String);
-    final dataFimParsed = DateTime.parse(map['data_fim'] as String);
+    final dataInicioParsed = _parseDateInvariant(map['data_inicio'] as String);
+    final dataFimParsed = _parseDateInvariant(map['data_fim'] as String);
 
     final dataInicio = DateTime(
       dataInicioParsed.year,
@@ -1594,7 +1576,10 @@ class TaskService {
         final nome = r['nome'] as String?;
         if (id != null && nome != null) idToName[id] = nome;
       }
-      executores = executorIds.map((id) => idToName[id]).whereType<String>().toList();
+      executores = executorIds
+          .map((id) => idToName[id])
+          .whereType<String>()
+          .toList();
     }
 
     // Carregar segmentos
@@ -3010,17 +2995,21 @@ class TaskService {
     );
 
     // Verificar se o range de datas mudou — se sim, forçar re-query do Supabase
-    final dateRangeChanged = _lastFilterDateStart != dataInicioMin ||
+    final dateRangeChanged =
+        _lastFilterDateStart != dataInicioMin ||
         _lastFilterDateEnd != dataFimMax;
     if (dateRangeChanged) {
-      _logDebug('[cache] Range de datas mudou: '
-          '${_lastFilterDateStart?.toIso8601String()} → ${dataInicioMin?.toIso8601String()}, '
-          '${_lastFilterDateEnd?.toIso8601String()} → ${dataFimMax?.toIso8601String()} — invalidando cache');
+      _logDebug(
+        '[cache] Range de datas mudou: '
+        '${_lastFilterDateStart?.toIso8601String()} → ${dataInicioMin?.toIso8601String()}, '
+        '${_lastFilterDateEnd?.toIso8601String()} → ${dataFimMax?.toIso8601String()} — invalidando cache',
+      );
     }
     _lastFilterDateStart = dataInicioMin;
     _lastFilterDateEnd = dataFimMax;
 
-    final shouldUseLocal = (!_useSupabase || cacheFresh || !isConnected) && !dateRangeChanged;
+    final shouldUseLocal =
+        (!_useSupabase || cacheFresh || !isConnected) && !dateRangeChanged;
 
     if (shouldUseLocal) {
       // Sempre recarregar do banco local para garantir dados cacheados
@@ -3191,8 +3180,8 @@ class TaskService {
           for (final r in locaisRes) {
             final id = r['id']?.toString();
             if (id != null && id.isNotEmpty) localIds.add(id);
-                    }
-                  if (localIds.isEmpty) {
+          }
+          if (localIds.isEmpty) {
             if (kDebugMode) {
               _logDebug(
                 '[LOCAL] Filtro local M:N: nenhum id em locais para nomes=$local -> retorno vazio',
@@ -3208,8 +3197,8 @@ class TaskService {
           for (final r in tlRes) {
             final tid = r['task_id']?.toString();
             if (tid != null && tid.isNotEmpty) ids.add(tid);
-                    }
-                  taskIdsForLocalFilter = ids.toList();
+          }
+          taskIdsForLocalFilter = ids.toList();
           if (kDebugMode) {
             _logDebug(
               '[LOCAL] Filtro local M:N: ${taskIdsForLocalFilter.length} task_ids para locais=$local',
@@ -3986,7 +3975,7 @@ class TaskService {
                 '📡 TaskService: Nova tarefa detectada via Realtime: ${task.id}',
               );
               onUpsert(task);
-                        } catch (e) {
+            } catch (e) {
               print('⚠️ Erro ao processar INSERT de tarefa via Realtime: $e');
             }
           },
@@ -4003,7 +3992,7 @@ class TaskService {
                 '📡 TaskService: Tarefa atualizada via Realtime: ${task.id}',
               );
               onUpsert(task);
-                        } catch (e) {
+            } catch (e) {
               print('⚠️ Erro ao processar UPDATE de tarefa via Realtime: $e');
             }
           },

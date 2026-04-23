@@ -533,6 +533,7 @@ class _HeaderBarState extends State<HeaderBar> {
                   _buildViewModeButton(Icons.calendar_month, 'Calendário', 'calendar'),
                   _buildViewModeButton(Icons.dynamic_feed, 'Feed', 'feed'),
                   _buildViewModeButton(Icons.dashboard, 'Dashboard', 'dashboard'),
+                  _buildViewModeButton(Icons.print, 'Relatório de Impressão', 'report'),
                 ],
               ),
             ),

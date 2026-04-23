@@ -1252,7 +1252,7 @@ class _GanttChartState extends State<GanttChart> {
               return Expanded(
                 child: RepaintBoundary(
                   child: ListView.builder(
-                    key: ValueKey('gantt_tasks_${hierarchicalTasks.length}_${expandedKeyString}_${subtasksHash}'),
+                    key: ValueKey('gantt_tasks_${hierarchicalTasks.length}_${expandedKeyString}_$subtasksHash'),
                     controller: widget.scrollController,
                     itemCount: hierarchicalTasks.length,
                     itemBuilder: (context, index) {
@@ -2102,7 +2102,6 @@ class _DraggableSegment extends StatefulWidget {
     this.textColor = Colors.white,
     this.taskService,
     this.onTasksUpdated,
-    this.onTaskUpdated,
     this.onDragStart,
     this.onDragEnd,
   });
@@ -2167,8 +2166,9 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
   }
 
   void _onPanUpdate(DragUpdateDetails details) {
-    if (_dragStartX == null || _dragMode == null || widget.taskService == null)
+    if (_dragStartX == null || _dragMode == null || widget.taskService == null) {
       return;
+    }
 
     final deltaX = details.localPosition.dx - _dragStartX!;
     // Calcular o delta em dias (pode ser fracionário)
@@ -2267,8 +2267,8 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
         print('💾 GanttChart _onPanEnd: Salvando alterações do período do executor (tarefa virtual)');
         print('   - Tarefa virtual ID: ${widget.task.id}');
         print('   - SegmentIndex: ${widget.segmentIndex}');
-        print('   - Data início: ${_currentStartDate}');
-        print('   - Data fim: ${_currentEndDate}');
+        print('   - Data início: $_currentStartDate');
+        print('   - Data fim: $_currentEndDate');
         
         // Extrair ID da tarefa principal e ID do executor do ID da tarefa virtual
         // Formato: {taskId}_executor_{executorId}
@@ -2349,8 +2349,8 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
         print('💾 GanttChart _onPanEnd: Salvando alterações do segmento');
         print('   - Tarefa ID: ${widget.task.id}');
         print('   - SegmentIndex: ${widget.segmentIndex}');
-        print('   - Data início: ${_currentStartDate}');
-        print('   - Data fim: ${_currentEndDate}');
+        print('   - Data início: $_currentStartDate');
+        print('   - Data fim: $_currentEndDate');
         print('   - Tipo: ${widget.segment.tipo}');
         print('   - TipoPeríodo: ${widget.segment.tipoPeriodo}');
 
@@ -2521,7 +2521,7 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
       dataFim: normalizedNewEnd,
     );
 
-    print('   Novo segmento criado: ${normalizedNewStart} até ${normalizedNewEnd}');
+    print('   Novo segmento criado: $normalizedNewStart até $normalizedNewEnd');
 
     // Adicionar o novo segmento à lista de segmentos da tarefa
     final updatedSegments = List<GanttSegment>.from(widget.task.ganttSegments);
@@ -2637,7 +2637,7 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
                 const SizedBox(height: 16),
                 // Dropdown para selecionar o tipo
                 DropdownButtonFormField<String>(
-                  value: selectedTipo,
+                  initialValue: selectedTipo,
                   decoration: const InputDecoration(
                     labelText: 'Tipo do Segmento',
                     border: OutlineInputBorder(),
@@ -2661,7 +2661,7 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
                 const SizedBox(height: 16),
                 // Dropdown para selecionar o tipo de período
                 DropdownButtonFormField<String>(
-                  value: selectedTipoPeriodo,
+                  initialValue: selectedTipoPeriodo,
                   decoration: const InputDecoration(
                     labelText: 'Tipo de Período',
                     border: OutlineInputBorder(),

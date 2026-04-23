@@ -4912,27 +4912,10 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
     final textColor = segmentTextColorOverride ?? widget.textColor;
     final tipoPeriodo = widget.segment.tipoPeriodo.toUpperCase();
 
-    // Para PLANEJAMENTO e DESLOCAMENTO: mostrar ícone
+    // Segmentos de planejamento e deslocamento não exibem ícone nem texto —
+    // apenas a cor da barra é suficiente para identificá-los visualmente.
     if (tipoPeriodo == 'PLANEJAMENTO' || tipoPeriodo == 'DESLOCAMENTO') {
-      IconData iconData;
-      if (tipoPeriodo == 'PLANEJAMENTO') {
-        iconData = Icons.calendar_today; // Ícone para planejamento
-      } else {
-        iconData = Icons.directions_car; // Ícone para deslocamento
-      }
-
-      return Icon(
-        iconData,
-        color: textColor,
-        size: _getOptimalFontSize(barWidth) * 1.5,
-        shadows: [
-          Shadow(
-            offset: const Offset(0.5, 0.5),
-            blurRadius: 1.0,
-            color: Colors.black.withOpacity(0.5),
-          ),
-        ],
-      );
+      return const SizedBox.shrink();
     }
 
     // Para EXECUCAO: mostrar texto (local e tarefa)

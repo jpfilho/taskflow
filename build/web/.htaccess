@@ -1,9 +1,0 @@
-﻿# Forcar nao-cache para HTML e service worker
-<FilesMatch "^(index\.html|flutter_service_worker\.js|version\.txt)$">
-  Header set Cache-Control "no-store, no-cache, must-revalidate, max-age=0"
-</FilesMatch>
-
-# Ativos estaticos podem usar cache longo
-<FilesMatch "\.(js|css|json|wasm|png|jpg|jpeg|gif|svg|ico)$">
-  Header set Cache-Control "public, max-age=31536000, immutable"
-</FilesMatch>

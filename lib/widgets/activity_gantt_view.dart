@@ -531,28 +531,36 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
   Future<void> _loadBackendConflicts() async {
     final cs = widget.conflictService;
     if (cs == null) return;
-    final ok = await cs.isBackendAvailable();
-    Map<String, ConflictInfo>? map;
-    Map<String, List<ExecutionEventFromBackend>>? events;
-    if (ok) {
-      map = await cs.getConflictsForRange(_displayStartDate, _displayEndDate);
-      events = await cs.getExecutionEventsForRange(_displayStartDate, _displayEndDate);
-    }
-    final fleetOk = await cs.isFleetConflictBackendAvailable();
-    Map<String, ConflictInfo>? fleetMap;
-    Map<String, List<FleetExecutionEventFromBackend>>? fleetEvents;
-    if (fleetOk) {
-      fleetMap = await cs.getFleetConflictsForRange(_displayStartDate, _displayEndDate);
-      fleetEvents = await cs.getFleetExecutionEventsForRange(_displayStartDate, _displayEndDate);
-    }
+
+    // ── 1. Verificar disponibilidade em paralelo ──────────────────────────────
+    final availability = await Future.wait([
+      cs.isBackendAvailable(),
+      cs.isFleetConflictBackendAvailable(),
+    ]);
+    final ok = availability[0];
+    final fleetOk = availability[1];
+
+    // ── 2. Buscar dados em paralelo com tipos corretos ─────────────────────────
+    final Future<Map<String, ConflictInfo>?> fMap =
+        ok ? cs.getConflictsForRange(_displayStartDate, _displayEndDate) : Future.value(null);
+    final Future<Map<String, List<ExecutionEventFromBackend>>?> fEvents =
+        ok ? cs.getExecutionEventsForRange(_displayStartDate, _displayEndDate) : Future.value(null);
+    final Future<Map<String, ConflictInfo>?> fFleetMap =
+        fleetOk ? cs.getFleetConflictsForRange(_displayStartDate, _displayEndDate) : Future.value(null);
+    final Future<Map<String, List<FleetExecutionEventFromBackend>>?> fFleetEvents =
+        fleetOk ? cs.getFleetExecutionEventsForRange(_displayStartDate, _displayEndDate) : Future.value(null);
+
+    // Aguarda tudo em paralelo
+    final results = await Future.wait([fMap, fEvents, fFleetMap, fFleetEvents]);
     if (!mounted) return;
+
     setState(() {
-      _conflictMapFromBackend = map;
-      _eventsByDayFromBackend = events;
-      _useBackendConflicts = ok;
-      _conflictMapFrotaFromBackend = fleetMap;
-      _fleetEventsByDayFromBackend = fleetEvents;
-      _useFleetConflictBackend = fleetOk;
+      _conflictMapFromBackend      = results[0] as Map<String, ConflictInfo>?;
+      _eventsByDayFromBackend      = results[1] as Map<String, List<ExecutionEventFromBackend>>?;
+      _conflictMapFrotaFromBackend = results[2] as Map<String, ConflictInfo>?;
+      _fleetEventsByDayFromBackend = results[3] as Map<String, List<FleetExecutionEventFromBackend>>?;
+      _useBackendConflicts         = ok;
+      _useFleetConflictBackend     = fleetOk;
       _conflictsVersion++;
     });
     _conflictsVersionNotifier.value = _conflictsVersion;
@@ -794,13 +802,17 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
     final last = DateTime(end.year, end.month, end.day);
     while (!cur.isAfter(last)) {
       final month = _getMonthAbbr(cur.month);
+      // end deve ser cur + 1 dia (exclusivo), igual à convenção do gantt_chart.dart.
+      // Isso garante que o GanttSegmentWidget filtre corretamente todos os dias,
+      // incluindo o último dia do segmento, evitando célula em branco no fim.
+      final nextDay = cur.add(const Duration(days: 1));
       result.add(GanttPeriod(
         start: cur,
-        end: cur.add(const Duration(days: 1)),
+        end: nextDay,
         label: '${cur.day}',
         groupLabel: '$month/${cur.year}',
       ));
-      cur = cur.add(const Duration(days: 1));
+      cur = nextDay;
     }
     return result;
   }
@@ -814,7 +826,7 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
       final label = _getPeriodLabel(cur, scale);
       final group = _getPeriodGroup(cur, scale);
       result.add(GanttPeriod(start: cur, end: periodEnd, label: label, groupLabel: group));
-      cur = periodEnd;
+      cur = periodEnd.add(const Duration(days: 1));
     }
     return result;
   }
@@ -822,19 +834,19 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
   DateTime _getPeriodEnd(DateTime start, GanttScale scale) {
     switch (scale) {
       case GanttScale.weekly:
-        return start.add(const Duration(days: 7));
+        return start.add(const Duration(days: 6));
       case GanttScale.biweekly:
-        return start.add(const Duration(days: 14));
+        return start.add(const Duration(days: 13));
       case GanttScale.monthly:
-        return DateTime(start.year, start.month + 1, 1);
+        return DateTime(start.year, start.month + 1, 0);
       case GanttScale.quarterly:
         final endMonth = ((start.month - 1) ~/ 3 + 1) * 3;
-        return DateTime(start.year, endMonth + 1, 1);
+        return DateTime(start.year, endMonth + 1, 0);
       case GanttScale.semiAnnual:
         final endMonth = start.month <= 6 ? 6 : 12;
-        return DateTime(start.year, endMonth + 1, 1);
+        return DateTime(start.year, endMonth + 1, 0);
       default:
-        return start.add(const Duration(days: 1));
+        return start;
     }
   }
 
@@ -896,37 +908,32 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
     return periods.isEmpty ? 40.0 : ((ganttWidth / desired) * 0.7).clamp(min, max);
   }
 
-  int _getPeriodIndexForDate(DateTime date, List<GanttPeriod> periods) {
-    if (periods.isEmpty) return 0;
-    final d = DateTime(date.year, date.month, date.day);
-    for (int i = 0; i < periods.length; i++) {
-      final p = periods[i];
-      if (!d.isBefore(p.start) && d.isBefore(p.end)) return i;
-    }
-    if (d.isBefore(periods.first.start)) return 0;
-    return periods.length - 1;
-  }
-
   double _getDateOffsetFromPeriods(DateTime date, List<GanttPeriod> periods, double periodWidth) {
-    if (periods.isEmpty) return -1;
-    final d = DateTime(date.year, date.month, date.day);
-    if (d.isBefore(periods.first.start) || !d.isBefore(periods.last.end)) {
-      return -1;
+    final normalized = DateTime(date.year, date.month, date.day);
+    for (int i = 0; i < periods.length; i++) {
+      final ps = DateTime(periods[i].start.year, periods[i].start.month, periods[i].start.day);
+      final pe = DateTime(periods[i].end.year, periods[i].end.month, periods[i].end.day);
+      // pe é exclusivo (start + 1 dia): interval [ps, pe) → ps <= normalized < pe
+      if (!normalized.isBefore(ps) && normalized.isBefore(pe)) {
+        return i * periodWidth;
+      }
     }
-    return _getPeriodIndexForDate(date, periods) * periodWidth;
+    return -1;
   }
 
   double _getBarWidthForRange(DateTime start, DateTime end, List<GanttPeriod> periods, double periodWidth) {
-    if (periods.isEmpty) return periodWidth;
-    final startNorm = DateTime(start.year, start.month, start.day);
-    final endNorm = DateTime(end.year, end.month, end.day);
-    int i0 = _getPeriodIndexForDate(startNorm, periods);
-    int i1 = _getPeriodIndexForDate(endNorm, periods);
-    if (i0 > i1) i1 = i0;
-    final span = (i1 - i0 + 1);
-    final width = span * periodWidth;
-    const padding = 0.5;
-    return width - periodWidth * padding;
+    int count = 0;
+    // Converter end inclusive → end exclusivo para comparação uniforme com pe exclusivo
+    final endExclusive = end.add(const Duration(days: 1));
+    for (var p in periods) {
+      final ps = DateTime(p.start.year, p.start.month, p.start.day);
+      final pe = DateTime(p.end.year, p.end.month, p.end.day);
+      // Sobreposição de intervalos semi-abertos [ps,pe) e [start, endExclusive):
+      // ps < endExclusive  AND  pe > start
+      if (ps.isBefore(endExclusive) && pe.isAfter(start)) count++;
+    }
+
+    return count * periodWidth;
   }
 
   double _getTodayOffset(List<GanttPeriod> periods, double periodWidth) {
@@ -941,12 +948,6 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
   }
 
   DateTime _normalizeLegacyEndDate(Task task, DateTime start, DateTime end) {
-    final cutoff = DateTime(2026, 2, 15);
-    final isLegacy = task.dataAtualizacao == null || task.dataAtualizacao!.isBefore(cutoff);
-    if (!isLegacy) return end;
-    if (end.isAfter(start) && end.difference(start).inDays > 0) {
-      return end.subtract(const Duration(days: 1));
-    }
     return end;
   }
 
@@ -1967,7 +1968,6 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                         end = _normalizeLegacyEndDate(task, start, end);
 
                         if (end.isBefore(widget.startDate) || start.isAfter(widget.endDate)) {
-                          print('DEBUG RENDER [$segIdx] ${seg.tipoPeriodo}: FORA DO PERIODO (start: $start, end: $end)');
                           return const SizedBox.shrink();
                         }
 
@@ -1989,19 +1989,6 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                         }
 
                         final segColor = _getSegmentColorByPeriod(seg, task, parentTask: parentTask, isSubtask: isSubtask);
-                        
-                        Color segTextColor = Colors.white;
-                        if (task.tipo.isNotEmpty) {
-                          final tipoAtividade = _tipoAtividadeMap[task.tipo];
-                          if (tipoAtividade != null &&
-                              tipoAtividade.corTextoSegmento != null &&
-                              tipoAtividade.corTextoSegmento!.isNotEmpty) {
-                            try {
-                              segTextColor = tipoAtividade.segmentTextColor;
-                            } catch (_) {}
-                          }
-                        }
-
                         final conflictListReady = widget.tasksForConflictDetection?.isNotEmpty ?? false;
                         final backendExecReady = widget.conflictService != null && _conflictMapFromBackend != null;
                         final conflictDays = (widget.scale == GanttScale.daily && (backendExecReady || (conflictListReady && _conflictPaintReady)))
@@ -2026,7 +2013,7 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                             dayWidth: periodWidth,
                             periods: periods,
                             color: segColor,
-                            textColor: segTextColor,
+                            textColor: segColor.computeLuminance() > 0.5 ? Colors.black87 : Colors.white,
                             conflictDays: conflictDays,
                             conflictTooltipMessage: null,
                             conflictTooltipMessageByDay: null,
@@ -2206,6 +2193,22 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
 
     return Column(
       children: [
+        // ── Barra de progresso de carregamento ──────────────────────────────
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 200),
+          child: widget.isLoading
+              ? SizedBox(
+                  key: const ValueKey('loading'),
+                  height: 3,
+                  child: LinearProgressIndicator(
+                    backgroundColor: Colors.transparent,
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
+                )
+              : const SizedBox(key: ValueKey('idle'), height: 3),
+        ),
         // ── Cabeçalho unificado ──────────────────────────────────────────────
         Row(
           children: [
@@ -2276,3 +2279,4 @@ class _TableColWidths {
       acoes + status + local + tipo + tarefa + executor + coordenador +
       frota + chat + anexos + notasSAP + ordens + ats + sis + alertas + 32;
 }
+

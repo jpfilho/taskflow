@@ -76,7 +76,8 @@ class _NotasSAPViewState extends State<NotasSAPView> {
   int _contadorManutencao = 0;
   String _searchQuery = ''; // Termo de busca do HeaderBar
   List<NotaSAP> _todasNotasOrdenadas = []; // Todas as notas ordenadas (para paginação)
-  bool _ordenacaoAscendente = true; // Direção da ordenação por prazo
+  bool _ordenacaoAscendente = true; // Direção da ordenação
+  int _sortColumnIndex = 8; // Coluna de ordenação: 8 = Prazo (padrão)
   bool _canEditTasks = false; // Permissão para criar/editar tarefas
   bool _canEditTasksChecked = false; // Indica se a permissão já foi verificada
   bool _isCheckingTaskPermission = false; // Evita múltiplas verificações simultâneas
@@ -719,27 +720,81 @@ class _NotasSAPViewState extends State<NotasSAPView> {
   // Aplicar ordenação e paginação nas notas já carregadas
   void _aplicarOrdenacaoEPaginacao() {
     if (_todasNotasOrdenadas.isEmpty) {
-      // Se não há notas carregadas, recarregar
       _loadNotas();
       return;
     }
 
-    // Ordenar todas as notas
+    // Ordenar todas as notas pela coluna selecionada
     _todasNotasOrdenadas.sort((a, b) {
-      final diasA = a.diasRestantes;
-      final diasB = b.diasRestantes;
-      
-      // Se ambos são NULL, manter ordem original
-      if (diasA == null && diasB == null) return 0;
-      
-      // Se A é NULL, A vai para o final
-      if (diasA == null) return _ordenacaoAscendente ? 1 : -1;
-      
-      // Se B é NULL, B vai para o final
-      if (diasB == null) return _ordenacaoAscendente ? -1 : 1;
-      
-      // Ambos têm prazo - ordenar pelos dias restantes
-      return _ordenacaoAscendente ? diasA.compareTo(diasB) : diasB.compareTo(diasA);
+      int cmp;
+      switch (_sortColumnIndex) {
+        case 2: // Status tarefa — notas programadas primeiro
+          final sa = _notasProgramadasInfo[a.id]?.isNotEmpty == true
+              ? (_notasProgramadasInfo[a.id]!.first['tarefa']?['status'] ?? '')
+              : '';
+          final sb = _notasProgramadasInfo[b.id]?.isNotEmpty == true
+              ? (_notasProgramadasInfo[b.id]!.first['tarefa']?['status'] ?? '')
+              : '';
+          cmp = (sa as String).compareTo(sb as String);
+          break;
+        case 4: // Local
+          cmp = (a.local ?? '').compareTo(b.local ?? '');
+          break;
+        case 5: // Sala
+          cmp = (a.sala ?? '').compareTo(b.sala ?? '');
+          break;
+        case 6: // Descrição
+          cmp = (a.descricao ?? '').compareTo(b.descricao ?? '');
+          break;
+        case 7: // Tipo
+          cmp = (a.tipo ?? '').compareTo(b.tipo ?? '');
+          break;
+        case 8: // Prazo (dias restantes)
+          final diasA = a.diasRestantes;
+          final diasB = b.diasRestantes;
+          if (diasA == null && diasB == null) return 0;
+          if (diasA == null) return _ordenacaoAscendente ? 1 : -1;
+          if (diasB == null) return _ordenacaoAscendente ? -1 : 1;
+          cmp = diasA.compareTo(diasB);
+          break;
+        case 9: // Nota (número)
+          final ia = int.tryParse(a.nota) ?? 0;
+          final ib = int.tryParse(b.nota) ?? 0;
+          cmp = ia.compareTo(ib);
+          break;
+        case 10: // Criado em
+          final ca = a.criadoEm ?? DateTime(1900);
+          final cb = b.criadoEm ?? DateTime(1900);
+          cmp = ca.compareTo(cb);
+          break;
+        case 11: // Prioridade
+          cmp = (a.textPrioridade ?? '').compareTo(b.textPrioridade ?? '');
+          break;
+        case 12: // Status Usuário
+          cmp = (a.statusUsuario ?? '').compareTo(b.statusUsuario ?? '');
+          break;
+        case 13: // Responsável
+          cmp = (a.denominacaoExecutor ?? '').compareTo(b.denominacaoExecutor ?? '');
+          break;
+        case 14: // Local da Instalação
+          cmp = (a.localInstalacao ?? '').compareTo(b.localInstalacao ?? '');
+          break;
+        case 15: // Ordem
+          cmp = (a.ordem ?? '').compareTo(b.ordem ?? '');
+          break;
+        case 16: // Centro Trabalho
+          cmp = (a.centroTrabalhoResponsavel ?? '').compareTo(b.centroTrabalhoResponsavel ?? '');
+          break;
+        case 17: // GPM
+          cmp = (a.gpm ?? '').compareTo(b.gpm ?? '');
+          break;
+        case 18: // Status do Sistema
+          cmp = (a.statusSistema ?? '').compareTo(b.statusSistema ?? '');
+          break;
+        default:
+          cmp = 0;
+      }
+      return _ordenacaoAscendente ? cmp : -cmp;
     });
 
     // Aplicar paginação
@@ -2323,9 +2378,11 @@ class _NotasSAPViewState extends State<NotasSAPView> {
       scrollDirection: Axis.horizontal,
       child: SingleChildScrollView(
         child: DataTable(
+          sortColumnIndex: _sortColumnIndex,
+          sortAscending: _ordenacaoAscendente,
           headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
           columns: [
-            DataColumn(
+            DataColumn( // 0. Checkbox "selecionar todos" — sem onSort
               label: Checkbox(
                 value: _notasSelecionadas.length == _notas.length && _notas.isNotEmpty,
                 onChanged: (value) {
@@ -2339,35 +2396,73 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                 },
               ),
             ),
-            DataColumn(label: Text('Ações', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Tarefa Vinculada', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Local', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Sala', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Descrição', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Tipo', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(
-              label: Text('Prazo', style: TextStyle(fontWeight: FontWeight.bold)),
-              onSort: (columnIndex, ascending) {
-                setState(() {
-                  _ordenacaoAscendente = ascending;
-                  _paginaAtual = 0; // Resetar para primeira página ao ordenar
-                });
-                // Reordenar todas as notas e aplicar paginação
-                _aplicarOrdenacaoEPaginacao();
-              },
+            const DataColumn(label: Text('Ações')), // 1. Ações (não ordena)
+            DataColumn( // 2. Status tarefa
+              label: const Text('Status', style: TextStyle(fontWeight: FontWeight.bold)),
+              onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
             ),
-            DataColumn(label: Text('Nota', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Criado em', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Prioridade', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Status Usuário', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Responsável', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Local da Instalação', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Ordem', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Centro Trabalho', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('GPM', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Status do Sistema', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Detalhes', style: TextStyle(fontWeight: FontWeight.bold))),
+            const DataColumn(label: Text('Tarefa Vinculada', style: TextStyle(fontWeight: FontWeight.bold))), // 3. não ordena
+            DataColumn( // 4. Local
+              label: const Text('Local', style: TextStyle(fontWeight: FontWeight.bold)),
+              onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
+            ),
+            DataColumn( // 5. Sala
+              label: const Text('Sala', style: TextStyle(fontWeight: FontWeight.bold)),
+              onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
+            ),
+            DataColumn( // 6. Descrição
+              label: const Text('Descrição', style: TextStyle(fontWeight: FontWeight.bold)),
+              onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
+            ),
+            DataColumn( // 7. Tipo
+              label: const Text('Tipo', style: TextStyle(fontWeight: FontWeight.bold)),
+              onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
+            ),
+            DataColumn( // 8. Prazo
+              label: const Text('Prazo', style: TextStyle(fontWeight: FontWeight.bold)),
+              onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
+            ),
+            DataColumn( // 9. Nota
+              label: const Text('Nota', style: TextStyle(fontWeight: FontWeight.bold)),
+              onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
+            ),
+            DataColumn( // 10. Criado em
+              label: const Text('Criado em', style: TextStyle(fontWeight: FontWeight.bold)),
+              onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
+            ),
+            DataColumn( // 11. Prioridade
+              label: const Text('Prioridade', style: TextStyle(fontWeight: FontWeight.bold)),
+              onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
+            ),
+            DataColumn( // 12. Status Usuário
+              label: const Text('Status Usuário', style: TextStyle(fontWeight: FontWeight.bold)),
+              onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
+            ),
+            DataColumn( // 13. Responsável
+              label: const Text('Responsável', style: TextStyle(fontWeight: FontWeight.bold)),
+              onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
+            ),
+            DataColumn( // 14. Local da Instalação
+              label: const Text('Local da Instalação', style: TextStyle(fontWeight: FontWeight.bold)),
+              onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
+            ),
+            DataColumn( // 15. Ordem
+              label: const Text('Ordem', style: TextStyle(fontWeight: FontWeight.bold)),
+              onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
+            ),
+            DataColumn( // 16. Centro Trabalho
+              label: const Text('Centro Trabalho', style: TextStyle(fontWeight: FontWeight.bold)),
+              onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
+            ),
+            DataColumn( // 17. GPM
+              label: const Text('GPM', style: TextStyle(fontWeight: FontWeight.bold)),
+              onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
+            ),
+            DataColumn( // 18. Status do Sistema
+              label: const Text('Status do Sistema', style: TextStyle(fontWeight: FontWeight.bold)),
+              onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
+            ),
+            const DataColumn(label: Text('Detalhes')), // 19. Detalhes (não ordena)
           ],
           rows: _notas.map((nota) {
             final isProgramada = _notasProgramadasIds.contains(nota.id);

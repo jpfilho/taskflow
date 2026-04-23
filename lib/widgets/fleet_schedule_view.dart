@@ -1728,22 +1728,10 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
     
     final tipoPeriodo = segment.tipoPeriodo.toUpperCase();
     
-    // Para PLANEJAMENTO e DESLOCAMENTO: mostrar ícone
+    // Segmentos de planejamento e deslocamento não exibem ícone nem texto —
+    // apenas a cor da barra é suficiente para identificá-los visualmente.
     if (tipoPeriodo == 'PLANEJAMENTO' || tipoPeriodo == 'DESLOCAMENTO') {
-      IconData iconData;
-      if (tipoPeriodo == 'PLANEJAMENTO') {
-        iconData = Icons.calendar_today;
-      } else {
-        iconData = Icons.directions_car;
-      }
-      
-      final iconSize = (_rowHeight - 4).clamp(12.0, 20.0);
-      
-      return Icon(
-        iconData,
-        size: iconSize,
-        color: Colors.white,
-      );
+      return const SizedBox.shrink();
     }
     
     // Para EXECUCAO: mostrar texto (local e tarefa) seguindo a lógica da tela de equipes

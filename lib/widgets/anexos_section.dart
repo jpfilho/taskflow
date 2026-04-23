@@ -45,14 +45,17 @@ class _AnexosSectionState extends State<AnexosSection> {
   }
 
   Future<void> _loadAnexos() async {
+    if (!mounted) return;
     setState(() => _isLoading = true);
     try {
       final anexos = await _anexoService.getAnexosByTaskId(widget.taskId);
+      if (!mounted) return;
       setState(() {
         _anexos = anexos;
         _isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() => _isLoading = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

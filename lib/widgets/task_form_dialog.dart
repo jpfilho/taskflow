@@ -289,7 +289,6 @@ class _TaskFormDialogState extends State<TaskFormDialog>
       _usarEquipe =
           task.equipeIds.isNotEmpty ||
           (task.equipeId != null && task.equipeId!.isNotEmpty);
-      _tipoExecutorEquipe = _usarEquipe ? 'equipe' : 'executor';
       _status = task.status;
       _regional = task.regional;
       _divisao = task.divisao;
@@ -297,9 +296,6 @@ class _TaskFormDialogState extends State<TaskFormDialog>
           ? task.locais.join(', ')
           : ''; // Para exibição
       _selectedLocalIds = Set<String>.from(task.localIds);
-      _selectedExecutorIds = Set<String>.from(task.executorIds);
-      _selectedEquipeIds = Set<String>.from(task.equipeIds);
-      _selectedFrotaIds = Set<String>.from(task.frotaIds);
       _tipo = task.tipo;
       _ordem = task.ordem;
       _tarefa = task.tarefa;
@@ -1260,11 +1256,10 @@ class _TaskFormDialogState extends State<TaskFormDialog>
       // Após carregar executores e equipes, tentar selecionar o executor/equipe da tarefa
       if (widget.task != null) {
         final task = widget.task!;
-        if (task.equipeIds.isNotEmpty || (task.equipeId != null && task.equipeId!.isNotEmpty)) {
-          final selectId = task.equipeIds.isNotEmpty ? task.equipeIds.first : task.equipeId;
+        if (task.equipeId != null && task.equipeId!.isNotEmpty) {
           try {
             _selectedEquipe = _equipesList.firstWhere(
-              (e) => e.id == selectId,
+              (e) => e.id == task.equipeId,
             );
             _usarEquipe = true;
           } catch (e) {
@@ -3904,7 +3899,9 @@ class _TaskFormDialogState extends State<TaskFormDialog>
             ? _executoresList
                   .where((e) => _selectedExecutorIds.contains(e.id))
                   .map((e) => e.nome)
-                  .join(', ') // Salvar TODOS os nomes separados por vírgula para manter compatibilidade
+                  .join(
+                    ', ',
+                  ) // Salvar TODOS os nomes separados por vírgula para manter compatibilidade
             : '', // Compatibilidade
         frota: _selectedFrotaIds.isNotEmpty
             ? _frotasList
@@ -4111,38 +4108,13 @@ class _TaskFormDialogState extends State<TaskFormDialog>
                       ? null
                       : (Equipe? value) {
                           setState(() {
+                            _selectedEquipe = value;
                             if (value != null) {
-                              // Opção A: Atalho visual que quebra a equipe em executores individuais
-                              _tipoExecutorEquipe = 'executor';
-                              _usarEquipe = false;
-                              _selectedEquipe = null;
-                              _selectedEquipeIds.clear();
-                              
-                              // Remover caixinhas em branco antes de adicionar
-                              _executoresSelecionados.removeWhere((item) => item == null);
-                              
-                              for (var equipeExecutor in value.executores) {
-                                // Garantir que não duplique pessoas já selecionadas
-                                if (!_selectedExecutorIds.contains(equipeExecutor.executorId)) {
-                                  Executor? ex;
-                                  try {
-                                    ex = _executoresList.firstWhere((e) => e.id == equipeExecutor.executorId);
-                                  } catch (_) {
-                                    ex = Executor(id: equipeExecutor.executorId, nome: equipeExecutor.executorNome);
-                                  }
-                                  
-                                  _executoresSelecionados.add(ex);
-                                  if (ex.id != null) {
-                                    _selectedExecutorIds.add(ex.id!);
-                                  }
-                                }
-                              }
-                              
-                              if (_executoresSelecionados.isEmpty) {
-                                _executoresSelecionados.add(null);
-                              }
+                              _selectedEquipeIds = {value.id};
+                              _usarEquipe = true;
+                              _executor = '';
+                              _selectedExecutorIds.clear();
                             } else {
-                              _selectedEquipe = null;
                               _selectedEquipeIds.clear();
                             }
                           });

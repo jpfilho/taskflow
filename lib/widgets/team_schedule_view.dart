@@ -818,6 +818,10 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
       final sortedExecutores = _getSortedExecutores();
       print('⏱ [TeamScheduleView] Processando ${sortedExecutores.length} executores...');
 
+      // Detectar uma única vez se a view retorna tipo_periodo (usando a lista global de rows)
+      // Evita false-negative para executores com lista vazia (0 tarefas no período)
+      final hasTipoPeriodoInView = rows.isNotEmpty && rows.first.containsKey('tipo_periodo');
+
       final processSw = Stopwatch()..start();
       int executorCount = 0;
       int totalTasksProcessed = 0;
@@ -996,9 +1000,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
         }
         segmentSw.stop();
 
-        // A view mv_execucoes_dia_completa já inclui todos os tipos de períodos
-        // Se a view não tiver o campo tipo_periodo, complementar com dados das tarefas originais
-        final hasTipoPeriodoInView = list.isNotEmpty && list.first.containsKey('tipo_periodo');
+        // hasTipoPeriodoInView já computado fora do loop com a lista global de rows
         
         final complementSw = Stopwatch()..start();
         if (!hasTipoPeriodoInView) {
@@ -1156,31 +1158,10 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
     
     final tipoPeriodo = segment.tipoPeriodo.toUpperCase();
     
-    // Para PLANEJAMENTO e DESLOCAMENTO: mostrar ícone
+    // Segmentos de planejamento e deslocamento não exibem ícone nem texto —
+    // apenas a cor da barra é suficiente para identificá-los visualmente.
     if (tipoPeriodo == 'PLANEJAMENTO' || tipoPeriodo == 'DESLOCAMENTO') {
-      IconData iconData;
-      if (tipoPeriodo == 'PLANEJAMENTO') {
-        iconData = Icons.calendar_today; // Ícone para planejamento
-      } else {
-        iconData = Icons.directions_car; // Ícone para deslocamento
-      }
-      
-      // Ajustar tamanho do ícone para não ultrapassar a altura da linha
-      final iconSize = (_rowHeight - 4).clamp(12.0, 20.0);
-      
-      final textColor = _getSegmentTextColor(task);
-      return Icon(
-        iconData,
-        color: textColor,
-        size: iconSize,
-        shadows: [
-          Shadow(
-            offset: const Offset(0.5, 0.5),
-            blurRadius: 1.0,
-            color: Colors.black.withOpacity(0.5),
-          ),
-        ],
-      );
+      return const SizedBox.shrink();
     }
     
     // Para EXECUCAO: texto padrão = LOCAL. Botão pin alterna só local vs local+tarefa; Tt alterna visibilidade.

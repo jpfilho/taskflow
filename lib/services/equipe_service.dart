@@ -21,9 +21,6 @@ class EquipeService {
       'nome': equipe.nome,
       'descricao': equipe.descricao,
       'tipo': equipe.tipo,
-      'regional_id': equipe.regionalId,
-      'divisao_id': equipe.divisaoId,
-      'segmento_id': equipe.segmentoId,
       'ativo': equipe.ativo,
     };
   }
@@ -113,7 +110,7 @@ class EquipeService {
   Future<Equipe?> createEquipe(Equipe equipe) async {
     try {
       final data = _equipeToMap(equipe);
-      
+
       // Inserir equipe
       final response = await _supabase
           .from('equipes')
@@ -129,15 +126,17 @@ class EquipeService {
 
       // Inserir relacionamentos com executores
       if (equipe.executores.isNotEmpty) {
-        final executoresData = equipe.executores.map((equipeExecutor) => {
-          'equipe_id': equipeId,
-          'executor_id': equipeExecutor.executorId,
-          'papel': equipeExecutor.papel,
-        }).toList();
+        final executoresData = equipe.executores
+            .map(
+              (equipeExecutor) => {
+                'equipe_id': equipeId,
+                'executor_id': equipeExecutor.executorId,
+                'papel': equipeExecutor.papel,
+              },
+            )
+            .toList();
 
-        await _supabase
-            .from('equipes_executores')
-            .insert(executoresData);
+        await _supabase.from('equipes_executores').insert(executoresData);
       }
 
       // Buscar equipe completa com joins
@@ -165,26 +164,26 @@ class EquipeService {
           .eq('id', id)
           .timeout(
             const Duration(seconds: 30),
-            onTimeout: () => throw TimeoutException('Timeout ao atualizar equipe'),
+            onTimeout: () =>
+                throw TimeoutException('Timeout ao atualizar equipe'),
           );
 
       // Remover relacionamentos antigos com executores
-      await _supabase
-          .from('equipes_executores')
-          .delete()
-          .eq('equipe_id', id);
+      await _supabase.from('equipes_executores').delete().eq('equipe_id', id);
 
       // Inserir novos relacionamentos com executores
       if (equipe.executores.isNotEmpty) {
-        final executoresData = equipe.executores.map((equipeExecutor) => {
-          'equipe_id': id,
-          'executor_id': equipeExecutor.executorId,
-          'papel': equipeExecutor.papel,
-        }).toList();
+        final executoresData = equipe.executores
+            .map(
+              (equipeExecutor) => {
+                'equipe_id': id,
+                'executor_id': equipeExecutor.executorId,
+                'papel': equipeExecutor.papel,
+              },
+            )
+            .toList();
 
-        await _supabase
-            .from('equipes_executores')
-            .insert(executoresData);
+        await _supabase.from('equipes_executores').insert(executoresData);
       }
 
       // Buscar equipe completa com joins
@@ -209,7 +208,8 @@ class EquipeService {
           .eq('id', id)
           .timeout(
             const Duration(seconds: 30),
-            onTimeout: () => throw TimeoutException('Timeout ao deletar equipe'),
+            onTimeout: () =>
+                throw TimeoutException('Timeout ao deletar equipe'),
           );
 
       return true;
@@ -220,10 +220,7 @@ class EquipeService {
   }
 
   // Filtrar equipes
-  Future<List<Equipe>> filterEquipes({
-    String? tipo,
-    bool? ativo,
-  }) async {
+  Future<List<Equipe>> filterEquipes({String? tipo, bool? ativo}) async {
     try {
       dynamic query = _supabase.from('equipes').select('''
         *,
@@ -299,13 +296,16 @@ class EquipeService {
         return await getEquipesAtivas();
       }
 
-      dynamic query = _supabase.from('equipes').select('''
+      dynamic query = _supabase
+          .from('equipes')
+          .select('''
         *,
         regionais!left(regional),
         divisoes!left(divisao),
         segmentos!left(segmento),
         equipes_executores!left(executor_id, papel, executores!inner(id, nome))
-      ''').eq('ativo', true);
+      ''')
+          .eq('ativo', true);
 
       // Filtrar por regional
       if (regionalId != null && regionalId.isNotEmpty) {
@@ -341,4 +341,3 @@ class EquipeService {
     }
   }
 }
-

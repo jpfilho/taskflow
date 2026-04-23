@@ -84,6 +84,7 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
       });
     } catch (e) {
       print('⚠️ Erro ao verificar permissão de edição: $e');
+      if (!mounted) return;
       setState(() {
         _canEdit = false;
       });
@@ -600,7 +601,6 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
           width: MediaQuery.of(context).size.width * 0.9,
           constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
           child: Column(
-            mainAxisSize: MainAxisSize.min,
             children: [
               Container(
                 padding: const EdgeInsets.all(20),
@@ -769,7 +769,6 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
           width: MediaQuery.of(context).size.width * 0.9,
           constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
           child: Column(
-            mainAxisSize: MainAxisSize.min,
             children: [
               Container(
                 padding: const EdgeInsets.all(20),
@@ -919,7 +918,6 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
           width: MediaQuery.of(context).size.width * 0.9,
           constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
           child: Column(
-            mainAxisSize: MainAxisSize.min,
             children: [
               Container(
                 padding: const EdgeInsets.all(20),
@@ -1068,7 +1066,6 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
           width: MediaQuery.of(context).size.width * 0.9,
           constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
           child: Column(
-            mainAxisSize: MainAxisSize.min,
             children: [
               Container(
                 padding: const EdgeInsets.all(20),

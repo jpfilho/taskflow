@@ -38,7 +38,8 @@ if (-not (Get-Command scp -ErrorAction SilentlyContinue)) {
 if ($NoBuild) {
     Write-Host "AVISO: Pulando build (usando build existente)" -ForegroundColor Yellow
     Write-Host ""
-} else {
+}
+else {
     Write-Host "Fazendo build da aplicacao..." -ForegroundColor Cyan
     Write-Host ""
 
@@ -124,7 +125,8 @@ Write-Host ""
 
 # ---- Empacotar em .tar.gz para transferencia rapida ----
 $archiveName = "task2026_web_$BUILD_TIMESTAMP.tar.gz"
-$archivePath = Join-Path $PWD $archiveName
+$archivePath = Join-Path $env:TEMP $archiveName
+if (Test-Path $archivePath) { Remove-Item $archivePath -Force }
 
 Write-Host "Empacotando arquivos..." -ForegroundColor Cyan
 tar -czf "$archivePath" -C build\web .
@@ -142,12 +144,13 @@ Write-Host "   (Digite a senha SSH quando solicitado)" -ForegroundColor Yellow
 Write-Host ""
 scp -o PubkeyAuthentication=no -o IPQoS=none -o KexAlgorithms=curve25519-sha256@libssh.org -P $SSH_PORT "$archivePath" "${SSH_USER}@${SSH_HOST}:/tmp/$archiveName"
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERRO: Falha ao transferir o pacote via rede!" -ForegroundColor Red
-    Write-Host "O pacote foi MANTIDO em: $archivePath" -ForegroundColor Yellow
-    Write-Host "Voce pode fazer o upload manual pelo painel da Hostinger!" -ForegroundColor Yellow
+    Write-Host "ERRO: Falha ao transferir o pacote!" -ForegroundColor Red
+    Remove-Item $archivePath -Force -ErrorAction SilentlyContinue
     exit 1
 }
 
+# Limpar pacote local
+Remove-Item $archivePath -Force -ErrorAction SilentlyContinue
 Write-Host "   Transferencia concluida!" -ForegroundColor Green
 Write-Host ""
 
@@ -186,7 +189,8 @@ if ($LASTEXITCODE -ne 0) {
 $remoteVersion = ($result | Select-Object -Last 1).Trim()
 if ($remoteVersion -eq $BUILD_TIMESTAMP) {
     Write-Host "   Versao confirmada no servidor: $remoteVersion" -ForegroundColor Green
-} else {
+}
+else {
     Write-Host "   Versao no servidor: $remoteVersion (esperado: $BUILD_TIMESTAMP)" -ForegroundColor Yellow
 }
 
