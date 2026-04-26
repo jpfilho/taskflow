@@ -1111,12 +1111,64 @@ class NotaSAPService {
           .select('notas_sap_com_prazo(*)')
           .eq('task_id', taskId);
 
-      return (response as List)
-          .map((item) => NotaSAP.fromMap(item['notas_sap_com_prazo'] as Map<String, dynamic>))
-          .toList();
-    } catch (e) {
-      print('❌ Erro ao buscar notas da tarefa: $e');
-      return [];
+      final list = response as List;
+      if (list.isEmpty) return [];
+
+      return list.map((item) {
+        // Supabase pode retornar LinkedMap — converter para Map<String, dynamic>
+        final raw = item is Map
+            ? item.map((key, value) => MapEntry(key.toString(), value))
+            : item as Map<String, dynamic>;
+        final notaData = raw['notas_sap_com_prazo'];
+        if (notaData == null) return null;
+        final notaMap = notaData is Map
+            ? notaData.map((key, value) => MapEntry(key.toString(), value))
+            : notaData as Map<String, dynamic>;
+        return NotaSAP.fromMap(notaMap);
+      }).where((n) => n != null).cast<NotaSAP>().toList();
+    } catch (e, stackTrace) {
+      print('⚠️ Erro ao buscar notas da tarefa (VIEW): $e');
+      print('⚠️ Tentando fallback pela tabela base...');
+      // Fallback: buscar IDs das notas na junction e depois os dados na tabela base
+      try {
+        final junctionResponse = await _supabase
+            .from('tasks_notas_sap')
+            .select('nota_sap_id')
+            .eq('task_id', taskId);
+
+        final junctionList = junctionResponse as List;
+        if (junctionList.isEmpty) return [];
+
+        final notaIds = junctionList.map((item) {
+          final raw = item is Map
+              ? item.map((key, value) => MapEntry(key.toString(), value))
+              : item as Map<String, dynamic>;
+          return raw['nota_sap_id']?.toString();
+        }).where((id) => id != null).cast<String>().toList();
+
+        if (notaIds.isEmpty) return [];
+
+        // Buscar dados das notas na tabela base
+        dynamic notasQuery = _supabase.from('notas_sap').select();
+        if (notaIds.length == 1) {
+          notasQuery = notasQuery.eq('id', notaIds[0]);
+        } else {
+          notasQuery = notasQuery.inFilter('id', notaIds);
+        }
+        final notasResponse = await notasQuery;
+
+        return (notasResponse as List).map((item) {
+          final notaMap = item is Map
+              ? item.map((key, value) => MapEntry(key.toString(), value))
+              : item as Map<String, dynamic>;
+          return NotaSAP.fromMap(notaMap);
+        }).toList();
+      } catch (e2, stackTrace2) {
+        print('❌ Erro no fallback ao buscar notas da tarefa: $e2');
+        print('❌ Stack original: $stackTrace');
+        print('❌ Stack fallback: $stackTrace2');
+        throw Exception('Erro ao buscar notas da tarefa: $e2');
+      }
     }
   }
 

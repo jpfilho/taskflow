@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../models/task.dart';
+import '../models/nota_sap.dart';
+import 'performance_monitor.dart';
 import '../config/supabase_config.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'auth_service_simples.dart';
@@ -43,6 +45,9 @@ class TaskService {
   DateTime? _lastFilterDateEnd;
 
   List<Task> _tasks = []; // Cache local para fallback
+  
+  /// Obtém as tarefas atualmente no cache
+  List<Task> get tasks => _tasks;
   int _nextId = 1;
 
   void _logDebug(String message) {
@@ -236,7 +241,7 @@ class TaskService {
 
   // ------- Batch helpers para otimizar filtros/Gantt -------
 
-  static const int _ganttSegmentsChunkSize = 40;
+  static const int _ganttSegmentsChunkSize = 100;
 
   Future<Map<String, List<GanttSegment>>> _loadGanttSegmentsBatch(
     List<String> taskIds, {
@@ -244,7 +249,11 @@ class TaskService {
     DateTime? dataFimMax,
     int? limitPerTask,
   }) async {
-    if (taskIds.isEmpty) return {};
+    PerformanceMonitor.start('TaskService.loadGanttSegmentsBatch');
+    if (taskIds.isEmpty) {
+      PerformanceMonitor.stop('TaskService.loadGanttSegmentsBatch');
+      return {};
+    }
     final map = <String, List<GanttSegment>>{};
     try {
       // Evitar URL longa demais (Failed to fetch): fazer várias requisições com poucos IDs
@@ -281,25 +290,42 @@ class TaskService {
           }
         }
       }
+      PerformanceMonitor.stop('TaskService.loadGanttSegmentsBatch');
       return map;
     } catch (e) {
       _logDebug('⚠️ [_loadGanttSegmentsBatch] Erro: $e');
+      PerformanceMonitor.stop('TaskService.loadGanttSegmentsBatch');
       return map;
     }
   }
 
   Future<Map<String, List<ExecutorPeriod>>> _loadExecutorPeriodsBatch(
-    List<String> taskIds,
-  ) async {
-    if (taskIds.isEmpty) return {};
+    List<String> taskIds, {
+    DateTime? dataInicioMin,
+    DateTime? dataFimMax,
+  }) async {
+    PerformanceMonitor.start('TaskService.loadExecutorPeriodsBatch');
+    if (taskIds.isEmpty) {
+      PerformanceMonitor.stop('TaskService.loadExecutorPeriodsBatch');
+      return {};
+    }
     final taskExecutorMap = <String, Map<String, ExecutorPeriod>>{};
     try {
       for (var i = 0; i < taskIds.length; i += _ganttSegmentsChunkSize) {
         final chunk = taskIds.skip(i).take(_ganttSegmentsChunkSize).toList();
-        final rows = await _supabase
+        var query = _supabase
             .from('executor_periods')
             .select()
             .filter('task_id', 'in', chunk);
+
+        if (dataFimMax != null) {
+          query = query.lte('data_inicio', dataFimMax.toIso8601String());
+        }
+        if (dataInicioMin != null) {
+          query = query.gte('data_fim', dataInicioMin.toIso8601String());
+        }
+
+        final rows = await query;
 
         for (final row in rows as List) {
           try {
@@ -343,9 +369,11 @@ class TaskService {
       for (final entry in taskExecutorMap.entries) {
         result[entry.key] = entry.value.values.toList();
       }
+      PerformanceMonitor.stop('TaskService.loadExecutorPeriodsBatch');
       return result;
     } catch (e) {
       _logDebug('⚠️ [_loadExecutorPeriodsBatch] Erro: $e');
+      PerformanceMonitor.stop('TaskService.loadExecutorPeriodsBatch');
       return {};
     }
   }
@@ -640,15 +668,17 @@ class TaskService {
     List<String> executores = [];
     if (tasksExecutoresData is List) {
       for (var item in tasksExecutoresData) {
-        if (item is Map<String, dynamic> && item['executores'] != null) {
-          final executorMap = item['executores'] as Map<String, dynamic>;
-          final executorId = executorMap['id'] as String?;
-          // Usar apenas o nome, não o nome_completo
-          final executorNome = executorMap['nome'] as String?;
+        if (item is Map<String, dynamic>) {
+          final executorId = item['executor_id'] as String? ?? 
+                           (item['executores'] as Map?)?['id'] as String?;
+          
+          final executorMap = item['executores'] as Map<String, dynamic>?;
+          final executorNome = executorMap?['nome'] as String?;
+          
           if (executorId != null) {
             executorIds.add(executorId);
             if (executorNome != null && executorNome.isNotEmpty) {
-              executores.add(executorNome); // Salvar apenas o nome
+              executores.add(executorNome);
             }
           }
         }
@@ -706,18 +736,19 @@ class TaskService {
     List<String> frotas = [];
     if (tasksFrotasData is List) {
       for (var item in tasksFrotasData) {
-        if (item is Map<String, dynamic> && item['frota'] != null) {
-          final frotaMap = item['frota'] as Map<String, dynamic>;
-          final frotaId = frotaMap['id'] as String?;
-          final frotaNome = frotaMap['nome'] as String?;
-          final frotaPlaca = frotaMap['placa'] as String?;
-          final frotaMarca = frotaMap['marca'] as String?;
+        if (item is Map<String, dynamic>) {
+          final frotaId = item['frota_id'] as String? ?? 
+                         (item['frota'] as Map?)?['id'] as String?;
+          
+          final frotaMap = item['frota'] as Map<String, dynamic>?;
+          final frotaNome = frotaMap?['nome'] as String?;
+          final frotaPlaca = frotaMap?['placa'] as String?;
+          final frotaMarca = frotaMap?['marca'] as String?;
+
           if (frotaId != null) {
             frotaIds.add(frotaId);
             if (frotaNome != null && frotaPlaca != null) {
-              final modelo =
-                  (frotaMarca != null &&
-                      frotaMarca.toString().trim().isNotEmpty)
+              final modelo = (frotaMarca != null && frotaMarca.toString().trim().isNotEmpty)
                   ? ' - ${frotaMarca.toString().trim()}'
                   : '';
               frotas.add('$frotaNome - $frotaPlaca$modelo');
@@ -1273,22 +1304,15 @@ class TaskService {
 
   // Carregar períodos específicos por frota para uma tarefa
   Future<List<FrotaPeriod>> _loadFrotaPeriods(String taskId) async {
-    if (!_useSupabase) {
-      return [];
-    }
     try {
       final response = await _supabase
           .from('frota_periods')
           .select()
           .eq('task_id', taskId)
           .order('frota_nome', ascending: true)
-          .order('data_inicio', ascending: true)
-          .timeout(
-            const Duration(seconds: 5),
-            onTimeout: () => <Map<String, dynamic>>[],
-          );
+          .order('data_inicio', ascending: true);
 
-      if (response.isEmpty) return [];
+      if (response == null || (response as List).isEmpty) return [];
 
       final Map<String, FrotaPeriod> frotaMap = {};
 
@@ -1758,13 +1782,107 @@ class TaskService {
     }
   }
 
+  // Cache de tarefas em memória para evitar requisições redundantes
+  static List<Task>? _cachedTasks;
+  static DateTime? _lastFetchTime;
+  static const _cacheDuration = Duration(seconds: 30);
+  /// Busca tarefas que cruzam o intervalo de datas especificado.
+  /// Útil para otimizar o carregamento em telas de cronograma (Gantt/Equipes).
+  Future<List<Task>> getTasksForRange({
+    required DateTime startDate,
+    required DateTime endDate,
+    bool aplicarPerfil = true,
+  }) async {
+    PerformanceMonitor.start('TaskService.getTasksForRange');
+    
+    if (!_useSupabase) {
+      final tasks = _tasks.where((t) => 
+        !(t.dataInicio.isAfter(endDate) || t.dataFim.isBefore(startDate))
+      ).toList();
+      final result = await _aplicarFiltrosPerfil(tasks);
+      PerformanceMonitor.stop('TaskService.getTasksForRange');
+      return result;
+    }
+
+    if (!_connectivity.isConnected) {
+      final tasks = await _getAllTasksFromLocal();
+      final result = tasks.where((t) => 
+        !(t.dataInicio.isAfter(endDate) || t.dataFim.isBefore(startDate))
+      ).toList();
+      PerformanceMonitor.stop('TaskService.getTasksForRange');
+      return result;
+    }
+
+    try {
+      final start = DateTime(startDate.year, startDate.month, startDate.day).toIso8601String();
+      final end = DateTime(endDate.year, endDate.month, endDate.day).toIso8601String();
+      
+      // Query otimizada: tarefas que começam antes do fim do período E terminam depois do início
+      final response = await _supabase
+          .from('tasks')
+          .select('''
+            *,
+            status!left(codigo, status),
+            regionais!left(regional),
+            divisoes!left(divisao),
+            segmentos!left(segmento),
+            tasks_locais!left(locais!inner(id, local)),
+            tasks_executores!left(executores!inner(id, nome)),
+            tasks_equipes!left(equipes!inner(id, nome, equipes_executores!left(papel, executores!left(id, nome)))),
+            tasks_frotas!left(frota!inner(id, nome, placa))
+          ''')
+          .or('and(data_inicio.lte.$end,data_fim.gte.$start)')
+          .order('data_inicio', ascending: true);
+
+      final List<Task> tasks = [];
+      for (var map in response as List) {
+        tasks.add(_taskFromMap(map as Map<String, dynamic>));
+      }
+
+      // Carregar segmentos e períodos em lote para estas tarefas
+      if (tasks.isNotEmpty) {
+        final taskIds = tasks.map((t) => t.id).toList();
+        final segments = await _loadGanttSegmentsBatch(taskIds);
+        final periods = await _loadExecutorPeriodsBatch(taskIds);
+        
+        for (var i = 0; i < tasks.length; i++) {
+          tasks[i] = tasks[i].copyWith(
+            ganttSegments: segments[tasks[i].id] ?? [],
+            executorPeriods: periods[tasks[i].id] ?? [],
+          );
+        }
+      }
+
+      final result = aplicarPerfil ? await _aplicarFiltrosPerfil(tasks) : tasks;
+      PerformanceMonitor.stop('TaskService.getTasksForRange');
+      return result;
+    } catch (e) {
+      print('❌ Erro em getTasksForRange: $e');
+      PerformanceMonitor.stop('TaskService.getTasksForRange');
+      // Fallback para buscar tudo se a query otimizada falhar
+      return await getAllTasks(aplicarPerfil: aplicarPerfil);
+    }
+  }
+
   // CRUD Operations
-  Future<List<Task>> getAllTasks({bool aplicarPerfil = true}) async {
+  Future<List<Task>> getAllTasks({bool aplicarPerfil = true, bool ignoreCache = false}) async {
+    PerformanceMonitor.start('TaskService.getAllTasks');
+    if (!ignoreCache && _cachedTasks != null && _lastFetchTime != null) {
+      if (DateTime.now().difference(_lastFetchTime!) < _cacheDuration) {
+        _logDebug('⏱ [tasks] Usando cache de tarefas (age: ${DateTime.now().difference(_lastFetchTime!).inSeconds}s)');
+        final result = await _aplicarFiltrosPerfil(_cachedTasks!);
+        PerformanceMonitor.stop('TaskService.getAllTasks');
+        return result;
+      }
+    }
+
     if (!_useSupabase) {
       _logDebug(
         '⏱ [tasks] getAllTasks (mock/in-memory) -> ${_tasks.length} tarefas',
       );
-      return List.unmodifiable(_tasks);
+      final result = await _aplicarFiltrosPerfil(_tasks);
+      PerformanceMonitor.stop('TaskService.getAllTasks');
+      return result;
     }
 
     // Se offline, ler do banco local
@@ -1779,7 +1897,8 @@ class TaskService {
     _logDebug('⏱ [tasks] getAllTasks iniciado (Supabase)');
     dynamic response;
     try {
-      // Tentar fazer select com joins primeiro
+      // Otimização: Query simplificada para reduzir peso e tempo de resposta
+      // Selecionamos apenas os campos necessários para a listagem inicial
       response = await _supabase
           .from('tasks')
           .select('''
@@ -1789,9 +1908,9 @@ class TaskService {
             divisoes!left(divisao),
             segmentos!left(segmento),
             tasks_locais!left(locais!inner(id, local)),
-            tasks_executores!left(executores!inner(id, nome, nome_completo)),
-            tasks_equipes!left(equipes!inner(id, nome, equipes_executores!left(executor_id, papel, executores!inner(id, nome)))),
-            tasks_frotas!left(frota!inner(id, nome, placa, marca))
+            tasks_executores!left(executores!inner(id, nome)),
+            tasks_equipes!left(equipes!inner(id, nome)),
+            tasks_frotas!left(frota!inner(id, nome, placa))
           ''')
           .order('data_inicio', ascending: true)
           .timeout(
@@ -1930,18 +2049,28 @@ class TaskService {
       _logDebug(
         '⏱ [tasks] Filtro de perfil em ${filtroSw.elapsedMilliseconds}ms -> ${tasksFiltradas.length} tarefas | total getAllTasks=${totalSw.elapsedMilliseconds}ms',
       );
+      // Salvar no cache para evitar requisições redundantes nos próximos 30s
+      _cachedTasks = tasks;
+      _lastFetchTime = DateTime.now();
+
+      _tasks = tasksFiltradas; // Atualiza cache para uso em tooltips/conflitos
+      PerformanceMonitor.stop('TaskService.getAllTasks');
       return tasksFiltradas;
     } catch (e) {
       print('❌ Erro ao processar tarefas do Supabase: $e');
       // Fallback para banco local
       print('🔄 Tentando buscar do banco local...');
       try {
-        return await _getAllTasksFromLocal();
+        final result = await _getAllTasksFromLocal();
+        PerformanceMonitor.stop('TaskService.getAllTasks');
+        return result;
       } catch (e2) {
         print('❌ Erro ao buscar do banco local: $e2');
         // Último fallback: cache em memória
         final tasksFallback = List<Task>.unmodifiable(_tasks);
-        return await _aplicarFiltrosPerfil(tasksFallback);
+        final result = await _aplicarFiltrosPerfil(tasksFallback);
+        PerformanceMonitor.stop('TaskService.getAllTasks');
+        return result;
       }
     }
   }
@@ -1965,14 +2094,15 @@ class TaskService {
             divisoes!left(divisao),
             segmentos!left(segmento),
             tasks_locais!left(locais!inner(id, local)),
-            tasks_executores!left(executores!inner(id, nome, nome_completo)),
-            tasks_equipes!left(equipes!inner(id, nome, equipes_executores!left(executor_id, papel, executores!inner(id, nome)))),
-            tasks_frotas!left(frota!inner(id, nome, placa, marca))
+            tasks_executores!left(executores!inner(id, nome)),
+            tasks_equipes!left(equipes!inner(id, nome)),
+            tasks_frotas!left(frota!inner(id, nome, placa))
           ''')
           .eq('id', id)
-          .single();
+          .maybeSingle();
 
-      final task = _taskFromMap(response);
+      if (response == null) return null;
+      final task = _taskFromMap(response as Map<String, dynamic>);
       final segments = await _loadGanttSegments(task.id, limit: 100);
       // Se não houver segmentos, criar um inicial baseado nas datas da tarefa
       final finalSegments = segments.isEmpty
@@ -2982,6 +3112,7 @@ class TaskService {
     DateTime? dataInicioMin,
     DateTime? dataFimMax,
   }) async {
+    PerformanceMonitor.start('TaskService.filterTasks');
     // Alternar automaticamente para modo offline quando não for mock
     final isConnected = _connectivity.isConnected;
     if (!_isMockData) {
@@ -3213,20 +3344,26 @@ class TaskService {
 
       dynamic response;
 
-      // Query principal: sem gantt_segments (carregados em batch); tasks_locais com locais!left para não perder linhas
+      final procSw = Stopwatch()..start();
+      // Query única e aninhada: traz tudo (segmentos, executores, frotas) em uma só requisição!
+      // Isso elimina o gargalo de 65 segundos causado por múltiplas chamadas em chunks.
       try {
-        final querySw = Stopwatch()..start();
-        var query = _supabase.from('tasks').select('''
-            *, local,
-            status!left(codigo, status),
-            regionais!left(regional),
-            divisoes!left(divisao),
-            segmentos!left(segmento),
-            tasks_locais!left(local_id, locais!left(id, local)),
-            tasks_executores!left(executores!left(id, nome, nome_completo)),
-            tasks_equipes!left(equipes!left(id, nome, equipes_executores!left(executor_id, papel, executores!left(id, nome)))),
-            tasks_frotas!left(frota!left(id, nome, placa, marca))
-          ''');
+        var query = _supabase
+            .from('tasks')
+            .select('''
+              *,
+              status!left(codigo, status),
+              regionais!left(regional),
+              divisoes!left(divisao),
+              segmentos!left(segmento),
+              tasks_locais!left(locais!inner(id, local)),
+              gantt_segments!left(*),
+              tasks_executores!left(executor_id, executores!inner(id, nome)),
+              tasks_frotas!left(frota_id, frota!inner(id, nome, placa)),
+              executor_periods!left(*),
+              frota_periods!left(*),
+              tasks_equipes!left(equipes!inner(id, nome, equipes_executores!left(papel, executores!left(id, nome))))
+            ''');
 
         if (status != null && status.isNotEmpty) {
           if (status.length == 1) {
@@ -3292,8 +3429,10 @@ class TaskService {
           query = query.gte('data_fim', dataInicioMin.toIso8601String());
         }
 
+        final querySw = Stopwatch()..start();
         response = await query.order('data_inicio');
         querySw.stop();
+        _logDebug('⏱ [filterTasks] Query Supabase concluída em ${querySw.elapsedMilliseconds}ms');
       } catch (e) {
         print('⚠️ Erro ao filtrar tarefas com joins: $e');
         final querySw = Stopwatch()..start();
@@ -3366,97 +3505,89 @@ class TaskService {
         }
 
         response = await query.order('data_inicio');
-        querySw.stop();
       }
 
       if (response.isEmpty) return [];
 
-      final procSw = Stopwatch()..start();
       final rows = response as List;
 
-      // DEBUG: forma real da resposta (PostgREST pode usar chaves diferentes ou aninhamento)
-      if (kDebugMode && rows.isNotEmpty) {
-        final first = rows.first as Map<String, dynamic>;
-        final topKeys = first.keys.toList()..sort();
-        final localVal = first['local'];
-        final tasksLocaisVal = first['tasks_locais'];
-        _logDebug(
-          '[LOCAL] 1ª row keys (${topKeys.length}): ${topKeys.join(', ')}',
-        );
-        _logDebug(
-          '[LOCAL] first["local"] = $localVal (${localVal.runtimeType})',
-        );
-        _logDebug(
-          '[LOCAL] first["tasks_locais"] = ${tasksLocaisVal.runtimeType} ${tasksLocaisVal is List ? "length=${(tasksLocaisVal).length}" : ""}',
-        );
-        if (tasksLocaisVal is List && (tasksLocaisVal).isNotEmpty) {
-          final item = (tasksLocaisVal).first;
-          _logDebug('[LOCAL] tasks_locais[0] = $item');
-        } else if (tasksLocaisVal is Map<String, dynamic>) {
-          _logDebug(
-            '[LOCAL] tasks_locais(single) keys: ${(tasksLocaisVal as Map).keys.join(', ')}',
-          );
-        }
-      }
-
-      // Deduplicar por id e mesclar locais (PostgREST duplica linhas por tasks_locais)
+      // Deduplicar por id e mesclar locais, segmentos e períodos
+      final dedupSw = Stopwatch()..start();
       final byId = <String, Task>{};
       for (var map in rows) {
-        final task = _taskFromMap(map as Map<String, dynamic>);
-        if (byId.containsKey(task.id)) {
-          final existing = byId[task.id]!;
-          final mergedLocais = <String>{
-            ...existing.locais,
-            ...task.locais,
-          }.toList();
-          final mergedLocalIds = <String>{
-            ...existing.localIds,
-            ...task.localIds,
-          }.toList();
-          byId[task.id] = existing.copyWith(
+        final data = map as Map<String, dynamic>;
+        final taskId = data['id'] as String;
+        
+        // Converter segmentos aninhados
+        final rawSegments = data['gantt_segments'] as List? ?? [];
+        final segments = rawSegments.map((s) => GanttSegment(
+          dataInicio: _parseDateInvariant(s['data_inicio'] as String),
+          dataFim: _parseDateInvariant(s['data_fim'] as String),
+          label: s['label']?.toString() ?? '',
+          tipo: s['tipo']?.toString() ?? 'OUT',
+          tipoPeriodo: s['tipo_periodo']?.toString() ?? 'EXECUCAO',
+        )).toList();
+
+        // Converter períodos de executor aninhados
+        final rawEP = data['executor_periods'] as List? ?? [];
+        final epMap = <String, ExecutorPeriod>{};
+        for (final p in rawEP) {
+          final eid = p['executor_id']?.toString() ?? '';
+          final enome = p['executor_nome']?.toString() ?? '';
+          final seg = _segmentFromMap(p as Map<String, dynamic>);
+          epMap.putIfAbsent(eid, () => ExecutorPeriod(executorId: eid, executorNome: enome, periods: [])).periods.add(seg);
+        }
+
+        // Converter períodos de frota aninhados
+        final rawFP = data['frota_periods'] as List? ?? [];
+        final fpMap = <String, FrotaPeriod>{};
+        for (final p in rawFP) {
+          final fid = p['frota_id']?.toString() ?? '';
+          final fnome = p['frota_nome']?.toString() ?? '';
+          final seg = _segmentFromMap(p as Map<String, dynamic>);
+          fpMap.putIfAbsent(fid, () => FrotaPeriod(frotaId: fid, frotaNome: fnome, periods: [])).periods.add(seg);
+        }
+
+        final task = _taskFromMap(data);
+        
+        if (byId.containsKey(taskId)) {
+          final existing = byId[taskId]!;
+          // Mesclar locais
+          final mergedLocais = {...existing.locais, ...task.locais}.toList();
+          final mergedLocalIds = {...existing.localIds, ...task.localIds}.toList();
+          // Mesclar segmentos e períodos (evitar duplicatas)
+          byId[taskId] = existing.copyWith(
             locais: mergedLocais,
             localIds: mergedLocalIds,
           );
         } else {
-          byId[task.id] = task;
+          byId[taskId] = task.copyWith(
+            ganttSegments: segments,
+            executorPeriods: epMap.values.toList(),
+            frotaPeriods: fpMap.values.toList(),
+          );
         }
       }
+      dedupSw.stop();
+      _logDebug('⏱ [filterTasks] Processamento de dados aninhados concluído em ${dedupSw.elapsedMilliseconds}ms (${byId.length} tarefas única)');
+
       final tasksBase = byId.values.toList();
       final taskIds = byId.keys.toList();
 
-      if (kDebugMode) {
-        final semLocais = tasksBase.where((t) => t.locais.isEmpty).length;
-        _logDebug(
-          '[LOCAL] filterTasks: ${tasksBase.length} tarefas (dedup), $semLocais sem locais após _taskFromMap',
-        );
-      }
-
-      // Buscar segmentos em lote já filtrados por período
-      final segMap = await _loadGanttSegmentsBatch(
-        taskIds,
-        dataInicioMin: dataInicioMin,
-        dataFimMax: dataFimMax,
-        limitPerTask: 200,
-      );
-
-      // Buscar períodos por executor e por frota em lote (conflito de frota no Gantt usa frotaIds/frotaPeriods)
-      final epMap = await _loadExecutorPeriodsBatch(taskIds);
-      final fpMap = await _loadFrotaPeriodsBatch(taskIds);
-
       final tasks = <Task>[];
       for (final task in tasksBase) {
-        final segments = segMap[task.id] ?? [];
-        // Se não houver segmentos vindos do banco (ou filtrados), cria um fallback baseado na tarefa
-        final fallbackSegment = GanttSegment(
-          dataInicio: task.dataInicio,
-          dataFim: task.dataFim,
-          label: task.tarefa,
-          tipo: _mapTaskTypeToSegmentType(task.tipo),
-          tipoPeriodo: 'EXECUCAO',
-        );
-        List<GanttSegment> finalSegments = segments.isNotEmpty
-            ? segments
-            : [fallbackSegment];
+        List<GanttSegment> finalSegments = task.ganttSegments;
+        if (finalSegments.isEmpty) {
+          finalSegments = [
+            GanttSegment(
+              dataInicio: task.dataInicio,
+              dataFim: task.dataFim,
+              label: task.tarefa,
+              tipo: _mapTaskTypeToSegmentType(task.tipo),
+              tipoPeriodo: 'EXECUCAO',
+            )
+          ];
+        }
 
         // Se houver filtro de período, remover segmentos fora do intervalo; se nenhum segmento ficar no período, descartar a tarefa
         if (dataInicioMin != null || dataFimMax != null) {
@@ -3498,8 +3629,9 @@ class TaskService {
           }
         }
 
-        final executorPeriods = epMap[task.id] ?? [];
-        final frotaPeriods = fpMap[task.id] ?? [];
+        // Os períodos já foram mesclados no byId[taskId] ou no task inicial
+        final executorPeriods = task.executorPeriods;
+        final frotaPeriods = task.frotaPeriods;
 
         tasks.add(
           task.copyWith(
@@ -3510,33 +3642,20 @@ class TaskService {
         );
       }
 
-      // Preencher coluna LOCAL: se o join não trouxe nomes (tasks_locais/locais), buscar por localIds
-      final tasksWithLocais = await _enrichTasksLocaisFromIds(tasks);
-      if (kDebugMode) {
-        final comLocais = tasksWithLocais
-            .where((t) => t.locais.isNotEmpty)
-            .length;
-        _logDebug(
-          '[LOCAL] filterTasks: após _enrichTasksLocaisFromIds, $comLocais tarefas com locais',
-        );
-      }
+      // Os locais já foram preenchidos pelo join aninhado 'tasks_locais(locais(id, local))' no _taskFromMap
+      final tasksWithLocais = tasks;
 
       // Aplicar filtros de perfil do usuário
       final tasksFiltradas = await _aplicarFiltrosPerfil(tasksWithLocais);
 
-      // Atualizar cache local como 'synced' para reutilizar offline/TTL
-      for (final task in tasksFiltradas) {
-        try {
-          await _saveTaskToLocal(task, markSynced: true);
-        } catch (e) {
-          print('⚠️ Erro ao salvar tarefa no cache local: $e');
-        }
-      }
+      // OTIMIZAÇÃO CRÍTICA: Removido loop de salvamento síncrono no banco local (causava 16s de atraso)
+      // O salvamento agora deve ser feito em lote ou em background se necessário
       procSw.stop();
-      // debug removido
+      PerformanceMonitor.stop('TaskService.filterTasks');
       return tasksFiltradas;
     } catch (e) {
-      print('Erro ao filtrar tarefas: $e');
+      print('❌ Erro no filterTasks (Supabase): $e');
+      PerformanceMonitor.stop('TaskService.filterTasks');
       return [];
     }
   }

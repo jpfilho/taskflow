@@ -235,6 +235,17 @@ class _FeriadosViewState extends State<FeriadosView> {
                                     ],
                                   ],
                                 ),
+                                if (feriado.locaisNomes != null && feriado.locaisNomes!.isNotEmpty) ...[
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Aplicado a: ${feriado.locaisNomes!.length <= 3 ? feriado.locaisNomes!.join(", ") : "${feriado.locaisNomes!.take(3).join(", ")} e mais ${feriado.locaisNomes!.length - 3}"}',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: Colors.blueGrey[600],
+                                      fontStyle: FontStyle.italic,
+                                    ),
+                                  ),
+                                ],
                               ],
                             ),
                             trailing: PopupMenuButton(

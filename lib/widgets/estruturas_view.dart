@@ -289,10 +289,23 @@ class _EstruturasViewState extends State<EstruturasView> {
   }
 }
 
-class _EstruturasTable extends StatelessWidget {
+class _EstruturasTable extends StatefulWidget {
   final List<Map<String, dynamic>> items;
   final Future<void> Function(Map<String, dynamic> item) onEdit;
   const _EstruturasTable({required this.items, required this.onEdit});
+
+  @override
+  State<_EstruturasTable> createState() => _EstruturasTableState();
+}
+
+class _EstruturasTableState extends State<_EstruturasTable> {
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
 
   String _fmt(dynamic v) => v == null ? '' : v.toString();
   String _fmtNum(dynamic v) {
@@ -303,7 +316,7 @@ class _EstruturasTable extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (items.isEmpty) return const Text('Nenhuma estrutura encontrada.');
+    if (widget.items.isEmpty) return const Text('Nenhuma estrutura encontrada.');
     final cols = <Map<String, String>>[
       {'k': 'lt', 'l': 'LT'},
       {'k': 'estrutura', 'l': 'Estrutura'},
@@ -319,8 +332,10 @@ class _EstruturasTable extends StatelessWidget {
       {'k': 'numeracao_antiga', 'l': 'Numeração Antiga'},
     ];
     return Scrollbar(
+      controller: _scrollController,
       thumbVisibility: true,
       child: SingleChildScrollView(
+        controller: _scrollController,
         scrollDirection: Axis.vertical,
         child: SingleChildScrollView(
           scrollDirection: Axis.horizontal,
@@ -332,7 +347,7 @@ class _EstruturasTable extends StatelessWidget {
               const DataColumn(label: Text('Ações')),
               ...cols.map((c) => DataColumn(label: Text(c['l']!))),
             ],
-            rows: items.map((row) {
+            rows: widget.items.map((row) {
               return DataRow(cells: cols.map((c) {
                 final key = c['k']!;
                 final val = row[key];
@@ -347,7 +362,7 @@ class _EstruturasTable extends StatelessWidget {
                     IconButton(
                       icon: const Icon(Icons.edit),
                       tooltip: 'Editar',
-                      onPressed: () => onEdit(row),
+                      onPressed: () => widget.onEdit(row),
                     ),
                   ),
                 ));

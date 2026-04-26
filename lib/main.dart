@@ -11,6 +11,7 @@ import 'html_stub.dart' as html if (dart.library.html) 'dart:html';
 import 'data/mock_data.dart';
 import 'models/task.dart';
 import 'services/task_service.dart';
+import 'services/performance_monitor.dart';
 import 'services/conflict_service.dart';
 import 'config/supabase_config.dart';
 import 'widgets/header_bar.dart';
@@ -1364,36 +1365,18 @@ class _MainScreenState extends State<MainScreen> {
 
   Future<void> _loadTasks() async {
     if (mounted) setState(() => _isTasksLoading = true);
+    PerformanceMonitor.start('MainScreen._loadTasks');
     try {
-      // Carregar lista base SEM filtros (somente janela de datas) para a tela de equipes
+      // Carregar lista base para o período (UMA ÚNICA VEZ)
       final baseTasks = await _taskService.filterTasks(
-        status: null,
-        regional: null,
-        divisao: null,
-        local: null,
-        tipo: null,
-        executor: null,
-        coordenador: null,
-        frota: null,
         dataInicioMin: _startDate,
         dataFimMax: _endDate,
       );
 
-      // Em seguida, aplicar filtros atuais (se existirem) para as demais telas
+      // Aplicar filtros em memória para evitar segunda query ao Supabase
       List<Task> filtered;
       if (_currentFilters.isNotEmpty) {
-        filtered = await _taskService.filterTasks(
-          status: _parseFilterList(_currentFilters['status']),
-          regional: _parseFilterList(_currentFilters['regional']),
-          divisao: _parseFilterList(_currentFilters['divisao']),
-          local: _parseFilterList(_currentFilters['local']),
-          tipo: _parseFilterList(_currentFilters['tipo']),
-          executor: _parseFilterList(_currentFilters['executor']),
-          coordenador: _parseFilterList(_currentFilters['coordenador']),
-          frota: _parseFilterList(_currentFilters['frota']),
-          dataInicioMin: _startDate,
-          dataFimMax: _endDate,
-        );
+        filtered = _applyLocalFilters(baseTasks, _currentFilters);
       } else {
         filtered = baseTasks;
       }
@@ -1403,31 +1386,57 @@ class _MainScreenState extends State<MainScreen> {
           _tasksSemFiltros = baseTasks;
           _tasks = filtered;
           _isTasksLoading = false;
-          _tasksVersion++; // Incrementar versão para forçar rebuild dos widgets
+          _tasksVersion++;
         });
         await _loadWarnings();
-        // Sincronização automática quando há rede e acesso ao Supabase (uma vez por sessão após carregar)
         if (!_autoSyncTriggeredAfterLoad) {
           _autoSyncTriggeredAfterLoad = true;
           SyncService().syncAll();
         }
       }
     } catch (e) {
-      // Se falhar, usar dados mock
-      print('⚠️ Erro ao carregar do Supabase, usando dados mock: $e');
-      _taskService.initializeWithMockData(MockData.getTasks());
-      if (mounted) {
-        setState(() {
-          // Fallback para mock (síncrono)
-          _tasksSemFiltros = [];
-          _tasks = [];
-          _isTasksLoading = false;
-        });
-
-        // Reaplicar filtros vigentes (inclui período selecionado no HeaderBar)
-        await _applyFilters(_currentFilters);
-      }
+      print('⚠️ Erro ao carregar tarefas: $e');
+      if (mounted) setState(() => _isTasksLoading = false);
+    } finally {
+      PerformanceMonitor.stop('MainScreen._loadTasks');
     }
+  }
+
+  // Novo método para filtrar tarefas em memória (muito mais rápido que nova query)
+  List<Task> _applyLocalFilters(List<Task> tasks, Map<String, String?> filters) {
+    return tasks.where((task) {
+      // Filtro de Status
+      if (filters['status'] != null) {
+        final statusFilter = _parseFilterList(filters['status']);
+        if (statusFilter != null && !statusFilter.contains(task.status)) return false;
+      }
+      // Filtro de Regional
+      if (filters['regional'] != null) {
+        final regionalFilter = _parseFilterList(filters['regional']);
+        if (regionalFilter != null && !regionalFilter.contains(task.regional)) return false;
+      }
+      // Filtro de Divisão
+      if (filters['divisao'] != null) {
+        final divisaoFilter = _parseFilterList(filters['divisao']);
+        if (divisaoFilter != null && !divisaoFilter.contains(task.divisaoId)) return false;
+      }
+      // Filtro de Local
+      if (filters['local'] != null) {
+        final localFilter = _parseFilterList(filters['local']);
+        if (localFilter != null && !task.locais.any((l) => localFilter.contains(l))) return false;
+      }
+      // Filtro de Executor
+      if (filters['executor'] != null) {
+        final executorFilter = _parseFilterList(filters['executor']);
+        if (executorFilter != null && !task.executores.any((e) => executorFilter.contains(e))) return false;
+      }
+      // Filtro de Frota
+      if (filters['frota'] != null) {
+        final frotaFilter = _parseFilterList(filters['frota']);
+        if (frotaFilter != null && !task.frota.contains(frotaFilter.first)) return false;
+      }
+      return true;
+    }).toList();
   }
 
   @override

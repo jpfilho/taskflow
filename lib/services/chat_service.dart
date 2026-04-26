@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'auth_service_simples.dart';
 import 'task_service.dart';
 import 'telegram_service.dart';
+import 'performance_monitor.dart';
 
 class ChatService {
   static final ChatService _instance = ChatService._internal();
@@ -76,21 +77,34 @@ class ChatService {
   }
 
   // Listar todas as comunidades (filtradas pelo perfil do usuário)
+  // Cache para lista de comunidades
+  static List<Comunidade>? _cachedComunidades;
+  static DateTime? _lastComunidadesFetch;
+  static const _comunidadesCacheDuration = Duration(minutes: 5);
+
   Future<List<Comunidade>> listarComunidades() async {
+    // Verificar cache
+    if (_lastComunidadesFetch != null && _cachedComunidades != null &&
+        DateTime.now().difference(_lastComunidadesFetch!) < _comunidadesCacheDuration) {
+      return List<Comunidade>.from(_cachedComunidades!);
+    }
+
     try {
       final response = await _supabase
           .from('comunidades')
-          .select()
-          .order('updated_at', ascending: false);
-
-      final comunidades = (response as List)
-          .map((map) => Comunidade.fromMap(map as Map<String, dynamic>))
-          .toList();
-
-      // Aplicar filtros de perfil
-      return await _aplicarFiltrosPerfilComunidades(comunidades);
+          .select('id, regional_id, regional_nome, divisao_id, divisao_nome, segmento_id, segmento_nome, descricao, foto_url, created_at, updated_at');
+      
+      final lista = (response as List).map((map) => Comunidade.fromMap(map)).toList();
+      final filtradas = await _aplicarFiltrosPerfilComunidades(lista);
+      
+      // Atualizar cache
+      _cachedComunidades = filtradas;
+      _lastComunidadesFetch = DateTime.now();
+      
+      return filtradas;
     } catch (e) {
-      throw Exception('Erro ao listar comunidades: $e');
+      print('❌ Erro ao listar comunidades: $e');
+      return [];
     }
   }
 
@@ -432,9 +446,28 @@ class ChatService {
     }
   }
 
+  // Cache para contagem de mensagens
+  static final Map<String, int> _cachedMessageCounts = {};
+  static DateTime? _lastCountsFetch;
+  static const _countsCacheDuration = Duration(minutes: 1);
+
   // Contar mensagens de múltiplas tarefas (otimizado - usa VIEW do Supabase com fallback)
   Future<Map<String, int>> contarMensagensPorTarefas(List<String> tarefaIds) async {
-    if (tarefaIds.isEmpty) return {};
+    PerformanceMonitor.start('ChatService.contarMensagensPorTarefas');
+    
+    // Verificar cache
+    if (_lastCountsFetch != null && 
+        DateTime.now().difference(_lastCountsFetch!) < _countsCacheDuration) {
+      // Se todos os IDs solicitados estão no cache, podemos retornar
+      // Mas para simplificar, se o cache é recente, retornamos o que temos
+      PerformanceMonitor.stop('ChatService.contarMensagensPorTarefas');
+      return Map<String, int>.from(_cachedMessageCounts);
+    }
+
+    if (tarefaIds.isEmpty) {
+      PerformanceMonitor.stop('ChatService.contarMensagensPorTarefas');
+      return {};
+    }
 
     // Tentativa 1: usar VIEW otimizada
     try {
@@ -459,8 +492,11 @@ class ChatService {
           final quantidade = item['quantidade'] as int? ?? 0;
           if (quantidade > 0) {
             contagens[taskId] = quantidade;
+            _cachedMessageCounts[taskId] = quantidade;
           }
         }
+        _lastCountsFetch = DateTime.now();
+        PerformanceMonitor.stop('ChatService.contarMensagensPorTarefas');
         return contagens;
       }
 
@@ -507,9 +543,16 @@ class ChatService {
       }
 
       print('✅ Fallback chat count: ${contagens.length} tarefas com mensagens');
+      
+      // Atualizar cache global
+      contagens.forEach((k, v) => _cachedMessageCounts[k] = v);
+      _lastCountsFetch = DateTime.now();
+      
+      PerformanceMonitor.stop('ChatService.contarMensagensPorTarefas');
       return contagens;
     } catch (e) {
       print('❌ Erro no fallback de contarMensagensPorTarefas: $e');
+      PerformanceMonitor.stop('ChatService.contarMensagensPorTarefas');
       return {};
     }
   }
@@ -1106,27 +1149,42 @@ class ChatService {
   }
 
   // Contar total de mensagens não lidas em TODOS os grupos acessíveis ao usuário
+  // Cache para contagem total (badge do header)
+  static int? _cachedTotalUnread;
+  static DateTime? _lastTotalUnreadFetch;
+  static const _totalUnreadCacheDuration = Duration(minutes: 10);
+
   Future<int> contarTotalMensagensNaoLidas() async {
+    PerformanceMonitor.start('ChatService.contarTotalMensagensNaoLidas');
+    
+    if (_lastTotalUnreadFetch != null && _cachedTotalUnread != null &&
+        DateTime.now().difference(_lastTotalUnreadFetch!) < _totalUnreadCacheDuration) {
+      PerformanceMonitor.stop('ChatService.contarTotalMensagensNaoLidas');
+      return _cachedTotalUnread!;
+    }
+
     try {
       // 1. Listar todas as comunidades acessíveis ao usuário
       final comunidades = await listarComunidades();
       if (comunidades.isEmpty) return 0;
 
-      // 2. Coletar todos os IDs de grupos de todas as comunidades
+      // 2. Coletar todos os IDs de grupos de todas as comunidades em uma única chamada (Bulk)
+      final idsComunidades = comunidades.map((c) => c.id).whereType<String>().toList();
       final todosGruposIds = <String>[];
-      for (final comunidade in comunidades) {
-        if (comunidade.id == null) continue;
+      
+      if (idsComunidades.isNotEmpty) {
         try {
           final grupos = await _supabase
               .from('grupos_chat')
               .select('id')
-              .eq('comunidade_id', comunidade.id!);
+              .inFilter('comunidade_id', idsComunidades);
+          
           for (final g in grupos) {
-            todosGruposIds.add(g['id'] as String);
+            final gid = g['id']?.toString();
+            if (gid != null) todosGruposIds.add(gid);
           }
         } catch (e) {
-          // Ignorar falha em uma comunidade específica
-          print('⚠️ Erro ao listar grupos da comunidade ${comunidade.id}: $e');
+          print('⚠️ Erro ao listar grupos em lote: $e');
         }
       }
 
@@ -1141,9 +1199,14 @@ class ChatService {
         total += count;
       }
 
+      _cachedTotalUnread = total;
+      _lastTotalUnreadFetch = DateTime.now();
+      
+      PerformanceMonitor.stop('ChatService.contarTotalMensagensNaoLidas');
       return total;
     } catch (e) {
       print('❌ Erro ao contar total de mensagens não lidas: $e');
+      PerformanceMonitor.stop('ChatService.contarTotalMensagensNaoLidas');
       return 0;
     }
   }

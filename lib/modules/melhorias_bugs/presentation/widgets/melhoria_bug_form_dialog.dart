@@ -23,6 +23,7 @@ class _MelhoriaBugFormDialogState extends State<MelhoriaBugFormDialog> {
   late TextEditingController _descricaoController;
   late String _tipo;
   late String _status;
+  final ScrollController _scrollController = ScrollController();
   String? _versaoId;
   String? _prioridade;
 
@@ -42,6 +43,7 @@ class _MelhoriaBugFormDialogState extends State<MelhoriaBugFormDialog> {
   void dispose() {
     _tituloController.dispose();
     _descricaoController.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -130,9 +132,13 @@ class _MelhoriaBugFormDialogState extends State<MelhoriaBugFormDialog> {
                 ],
               ),
             ),
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+            Expanded(
+              child: Scrollbar(
+                controller: _scrollController,
+                thumbVisibility: true,
+                child: SingleChildScrollView(
+                  controller: _scrollController,
+                  padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -196,7 +202,8 @@ class _MelhoriaBugFormDialogState extends State<MelhoriaBugFormDialog> {
                 ),
               ),
             ),
-            Padding(
+          ),
+          Padding(
               padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.end,

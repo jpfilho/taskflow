@@ -10,6 +10,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../models/task.dart';
 import '../services/task_service.dart';
+import '../utils/conflict_detection.dart';
+import 'common/taskflow_tooltip.dart';
 import 'gantt_chart.dart' show GanttPeriod;
 
 /// Widget público para barras arrastáveis do Gantt.
@@ -1207,25 +1209,9 @@ class _GanttSegmentWidgetState extends State<GanttSegmentWidget> {
     double currentBarWidth,
     bool isResizing,
   ) {
-    final hasConflict =
-        widget.conflictDays != null && widget.conflictDays!.isNotEmpty;
     final hasConflictFrota =
         widget.conflictDaysFrota != null &&
         widget.conflictDaysFrota!.isNotEmpty;
-    final tooltipMessage = widget.conflictTooltipMessage?.isNotEmpty == true
-        ? widget.conflictTooltipMessage!
-        : (hasConflict
-              ? 'Conflito de agenda nos dias em vermelho.\nExecutor(es) em conflito: ${_getExecutorLabel()}'
-              : '');
-    final tooltipMessageFrota =
-        widget.conflictTooltipMessageFrota ??
-        (hasConflictFrota ? 'Conflito de frota nos dias em preto.' : '');
-    final usePerDayTooltip =
-        (widget.conflictTooltipMessageByDay != null &&
-            widget.conflictTooltipMessageByDay!.isNotEmpty) ||
-        (widget.conflictTooltipMessageByDayFrota != null &&
-            widget.conflictTooltipMessageByDayFrota!.isNotEmpty);
-
     final stack = Stack(
       children: [
         Row(
@@ -1241,7 +1227,8 @@ class _GanttSegmentWidgetState extends State<GanttSegmentWidget> {
                 : isConflictDay
                 ? Colors.red[600]!
                 : (_isDragging ? widget.color.withOpacity(0.7) : widget.color);
-            return Container(
+                
+            Widget cell = Container(
               width: widget.dayWidth,
               height: 48.0,
               decoration: BoxDecoration(
@@ -1249,36 +1236,90 @@ class _GanttSegmentWidgetState extends State<GanttSegmentWidget> {
                 borderRadius: BorderRadius.circular(2),
               ),
             );
+
+            if (isConflictDay || isConflictDayFrota) {
+              final day = DateTime(p.start.year, p.start.month, p.start.day);
+              
+              List<String> tasksList = [];
+              String executorName = '';
+              String title = '';
+              String reason = '';
+              TooltipSeverity severity = TooltipSeverity.danger;
+
+              if (isConflictDay) {
+                title = 'Conflito de agenda';
+                executorName = _getExecutorLabel();
+                reason = widget.conflictTooltipMessageByDay?[day] ?? 'Mesmo executor alocado em mais de um local/tarefa neste dia.';
+                if (widget.taskService != null) {
+                  // Se tivermos os ids dos executores, podemos pegar as tarefas de todos eles
+                  final executorIds = <String>{};
+                  executorIds.addAll(widget.task.executorIds);
+                  for (var ep in widget.task.executorPeriods) {
+                    if (ep.executorId.isNotEmpty) executorIds.add(ep.executorId);
+                  }
+                  if (widget.task.executor.isNotEmpty) executorIds.add(widget.task.executor);
+                  
+                  for (final eid in executorIds) {
+                    final descs = ConflictDetection.getConflictDescriptionsForDay(
+                      widget.taskService!.tasks, day, eid,
+                    );
+                    tasksList.addAll(descs);
+                  }
+                  tasksList = tasksList.toSet().toList()..sort();
+                }
+              } else if (isConflictDayFrota) {
+                title = 'Conflito de Frota';
+                executorName = 'Frota(s)';
+                severity = TooltipSeverity.warning;
+                reason = widget.conflictTooltipMessageByDayFrota?[day] ?? 'A frota está alocada em outra tarefa neste dia.';
+                // Como não há função pronta para listar tarefas de frota no ConflictDetection, deixamos genérico
+              }
+
+              return TaskFlowTooltip(
+                content: TooltipContent(
+                  title: title,
+                  severity: severity,
+                  executor: executorName,
+                  reason: reason,
+                  tasks: tasksList,
+                ),
+                child: cell,
+              );
+            }
+            return cell;
           }).toList(),
         ),
-        Center(
-          child: Container(
-            width: currentBarWidth - 1,
-            height: 48.0,
-            decoration: BoxDecoration(
-              color: Colors.transparent,
-              borderRadius: BorderRadius.circular(2),
-              border: _isDragging
-                  ? Border.all(
-                      color: isResizing ? Colors.orange : Colors.blue,
-                      width: 2,
-                    )
-                  : null,
-            ),
-            child: Center(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 3.0,
-                  vertical: 1.0,
+        IgnorePointer(
+          ignoring: true,
+          child: Center(
+            child: Container(
+              width: currentBarWidth - 1,
+              height: 48.0,
+              decoration: BoxDecoration(
+                color: Colors.transparent,
+                borderRadius: BorderRadius.circular(2),
+                border: _isDragging
+                    ? Border.all(
+                        color: isResizing ? Colors.orange : Colors.blue,
+                        width: 2,
+                      )
+                    : null,
+              ),
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 3.0,
+                    vertical: 1.0,
+                  ),
+                  child: currentBarWidth < 40
+                      ? const SizedBox.shrink()
+                      : _buildSegmentContent(
+                          currentBarWidth,
+                          segmentTextColorOverride: hasConflictFrota
+                              ? Colors.white
+                              : null,
+                        ),
                 ),
-                child: currentBarWidth < 40
-                    ? const SizedBox.shrink()
-                    : _buildSegmentContent(
-                        currentBarWidth,
-                        segmentTextColorOverride: hasConflictFrota
-                            ? Colors.white
-                            : null,
-                      ),
               ),
             ),
           ),
@@ -1315,12 +1356,15 @@ class _GanttSegmentWidgetState extends State<GanttSegmentWidget> {
             top: 0,
             bottom: 0,
             width: 2,
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.3),
-                borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(2),
-                  bottomLeft: Radius.circular(2),
+            child: IgnorePointer(
+              ignoring: true,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.3),
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(2),
+                    bottomLeft: Radius.circular(2),
+                  ),
                 ),
               ),
             ),
@@ -1330,12 +1374,15 @@ class _GanttSegmentWidgetState extends State<GanttSegmentWidget> {
             top: 0,
             bottom: 0,
             width: 2,
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.3),
-                borderRadius: const BorderRadius.only(
-                  topRight: Radius.circular(2),
-                  bottomRight: Radius.circular(2),
+            child: IgnorePointer(
+              ignoring: true,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.3),
+                  borderRadius: const BorderRadius.only(
+                    topRight: Radius.circular(2),
+                    bottomRight: Radius.circular(2),
+                  ),
                 ),
               ),
             ),
@@ -1344,46 +1391,6 @@ class _GanttSegmentWidgetState extends State<GanttSegmentWidget> {
       ],
     );
 
-    final combinedTooltip = [
-      if (hasConflict && tooltipMessage.isNotEmpty) tooltipMessage,
-      if (hasConflictFrota && tooltipMessageFrota.isNotEmpty)
-        tooltipMessageFrota,
-    ].join('\n\n');
-
-    if ((hasConflict || hasConflictFrota) &&
-        combinedTooltip.isNotEmpty &&
-        !usePerDayTooltip) {
-      return Tooltip(
-        message: combinedTooltip,
-        preferBelow: false,
-        child: stack,
-      );
-    }
-    if (usePerDayTooltip) {
-      return MouseRegion(
-        onHover: (event) {
-          final i = (event.localPosition.dx / widget.dayWidth).floor();
-          final idx = i.clamp(0, segmentPeriods.length - 1);
-          if (idx >= 0 && idx < segmentPeriods.length) {
-            final p = segmentPeriods[idx];
-            final day = DateTime(p.start.year, p.start.month, p.start.day);
-            final msgExec = widget.conflictTooltipMessageByDay?[day];
-            final msgFrota = widget.conflictTooltipMessageByDayFrota?[day];
-            final parts = [
-              if (msgExec != null && msgExec.isNotEmpty) msgExec,
-              if (msgFrota != null && msgFrota.isNotEmpty) msgFrota,
-            ];
-            if (parts.isNotEmpty) {
-              _showDayTooltipOverlay(event.position, parts.join('\n\n'));
-              return;
-            }
-          }
-          _hideDayTooltipOverlay();
-        },
-        onExit: (_) => _hideDayTooltipOverlay(),
-        child: stack,
-      );
-    }
     return stack;
   }
 }

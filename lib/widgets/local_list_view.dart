@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/local.dart';
 import '../services/local_service.dart';
 import 'local_form_dialog.dart';
+import 'multi_select_filter_dialog.dart';
 import '../utils/responsive.dart';
 
 class LocalListView extends StatefulWidget {
@@ -17,13 +18,23 @@ class _LocalListViewState extends State<LocalListView> {
   List<Local> _filteredLocais = [];
   bool _isLoading = true;
   final TextEditingController _searchController = TextEditingController();
+  final TextEditingController _descricaoFilterController = TextEditingController();
+  final TextEditingController _sapFilterController = TextEditingController();
+  
+  final Set<String> _selectedLocalFilters = {};
+  final Set<String> _selectedRegionalFilters = {};
+  final Set<String> _selectedDivisaoFilters = {};
+  final Set<String> _selectedSegmentoFilters = {};
+
   bool _isTableView = false; // false = lista (cards), true = tabela
 
   @override
   void initState() {
     super.initState();
     _loadLocais();
-    _searchController.addListener(_onSearchChanged);
+    _searchController.addListener(_applyFilters);
+    _descricaoFilterController.addListener(_applyFilters);
+    _sapFilterController.addListener(_applyFilters);
     // No desktop, tabela é o padrão
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && Responsive.isDesktop(context)) {
@@ -37,6 +48,8 @@ class _LocalListViewState extends State<LocalListView> {
   @override
   void dispose() {
     _searchController.dispose();
+    _descricaoFilterController.dispose();
+    _sapFilterController.dispose();
     super.dispose();
   }
 
@@ -68,26 +81,36 @@ class _LocalListViewState extends State<LocalListView> {
     }
   }
 
-  void _onSearchChanged() {
-    final query = _searchController.text.trim();
-    if (query.isEmpty) {
-      setState(() {
-        _filteredLocais = _locais;
-      });
-    } else {
-      _searchLocais(query);
-    }
-  }
+  void _applyFilters() {
+    final query = _searchController.text.toLowerCase().trim();
+    final descQ = _descricaoFilterController.text.toLowerCase().trim();
+    final sapQ = _sapFilterController.text.toLowerCase().trim();
 
-  Future<void> _searchLocais(String query) async {
-    try {
-      final results = await _localService.searchLocais(query);
-      setState(() {
-        _filteredLocais = results;
-      });
-    } catch (e) {
-      print('Erro ao buscar locais: $e');
-    }
+    setState(() {
+      _filteredLocais = _locais.where((l) {
+        // Global search
+        bool matchesGlobal = query.isEmpty ||
+            l.local.toLowerCase().contains(query) ||
+            (l.descricao?.toLowerCase().contains(query) ?? false) ||
+            l.regional.toLowerCase().contains(query) ||
+            l.divisao.toLowerCase().contains(query) ||
+            l.segmento.toLowerCase().contains(query);
+
+        if (!matchesGlobal) return false;
+
+        // Column filters (Text)
+        if (descQ.isNotEmpty && !(l.descricao?.toLowerCase().contains(descQ) ?? false)) return false;
+        if (sapQ.isNotEmpty && !(l.localInstalacaoSap?.toLowerCase().contains(sapQ) ?? false)) return false;
+
+        // Multi-select filters
+        if (_selectedLocalFilters.isNotEmpty && !_selectedLocalFilters.contains(l.local)) return false;
+        if (_selectedRegionalFilters.isNotEmpty && !_selectedRegionalFilters.contains(l.regional)) return false;
+        if (_selectedDivisaoFilters.isNotEmpty && !_selectedDivisaoFilters.contains(l.divisao)) return false;
+        if (_selectedSegmentoFilters.isNotEmpty && !_selectedSegmentoFilters.contains(l.segmento)) return false;
+
+        return true;
+      }).toList();
+    });
   }
 
   Future<void> _createLocal() async {
@@ -437,14 +460,27 @@ class _LocalListViewState extends State<LocalListView> {
       child: SingleChildScrollView(
         child: DataTable(
           headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
-          columns: const [
-            DataColumn(label: Text('Local', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Descrição', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Local Instalação SAP', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Regional', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Divisão', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Segmento', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Ações', style: TextStyle(fontWeight: FontWeight.bold))),
+          headingRowHeight: 80, // Aumentado para acomodar os campos de busca
+          columns: [
+            DataColumn(
+              label: _buildSelectableHeader('Local', _selectedLocalFilters, _locais.map((l) => l.local).toSet().toList()..sort()),
+            ),
+            DataColumn(
+              label: _buildSortableHeader('Descrição', _descricaoFilterController),
+            ),
+            DataColumn(
+              label: _buildSortableHeader('Local Instalação SAP', _sapFilterController),
+            ),
+            DataColumn(
+              label: _buildSelectableHeader('Regional', _selectedRegionalFilters, _locais.map((l) => l.regional).where((s) => s.isNotEmpty).toSet().toList()..sort()),
+            ),
+            DataColumn(
+              label: _buildSelectableHeader('Divisão', _selectedDivisaoFilters, _locais.map((l) => l.divisao).where((s) => s.isNotEmpty).toSet().toList()..sort()),
+            ),
+            DataColumn(
+              label: _buildSelectableHeader('Segmento', _selectedSegmentoFilters, _locais.map((l) => l.segmento).where((s) => s.isNotEmpty).toSet().toList()..sort()),
+            ),
+            const DataColumn(label: Text('Ações', style: TextStyle(fontWeight: FontWeight.bold))),
           ],
           rows: _filteredLocais.map((local) {
             return DataRow(
@@ -504,6 +540,106 @@ class _LocalListViewState extends State<LocalListView> {
             );
           }).toList(),
         ),
+      ),
+    );
+  }
+
+  Widget _buildSortableHeader(String label, TextEditingController controller) {
+    return Container(
+      width: 150,
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(label, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+          const SizedBox(height: 4),
+          SizedBox(
+            height: 30,
+            child: TextField(
+              controller: controller,
+              style: const TextStyle(fontSize: 12),
+              decoration: InputDecoration(
+                hintText: 'Filtrar...',
+                hintStyle: TextStyle(color: Colors.grey[400], fontSize: 11),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                filled: true,
+                fillColor: Colors.white,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSelectableHeader(String label, Set<String> selectedValues, List<String> options) {
+    final hasFilter = selectedValues.isNotEmpty;
+    
+    return Container(
+      width: 150,
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(label, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+          const SizedBox(height: 4),
+          InkWell(
+            onTap: () async {
+              final result = await showDialog<Set<String>>(
+                context: context,
+                builder: (context) => MultiSelectFilterDialog(
+                  title: 'Filtrar $label',
+                  options: options,
+                  selectedValues: selectedValues,
+                  onSelectionChanged: (values) {},
+                  searchHint: 'Pesquisar $label...',
+                ),
+              );
+              if (result != null) {
+                setState(() {
+                  selectedValues.clear();
+                  selectedValues.addAll(result);
+                  _applyFilters();
+                });
+              }
+            },
+            child: Container(
+              height: 30,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              decoration: BoxDecoration(
+                color: hasFilter ? Colors.blue[50] : Colors.white,
+                border: Border.all(
+                  color: hasFilter ? Colors.blue : Colors.grey[300]!,
+                ),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      hasFilter ? '${selectedValues.length} selecionados' : 'Todos',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: hasFilter ? Colors.blue[700] : Colors.grey[600],
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  Icon(
+                    Icons.filter_list,
+                    size: 14,
+                    color: hasFilter ? Colors.blue : Colors.grey[400],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

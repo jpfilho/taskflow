@@ -1440,10 +1440,13 @@ class _TaskFormDialogState extends State<TaskFormDialog>
 
     try {
       final results = await Future.wait([
-        _executorService.getExecutoresFiltrados(
-          regionalId: _regionalId,
-          divisaoId: _divisaoId,
-          segmentoId: _segmentoId,
+        _executorService.getExecutoresPorPerfilUsuario(
+          regionalIds: _usuarioAtual?.regionalIds ?? [],
+          divisaoIds: _usuarioAtual?.divisaoIds ?? [],
+          segmentoIds: _usuarioAtual?.segmentoIds ?? [],
+          formRegionalId: _regionalId,
+          formDivisaoId: _divisaoId,
+          formSegmentoId: _segmentoId,
         ),
         _equipeService.getEquipesFiltradas(
           regionalId: _regionalId,
@@ -4108,13 +4111,47 @@ class _TaskFormDialogState extends State<TaskFormDialog>
                       ? null
                       : (Equipe? value) {
                           setState(() {
-                            _selectedEquipe = value;
                             if (value != null) {
-                              _selectedEquipeIds = {value.id};
-                              _usarEquipe = true;
-                              _executor = '';
-                              _selectedExecutorIds.clear();
+                              bool adicionou = false;
+                              for (var equipeExecutor in value.executores) {
+                                // Encontra o Executor correspondente na _executoresList pelo ID
+                                final executorObj = _executoresList.cast<Executor?>().firstWhere(
+                                  (e) => e != null && e.id == equipeExecutor.executorId,
+                                  orElse: () => null,
+                                );
+                                
+                                if (executorObj != null && !_selectedExecutorIds.contains(executorObj.id)) {
+                                  _selectedExecutorIds.add(executorObj.id);
+                                  
+                                  // Remover os nulos soltos na lista antes de adicionar
+                                  if (_executoresSelecionados.length == 1 && _executoresSelecionados[0] == null) {
+                                    _executoresSelecionados.clear();
+                                  }
+                                  
+                                  _executoresSelecionados.add(executorObj);
+                                  adicionou = true;
+                                }
+                              }
+                              
+                              if (adicionou) {
+                                // Volta para a tela de executores para visualizar
+                                _tipoExecutorEquipe = 'executor';
+                                _usarEquipe = false;
+                                _selectedEquipe = null;
+                                _selectedEquipeIds.clear();
+                                
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Executores da equipe ${value.nome} adicionados.')),
+                                );
+                              } else {
+                                _selectedEquipe = null;
+                                _selectedEquipeIds.clear();
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Nenhum executor novo ou válido encontrado na equipe ${value.nome}.')),
+                                );
+                              }
                             } else {
+                              _selectedEquipe = null;
                               _selectedEquipeIds.clear();
                             }
                           });

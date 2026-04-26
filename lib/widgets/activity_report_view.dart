@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-// ignore: avoid_web_libraries_in_flutter
-import 'dart:html' as html;
+import '../utils/platform_utils.dart' as platform;
 import '../models/nota_sap.dart';
 import '../models/ordem.dart';
 import '../models/task.dart';
@@ -235,9 +234,6 @@ class _ActivityReportViewState extends State<ActivityReportView> {
   // Flutter Web renderiza dentro de um canvas — CSS @media print não enxerga
   // os widgets. A solução correta é abrir uma nova janela com HTML puro.
   void _print() {
-    final html.WindowBase? printWindow = html.window.open('', '_blank');
-    if (printWindow == null) return;
-
     final sb = StringBuffer();
     sb.write('''<!DOCTYPE html>
 <html lang="pt-BR">
@@ -393,13 +389,7 @@ class _ActivityReportViewState extends State<ActivityReportView> {
 </body>
 </html>''');
 
-    // Escreve o HTML na nova janela e imprime
-    // dart:html WindowBase não expõe document.write/close diretamente —
-    // usamos cast para dynamic para chamar os métodos via JS interop
-    final win = printWindow as dynamic;
-    (win.document as dynamic).write(sb.toString());
-    (win.document as dynamic).close();
-    (win as dynamic).print();
+    platform.printHtml('Relatório de Atividades — ${_fmtPeriod()}', sb.toString());
   }
 
   /// Escapa caracteres HTML e substitui null por '—'

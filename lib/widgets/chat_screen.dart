@@ -121,6 +121,7 @@ class _ChatScreenState extends State<ChatScreen> {
         _grupoNome = grupo.tarefaNome;
       }
 
+      if (!mounted) return;
       setState(() {
         _mensagens = mensagens;
         _isLoading = false;
@@ -264,9 +265,11 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (e) {
       print('❌ [Chat] Erro ao carregar notas/ordens: $e');
     } finally {
-      setState(() {
-        _carregandoNotasOrdens = false;
-      });
+      if (mounted) {
+        setState(() {
+          _carregandoNotasOrdens = false;
+        });
+      }
     }
   }
 

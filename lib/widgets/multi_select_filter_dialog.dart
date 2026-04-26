@@ -25,12 +25,20 @@ class _MultiSelectFilterDialogState extends State<MultiSelectFilterDialog> {
   late Set<String> _selectedValues;
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
     _selectedValues = Set<String>.from(widget.selectedValues);
     _searchController.text = _searchQuery;
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _scrollController.dispose();
+    super.dispose();
   }
 
   List<String> get _filteredOptions {
@@ -181,8 +189,10 @@ class _MultiSelectFilterDialogState extends State<MultiSelectFilterDialog> {
                       ),
                     )
                   : Scrollbar(
+                      controller: _scrollController,
                       thumbVisibility: true,
                       child: ListView.separated(
+                        controller: _scrollController,
                         padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
                         itemCount: _filteredOptions.length,
                         separatorBuilder: (_, __) => const Divider(height: 1),

@@ -24,11 +24,18 @@ class _HourlyCalendarViewState extends State<HourlyCalendarView> {
   static const double _timeColWidth = 56.0;
 
   late final List<DateTime> _days;
+  final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
     _days = _getDaysInRange(widget.startDate, widget.endDate);
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
   }
 
   List<DateTime> _getDaysInRange(DateTime start, DateTime end) {
@@ -84,7 +91,10 @@ class _HourlyCalendarViewState extends State<HourlyCalendarView> {
   @override
   Widget build(BuildContext context) {
     return Scrollbar(
+      controller: _scrollController,
+      thumbVisibility: true,
       child: SingleChildScrollView(
+        controller: _scrollController,
         scrollDirection: Axis.horizontal,
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,

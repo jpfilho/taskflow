@@ -3,6 +3,8 @@ import '../models/equipe.dart';
 import '../config/supabase_config.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'performance_monitor.dart';
+
 class EquipeService {
   static final EquipeService _instance = EquipeService._internal();
   factory EquipeService() => _instance;
@@ -27,6 +29,7 @@ class EquipeService {
 
   // Buscar todas as equipes
   Future<List<Equipe>> getAllEquipes() async {
+    PerformanceMonitor.start('EquipeService.getAllEquipes');
     try {
       final response = await _supabase
           .from('equipes')
@@ -46,10 +49,13 @@ class EquipeService {
       if (response.isEmpty) return [];
 
       final equipesList = response as List;
-      return equipesList
+      final result = equipesList
           .map((map) => _equipeFromMap(map as Map<String, dynamic>))
           .toList();
+      PerformanceMonitor.stop('EquipeService.getAllEquipes');
+      return result;
     } catch (e) {
+      PerformanceMonitor.stop('EquipeService.getAllEquipes');
       print('Erro ao buscar equipes: $e');
       return [];
     }
@@ -256,6 +262,7 @@ class EquipeService {
 
   // Buscar equipes por texto
   Future<List<Equipe>> searchEquipes(String query) async {
+    PerformanceMonitor.start('EquipeService.searchEquipes');
     if (query.isEmpty) return await getAllEquipes();
 
     try {
@@ -275,10 +282,13 @@ class EquipeService {
       if (response.isEmpty) return [];
 
       final equipesList = response as List;
-      return equipesList
+      final result = equipesList
           .map((map) => _equipeFromMap(map as Map<String, dynamic>))
           .toList();
+      PerformanceMonitor.stop('EquipeService.searchEquipes');
+      return result;
     } catch (e) {
+      PerformanceMonitor.stop('EquipeService.searchEquipes');
       print('Erro ao buscar equipes: $e');
       return [];
     }

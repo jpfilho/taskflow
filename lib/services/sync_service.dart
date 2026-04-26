@@ -6,6 +6,7 @@ import '../config/supabase_config.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'local_database_service.dart';
 import 'connectivity_service.dart';
+import 'performance_monitor.dart';
 
 class SyncService {
   static final SyncService _instance = SyncService._internal();
@@ -76,6 +77,7 @@ class SyncService {
 
     _isSyncing = true;
     _syncingController.add(true);
+    PerformanceMonitor.start('SyncService.syncAll');
     print('🔄 Iniciando sincronização...');
 
     try {
@@ -107,6 +109,7 @@ class SyncService {
       _isSyncing = false;
       _lastSyncEnd = DateTime.now();
       _syncingController.add(false);
+      PerformanceMonitor.stop('SyncService.syncAll');
       _clearHasLocalChangesIfNonePending();
     }
   }
@@ -197,6 +200,7 @@ class SyncService {
 
   // Baixar dados atualizados do Supabase
   Future<void> _pullFromSupabase() async {
+    PerformanceMonitor.start('SyncService.pullFromSupabase');
     try {
       // Baixar tarefas
       await _pullTable('tasks', 'tasks_local');
@@ -205,6 +209,8 @@ class SyncService {
       await _pullTable('melhorias_bugs', 'melhorias_bugs_local');
     } catch (e) {
       print('Erro ao baixar dados do Supabase: $e');
+    } finally {
+      PerformanceMonitor.stop('SyncService.pullFromSupabase');
     }
   }
 
@@ -219,40 +225,30 @@ class SyncService {
 
       final db = await _localDb.database;
       
-      for (var record in response) {
+      await db.transaction((txn) async {
+        final batch = txn.batch();
+        
+        for (var record in response) {
           final recordMap = Map<String, dynamic>.from(record);
           final recordId = recordMap['id'] as String;
 
-          // Converter DateTime para timestamp
           _convertDateTimesToTimestamps(recordMap);
-          // SQLite (sqflite_common_ffi_web) aceita só num, String, Uint8List
           _sanitizeMapForSqlite(recordMap);
+          
+          recordMap['sync_status'] = 'synced';
+          recordMap['last_synced'] = DateTime.now().millisecondsSinceEpoch;
 
-          // Verificar se já existe localmente
-          final existing = await db.query(
-            localTable,
-            where: 'id = ?',
-            whereArgs: [recordId],
-            limit: 1,
+          // Usar INSERT OR REPLACE com batch é muito mais rápido do que checar individualmente
+          // SQLite resolve o conflito de ID automaticamente.
+          batch.insert(
+            localTable, 
+            recordMap, 
+            conflictAlgorithm: ConflictAlgorithm.replace
           );
-
-          if (existing.isEmpty) {
-            // Inserir novo registro
-            recordMap['sync_status'] = 'synced';
-            recordMap['last_synced'] = DateTime.now().millisecondsSinceEpoch;
-            await db.insert(localTable, recordMap, conflictAlgorithm: ConflictAlgorithm.replace);
-          } else {
-            // Atualizar se o registro do Supabase for mais recente
-            final localUpdated = existing.first['updated_at'] as int?;
-            final supabaseUpdated = recordMap['updated_at'] as int?;
-            
-            if (supabaseUpdated != null && (localUpdated == null || supabaseUpdated > localUpdated)) {
-              recordMap['sync_status'] = 'synced';
-              recordMap['last_synced'] = DateTime.now().millisecondsSinceEpoch;
-              await db.update(localTable, recordMap, where: 'id = ?', whereArgs: [recordId]);
-            }
-          }
         }
+        
+        await batch.commit(noResult: true);
+      });
     } catch (e) {
       print('Erro ao baixar tabela $supabaseTable: $e');
     }

@@ -7,15 +7,17 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/task.dart';
 import '../models/executor.dart';
 import '../models/tipo_atividade.dart';
+import 'package:task2026/widgets/common/taskflow_calendar_marker_tooltip.dart';
 import '../models/feriado.dart';
 import '../models/status.dart';
 import '../services/task_service.dart';
 import '../services/executor_service.dart';
+import '../services/status_service.dart';
+import '../services/performance_monitor.dart';
 import '../services/tipo_atividade_service.dart';
 import '../services/auth_service_simples.dart';
 import '../services/divisao_service.dart';
 import '../services/feriado_service.dart';
-import '../services/status_service.dart';
 import '../services/anexo_service.dart';
 import '../services/nota_sap_service.dart';
 import '../services/ordem_service.dart';
@@ -25,6 +27,7 @@ import '../services/tab_sync_service.dart';
 import '../services/conflict_service.dart';
 import '../utils/responsive.dart';
 import '../utils/conflict_detection.dart';
+import 'common/taskflow_tooltip.dart';
 
 class TeamScheduleView extends StatefulWidget {
   final TaskService taskService;
@@ -85,6 +88,58 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
   final ScrollController _tableVerticalScrollController = ScrollController();
   final ScrollController _ganttVerticalScrollController = ScrollController();
   final ScrollController _ganttHorizontalScrollController = ScrollController();
+  final ScrollController _ganttBottomHorizontalScrollController = ScrollController();
+  final ScrollController _mainHorizontalScrollController = ScrollController();
+  final ScrollController _ganttMonthHorizontalScrollController = ScrollController();
+  
+  // Controle de scroll horizontal das linhas (um controller por linha para evitar assertion error)
+  final List<ScrollController> _rowScrollControllers = [];
+  bool _isHorizScrolling = false;
+
+  ScrollController _getRowController(int index) {
+    while (_rowScrollControllers.length <= index) {
+      _rowScrollControllers.add(ScrollController());
+    }
+    return _rowScrollControllers[index];
+  }
+
+  void _syncTeamHorizScroll(ScrollController source) {
+    if (_isHorizScrolling) return;
+    _isHorizScrolling = true;
+    final offset = source.offset;
+
+    try {
+      // 1. Sincronizar cabeçalho
+      if (_ganttHorizontalScrollController.hasClients && _ganttHorizontalScrollController != source) {
+        if ((_ganttHorizontalScrollController.offset - offset).abs() > 1.0) {
+          _ganttHorizontalScrollController.jumpTo(offset.clamp(0.0, _ganttHorizontalScrollController.position.maxScrollExtent));
+        }
+      }
+      // 1.1 Sincronizar cabeçalho de meses
+      if (_ganttMonthHorizontalScrollController.hasClients && _ganttMonthHorizontalScrollController != source) {
+        if ((_ganttMonthHorizontalScrollController.offset - offset).abs() > 1.0) {
+          _ganttMonthHorizontalScrollController.jumpTo(offset.clamp(0.0, _ganttMonthHorizontalScrollController.position.maxScrollExtent));
+        }
+      }
+      // 2. Sincronizar barra inferior
+      if (_ganttBottomHorizontalScrollController.hasClients && _ganttBottomHorizontalScrollController != source) {
+        if ((_ganttBottomHorizontalScrollController.offset - offset).abs() > 1.0) {
+          _ganttBottomHorizontalScrollController.jumpTo(offset.clamp(0.0, _ganttBottomHorizontalScrollController.position.maxScrollExtent));
+        }
+      }
+      // 3. Sincronizar todas as linhas
+      for (var controller in _rowScrollControllers) {
+        if (controller.hasClients && controller != source) {
+          if ((controller.offset - offset).abs() > 1.0) {
+            controller.jumpTo(offset.clamp(0.0, controller.position.maxScrollExtent));
+          }
+        }
+      }
+    } catch (_) {}
+
+    _isHorizScrolling = false;
+  }
+
   final double _rowHeight = 30.0;
   bool _isScrolling = false;
   bool _showSegmentTexts = true; // exibe textos por padrão
@@ -171,6 +226,21 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
         _isScrolling = false;
       }
     });
+
+    // Sincronizar scroll horizontal (Cabeçalho -> Outros)
+    _ganttHorizontalScrollController.addListener(() {
+      _syncTeamHorizScroll(_ganttHorizontalScrollController);
+    });
+
+    // Sincronizar scroll horizontal (Barra Inferior -> Outros)
+    _ganttBottomHorizontalScrollController.addListener(() {
+      _syncTeamHorizScroll(_ganttBottomHorizontalScrollController);
+    });
+
+    // Sincronizar scroll horizontal (Cabeçalho Meses -> Outros)
+    _ganttMonthHorizontalScrollController.addListener(() {
+      _syncTeamHorizScroll(_ganttMonthHorizontalScrollController);
+    });
     
     // Inicializar sincronização entre abas (apenas no web)
     if (kIsWeb) {
@@ -241,6 +311,11 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
   Future<void> _loadBackendConflicts() async {
     final cs = widget.conflictService;
     if (cs == null) return;
+    
+    // Otimização: Só buscar se tivermos executores carregados
+    if (_executores.isEmpty) return;
+    final executorIds = _executores.map((e) => e.id).toList();
+    
     final ok = await cs.isBackendAvailable();
     if (!ok) {
       if (mounted && _useBackendConflicts) {
@@ -254,8 +329,8 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
     }
     final start = widget.startDate;
     final end = widget.endDate;
-    final map = await cs.getConflictsForRange(start, end);
-    final events = await cs.getExecutionEventsForRange(start, end);
+    final map = await cs.getConflictsForRange(start, end, executorIds: executorIds);
+    final events = await cs.getExecutionEventsForRange(start, end, executorIds: executorIds);
     if (!mounted) return;
     setState(() {
       _conflictMapFromBackend = map;
@@ -403,6 +478,12 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
     _tableVerticalScrollController.dispose();
     _ganttVerticalScrollController.dispose();
     _ganttHorizontalScrollController.dispose();
+    _ganttBottomHorizontalScrollController.dispose();
+    _ganttMonthHorizontalScrollController.dispose();
+    _mainHorizontalScrollController.dispose();
+    for (var c in _rowScrollControllers) {
+      c.dispose();
+    }
     super.dispose();
   }
 
@@ -438,7 +519,14 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
       
       // Carregar todas as tarefas (sem filtrar por perfil) para permitir que executores multi-segmento
       // vejam suas tarefas em qualquer segmento. A filtragem por perfil continua apenas para os executores.
-      final tasks = await widget.taskService.getAllTasks(aplicarPerfil: false);
+      // Carregar apenas tarefas que cruzam o período visível (otimização de performance)
+      PerformanceMonitor.start('TeamScheduleView.getTasksForRange');
+      final tasks = await widget.taskService.getTasksForRange(
+        startDate: widget.startDate,
+        endDate: widget.endDate,
+        aplicarPerfil: false,
+      );
+      PerformanceMonitor.stop('TeamScheduleView.getTasksForRange');
       // debug silenciado
       
       final executores = await widget.executorService.getAllExecutores();
@@ -553,13 +641,23 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
   /// útil após exclusão/atualização para evitar conflitos stale.
   Future<void> _reloadTasksAndRows() async {
     try {
-      final tasks = await widget.taskService.getAllTasks(aplicarPerfil: false);
-      if (!mounted) return;
+      PerformanceMonitor.start('TeamScheduleView.reloadTasks');
+      final tasks = await widget.taskService.getTasksForRange(
+        startDate: widget.startDate,
+        endDate: widget.endDate,
+        aplicarPerfil: false,
+      );
+      if (!mounted) {
+        PerformanceMonitor.stop('TeamScheduleView.reloadTasks');
+        return;
+      }
       setState(() {
         _tasks = tasks;
       });
       await _buildExecutorRowsFromView();
+      PerformanceMonitor.stop('TeamScheduleView.reloadTasks');
     } catch (e, st) {
+      PerformanceMonitor.stop('TeamScheduleView.reloadTasks');
       print('⚠️ Erro ao recarregar tarefas/linhas: $e');
       print(st);
     }
@@ -816,7 +914,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
 
       final executorRows = <ExecutorTaskRow>[];
       final sortedExecutores = _getSortedExecutores();
-      print('⏱ [TeamScheduleView] Processando ${sortedExecutores.length} executores...');
+      print('⏱ [TeamScheduleView] Processando ${sortedExecutores.length} executores... | TOTAL _tasks: ${_tasks.length}');
 
       // Detectar uma única vez se a view retorna tipo_periodo (usando a lista global de rows)
       // Evita false-negative para executores com lista vazia (0 tarefas no período)
@@ -899,6 +997,84 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
           }
         }
         parseSw.stop();
+
+        final normName = _normalizeText(executor.nome);
+        final isFranklin = normName.contains('franklinwt');
+
+        // --- ENRIQUECIMENTO (FIX): Complementar com _tasks para capturar atribuições via equipe ou nomes que a view pode ter perdido ---
+        // Isso resolve o problema de executores que aparecem na tela de atividades mas não no Gantt de equipes
+        for (final task in _tasks) {
+          final isAssigned = isTaskAssignedToExecutor(task, executor);
+          // Se o status for cancelado ou reprogramado, ignorar (mesma regra da view)
+          final cod = task.status.toUpperCase().trim();
+          final isStatusExcluded = cod == 'CANC' || cod == 'REPR' ||
+              cod.contains('CANC') || cod.contains('REPR');
+          
+          if (isStatusExcluded) continue;
+
+          if (isTaskAssignedToExecutor(task, executor)) {
+            // Verificar se a tarefa cruza o período visível
+            final periodStart = DateTime(widget.startDate.year, widget.startDate.month, widget.startDate.day);
+            final periodEnd = DateTime(widget.endDate.year, widget.endDate.month, widget.endDate.day);
+            
+            bool inRange = false;
+            if (task.ganttSegments.isNotEmpty) {
+              for (final seg in task.ganttSegments) {
+                if (!(seg.dataInicio.isAfter(periodEnd) || seg.dataFim.isBefore(periodStart))) {
+                  inRange = true;
+                  break;
+                }
+              }
+            } else {
+              inRange = !(task.dataInicio.isAfter(periodEnd) || task.dataFim.isBefore(periodStart));
+            }
+
+            if (inRange) {
+              // Adicionar ao mapa de tarefas se não estiver lá
+              tasksById.putIfAbsent(task.id, () => task);
+              final daysByTipo = taskDaysByTipo.putIfAbsent(task.id, () => {});
+              
+              // "Explodir" a tarefa em dias e mesclar com o que já existe
+              if (task.ganttSegments.isNotEmpty) {
+                for (final seg in task.ganttSegments) {
+                  final tipo = (seg.tipoPeriodo ?? 'EXECUCAO').toUpperCase();
+                  final daysList = daysByTipo.putIfAbsent(tipo, () => []);
+                  
+                  DateTime d = DateTime(seg.dataInicio.year, seg.dataInicio.month, seg.dataInicio.day);
+                  final end = DateTime(seg.dataFim.year, seg.dataFim.month, seg.dataFim.day);
+                  while (!d.isAfter(end)) {
+                    if (!(d.isAfter(periodEnd) || d.isBefore(periodStart))) {
+                      // Mesclar apenas se o dia ainda não estiver na lista
+                      if (!daysList.any((existingDay) => 
+                          existingDay.year == d.year && 
+                          existingDay.month == d.month && 
+                          existingDay.day == d.day)) {
+                        daysList.add(d);
+                      }
+                    }
+                    d = d.add(const Duration(days: 1));
+                  }
+                }
+              } else {
+                final daysList = daysByTipo.putIfAbsent('EXECUCAO', () => []);
+                DateTime d = DateTime(task.dataInicio.year, task.dataInicio.month, task.dataInicio.day);
+                final end = DateTime(task.dataFim.year, task.dataFim.month, task.dataFim.day);
+                while (!d.isAfter(end)) {
+                  if (!(d.isAfter(periodEnd) || d.isBefore(periodStart))) {
+                    if (!daysList.any((existingDay) => 
+                        existingDay.year == d.year && 
+                        existingDay.month == d.month && 
+                        existingDay.day == d.day)) {
+                      daysList.add(d);
+                    }
+                  }
+                  d = d.add(const Duration(days: 1));
+                }
+              }
+            }
+          }
+        }
+
         // Enriquecer com _tasks: status (RPGR/CANC) e executorPeriods (período específico por executor)
         // Quando a tarefa tem executorPeriods, a detecção de conflito usa só esses dias — evita contar dias em que o executor não está programado (ex.: EDMUNDO na TSD só a partir da 2ª semana)
         for (final entry in tasksById.entries.toList()) {
@@ -914,8 +1090,8 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
           if (fromList != null) {
             var updated = fromView;
             final cod = fromList.status.trim().toUpperCase();
-            final isExcluded = cod == 'RPGR' || cod == 'REPR' || cod == 'CANC' || cod == 'RPAR' ||
-                cod.contains('RPGR') || cod.contains('REPR') || cod.contains('CANC');
+            final isExcluded = cod == 'REPR' || cod == 'CANC' ||
+                cod.contains('REPR') || cod.contains('CANC');
             if (isExcluded && (fromList.status != fromView.status || fromList.statusNome != fromView.statusNome)) {
               updated = updated.copyWith(status: fromList.status, statusNome: fromList.statusNome);
             }
@@ -1282,10 +1458,11 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
 
   Future<void> _loadFeriados() async {
     try {
-      // Carregar feriados para o período
-      final feriadosMap = await _feriadoService.getFeriadosMapByDateRange(
+      final allLocalIds = _tasks.expand((t) => t.localIds).toSet().toList();
+      final feriadosMap = await _feriadoService.getFeriadosMapByDateRangeAndLocais(
         widget.startDate,
         widget.endDate,
+        allLocalIds,
       );
       setState(() {
         _feriadosMap = feriadosMap;
@@ -1295,10 +1472,58 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
     }
   }
 
-  // Verificar se uma data é feriado
+  // Verificar se uma data é feriado (usado globalmente no cabeçalho)
   bool _isFeriado(DateTime date) {
+    return _getHolidayColor(date) != null;
+  }
+
+  Color? _getHolidayColor(DateTime date) {
     final normalizedDate = DateTime(date.year, date.month, date.day);
-    return _feriadosMap.containsKey(normalizedDate);
+    if (!_feriadosMap.containsKey(normalizedDate)) return null;
+    final feriados = _feriadosMap[normalizedDate]!;
+    if (feriados.isEmpty) return null;
+    
+    // Priorizar EVENTO (laranja)
+    if (feriados.any((f) => f.tipo == 'EVENTO')) {
+      return Colors.orange[100];
+    }
+    return Colors.purple[100];
+  }
+
+  String? _getGlobalHolidayTooltip(DateTime date) {
+    final n = DateTime(date.year, date.month, date.day);
+    if (!_feriadosMap.containsKey(n)) return null;
+    final feriados = _feriadosMap[n]!;
+    if (feriados.isEmpty) return null;
+    return feriados.map((f) => '${f.tipo}: ${f.descricao}').join('\n');
+  }
+  
+  // Verificar se é feriado para a linha (executor) baseando-se nas tarefas dele
+  bool _isFeriadoForTaskRow(DateTime date, ExecutorTaskRow row) {
+    return _getHolidayColorForTaskRow(date, row) != null;
+  }
+
+  Color? _getHolidayColorForTaskRow(DateTime date, ExecutorTaskRow row) {
+    final n = DateTime(date.year, date.month, date.day);
+    if (!_feriadosMap.containsKey(n)) return null;
+    final feriadosNoDia = _feriadosMap[n]!;
+    if (feriadosNoDia.isEmpty) return null;
+    
+    final rowLocalIds = row.tasks.expand((t) => t.localIds).toSet();
+    if (rowLocalIds.isEmpty) return null; // Sem local definido na linha, sem feriado local
+    
+    final applicableFeriados = feriadosNoDia.where((feriado) => 
+       feriado.localIds.any((lId) => rowLocalIds.contains(lId))
+    ).toList();
+
+    if (applicableFeriados.isEmpty) return null;
+
+    // Priorizar EVENTO (laranja)
+    if (applicableFeriados.any((f) => f.tipo == 'EVENTO')) {
+      return Colors.orange[100];
+    }
+    
+    return Colors.purple[100];
   }
 
   Color _getSegmentColor(GanttSegment segment, Task task) {
@@ -1398,6 +1623,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
         return SizedBox(
           height: calculatedHeight,
           child: SingleChildScrollView(
+            controller: _mainHorizontalScrollController,
             scrollDirection: Axis.horizontal,
             physics: const AlwaysScrollableScrollPhysics(),
             child: SizedBox(
@@ -1634,7 +1860,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                           Align(
                             alignment: Alignment.topLeft,
                             child: SingleChildScrollView(
-                              controller: _ganttHorizontalScrollController,
+                              controller: _ganttMonthHorizontalScrollController,
                               scrollDirection: Axis.horizontal,
                               physics: needsScroll 
                                 ? const AlwaysScrollableScrollPhysics() 
@@ -1747,71 +1973,154 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                     ),
                     child: Align(
                       alignment: Alignment.topLeft,
-                      child: SingleChildScrollView(
-                      controller: _ganttHorizontalScrollController,
-                      scrollDirection: Axis.horizontal,
-                      physics: needsScroll 
-                        ? const AlwaysScrollableScrollPhysics() 
-                        : const NeverScrollableScrollPhysics(),
-                      padding: EdgeInsets.zero,
-                      child: SizedBox(
-                        width: totalWidth,
-                        height: dayHeaderHeight,
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.start,
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          textDirection: TextDirection.ltr,
-                          mainAxisSize: MainAxisSize.min,
-                          children: days.map((day) {
-                              final isWeekend = day.weekday == 6 || day.weekday == 7;
-                              final isFeriado = _isFeriado(day);
-                              final hasConflict = _hasAnyExecutorConflictOnDay(day);
-                              return Container(
-                                width: dayWidth,
-                                height: 50,
-                                padding: EdgeInsets.zero,
-                                margin: EdgeInsets.zero,
-                                decoration: BoxDecoration(
-                                  color: hasConflict
-                                      ? Colors.red[200]
-                                      : isFeriado
-                                          ? Colors.purple[100]
-                                          : (isWeekend
-                                              ? Colors.grey[200]
-                                              : Colors.white),
-                                  border: Border(
-                                    right: BorderSide(
-                                      color: hasConflict ? Colors.red[400]! : Colors.grey[300]!,
-                                      width: hasConflict ? 2 : 1,
-                                    ),
-                                  ),
-                                ),
-                                alignment: Alignment.centerLeft,
-                                child: Padding(
-                                  padding: const EdgeInsets.only(left: 2.0),
-                                  child: Tooltip(
-                                    message: hasConflict
-                                        ? 'Conflito de execução em locais diferentes'
-                                        : (isFeriado ? 'Feriado' : ''),
-                                    child: Text(
-                                      day.day.toString().padLeft(2, '0'),
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        fontWeight: hasConflict ? FontWeight.bold : FontWeight.normal,
-                                        color: hasConflict
-                                            ? Colors.red[900]
-                                            : isFeriado
-                                                ? Colors.purple[900]
-                                                : (isWeekend ? Colors.grey[800] : Colors.black),
+                      child: needsScroll ? Scrollbar(
+                        controller: _ganttHorizontalScrollController,
+                        thickness: 10,
+                        radius: const Radius.circular(5),
+                        child: SingleChildScrollView(
+                          controller: _ganttHorizontalScrollController,
+                          scrollDirection: Axis.horizontal,
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          padding: EdgeInsets.zero,
+                          child: SizedBox(
+                            width: totalWidth,
+                            height: dayHeaderHeight,
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.start,
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              textDirection: TextDirection.ltr,
+                              mainAxisSize: MainAxisSize.min,
+                              children: days.map((day) {
+                                final isWeekend = day.weekday == 6 || day.weekday == 7;
+                                final ferColor = _getHolidayColor(day);
+                                final isFeriado = ferColor != null;
+                                final holidayColor = _getHolidayColor(day);
+                                
+                                return Container(
+                                  width: dayWidth,
+                                  height: dayHeaderHeight,
+                                  decoration: BoxDecoration(
+                                    color: holidayColor ?? (isWeekend ? Colors.grey[200] : Colors.white),
+                                    border: Border(
+                                      right: BorderSide(
+                                        color: Colors.grey[300]!,
+                                        width: 1,
                                       ),
                                     ),
                                   ),
-                                ),
-                              );
-                            }).toList(),
+                                  alignment: Alignment.center,
+                                  child: _feriadosMap[DateTime(day.year, day.month, day.day)] != null
+                                    ? TaskFlowCalendarMarkerTooltip(
+                                        data: CalendarMarkerData(
+                                          title: _feriadosMap[DateTime(day.year, day.month, day.day)]?.map((e) => e.descricao).join(' + ') ?? 'Feriado',
+                                          type: (() {
+                                              final f = _feriadosMap[DateTime(day.year, day.month, day.day)]?.first;
+                                              if (f?.tipo == 'ESTADUAL') return MarkerType.stateHoliday;
+                                              if (f?.tipo == 'MUNICIPAL') return MarkerType.cityHoliday;
+                                              if (f?.tipo == 'EVENTO') return MarkerType.specialEvent;
+                                              return MarkerType.nationalHoliday;
+                                            })(),
+                                          date: day,
+                                          observation: _feriadosMap[DateTime(day.year, day.month, day.day)]?.first.tipo == 'EVENTO' ? 'Evento Setor Elétrico' : 'Dia não útil',
+                                        ),
+                                        child: Text(
+                                          day.day.toString().padLeft(2, '0'),
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: isFeriado ? FontWeight.bold : FontWeight.normal,
+                                            color: isFeriado
+                                                ? (holidayColor == Colors.orange[100] ? Colors.orange[900] : Colors.purple[900])
+                                                : (isWeekend ? Colors.grey[800] : Colors.black),
+                                          ),
+                                        ),
+                                      )
+                                    : Text(
+                                        day.day.toString().padLeft(2, '0'),
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: isFeriado ? FontWeight.bold : FontWeight.normal,
+                                          color: isFeriado
+                                              ? (holidayColor == Colors.orange[100] ? Colors.orange[900] : Colors.purple[900])
+                                              : (isWeekend ? Colors.grey[800] : Colors.black),
+                                        ),
+                                      ),
+                                );
+                              }).toList(),
+                            ),
                           ),
                         ),
-                      ),
+                      ) : SingleChildScrollView(
+                          controller: _ganttHorizontalScrollController,
+                          scrollDirection: Axis.horizontal,
+                          physics: const NeverScrollableScrollPhysics(),
+                          padding: EdgeInsets.zero,
+                          child: SizedBox(
+                            width: totalWidth,
+                            height: dayHeaderHeight,
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.start,
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              textDirection: TextDirection.ltr,
+                              mainAxisSize: MainAxisSize.min,
+                              children: days.map((day) {
+                                final isWeekend = day.weekday == 6 || day.weekday == 7;
+                                final ferColor = _getHolidayColor(day);
+                                final isFeriado = ferColor != null;
+                                final holidayColor = _getHolidayColor(day);
+                                
+                                return Container(
+                                  width: dayWidth,
+                                  height: dayHeaderHeight,
+                                  decoration: BoxDecoration(
+                                    color: holidayColor ?? (isWeekend ? Colors.grey[200] : Colors.white),
+                                    border: Border(
+                                      right: BorderSide(
+                                        color: Colors.grey[300]!,
+                                        width: 1,
+                                      ),
+                                    ),
+                                  ),
+                                  alignment: Alignment.center,
+                                  child: _feriadosMap[DateTime(day.year, day.month, day.day)] != null
+                                    ? TaskFlowCalendarMarkerTooltip(
+                                        data: CalendarMarkerData(
+                                          title: _feriadosMap[DateTime(day.year, day.month, day.day)]?.map((e) => e.descricao).join(' + ') ?? 'Feriado',
+                                          type: (() {
+                                              final f = _feriadosMap[DateTime(day.year, day.month, day.day)]?.first;
+                                              if (f?.tipo == 'ESTADUAL') return MarkerType.stateHoliday;
+                                              if (f?.tipo == 'MUNICIPAL') return MarkerType.cityHoliday;
+                                              if (f?.tipo == 'EVENTO') return MarkerType.specialEvent;
+                                              return MarkerType.nationalHoliday;
+                                            })(),
+                                          date: day,
+                                          observation: _feriadosMap[DateTime(day.year, day.month, day.day)]?.first.tipo == 'EVENTO' ? 'Evento Setor Elétrico' : 'Dia não útil',
+                                        ),
+                                        child: Text(
+                                          day.day.toString().padLeft(2, '0'),
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: isFeriado ? FontWeight.bold : FontWeight.normal,
+                                            color: isFeriado
+                                                ? (holidayColor == Colors.orange[100] ? Colors.orange[900] : Colors.purple[900])
+                                                : (isWeekend ? Colors.grey[800] : Colors.black),
+                                          ),
+                                        ),
+                                      )
+                                    : Text(
+                                        day.day.toString().padLeft(2, '0'),
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: isFeriado ? FontWeight.bold : FontWeight.normal,
+                                          color: isFeriado
+                                              ? (holidayColor == Colors.orange[100] ? Colors.orange[900] : Colors.purple[900])
+                                              : (isWeekend ? Colors.grey[800] : Colors.black),
+                                        ),
+                                      ),
+                                );
+                              }).toList(),
+                            ),
+                          ),
+                        ),
                     ),
                   ),
                 ],
@@ -1856,6 +2165,26 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                   },
                 ),
               ),
+              // ── Barra de Rolagem Horizontal Inferior (Sincronizada) ──────────────
+              if (needsScroll)
+                Container(
+                  height: 18,
+                  color: Colors.grey[50],
+                  decoration: BoxDecoration(
+                    border: Border(top: BorderSide(color: Colors.grey[300]!, width: 1)),
+                  ),
+                  child: Scrollbar(
+                    controller: _ganttBottomHorizontalScrollController,
+                    thickness: 10,
+                    radius: const Radius.circular(5),
+                    child: SingleChildScrollView(
+                      controller: _ganttBottomHorizontalScrollController,
+                      scrollDirection: Axis.horizontal,
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      child: SizedBox(width: totalWidth, height: 18),
+                    ),
+                  ),
+                ),
             ],
           ),
         );
@@ -1876,25 +2205,20 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
               ? Colors.red[100]
               : (row.tasks.isEmpty ? Colors.grey[50] : Colors.white),
         ),
-        child: NotificationListener<ScrollNotification>(
-          onNotification: (notification) {
-            // Sincronizar scroll horizontal de todas as linhas
-            if (notification is ScrollUpdateNotification) {
-              if (!_isScrolling) {
-                _isScrolling = true;
-                // O scroll já está sincronizado pelo controller compartilhado
-                _isScrolling = false;
-              }
-            }
-            return false;
-          },
           child: SingleChildScrollView(
-            controller: _ganttHorizontalScrollController,
+            controller: _getRowController(index),
             scrollDirection: Axis.horizontal,
             physics: needsScroll 
               ? const AlwaysScrollableScrollPhysics() 
               : const NeverScrollableScrollPhysics(),
-            child: SizedBox(
+            child: NotificationListener<ScrollNotification>(
+              onNotification: (notification) {
+                if (notification is ScrollUpdateNotification && notification.depth == 0) {
+                  _syncTeamHorizScroll(_getRowController(index));
+                }
+                return false;
+              },
+              child: SizedBox(
               width: totalWidth,
               child: Stack(
                 children: [
@@ -1906,22 +2230,17 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                     mainAxisSize: MainAxisSize.min,
                     children: days.map((day) {
                       final isWeekend = day.weekday == 6 || day.weekday == 7;
-                      final isFeriado = _isFeriado(day);
-                      // Verificar se há conflito neste dia para este executor específico
-                      final hasConflict = _hasConflictOnDayForExecutor(day, row.executor.id);
+                      final ferColor = _getHolidayColorForTaskRow(day, row);
                       return Container(
                         width: dayWidth,
                         height: _rowHeight,
                         decoration: BoxDecoration(
-                          color: hasConflict
-                              ? Colors.red[200]
-                              : isFeriado
-                                  ? Colors.purple[100]
-                                  : (isWeekend ? Colors.grey[200] : Colors.white),
+                          color: ferColor ??
+                              (isWeekend ? Colors.grey[200] : Colors.white),
                           border: Border(
                             right: BorderSide(
-                              color: hasConflict ? Colors.red[400]! : Colors.grey[300]!,
-                              width: hasConflict ? 2 : 1,
+                              color: Colors.grey[300]!,
+                              width: 1,
                             ),
                           ),
                         ),
@@ -2068,7 +2387,12 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                             print('🔄 _DraggableExecutorSegment onTasksUpdated: Recarregando tarefas do banco...');
                             try {
                               // Sempre recarregar do banco para garantir que as alterações sejam refletidas
-                              final tasks = await widget.taskService.getAllTasks();
+                              PerformanceMonitor.start('TeamScheduleView.dragUpdate');
+                              final tasks = await widget.taskService.getTasksForRange(
+                                startDate: widget.startDate,
+                                endDate: widget.endDate,
+                                aplicarPerfil: false,
+                              );
                               
                               if (mounted) {
                                 setState(() {
@@ -2076,6 +2400,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                                 });
                                 _buildExecutorRows();
                                 print('✅ Tarefas recarregadas no TeamScheduleView: ${tasks.length} tarefas');
+                                PerformanceMonitor.stop('TeamScheduleView.dragUpdate');
                                 
                                 // Notificar callback global (main.dart) para atualizar todas as views
                                 if (widget.onTasksUpdated != null) {
@@ -2099,6 +2424,47 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                       );
                     }).whereType<Widget>();
                   }),
+                  // OVERLAY de conflito desenhado NA FRENTE de todas as tarefas
+                  if (hasConflict)
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      textDirection: TextDirection.ltr,
+                      mainAxisSize: MainAxisSize.min,
+                      children: days.map((day) {
+                        final hasConflictOnDay = _hasConflictOnDayForExecutor(day, row.executor.id);
+                        
+                        Widget dayCell = Container(
+                          width: dayWidth,
+                          height: _rowHeight,
+                          decoration: BoxDecoration(
+                            color: hasConflictOnDay ? Colors.red[500]!.withOpacity(0.4) : Colors.transparent,
+                            border: hasConflictOnDay ? Border(
+                              right: BorderSide(
+                                color: Colors.red[700]!,
+                                width: 2,
+                              ),
+                            ) : null,
+                          ),
+                        );
+                        
+                        if (hasConflictOnDay) {
+                          final tasksInConflict = _getConflictTaskDescriptionsForDay(day, row.executor.id);
+                          return TaskFlowTooltip(
+                            content: TooltipContent(
+                              title: 'Conflito de agenda',
+                              severity: TooltipSeverity.danger,
+                              executor: row.executor.nome,
+                              reason: 'Mesmo executor alocado em mais de um local/tarefa neste dia.',
+                              tasks: tasksInConflict.toList()..sort(),
+                            ),
+                            child: dayCell,
+                          );
+                        }
+                        
+                        return IgnorePointer(child: dayCell); // Empty cells should not intercept clicks
+                      }).toList(),
+                    ),
                 ],
               ),
             ),
@@ -2381,6 +2747,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
         ),
       ),
       child: SingleChildScrollView(
+        controller: ScrollController(),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
@@ -3432,31 +3799,6 @@ class _DraggableExecutorSegmentState extends State<_DraggableExecutorSegment> {
                             ),
                           ),
                         ),
-                        // Overlay de conflito POR DIA (acima de tudo), só nos dias conflitantes
-                        if ((widget.conflictDays?.isNotEmpty ?? false))
-                          Positioned.fill(
-                            child: IgnorePointer(
-                              child: Row(
-                                children: widget.days.map((day) {
-                                  final dayStart = DateTime(day.year, day.month, day.day);
-                                  final dayEnd = dayStart.add(const Duration(days: 1));
-                                  final coversDay = effectiveStartDate.isBefore(dayEnd) && effectiveEndDate.isAfter(dayStart);
-                                  if (!coversDay) return const SizedBox.shrink();
-                                  final isConflictDay = widget.conflictDays!.any((d) =>
-                                      d.year == day.year && d.month == day.month && d.day == day.day);
-                                  return Expanded(
-                                    child: Container(
-                                      decoration: BoxDecoration(
-                                        color: isConflictDay ? Colors.red[600]!.withOpacity(0.9) : Colors.transparent,
-                                        borderRadius: isConflictDay ? BorderRadius.circular(3) : null,
-                                        border: isConflictDay ? Border.all(color: Colors.red[800]!, width: 3) : null,
-                                      ),
-                                    ),
-                                  );
-                                }).toList(),
-                              ),
-                            ),
-                          ),
                       ],
                     ),
                   ),
@@ -3725,6 +4067,7 @@ class _ExecutorTasksModalState extends State<_ExecutorTasksModal> {
                   final execPeriods = _executorExecPeriods(task);
                   final hasExecPeriods = execPeriods.isNotEmpty;
                   return SingleChildScrollView(
+                    controller: ScrollController(),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -3779,6 +4122,7 @@ class _ExecutorTasksModalState extends State<_ExecutorTasksModal> {
           else
             Expanded(
               child: SingleChildScrollView(
+                controller: ScrollController(),
                 child: (() {
                   final sortedTasks = [...widget.tasks]..sort((a, b) {
                     final cmpInicio = a.dataInicio.compareTo(b.dataInicio);
@@ -3911,6 +4255,7 @@ class _ExecutorDetailsModal extends StatelessWidget {
         maxHeight: screenHeight * 0.9,
       ),
       child: SingleChildScrollView(
+        controller: ScrollController(),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,

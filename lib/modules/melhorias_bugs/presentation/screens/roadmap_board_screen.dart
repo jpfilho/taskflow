@@ -15,6 +15,7 @@ class RoadmapBoardScreen extends StatefulWidget {
 
 class _RoadmapBoardScreenState extends State<RoadmapBoardScreen> {
   final MelhoriasBugsService _service = MelhoriasBugsService();
+  final ScrollController _scrollController = ScrollController();
   List<Versao> _versoes = [];
   Map<String, List<MelhoriaBug>> _itensPorVersao = {};
   bool _loading = true;
@@ -46,6 +47,12 @@ class _RoadmapBoardScreenState extends State<RoadmapBoardScreen> {
   }
 
   @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
   void initState() {
     super.initState();
     _load();
@@ -73,115 +80,213 @@ class _RoadmapBoardScreenState extends State<RoadmapBoardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    if (_versoes.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.map_outlined, size: 64, color: Colors.grey.shade400),
-            const SizedBox(height: 16),
-            Text(
-              'Nenhuma versão no roadmap',
-              style: TextStyle(color: Colors.grey.shade600),
-            ),
-            const SizedBox(height: 24),
-            FilledButton.icon(
-              onPressed: () => _openVersaoForm(),
-              icon: const Icon(Icons.add),
-              label: const Text('Criar primeira versão'),
-            ),
-          ],
-        ),
-      );
-    }
+    final theme = Theme.of(context);
+
     return Scaffold(
-      body: RefreshIndicator(
-        onRefresh: _load,
-        child: ListView.builder(
-          padding: const EdgeInsets.all(12),
-          itemCount: _versoes.length,
-          itemBuilder: (context, index) {
-          final v = _versoes[index];
-          final itens = _itensPorVersao[v.id] ?? [];
-          final total = itens.length;
-          final concluidos = itens.where((i) => i.status == 'CONCLUIDO').length;
-          final progresso = total > 0 ? (concluidos / total) : 0.0;
-          final dataPrev = v.dataPrevistaLancamento != null
-              ? DateFormat('dd/MM/yyyy').format(v.dataPrevistaLancamento!)
-              : '—';
-          return Card(
-            margin: const EdgeInsets.only(bottom: 12),
-            child: InkWell(
-              onTap: () => _openVersaoDetail(v),
-              borderRadius: BorderRadius.circular(12),
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            v.nome,
-                            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                ),
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.edit_outlined),
-                          onPressed: () => _openVersaoForm(v),
-                        ),
-                      ],
-                    ),
-                    if (v.descricao != null && v.descricao!.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Text(
-                          v.descricao!,
-                          style: TextStyle(
-                            color: Colors.grey.shade600,
-                            fontSize: 13,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
+      backgroundColor: theme.colorScheme.surface,
+      appBar: AppBar(
+        title: const Text('Roadmap do Sistema'),
+        elevation: 0,
+        backgroundColor: Colors.transparent,
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : _versoes.isEmpty
+              ? Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.map_outlined, size: 64, color: theme.colorScheme.onSurface.withOpacity(0.2)),
+                      const SizedBox(height: 16),
+                      Text(
+                        'Nenhuma versão no roadmap',
+                        style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
                       ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Icon(Icons.calendar_today, size: 14, color: Colors.grey.shade600),
-                        const SizedBox(width: 4),
-                        Text('Previsto: $dataPrev', style: TextStyle(fontSize: 12, color: Colors.grey.shade700)),
-                        const SizedBox(width: 16),
-                        Text(
-                          '$concluidos / $total itens',
-                          style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                      const SizedBox(height: 24),
+                      FilledButton.icon(
+                        onPressed: () => _openVersaoForm(),
+                        icon: const Icon(Icons.add),
+                        label: const Text('Criar primeira versão'),
+                      ),
+                    ],
+                  ),
+                )
+              : RefreshIndicator(
+                  onRefresh: _load,
+                  child: ListView.builder(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    itemCount: _versoes.length,
+                    itemBuilder: (context, index) {
+                      final v = _versoes[index];
+                      final itens = _itensPorVersao[v.id] ?? [];
+                      final total = itens.length;
+                      final concluidos = itens.where((i) => i.status == 'CONCLUIDO').length;
+                      final progresso = total > 0 ? (concluidos / total) : 0.0;
+                      final dataPrev = v.dataPrevistaLancamento != null
+                          ? DateFormat('dd MMM yyyy').format(v.dataPrevistaLancamento!)
+                          : 'A definir';
+
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 16),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.surface,
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: theme.dividerColor.withOpacity(0.1)),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.04),
+                              blurRadius: 12,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    LinearProgressIndicator(
-                      value: progresso,
-                      backgroundColor: Colors.grey.shade200,
-                      valueColor: AlwaysStoppedAnimation<Color>(Theme.of(context).colorScheme.primary),
-                    ),
-                  ],
+                        child: InkWell(
+                          onTap: () => _openVersaoDetail(v),
+                          borderRadius: BorderRadius.circular(20),
+                          child: Padding(
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            v.nome,
+                                            style: theme.textTheme.titleLarge?.copyWith(
+                                              fontWeight: FontWeight.bold,
+                                              letterSpacing: -0.5,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Row(
+                                            children: [
+                                              Icon(Icons.event_outlined, size: 14, color: theme.colorScheme.primary),
+                                              const SizedBox(width: 4),
+                                              Text(
+                                                dataPrev,
+                                                style: theme.textTheme.bodySmall?.copyWith(
+                                                  color: theme.colorScheme.primary,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    IconButton(
+                                      icon: Icon(Icons.edit_outlined, size: 20, color: theme.colorScheme.onSurfaceVariant),
+                                      onPressed: () => _openVersaoForm(v),
+                                      visualDensity: VisualDensity.compact,
+                                    ),
+                                  ],
+                                ),
+                                if (v.descricao != null && v.descricao!.isNotEmpty) ...[
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    v.descricao!,
+                                    style: theme.textTheme.bodyMedium?.copyWith(
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                      height: 1.4,
+                                    ),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
+                                const SizedBox(height: 24),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(
+                                      'Progresso',
+                                      style: theme.textTheme.labelMedium?.copyWith(
+                                        fontWeight: FontWeight.bold,
+                                        color: theme.colorScheme.onSurface,
+                                      ),
+                                    ),
+                                    Text(
+                                      '${(progresso * 100).toInt()}%',
+                                      style: theme.textTheme.labelLarge?.copyWith(
+                                        fontWeight: FontWeight.bold,
+                                        color: theme.colorScheme.primary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                Stack(
+                                  children: [
+                                    Container(
+                                      height: 10,
+                                      width: double.infinity,
+                                      decoration: BoxDecoration(
+                                        color: theme.colorScheme.primary.withOpacity(0.1),
+                                        borderRadius: BorderRadius.circular(5),
+                                      ),
+                                    ),
+                                    FractionallySizedBox(
+                                      widthFactor: progresso,
+                                      child: Container(
+                                        height: 10,
+                                        decoration: BoxDecoration(
+                                          gradient: LinearGradient(
+                                            colors: [
+                                              theme.colorScheme.primary,
+                                              theme.colorScheme.primary.withOpacity(0.7),
+                                            ],
+                                          ),
+                                          borderRadius: BorderRadius.circular(5),
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: theme.colorScheme.primary.withOpacity(0.3),
+                                              blurRadius: 4,
+                                              offset: const Offset(0, 2),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 16),
+                                Row(
+                                  children: [
+                                    _buildMiniStat(Icons.check_circle_outline, '$concluidos concluídos', Colors.green),
+                                    const SizedBox(width: 16),
+                                    _buildMiniStat(Icons.pending_actions, '${total - concluidos} pendentes', Colors.orange),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
                 ),
-              ),
-            ),
-          );
-        },
-        ),
-      ),
-      floatingActionButton: FloatingActionButton(
+      floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _openVersaoForm(),
-        child: const Icon(Icons.add),
+        label: const Text('Nova Versão'),
+        icon: const Icon(Icons.add),
       ),
+    );
+  }
+
+  Widget _buildMiniStat(IconData icon, String label, Color color) {
+    return Row(
+      children: [
+        Icon(icon, size: 14, color: color),
+        const SizedBox(width: 4),
+        Text(
+          label,
+          style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w600),
+        ),
+      ],
     );
   }
 }

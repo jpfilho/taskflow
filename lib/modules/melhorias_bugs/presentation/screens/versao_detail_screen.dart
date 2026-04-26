@@ -22,6 +22,7 @@ class VersaoDetailScreen extends StatefulWidget {
 
 class _VersaoDetailScreenState extends State<VersaoDetailScreen> {
   final MelhoriasBugsService _service = MelhoriasBugsService();
+  final ScrollController _scrollController = ScrollController();
   List<MelhoriaBug> _items = [];
   List<Versao> _versoes = [];
   bool _loading = true;
@@ -55,6 +56,12 @@ class _VersaoDetailScreenState extends State<VersaoDetailScreen> {
   }
 
   @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
   void initState() {
     super.initState();
     _load();
@@ -74,102 +81,187 @@ class _VersaoDetailScreenState extends State<VersaoDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final total = _items.length;
     final concluidos = _items.where((i) => i.status == 'CONCLUIDO').length;
     final progresso = total > 0 ? (concluidos / total) : 0.0;
 
     return Scaffold(
+      backgroundColor: theme.colorScheme.surface,
       appBar: AppBar(
         title: Text(versao.nome),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.add),
-            onPressed: () => _openForm(),
-          ),
-        ],
+        elevation: 0,
+        backgroundColor: Colors.transparent,
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : CustomScrollView(
+              controller: _scrollController,
               slivers: [
                 SliverToBoxAdapter(
                   child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            if (versao.descricao != null && versao.descricao!.isNotEmpty)
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 8),
-                                child: Text(
-                                  versao.descricao!,
-                                  style: TextStyle(color: Colors.grey.shade700),
-                                ),
-                              ),
-                            Row(
-                              children: [
-                                if (versao.dataPrevistaLancamento != null)
-                                  Text(
-                                    'Previsto: ${DateFormat('dd/MM/yyyy').format(versao.dataPrevistaLancamento!)}',
-                                    style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
-                                  ),
-                                if (versao.dataPrevistaLancamento != null) const SizedBox(width: 16),
-                                Text(
-                                  '$concluidos / $total itens',
-                                  style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            LinearProgressIndicator(
-                              value: progresso,
-                              backgroundColor: Colors.grey.shade200,
-                              valueColor: AlwaysStoppedAnimation<Color>(Theme.of(context).colorScheme.primary),
-                            ),
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                    child: Container(
+                      padding: const EdgeInsets.all(24),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            theme.colorScheme.primaryContainer.withOpacity(0.3),
+                            theme.colorScheme.surface,
                           ],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
                         ),
+                        borderRadius: BorderRadius.circular(24),
+                        border: Border.all(color: theme.dividerColor.withOpacity(0.1)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (versao.descricao != null && versao.descricao!.isNotEmpty) ...[
+                            Text(
+                              versao.descricao!,
+                              style: theme.textTheme.bodyLarge?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                                height: 1.5,
+                              ),
+                            ),
+                            const SizedBox(height: 24),
+                          ],
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Status da Versão',
+                                    style: theme.textTheme.labelMedium?.copyWith(
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '${(progresso * 100).toInt()}% Concluído',
+                                    style: theme.textTheme.titleMedium?.copyWith(
+                                      color: theme.colorScheme.primary,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              if (versao.dataPrevistaLancamento != null)
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
+                                    Text(
+                                      'Previsão',
+                                      style: theme.textTheme.labelMedium?.copyWith(
+                                        color: theme.colorScheme.onSurfaceVariant,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      DateFormat('dd MMM yyyy').format(versao.dataPrevistaLancamento!),
+                                      style: theme.textTheme.titleMedium?.copyWith(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: LinearProgressIndicator(
+                              value: progresso,
+                              minHeight: 12,
+                              backgroundColor: theme.colorScheme.primary.withOpacity(0.1),
+                              valueColor: AlwaysStoppedAnimation<Color>(theme.colorScheme.primary),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
                 ),
                 SliverToBoxAdapter(
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: Text(
-                      'Itens desta versão',
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                            color: Colors.grey.shade700,
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                    child: Row(
+                      children: [
+                        Text(
+                          'ITENS DA VERSÃO',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 1.2,
+                            color: theme.colorScheme.onSurfaceVariant,
                           ),
+                        ),
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            total.toString(),
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: theme.colorScheme.primary,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
+                const SliverPadding(padding: EdgeInsets.only(top: 8)),
                 _items.isEmpty
-                    ? const SliverFillRemaining(
+                    ? SliverFillRemaining(
+                        hasScrollBody: false,
                         child: Center(
-                          child: Text('Nenhum item nesta versão. Toque em + para adicionar.'),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.assignment_outlined, size: 48, color: theme.colorScheme.onSurface.withOpacity(0.1)),
+                              const SizedBox(height: 16),
+                              Text(
+                                'Nenhum item nesta versão',
+                                style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
+                              ),
+                            ],
+                          ),
                         ),
                       )
-                    : SliverList(
-                        delegate: SliverChildBuilderDelegate(
-                          (context, index) {
-                            final item = _items[index];
-                            return MelhoriaBugCard(
-                              item: item,
-                              onTap: () => _openForm(item),
-                              onEdit: () => _openForm(item),
-                            );
-                          },
-                          childCount: _items.length,
+                    : SliverPadding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        sliver: SliverList(
+                          delegate: SliverChildBuilderDelegate(
+                            (context, index) {
+                              final item = _items[index];
+                              return MelhoriaBugCard(
+                                item: item,
+                                onTap: () => _openForm(item),
+                                onEdit: () => _openForm(item),
+                              );
+                            },
+                            childCount: _items.length,
+                          ),
                         ),
                       ),
+                const SliverPadding(padding: EdgeInsets.only(bottom: 100)),
               ],
             ),
-      floatingActionButton: FloatingActionButton(
+      floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _openForm(),
-        child: const Icon(Icons.add),
+        label: const Text('Novo Item'),
+        icon: const Icon(Icons.add),
       ),
     );
   }

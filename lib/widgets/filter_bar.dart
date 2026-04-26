@@ -249,79 +249,93 @@ class _FilterBarState extends State<FilterBar> {
       _selectedSegmento.isNotEmpty,
       _selectedFrota.isNotEmpty,
     ].where((f) => f).length;
-    const double fieldWidth = 140.0;
+    
     const double barHeight = 72.0;
+    
     return Container(
       width: double.infinity,
       height: barHeight,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      color: Colors.grey[200],
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SizedBox(
-              width: fieldWidth,
-              child: _buildMultiSelectFilterField(
-                'REGIONAL', _regionaisTotais, _selectedRegional, (v) {
-                  setState(() { _selectedRegional = v; _updateFilters(); });
-                },
-                isMobile: false,
-              ),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            offset: const Offset(0, 2),
+            blurRadius: 4,
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Filtros distribuídos
+          Expanded(
+            child: _buildTeamFilterField(
+              'REGIONAL', 
+              Icons.location_on,
+              _regionaisTotais, 
+              _selectedRegional, 
+              (v) {
+                setState(() { _selectedRegional = v; _updateFilters(); });
+              }
             ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _buildTeamFilterField(
+              'DIVISÃO', 
+              Icons.business_center,
+              _divisoesTotais, 
+              _selectedDivisao, 
+              (v) {
+                setState(() { _selectedDivisao = v; _updateFilters(); });
+              }
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _buildTeamFilterField(
+              'SEGMENTO', 
+              Icons.category,
+              _segmentosTotais, 
+              _selectedSegmento, 
+              (v) {
+                setState(() { _selectedSegmento = v; _updateFilters(); });
+              }
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _buildTeamFilterField(
+              'FROTA', 
+              Icons.local_shipping,
+              _frotasTotais, 
+              _selectedFrota, 
+              (v) {
+                setState(() { _selectedFrota = v; _updateFilters(); });
+              }
+            ),
+          ),
+          
+          // Botão Limpar
+          if (activeCount > 0) ...[
             const SizedBox(width: 12),
-            SizedBox(
-              width: fieldWidth,
-              child: _buildMultiSelectFilterField(
-                'DIVISAO', _divisoesTotais, _selectedDivisao, (v) {
-                  setState(() { _selectedDivisao = v; _updateFilters(); });
-                },
-                isMobile: false,
-              ),
-            ),
-            const SizedBox(width: 12),
-            SizedBox(
-              width: fieldWidth,
-              child: _buildMultiSelectFilterField(
-                'SEGMENTO', _segmentosTotais, _selectedSegmento, (v) {
-                  setState(() { _selectedSegmento = v; _updateFilters(); });
-                },
-                isMobile: false,
-              ),
-            ),
-            const SizedBox(width: 12),
-            SizedBox(
-              width: fieldWidth,
-              child: _buildMultiSelectFilterField(
-                'FROTA', _frotasTotais, _selectedFrota, (v) {
-                  setState(() { _selectedFrota = v; _updateFilters(); });
-                },
-                isMobile: false,
-              ),
-            ),
-            if (activeCount > 0) ...[
-              const SizedBox(width: 12),
-              Center(
-                child: TextButton(
-                  onPressed: () {
-                    setState(() {
-                      _selectedRegional = {};
-                      _selectedDivisao = {};
-                      _selectedSegmento = {};
-                      _selectedFrota = {};
-                      _updateFilters();
-                    });
-                  },
-                  child: Text('Limpar', style: TextStyle(fontSize: 12, color: Colors.blue[700])),
-                ),
-              ),
-            ],
+            _buildClearButton(activeCount),
           ],
-        ),
+        ],
       ),
     );
+  }
+
+  void _clearFleetFilters() {
+    setState(() {
+      _selectedRegional = {};
+      _selectedDivisao = {};
+      _selectedSegmento = {};
+      _selectedFrota = {};
+      _updateFilters();
+    });
   }
 
   Widget _buildTeamFilterRow(bool isMobile) {
@@ -332,87 +346,238 @@ class _FilterBarState extends State<FilterBar> {
       _selectedMatricula.isNotEmpty,
       _selectedNome.isNotEmpty,
     ].where((f) => f).length;
-    const double fieldWidth = 140.0;
+    
     const double barHeight = 72.0;
+    
     return Container(
       width: double.infinity,
       height: barHeight,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      color: Colors.grey[200],
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SizedBox(
-              width: fieldWidth,
-              child: _buildMultiSelectFilterField(
-                'DIVISÃO', _divisoesTotais, _selectedDivisao, (v) {
-                  setState(() { _selectedDivisao = v; _updateFilters(); });
-                },
-                isMobile: false,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            offset: const Offset(0, 2),
+            blurRadius: 4,
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Campo de busca global à esquerda
+          Expanded(
+            flex: 2,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: Colors.grey[100],
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.grey[300]!),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.search, color: Colors.grey[600], size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextField(
+                      decoration: const InputDecoration(
+                        hintText: 'Buscar...',
+                        border: InputBorder.none,
+                        isDense: true,
+                        hintStyle: TextStyle(fontSize: 13),
+                      ),
+                      style: const TextStyle(fontSize: 13),
+                      onChanged: (v) {
+                        setState(() {
+                          _selectedNome = v.trim().isEmpty ? {} : {v.trim()};
+                          _updateFilters();
+                        });
+                      },
+                    ),
+                  ),
+                ],
               ),
             ),
+          ),
+          const SizedBox(width: 16),
+          
+          // Filtros distribuídos
+          Expanded(
+            flex: 1,
+            child: _buildTeamFilterField(
+              'DIVISÃO', 
+              Icons.business_center,
+              _divisoesTotais, 
+              _selectedDivisao, 
+              (v) {
+                setState(() { _selectedDivisao = v; _updateFilters(); });
+              }
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 1,
+            child: _buildTeamFilterField(
+              'EMPRESA', 
+              Icons.business,
+              _empresasTotais, 
+              _selectedEmpresa, 
+              (v) {
+                setState(() { _selectedEmpresa = v; _updateFilters(); });
+              }
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 1,
+            child: _buildTeamFilterField(
+              'FUNÇÃO', 
+              Icons.assignment_ind,
+              _funcoesTotais, 
+              _selectedFuncao, 
+              (v) {
+                setState(() { _selectedFuncao = v; _updateFilters(); });
+              }
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 1,
+            child: _buildTeamFilterField(
+              'MATRÍCULA', 
+              Icons.badge,
+              _matriculasTotais, 
+              _selectedMatricula, 
+              (v) {
+                setState(() { _selectedMatricula = v; _updateFilters(); });
+              }
+            ),
+          ),
+          
+          // Botão Limpar
+          if (activeCount > 0) ...[
             const SizedBox(width: 12),
-            SizedBox(
-              width: fieldWidth,
-              child: _buildMultiSelectFilterField(
-                'EMPRESA', _empresasTotais, _selectedEmpresa, (v) {
-                  setState(() { _selectedEmpresa = v; _updateFilters(); });
-                },
-                isMobile: false,
-              ),
+            _buildClearButton(activeCount),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTeamFilterField(
+    String label, 
+    IconData icon,
+    List<String> options, 
+    Set<String> selectedValues, 
+    ValueChanged<Set<String>> onChanged
+  ) {
+    final hasSelection = selectedValues.isNotEmpty;
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: hasSelection ? Colors.blue[600]! : Colors.grey[300]!,
+          width: hasSelection ? 1.5 : 1,
+        ),
+      ),
+      child: InkWell(
+        onTap: () {
+          showDialog(
+            context: context,
+            builder: (ctx) => MultiSelectFilterDialog(
+              title: label,
+              options: options,
+              selectedValues: selectedValues,
+              onSelectionChanged: onChanged,
+              searchHint: 'Pesquisar $label...',
             ),
-            const SizedBox(width: 12),
-            SizedBox(
-              width: fieldWidth,
-              child: _buildMultiSelectFilterField(
-                'FUNÇÃO', _funcoesTotais, _selectedFuncao, (v) {
-                  setState(() { _selectedFuncao = v; _updateFilters(); });
-                },
-                isMobile: false,
+          );
+        },
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          child: Row(
+            children: [
+              Icon(icon, size: 16, color: hasSelection ? Colors.blue[700] : Colors.grey[600]),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      style: TextStyle(
+                        fontSize: 9,
+                        color: Colors.grey[500],
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.5,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    Text(
+                      selectedValues.isEmpty
+                          ? 'Todos'
+                          : selectedValues.length == 1
+                              ? selectedValues.first
+                              : '${selectedValues.length} itens',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: hasSelection ? Colors.blue[800] : Colors.black87,
+                        fontWeight: hasSelection ? FontWeight.bold : FontWeight.normal,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(width: 12),
-            SizedBox(
-              width: fieldWidth,
-              child: _buildMultiSelectFilterField(
-                'MATRÍCULA', _matriculasTotais, _selectedMatricula, (v) {
-                  setState(() { _selectedMatricula = v; _updateFilters(); });
-                },
-                isMobile: false,
-              ),
-            ),
-            const SizedBox(width: 12),
-            SizedBox(
-              width: fieldWidth,
-              child: _buildMultiSelectFilterField(
-                'NOME', _nomesTotais, _selectedNome, (v) {
-                  setState(() { _selectedNome = v; _updateFilters(); });
-                },
-                isMobile: false,
-              ),
-            ),
-            if (activeCount > 0) ...[
-              const SizedBox(width: 12),
-              Center(
-                child: TextButton(
-                  onPressed: () {
-                    setState(() {
-                      _selectedDivisao = {};
-                      _selectedEmpresa = {};
-                      _selectedFuncao = {};
-                      _selectedMatricula = {};
-                      _selectedNome = {};
-                      _updateFilters();
-                    });
-                  },
-                  child: Text('Limpar', style: TextStyle(fontSize: 12, color: Colors.blue[700])),
+              Icon(Icons.arrow_drop_down, size: 18, color: Colors.grey[400]),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildClearButton(int count) {
+    return Center(
+      child: InkWell(
+        onTap: () {
+          setState(() {
+            _selectedDivisao = {};
+            _selectedEmpresa = {};
+            _selectedFuncao = {};
+            _selectedMatricula = {};
+            _selectedNome = {};
+            _updateFilters();
+          });
+        },
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.red[50],
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.red[200]!),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.filter_alt_off, size: 16, color: Colors.red[700]),
+              const SizedBox(width: 6),
+              Text(
+                'Limpar ($count)',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.red[700],
+                  fontWeight: FontWeight.bold,
                 ),
               ),
             ],
-          ],
+          ),
         ),
       ),
     );

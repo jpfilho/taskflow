@@ -906,13 +906,12 @@ class _TaskTableState extends State<TaskTable> {
                               color: Colors.transparent,
                               child: InkWell(
                                 onTap: () {
-                                  print('🔴 [DEBUG] Clique na ROW! taskId=${task.id}');
                                   widget.onTaskSelected?.call(task);
                                 },
                                 hoverColor: Colors.blue[100]!.withOpacity(0.3),
                                 child: Container(
                                   height:
-                                      50, // Altura fixa de 50px para alinhar com Gantt
+                                      50,
                                   decoration: BoxDecoration(
                                     color: statusBackgroundColor,
                                     border: Border(
@@ -1793,43 +1792,46 @@ class _TaskTableState extends State<TaskTable> {
 
     return SizedBox(
       width: width,
-      child: InkWell(
-        onTap: (_notasSAPCount[task.id] ?? 1) > 0 ? () {
-          print('🔵 [DEBUG-CELL TEXT] Clicou em NOTAS taskId=${task.id}');
-          _mostrarNotasSAP(task);
-        } : null,
-        child: Container(
-          padding: EdgeInsets.symmetric(
-            horizontal: isMobile ? 3 : 6,
-            vertical: isMobile ? 4 : 8,
-          ),
-          decoration: BoxDecoration(
-            border: Border(
-              right: BorderSide(color: Colors.grey[300]!, width: 0.5),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () {
+            print('🟡 [TAP] NotaSAPCell TAPPED! taskId=${task.id} hasNotas=$hasNotas count=$notasCount');
+            _mostrarNotasSAP(task);
+          },
+          child: Container(
+            padding: EdgeInsets.symmetric(
+              horizontal: isMobile ? 3 : 6,
+              vertical: isMobile ? 4 : 8,
             ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.description,
-                size: isMobile ? 12 : 14,
-                color: notaColor,
+            decoration: BoxDecoration(
+              border: Border(
+                right: BorderSide(color: Colors.grey[300]!, width: 0.5),
               ),
-              if (hasNotas)
-                Padding(
-                  padding: EdgeInsets.only(left: isMobile ? 2 : 4),
-                  child: Text(
-                    '$notasCount',
-                    style: TextStyle(
-                      fontSize: isMobile ? 9 : 10,
-                      color: statusBackgroundColor != Colors.white
-                          ? Colors.grey[800]
-                          : Colors.black87,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.description,
+                  size: isMobile ? 12 : 14,
+                  color: notaColor,
+                ),
+                if (hasNotas)
+                  Padding(
+                    padding: EdgeInsets.only(left: isMobile ? 2 : 4),
+                    child: Text(
+                      '$notasCount',
+                      style: TextStyle(
+                        fontSize: isMobile ? 9 : 10,
+                        color: statusBackgroundColor != Colors.white
+                            ? Colors.grey[800]
+                            : Colors.black87,
+                      ),
                     ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -1857,10 +1859,7 @@ class _TaskTableState extends State<TaskTable> {
     return SizedBox(
       width: width,
       child: InkWell(
-        onTap: (_ordensCount[task.id] ?? 1) > 0 ? () {
-          print('🔵 [DEBUG-CELL TEXT] Clicou em ORDENS taskId=${task.id}');
-          _mostrarOrdens(task);
-        } : null,
+        onTap: hasOrdens ? () => _mostrarOrdens(task) : null,
         child: Container(
           padding: EdgeInsets.symmetric(
             horizontal: isMobile ? 3 : 6,
@@ -1916,10 +1915,7 @@ class _TaskTableState extends State<TaskTable> {
     return SizedBox(
       width: width,
       child: InkWell(
-        onTap: (_atsCount[task.id] ?? 1) > 0 ? () {
-          print('🔵 [DEBUG-CELL TEXT] Clicou em ATs taskId=${task.id}');
-          _mostrarATs(task);
-        } : null,
+        onTap: hasATs ? () => _mostrarATs(task) : null,
         child: Container(
           padding: EdgeInsets.symmetric(
             horizontal: isMobile ? 3 : 6,
@@ -1974,10 +1970,7 @@ class _TaskTableState extends State<TaskTable> {
     return SizedBox(
       width: width,
       child: InkWell(
-        onTap: (_sisCount[task.id] ?? 1) > 0 || hasSiField ? () {
-          print('🔵 [DEBUG-CELL TEXT] Clicou em SIs taskId=${task.id}');
-          _mostrarSIs(task);
-        } : null,
+        onTap: hasSIs ? () => _mostrarSIs(task) : null,
         child: Container(
           padding: EdgeInsets.symmetric(
             horizontal: isMobile ? 3 : 6,
@@ -2040,10 +2033,24 @@ class _TaskTableState extends State<TaskTable> {
 
   Future<void> _mostrarNotasSAP(Task task) async {
     print('🟢 [DEBUG] _mostrarNotasSAP START taskId=${task.id}');
+    
+    // Feedback visual SÍNCRONO antes de qualquer async
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Buscando notas SAP da tarefa ${task.tarefa}...'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+    
     try {
       final notas = await _notaSAPService.getNotasPorTarefa(task.id);
-      print('🟢 [DEBUG] _mostrarNotasSAP notas=${notas.length} mounted=$mounted');
-      if (!mounted) return;
+      print('🟢 [DEBUG] _mostrarNotasSAP AFTER AWAIT notas=${notas.length} mounted=$mounted');
+      if (!mounted) {
+        print('🔴 [DEBUG] _mostrarNotasSAP ABORTED - widget not mounted!');
+        return;
+      }
 
       // Atualizar contagem on-demand se necessário
       if (notas.isNotEmpty) {
@@ -2053,18 +2060,39 @@ class _TaskTableState extends State<TaskTable> {
       }
 
       if (notas.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Nenhuma nota SAP vinculada')),
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Aviso'),
+            content: const Text('Nenhuma nota SAP vinculada (ou você não tem permissão para vê-las).'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
         );
         return;
       }
 
       _mostrarDialogNotasSAP(notas, task);
     } catch (e) {
+      print('🔴 [DEBUG] _mostrarNotasSAP ERROR: $e');
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Erro ao carregar notas: $e')));
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Erro Interno'),
+            content: SingleChildScrollView(child: Text(e.toString())),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
       }
     }
   }
@@ -2082,8 +2110,18 @@ class _TaskTableState extends State<TaskTable> {
       }
 
       if (ordens.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Nenhuma ordem vinculada')),
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Aviso'),
+            content: const Text('Nenhuma ordem vinculada (ou sem permissão).'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
         );
         return;
       }
@@ -2091,9 +2129,19 @@ class _TaskTableState extends State<TaskTable> {
       _mostrarDialogOrdens(ordens, task);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Erro ao carregar ordens: $e')));
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Erro Interno'),
+            content: SingleChildScrollView(child: Text(e.toString())),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
       }
     }
   }
@@ -2349,7 +2397,6 @@ class _TaskTableState extends State<TaskTable> {
             maxHeight: MediaQuery.of(context).size.height * 0.8,
           ),
           child: Column(
-            mainAxisSize: MainAxisSize.min,
             children: [
               Container(
                 padding: const EdgeInsets.all(20),
@@ -2408,12 +2455,8 @@ class _TaskTableState extends State<TaskTable> {
                   ],
                 ),
               ),
-              ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxHeight: MediaQuery.of(context).size.height * 0.6,
-                ),
+              Expanded(
                 child: ListView.builder(
-                  shrinkWrap: true,
                   padding: const EdgeInsets.all(16),
                   itemCount: notas.length,
                   itemBuilder: (context, index) {
@@ -2836,7 +2879,6 @@ class _TaskTableState extends State<TaskTable> {
             maxHeight: MediaQuery.of(context).size.height * 0.8,
           ),
           child: Column(
-            mainAxisSize: MainAxisSize.min,
             children: [
               Container(
                 padding: const EdgeInsets.all(20),
@@ -2895,12 +2937,8 @@ class _TaskTableState extends State<TaskTable> {
                   ],
                 ),
               ),
-              ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxHeight: MediaQuery.of(context).size.height * 0.6,
-                ),
+              Expanded(
                 child: ListView.builder(
-                  shrinkWrap: true,
                   padding: const EdgeInsets.all(16),
                   itemCount: ordens.length,
                   itemBuilder: (context, index) {
@@ -3009,7 +3047,6 @@ class _TaskTableState extends State<TaskTable> {
             maxHeight: MediaQuery.of(context).size.height * 0.8,
           ),
           child: Column(
-            mainAxisSize: MainAxisSize.min,
             children: [
               Container(
                 padding: const EdgeInsets.all(20),
@@ -3068,12 +3105,8 @@ class _TaskTableState extends State<TaskTable> {
                   ],
                 ),
               ),
-              ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxHeight: MediaQuery.of(context).size.height * 0.6,
-                ),
+              Expanded(
                 child: ListView.builder(
-                  shrinkWrap: true,
                   padding: const EdgeInsets.all(16),
                   itemCount: ats.length,
                   itemBuilder: (context, index) {
@@ -3177,7 +3210,6 @@ class _TaskTableState extends State<TaskTable> {
             maxHeight: MediaQuery.of(context).size.height * 0.8,
           ),
           child: Column(
-            mainAxisSize: MainAxisSize.min,
             children: [
               Container(
                 padding: const EdgeInsets.all(20),
@@ -3236,12 +3268,8 @@ class _TaskTableState extends State<TaskTable> {
                   ],
                 ),
               ),
-              ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxHeight: MediaQuery.of(context).size.height * 0.6,
-                ),
+              Expanded(
                 child: ListView.builder(
-                  shrinkWrap: true,
                   padding: const EdgeInsets.all(16),
                   itemCount: sis.length,
                   itemBuilder: (context, index) {

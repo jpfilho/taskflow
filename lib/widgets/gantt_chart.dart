@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import '../models/task.dart';
 import '../models/status.dart';
+import 'package:task2026/widgets/common/taskflow_calendar_marker_tooltip.dart';
 import '../models/feriado.dart';
 import '../models/tipo_atividade.dart';
 import '../services/task_service.dart';
@@ -1090,8 +1091,28 @@ class _GanttChartState extends State<GanttChart> {
 
   // Verificar se uma data é feriado
   bool _isFeriado(DateTime date) {
+    return _getHolidayColor(date) != null;
+  }
+
+  Color? _getHolidayColor(DateTime date) {
     final normalizedDate = DateTime(date.year, date.month, date.day);
-    return _feriadosMap.containsKey(normalizedDate);
+    if (!_feriadosMap.containsKey(normalizedDate)) return null;
+    final feriados = _feriadosMap[normalizedDate]!;
+    if (feriados.isEmpty) return null;
+    
+    // Priorizar EVENTO (laranja)
+    if (feriados.any((f) => f.tipo == 'EVENTO')) {
+      return Colors.orange[100];
+    }
+    return Colors.purple[100];
+  }
+
+  String? _getGlobalHolidayTooltip(DateTime date) {
+    final n = DateTime(date.year, date.month, date.day);
+    if (!_feriadosMap.containsKey(n)) return null;
+    final feriados = _feriadosMap[n]!;
+    if (feriados.isEmpty) return null;
+    return feriados.map((f) => '${f.tipo}: ${f.descricao}').join('\n');
   }
 
   // Método auxiliar para calcular largura dos dias baseado na largura da tela
@@ -2128,19 +2149,19 @@ class _GanttChartState extends State<GanttChart> {
                                       widget.scale == GanttScale.daily;
                                   final day = p.start;
                                   final isWeekend = isDaily && _isWeekend(day);
-                                  final isFeriado = isDaily && _isFeriado(day);
-                                  return Container(
+                                  final tooltip = isDaily ? _getGlobalHolidayTooltip(day) : null;
+                                  
+                                  Widget cell = Container(
                                     width: periodWidth,
                                     height:
                                         Responsive.kActivitiesHeaderRowHeight,
                                     padding: EdgeInsets.zero,
                                     margin: EdgeInsets.zero,
                                     decoration: BoxDecoration(
-                                      color: isFeriado
-                                          ? Colors.purple[100]
-                                          : isWeekend
-                                          ? Colors.grey[200]
-                                          : Colors.white,
+                                      color: _getHolidayColor(day) ??
+                                          (isWeekend
+                                              ? Colors.grey[200]
+                                              : Colors.white),
                                       border: Border.all(
                                         color: Colors.grey[300]!,
                                         width: 1,
@@ -2160,6 +2181,31 @@ class _GanttChartState extends State<GanttChart> {
                                       ),
                                     ),
                                   );
+
+                                  if (tooltip != null) {
+                                    final n = DateTime(day.year, day.month, day.day);
+                                    final feriados = _feriadosMap[n] ?? [];
+                                    
+                                    if (feriados.isNotEmpty) {
+                                      final f = feriados.first;
+                                      MarkerType mType = MarkerType.nationalHoliday;
+                                      if (f.tipo == 'ESTADUAL') mType = MarkerType.stateHoliday;
+                                      else if (f.tipo == 'MUNICIPAL') mType = MarkerType.cityHoliday;
+                                      else if (f.tipo == 'EVENTO') mType = MarkerType.specialEvent;
+
+                                      cell = TaskFlowCalendarMarkerTooltip(
+                                        data: CalendarMarkerData(
+                                          title: feriados.map((e) => e.descricao).join(' + '),
+                                          type: mType,
+                                          date: day,
+                                          observation: f.tipo == 'EVENTO' ? 'Evento Setor Elétrico' : 'Dia não útil',
+                                        ),
+                                        child: cell,
+                                      );
+                                    }
+                                  }
+
+                                  return cell;
                                 }).toList(),
                               ),
                               // Linhas verticais entre grupos (primeiro período de cada grupo)
@@ -3067,23 +3113,23 @@ class _GanttChartState extends State<GanttChart> {
                                             // Linha vertical indicando o dia atual (por cima de tudo)
                                             if (todayOffset >= 0)
                                               Positioned(
-                                                left:
-                                                    todayOffset +
-                                                    (periodWidth / 2),
+                                                left: todayOffset + (periodWidth / 2),
                                                 top: 0,
                                                 bottom: 0,
-                                                child: Container(
-                                                  width: 3,
-                                                  decoration: BoxDecoration(
-                                                    color: Colors.red[600],
-                                                    boxShadow: [
-                                                      BoxShadow(
-                                                        color: Colors.red
-                                                            .withOpacity(0.7),
-                                                        blurRadius: 4,
-                                                        spreadRadius: 1,
-                                                      ),
-                                                    ],
+                                                child: IgnorePointer(
+                                                  ignoring: true,
+                                                  child: Container(
+                                                    width: 3,
+                                                    decoration: BoxDecoration(
+                                                      color: Colors.red[600],
+                                                      boxShadow: [
+                                                        BoxShadow(
+                                                          color: Colors.red.withOpacity(0.7),
+                                                          blurRadius: 4,
+                                                          spreadRadius: 1,
+                                                        ),
+                                                      ],
+                                                    ),
                                                   ),
                                                 ),
                                               ),

@@ -34,6 +34,7 @@ class _ChatGruposListState extends State<ChatGruposList> {
   }
 
   Future<void> _loadGrupos() async {
+    if (!mounted) return;
     setState(() => _isLoading = true);
     try {
       // Carregar grupos da comunidade
@@ -43,6 +44,7 @@ class _ChatGruposListState extends State<ChatGruposList> {
       final gruposIds = grupos.where((g) => g.id != null).map((g) => g.id!).toList();
 
       if (gruposIds.isEmpty) {
+         if (!mounted) return;
          setState(() {
             _grupos = [];
             _isLoading = false;
@@ -57,6 +59,7 @@ class _ChatGruposListState extends State<ChatGruposList> {
       final gruposAtivosIds = ultimasMsgsMap.keys.toList();
 
       if (gruposAtivosIds.isEmpty) {
+         if (!mounted) return;
          setState(() {
             _grupos = [];
             _isLoading = false;
@@ -86,12 +89,14 @@ class _ChatGruposListState extends State<ChatGruposList> {
         return bData.compareTo(aData);
       });
 
+      if (!mounted) return;
       setState(() {
         _grupos = gruposComMensagem;
         _isLoading = false;
       });
     } catch (e) {
       print('Erro ao carregar grupos: $e');
+      if (!mounted) return;
       setState(() => _isLoading = false);
     }
   }

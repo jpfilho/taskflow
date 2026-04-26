@@ -8,6 +8,7 @@ import 'dart:async';
 import '../models/task.dart';
 import '../models/frota.dart';
 import '../models/tipo_atividade.dart';
+import 'package:task2026/widgets/common/taskflow_calendar_marker_tooltip.dart';
 import '../models/feriado.dart';
 import '../models/status.dart';
 import '../services/task_service.dart';
@@ -19,6 +20,7 @@ import '../services/status_service.dart';
 import '../services/segmento_service.dart';
 import '../services/tab_sync_service.dart';
 import '../services/conflict_service.dart';
+import '../services/performance_monitor.dart';
 import '../utils/responsive.dart';
 
 class FleetScheduleView extends StatefulWidget {
@@ -252,7 +254,13 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
       await _loadFeriados();
       
       // Carregar tarefas
-      final tasks = widget.filteredTasks ?? await widget.taskService.getAllTasks();
+      // Carregar tarefas apenas do período visível (otimização)
+      PerformanceMonitor.start('FleetScheduleView.getTasksForRange');
+      final tasks = widget.filteredTasks ?? await widget.taskService.getTasksForRange(
+        startDate: widget.startDate,
+        endDate: widget.endDate,
+      );
+      PerformanceMonitor.stop('FleetScheduleView.getTasksForRange');
       // debug silenciado
       
       // Carregar frotas
@@ -342,18 +350,15 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
 
   Future<void> _loadFeriados() async {
     try {
-      final feriados = await _feriadoService.getFeriadosByDateRange(
+      final allLocalIds = _tasks.expand((t) => t.localIds).toSet().toList();
+      final feriadosMap = await _feriadoService.getFeriadosMapByDateRangeAndLocais(
         widget.startDate,
         widget.endDate,
+        allLocalIds,
       );
-      _feriadosMap = {};
-      for (var feriado in feriados) {
-        final date = DateTime(feriado.data.year, feriado.data.month, feriado.data.day);
-        if (!_feriadosMap.containsKey(date)) {
-          _feriadosMap[date] = [];
-        }
-        _feriadosMap[date]!.add(feriado);
-      }
+      setState(() {
+        _feriadosMap = feriadosMap;
+      });
       print('✅ Feriados carregados: ${_feriadosMap.length}');
     } catch (e) {
       print('⚠️ Erro ao carregar feriados: $e');
@@ -361,8 +366,55 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
   }
 
   bool _isFeriado(DateTime date) {
-    final dateKey = DateTime(date.year, date.month, date.day);
-    return _feriadosMap.containsKey(dateKey);
+    return _getHolidayColor(date) != null;
+  }
+
+  Color? _getHolidayColor(DateTime date) {
+    final normalizedDate = DateTime(date.year, date.month, date.day);
+    if (!_feriadosMap.containsKey(normalizedDate)) return null;
+    final feriados = _feriadosMap[normalizedDate]!;
+    if (feriados.isEmpty) return null;
+    
+    // Priorizar EVENTO (laranja)
+    if (feriados.any((f) => f.tipo == 'EVENTO')) {
+      return Colors.orange[100];
+    }
+    return Colors.purple[100];
+  }
+  
+  bool _isFeriadoForTaskRow(DateTime date, FleetTaskRow row) {
+    return _getHolidayColorForTaskRow(date, row) != null;
+  }
+
+  Color? _getHolidayColorForTaskRow(DateTime date, FleetTaskRow row) {
+    final n = DateTime(date.year, date.month, date.day);
+    if (!_feriadosMap.containsKey(n)) return null;
+    final feriadosNoDia = _feriadosMap[n]!;
+    if (feriadosNoDia.isEmpty) return null;
+    
+    final rowLocalIds = row.tasks.expand((t) => t.localIds).toSet();
+    if (rowLocalIds.isEmpty) return null;
+    
+    final applicableFeriados = feriadosNoDia.where((feriado) => 
+       feriado.localIds.any((lId) => rowLocalIds.contains(lId))
+    ).toList();
+
+    if (applicableFeriados.isEmpty) return null;
+
+    // Priorizar EVENTO (laranja)
+    if (applicableFeriados.any((f) => f.tipo == 'EVENTO')) {
+      return Colors.orange[100];
+    }
+    
+    return Colors.purple[100];
+  }
+
+  String? _getGlobalHolidayTooltip(DateTime date) {
+    final n = DateTime(date.year, date.month, date.day);
+    if (!_feriadosMap.containsKey(n)) return null;
+    final feriados = _feriadosMap[n]!;
+    if (feriados.isEmpty) return null;
+    return feriados.map((f) => '${f.tipo}: ${f.descricao}').join('\n');
   }
 
   /// Aplica filtros da barra da tela Frota (Regional, Divisão, Segmento, Frota, Local não aplicado aqui).
@@ -527,8 +579,12 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
     }
     final start = DateTime(widget.startDate.year, widget.startDate.month, widget.startDate.day);
     final end = DateTime(widget.endDate.year, widget.endDate.month, widget.endDate.day);
-    final map = await cs.getFleetConflictsForRange(start, end);
-    final events = await cs.getFleetExecutionEventsForRange(start, end);
+    
+    // Otimização: Filtrar por frotas visíveis
+    final frotaIds = _frotas.map((f) => f.id).toList();
+    
+    final map = await cs.getFleetConflictsForRange(start, end, frotaIds: frotaIds);
+    final events = await cs.getFleetExecutionEventsForRange(start, end, frotaIds: frotaIds);
     if (!mounted) return;
     final conflictDaysByFrota = <String, Set<DateTime>>{};
     for (final entry in map.entries) {
@@ -1352,16 +1408,18 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
                             mainAxisSize: MainAxisSize.min,
                             children: days.map((day) {
                               final isWeekend = day.weekday == 6 || day.weekday == 7;
-                              final isFeriado = _isFeriado(day);
-                              return Container(
+                              final holidayColor = _getHolidayColor(day);
+                              final tooltip = _getGlobalHolidayTooltip(day);
+                              final isFeriado = holidayColor != null;
+
+                              Widget cell = Container(
                                 width: dayWidth,
                                 height: 50,
                                 padding: EdgeInsets.zero,
                                 margin: EdgeInsets.zero,
                                 decoration: BoxDecoration(
-                                  color: isFeriado
-                                      ? Colors.purple[100]
-                                      : (isWeekend ? Colors.grey[200] : Colors.white),
+                                  color: holidayColor ??
+                                      (isWeekend ? Colors.grey[200] : Colors.white),
                                   border: Border(
                                     right: BorderSide(
                                       color: Colors.grey[300]!,
@@ -1376,14 +1434,39 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
                                     day.day.toString().padLeft(2, '0'),
                                     style: TextStyle(
                                       fontSize: 11,
-                                      fontWeight: FontWeight.normal,
+                                      fontWeight: isFeriado ? FontWeight.bold : FontWeight.normal,
                                       color: isFeriado
-                                          ? Colors.purple[800]
+                                          ? (holidayColor == Colors.orange[100] ? Colors.orange[900] : Colors.purple[800])
                                           : (isWeekend ? Colors.grey[600] : Colors.black),
                                     ),
                                   ),
                                 ),
                               );
+
+                              if (tooltip != null) {
+                                final n = DateTime(day.year, day.month, day.day);
+                                final feriados = _feriadosMap[n] ?? [];
+                                
+                                if (feriados.isNotEmpty) {
+                                  final f = feriados.first;
+                                  MarkerType mType = MarkerType.nationalHoliday;
+                                  if (f.tipo == 'ESTADUAL') mType = MarkerType.stateHoliday;
+                                  else if (f.tipo == 'MUNICIPAL') mType = MarkerType.cityHoliday;
+                                  else if (f.tipo == 'EVENTO') mType = MarkerType.specialEvent;
+
+                                  cell = TaskFlowCalendarMarkerTooltip(
+                                    data: CalendarMarkerData(
+                                      title: feriados.map((e) => e.descricao).join(' + '),
+                                      type: mType,
+                                      date: day,
+                                      observation: f.tipo == 'EVENTO' ? 'Evento Setor Elétrico' : 'Dia não útil',
+                                    ),
+                                    child: cell,
+                                  );
+                                }
+                              }
+
+                              return cell;
                             }).toList(),
                           ),
                         ),
@@ -1583,14 +1666,13 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
                     mainAxisSize: MainAxisSize.min,
                     children: days.map((day) {
                       final isWeekend = day.weekday == 6 || day.weekday == 7;
-                      final isFeriado = _isFeriado(day);
+                      final ferColor = _getHolidayColorForTaskRow(day, row);
                       return Container(
                         width: dayWidth,
                         height: _rowHeight,
                         decoration: BoxDecoration(
-                          color: isFeriado
-                              ? Colors.purple[100]
-                              : (isWeekend ? Colors.grey[200] : Colors.white),
+                          color: ferColor ??
+                              (isWeekend ? Colors.grey[200] : Colors.white),
                           border: Border(
                             right: BorderSide(
                               color: Colors.grey[300]!,

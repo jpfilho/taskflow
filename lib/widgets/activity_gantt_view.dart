@@ -19,9 +19,13 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import '../models/task.dart';
 import '../models/status.dart';
+import 'package:task2026/widgets/common/taskflow_calendar_marker_tooltip.dart';
 import '../models/feriado.dart';
+import '../services/performance_monitor.dart';
 import '../models/tipo_atividade.dart';
 import '../models/grupo_chat.dart';
 import '../models/nota_sap.dart';
@@ -109,9 +113,10 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
   // ── Scroll ────────────────────────────────────────────────────────────────
   final ScrollController _verticalController = ScrollController();
   final ScrollController _ganttHorizController = ScrollController();
+  final ScrollController _ganttBottomHorizController = ScrollController();
   final ScrollController _ganttHeaderHorizController = ScrollController();
   final ScrollController _tableHeaderHorizController = ScrollController();
-  final ScrollController _tableBodyHorizController = ScrollController();
+
   final List<ScrollController> _rowScrollControllers = [];
   bool _isHorizScrolling = false;
   bool _isDragging = false;
@@ -154,6 +159,7 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
 
   // ── Conflitos ─────────────────────────────────────────────────────────────
   Map<String, ConflictInfo>? _conflictMapFromBackend;
+  Set<String> _daysWithConflicts = {}; // Otimização: dias que têm pelo menos um conflito
   Map<String, List<ExecutionEventFromBackend>>? _eventsByDayFromBackend;
   Map<String, ConflictInfo>? _conflictMapFrotaFromBackend;
   Map<String, List<FleetExecutionEventFromBackend>>? _fleetEventsByDayFromBackend;
@@ -161,7 +167,12 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
   bool _useFleetConflictBackend = false;
   bool _conflictPaintReady = false;
   int _conflictsVersion = 0;
-  late ValueNotifier<int> _conflictsVersionNotifier;
+  final ValueNotifier<int> _conflictsVersionNotifier = ValueNotifier<int>(0);
+  bool _isFetchingConflicts = false; 
+  Timer? _debounceConflictsTimer; 
+  DateTime? _lastFetchStart;
+  DateTime? _lastFetchEnd;
+  String? _lastTasksSignature;
   StreamSubscription<bool>? _syncStreamSub;
   bool _wasSyncing = false;
 
@@ -191,22 +202,21 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
   @override
   void initState() {
     super.initState();
-    _conflictsVersionNotifier = ValueNotifier<int>(_conflictsVersion);
 
-    _displayStartDate = widget.startDate.subtract(const Duration(days: 365));
-    _displayEndDate = widget.endDate.add(const Duration(days: 365));
+    final start = widget.startDate.subtract(const Duration(days: 15));
+    final end = widget.endDate.add(const Duration(days: 15));
+
+    _displayStartDate = start;
+    _displayEndDate = end;
 
     // Sincronizar scroll horizontal entre cabeçalho e linhas
     _ganttHorizController.addListener(_syncGanttHorizScroll);
-
-    // Cabeçalho da tabela segue o corpo
-    _tableBodyHorizController.addListener(() {
-      if (!_tableHeaderHorizController.hasClients) return;
-      try {
-        final max = _tableHeaderHorizController.position.maxScrollExtent;
-        final target = _tableBodyHorizController.offset.clamp(0.0, max);
-        _tableHeaderHorizController.jumpTo(target);
-      } catch (_) {}
+    _ganttBottomHorizController.addListener(() {
+      if (_isHorizScrolling || !_ganttBottomHorizController.hasClients) return;
+      final offset = _ganttBottomHorizController.offset;
+      if (_ganttHorizController.hasClients && (_ganttHorizController.offset - offset).abs() > 1.0) {
+        _ganttHorizController.jumpTo(offset.clamp(0.0, _ganttHorizController.position.maxScrollExtent));
+      }
     });
 
     _loadStatus();
@@ -244,11 +254,12 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
   void didUpdateWidget(ActivityGanttView oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    // Recarregar quando as tarefas mudarem
     final tasksChanged =
         oldWidget.tasks.length != widget.tasks.length ||
         oldWidget.tasks.map((t) => t.id).join(',') !=
             widget.tasks.map((t) => t.id).join(',');
+    
+    final rangeChanged = oldWidget.startDate != widget.startDate || oldWidget.endDate != widget.endDate;
 
     if (tasksChanged) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -256,6 +267,7 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
         _loadCounts();
         _loadedSubtasks.clear();
         _loadAllSubtasks();
+        
         if (widget.tasks.isEmpty) {
           _startEmptyTimer();
         } else {
@@ -263,6 +275,15 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
           _showEmptyMessage = false;
         }
       });
+    }
+
+    if (tasksChanged || rangeChanged) {
+      if (widget.conflictService != null) {
+        _debounceConflictsTimer?.cancel();
+        _debounceConflictsTimer = Timer(const Duration(milliseconds: 300), () {
+          _loadBackendConflicts();
+        });
+      }
     }
 
     // Sincronizar expansão global
@@ -284,12 +305,9 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
     }
 
     // Recarregar conflitos quando datas ou escala mudarem
-    if (oldWidget.startDate != widget.startDate ||
-        oldWidget.endDate != widget.endDate ||
-        oldWidget.scale != widget.scale) {
+    if (rangeChanged || oldWidget.scale != widget.scale) {
       _hasInitializedScroll = false;
       _loadFeriados();
-      if (widget.conflictService != null) _loadBackendConflicts();
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && _ganttHorizController.hasClients) {
           _ganttHorizController.jumpTo(0);
@@ -305,6 +323,7 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
 
   @override
   void dispose() {
+    _debounceConflictsTimer?.cancel();
     _conflictsVersionNotifier.dispose();
     _syncStreamSub?.cancel();
     _statusChangeSubscription?.cancel();
@@ -314,7 +333,8 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
     _ganttHorizController.dispose();
     _ganttHeaderHorizController.dispose();
     _tableHeaderHorizController.dispose();
-    _tableBodyHorizController.dispose();
+    _ganttBottomHorizController.dispose();
+
     for (var ctrl in _rowScrollControllers) {
       ctrl.dispose();
     }
@@ -326,28 +346,30 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
   // =========================================================================
 
   void _syncGanttHorizScroll() {
-    if (_isHorizScrolling) return;
-    if (!_ganttHorizController.hasClients) return;
+    if (_isHorizScrolling || !_ganttHorizController.hasClients) return;
     final offset = _ganttHorizController.offset;
 
     _isHorizScrolling = true;
-    // Sincronizar cabeçalho do gantt
-    if (_ganttHeaderHorizController.hasClients) {
-      try {
+    try {
+      if (_ganttHeaderHorizController.hasClients && (_ganttHeaderHorizController.offset - offset).abs() > 1.0) {
         _ganttHeaderHorizController.jumpTo(
           offset.clamp(0.0, _ganttHeaderHorizController.position.maxScrollExtent),
         );
-      } catch (_) {}
-    }
-    // Sincronizar todas as linhas
-    for (var ctrl in _rowScrollControllers) {
-      if (ctrl.hasClients && (ctrl.offset - offset).abs() > 1.0) {
-        try {
-          ctrl.jumpTo(offset.clamp(0.0, ctrl.position.maxScrollExtent));
-        } catch (_) {}
       }
+      for (var ctrl in _rowScrollControllers) {
+        if (ctrl.hasClients && (ctrl.offset - offset).abs() > 1.0) {
+          ctrl.jumpTo(offset.clamp(0.0, ctrl.position.maxScrollExtent));
+        }
+      }
+      if (_ganttBottomHorizController.hasClients && (_ganttBottomHorizController.offset - offset).abs() > 1.0) {
+        _ganttBottomHorizController.jumpTo(
+          offset.clamp(0.0, _ganttBottomHorizController.position.maxScrollExtent),
+        );
+      }
+    } catch (_) {
+    } finally {
+      _isHorizScrolling = false;
     }
-    _isHorizScrolling = false;
   }
 
   ScrollController _getRowController(int index) {
@@ -356,29 +378,10 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
       ctrl.addListener(() {
         if (_isHorizScrolling || !ctrl.hasClients) return;
         final offset = ctrl.offset;
-        if (_ganttHorizController.hasClients &&
-            (_ganttHorizController.offset - offset).abs() > 1.0) {
-          _isHorizScrolling = true;
+        if (_ganttHorizController.hasClients && (_ganttHorizController.offset - offset).abs() > 1.0) {
           _ganttHorizController.jumpTo(
             offset.clamp(0.0, _ganttHorizController.position.maxScrollExtent),
           );
-          if (_ganttHeaderHorizController.hasClients) {
-            try {
-              _ganttHeaderHorizController.jumpTo(
-                offset.clamp(0.0, _ganttHeaderHorizController.position.maxScrollExtent),
-              );
-            } catch (_) {}
-          }
-          for (var other in _rowScrollControllers) {
-            if (other != ctrl && other.hasClients) {
-              try {
-                other.jumpTo(
-                  offset.clamp(0.0, other.position.maxScrollExtent),
-                );
-              } catch (_) {}
-            }
-          }
-          _isHorizScrolling = false;
         }
       });
       _rowScrollControllers.add(ctrl);
@@ -429,9 +432,11 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
 
   Future<void> _loadFeriados() async {
     try {
-      final map = await _feriadoService.getFeriadosMapByDateRange(
+      final allLocalIds = widget.tasks.expand((t) => t.localIds).toSet().toList();
+      final map = await _feriadoService.getFeriadosMapByDateRangeAndLocais(
         _displayStartDate,
         _displayEndDate,
+        allLocalIds,
       );
       if (mounted) setState(() => _feriadosMap = map);
     } catch (e) {
@@ -492,7 +497,6 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
       final ordensNaoEnc = Map<String, int>.from((enc as dynamic).ordensNaoEncerradas as Map);
       final atsNaoEnc = Map<String, int>.from((enc as dynamic).atsNaoEncerradas as Map);
 
-      // Nomes das frotas
       final frotasCountMap = results[6] as Map<String, int>;
       final frotasNomesMap = <String, String>{};
       for (var task in widget.tasks) {
@@ -529,42 +533,127 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
   }
 
   Future<void> _loadBackendConflicts() async {
+    PerformanceMonitor.start('Gantt.loadBackendConflicts');
     final cs = widget.conflictService;
-    if (cs == null) return;
+    if (!mounted || cs == null) {
+      PerformanceMonitor.stop('Gantt.loadBackendConflicts');
+      return;
+    }
+    
+    // Gerar uma assinatura das tarefas atuais para evitar recargas inúteis
+    final currentSignature = widget.tasks.map((t) => t.id).join(',');
+    if (_lastFetchStart == widget.startDate && 
+        _lastFetchEnd == widget.endDate && 
+        _lastTasksSignature == currentSignature &&
+        _useBackendConflicts) {
+      return; // Já temos os dados para este cenário
+    }
 
-    // ── 1. Verificar disponibilidade em paralelo ──────────────────────────────
-    final availability = await Future.wait([
-      cs.isBackendAvailable(),
-      cs.isFleetConflictBackendAvailable(),
-    ]);
-    final ok = availability[0];
-    final fleetOk = availability[1];
+    if (_isFetchingConflicts) return; // Já existe uma busca em curso
 
-    // ── 2. Buscar dados em paralelo com tipos corretos ─────────────────────────
-    final Future<Map<String, ConflictInfo>?> fMap =
-        ok ? cs.getConflictsForRange(_displayStartDate, _displayEndDate) : Future.value(null);
-    final Future<Map<String, List<ExecutionEventFromBackend>>?> fEvents =
-        ok ? cs.getExecutionEventsForRange(_displayStartDate, _displayEndDate) : Future.value(null);
-    final Future<Map<String, ConflictInfo>?> fFleetMap =
-        fleetOk ? cs.getFleetConflictsForRange(_displayStartDate, _displayEndDate) : Future.value(null);
-    final Future<Map<String, List<FleetExecutionEventFromBackend>>?> fFleetEvents =
-        fleetOk ? cs.getFleetExecutionEventsForRange(_displayStartDate, _displayEndDate) : Future.value(null);
+    setState(() => _isFetchingConflicts = true);
+    
+    try {
+      final start = widget.startDate;
+      final end = widget.endDate;
 
-    // Aguarda tudo em paralelo
-    final results = await Future.wait([fMap, fEvents, fFleetMap, fFleetEvents]);
-    if (!mounted) return;
+      // Otimização: Coletar apenas os IDs de executores e frotas presentes nestas tarefas
+      final executorIds = <String>{};
+      final frotaIds = <String>{};
+      for (final t in widget.tasks) {
+        for (final id in t.executorIds) {
+          if (_uuidRegex.hasMatch(id.trim())) {
+            executorIds.add(id.trim());
+          }
+        }
+        // Se o campo executor (nome) por acaso for um UUID, também incluímos
+        if (t.executor.isNotEmpty && _uuidRegex.hasMatch(t.executor.trim())) {
+          executorIds.add(t.executor.trim());
+        }
+        frotaIds.addAll(t.frotaIds);
+      }
 
-    setState(() {
-      _conflictMapFromBackend      = results[0] as Map<String, ConflictInfo>?;
-      _eventsByDayFromBackend      = results[1] as Map<String, List<ExecutionEventFromBackend>>?;
-      _conflictMapFrotaFromBackend = results[2] as Map<String, ConflictInfo>?;
-      _fleetEventsByDayFromBackend = results[3] as Map<String, List<FleetExecutionEventFromBackend>>?;
-      _useBackendConflicts         = ok;
-      _useFleetConflictBackend     = fleetOk;
-      _conflictsVersion++;
-    });
-    _conflictsVersionNotifier.value = _conflictsVersion;
-    widget.onConflictsLoaded?.call();
+      // 1. Verificar disponibilidade em paralelo
+      final availability = await Future.wait([
+        cs.isBackendAvailable(),
+        cs.isFleetConflictBackendAvailable(),
+      ]);
+      final ok = availability[0];
+      final fleetOk = availability[1];
+
+      // 2. Buscar dados em paralelo filtrando pelos IDs coletados
+      final results = await Future.wait([
+        ok ? cs.getConflictsForRange(start, end, executorIds: executorIds.toList()) : Future.value(<String, ConflictInfo>{}),
+        ok ? cs.getExecutionEventsForRange(start, end, executorIds: executorIds.toList()) : Future.value(<String, List<ExecutionEventFromBackend>>{}),
+        fleetOk ? cs.getFleetConflictsForRange(start, end, frotaIds: frotaIds.toList()) : Future.value(<String, ConflictInfo>{}),
+        fleetOk ? cs.getFleetExecutionEventsForRange(start, end, frotaIds: frotaIds.toList()) : Future.value(<String, List<FleetExecutionEventFromBackend>>{}),
+      ]);
+
+      if (!mounted) return;
+
+      setState(() {
+        _conflictMapFromBackend      = results[0] as Map<String, ConflictInfo>?;
+        _eventsByDayFromBackend      = results[1] as Map<String, List<ExecutionEventFromBackend>>?;
+        _conflictMapFrotaFromBackend = results[2] as Map<String, ConflictInfo>?;
+        _fleetEventsByDayFromBackend = results[3] as Map<String, List<FleetExecutionEventFromBackend>>?;
+        _useBackendConflicts         = ok;
+        _useFleetConflictBackend     = fleetOk;
+        _conflictsVersion++;
+        
+        _lastFetchStart = start;
+        _lastFetchEnd = end;
+        _lastTasksSignature = currentSignature;
+
+        // Otimização: Preencher o Set de dias com conflito apenas para tarefas visíveis
+        _daysWithConflicts.clear();
+        if (_conflictMapFromBackend != null && widget.tasks.isNotEmpty) {
+          // Criar um mapa rápido de quais dias cada executor tem tarefas visíveis
+          final Map<String, Set<String>> visibleDaysByExecutor = {};
+          for (final t in widget.tasks) {
+            final ids = _getExecutorIdsForTask(t);
+            // Para cada segmento/período da tarefa
+            for (final segment in t.ganttSegments) {
+              DateTime cur = segment.dataInicio;
+              while (!cur.isAfter(segment.dataFim)) {
+                final dayKey = '${cur.year}-${cur.month.toString().padLeft(2, '0')}-${cur.day.toString().padLeft(2, '0')}';
+                for (final id in ids) {
+                  visibleDaysByExecutor.putIfAbsent(id.toLowerCase(), () => {}).add(dayKey);
+                }
+                cur = cur.add(const Duration(days: 1));
+              }
+            }
+          }
+
+          if (kDebugMode) {
+            // Debug removido
+          }
+
+          for (var entry in _conflictMapFromBackend!.entries) {
+            if (entry.value.hasConflict) {
+              final lastUnderscore = entry.key.lastIndexOf('_');
+              if (lastUnderscore != -1) {
+                final execId = entry.key.substring(0, lastUnderscore).toLowerCase();
+                final dateKey = entry.key.substring(lastUnderscore + 1);
+                
+                // Só adiciona se o executor tem uma tarefa VISÍVEL neste dia
+                if (visibleDaysByExecutor[execId]?.contains(dateKey) ?? false) {
+                  _daysWithConflicts.add(dateKey);
+                }
+              }
+            }
+          }
+        }
+      });
+      _conflictsVersionNotifier.value = _conflictsVersion;
+      PerformanceMonitor.stop('Gantt.loadBackendConflicts');
+    } catch (e) {
+      debugPrint('Erro ao carregar conflitos do backend: $e');
+      PerformanceMonitor.stop('Gantt.loadBackendConflicts');
+    } finally {
+      if (mounted) {
+        setState(() => _isFetchingConflicts = false);
+      }
+    }
   }
 
   // =========================================================================
@@ -942,9 +1031,50 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
   }
 
   bool _isWeekend(DateTime date) => date.weekday == 6 || date.weekday == 7;
-  bool _isFeriado(DateTime date) {
+  bool _isFeriado(DateTime date) => _getGlobalHolidayColor(date) != null;
+
+  Color? _getGlobalHolidayColor(DateTime date) {
     final n = DateTime(date.year, date.month, date.day);
-    return _feriadosMap.containsKey(n);
+    if (!_feriadosMap.containsKey(n)) return null;
+    final feriados = _feriadosMap[n]!;
+    if (feriados.isEmpty) return null;
+    if (feriados.any((f) => f.tipo == 'EVENTO')) return Colors.orange[100];
+    return Colors.purple[100];
+  }
+
+  String? _getGlobalHolidayTooltip(DateTime date) {
+    final n = DateTime(date.year, date.month, date.day);
+    if (!_feriadosMap.containsKey(n)) return null;
+    final feriados = _feriadosMap[n]!;
+    if (feriados.isEmpty) return null;
+    return feriados.map((f) => '${f.tipo}: ${f.descricao}').join('\n');
+  }
+  
+  bool _isFeriadoForTask(DateTime date, Task task) {
+    return _getHolidayColorForTask(date, task) != null;
+  }
+
+  Color? _getHolidayColorForTask(DateTime date, Task task) {
+    final n = DateTime(date.year, date.month, date.day);
+    if (!_feriadosMap.containsKey(n)) return null;
+    final feriadosNoDia = _feriadosMap[n]!;
+    if (feriadosNoDia.isEmpty) return null;
+    
+    // Se a tarefa não tem locais definidos, não se aplica nenhum feriado local/estadual (exceto os que foram aplicados a todos os locais)
+    if (task.localIds.isEmpty) return null;
+    
+    final applicableFeriados = feriadosNoDia.where((feriado) => 
+       feriado.localIds.any((lId) => task.localIds.contains(lId))
+    ).toList();
+
+    if (applicableFeriados.isEmpty) return null;
+
+    // Priorizar EVENTO (laranja) sobre feriados normais (roxo) se houver ambos
+    if (applicableFeriados.any((f) => f.tipo == 'EVENTO')) {
+      return Colors.orange[100];
+    }
+    
+    return Colors.purple[100];
   }
 
   DateTime _normalizeLegacyEndDate(Task task, DateTime start, DateTime end) {
@@ -1007,17 +1137,22 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
   bool _hasConflictOnDayForExecutor(DateTime day, String executorId) {
     if (widget.conflictService != null) {
       if (_conflictMapFromBackend == null) return false;
-      if (!_uuidRegex.hasMatch(executorId.trim())) return false;
       final key = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
-      return _conflictMapFromBackend!['${executorId}_$key']?.hasConflict ?? false;
+      return _conflictMapFromBackend!['${executorId.toLowerCase()}_$key']?.hasConflict ?? false;
     }
-    return ConflictDetection.hasConflictOnDayForExecutor(_taskList, day, executorId, _taskList);
+    return false;
   }
 
   bool _hasConflictOnDayForFrota(DateTime day, String frotaId) {
     if (_conflictMapFrotaFromBackend == null) return false;
     final key = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
     return _conflictMapFrotaFromBackend!['${frotaId}_$key']?.hasConflict ?? false;
+  }
+
+  bool _hasAnyExecutorConflictOnDay(DateTime day) {
+    if (_daysWithConflicts.isEmpty) return false;
+    final key = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+    return _daysWithConflicts.contains(key);
   }
 
   List<String> _getExecutorIdsForTask(Task task) {
@@ -1062,6 +1197,133 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
       cur = cur.add(const Duration(days: 1));
     }
     return days;
+  }
+
+  /// Tooltip de conflito apenas para um dia (para mostrar só o dia sob o cursor).
+  /// Agrupa por nome do executor para evitar linhas duplicadas (mesmo executor com ID e nome).
+  String? _getConflictDetailsMessageForSingleDay(Task task, DateTime day) {
+    final executorIds = _getExecutorIdsForConflictLookup(task);
+    if (executorIds.isEmpty) return null;
+
+    if (widget.conflictService != null && _useBackendConflicts && _eventsByDayFromBackend != null) {
+      final key = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+      final allEvents = _eventsByDayFromBackend![key] ?? [];
+      if (allEvents.isEmpty) return null;
+
+      final relevantEvents = allEvents.where((e) => executorIds.contains(e.executorId)).toList();
+      if (relevantEvents.isEmpty) return null;
+
+      final idToName = _executorIdToNameMap();
+      final nameToDescriptions = <String, Set<String>>{};
+      for (final e in relevantEvents) {
+        if (e.taskId == task.id) continue;
+        final nome = idToName[e.executorId] ?? e.executorId;
+        nameToDescriptions.putIfAbsent(nome, () => {}).add(e.description);
+      }
+      if (nameToDescriptions.isEmpty) return null;
+
+      final dayStr = '${day.day.toString().padLeft(2, '0')}/${day.month.toString().padLeft(2, '0')}/${day.year}';
+      final lines = <String>['Conflito em $dayStr (Backend):', ''];
+      final names = nameToDescriptions.keys.toList()..sort();
+      for (final nome in names) {
+        final descs = nameToDescriptions[nome]!.toList()..sort();
+        lines.add('• $nome: ${descs.join(' ; ')}');
+      }
+      return lines.join('\n');
+    }
+
+    return null;
+  }
+
+  String? _getFleetConflictDetailsMessageForSingleDay(Task task, DateTime day) {
+    final frotaIds = _getFleetIdsForTask(task);
+    if (frotaIds.isEmpty) return null;
+
+    if (widget.conflictService != null && _useFleetConflictBackend && _fleetEventsByDayFromBackend != null) {
+      final key = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+      final allEvents = _fleetEventsByDayFromBackend![key] ?? [];
+      if (allEvents.isEmpty) return null;
+
+      final relevantEvents = allEvents.where((e) => frotaIds.contains(e.frotaId)).toList();
+      if (relevantEvents.isEmpty) return null;
+
+      final nameToDescriptions = <String, Set<String>>{};
+      for (final e in relevantEvents) {
+        if (e.taskId == task.id) continue;
+        nameToDescriptions.putIfAbsent(e.frotaNome, () => {}).add(e.description);
+      }
+      if (nameToDescriptions.isEmpty) return null;
+
+      final dayStr = '${day.day.toString().padLeft(2, '0')}/${day.month.toString().padLeft(2, '0')}/${day.year}';
+      final lines = <String>['Conflito de frota em $dayStr:', ''];
+      for (final entry in nameToDescriptions.entries) {
+        lines.add('• ${entry.key}: ${entry.value.join(' ; ')}');
+      }
+      return lines.join('\n');
+    }
+
+    final lines = <String>['Conflito de frota (dias em preto).', ''];
+    for (final frotaId in frotaIds) {
+      if (!_hasConflictOnDayForFrota(day, frotaId)) continue;
+      // Detecção local de frota não implementada detalhadamente aqui
+      lines.add('• Frota em conflito neste dia.');
+    }
+    if (lines.length <= 2) return null;
+    return lines.join('\n');
+  }
+
+  Set<String> _getExecutorIdsForConflictLookup(Task task) {
+    final nameToId = <String, String>{};
+    for (final ep in task.executorPeriods) {
+      if (ep.executorId.trim().isNotEmpty && _uuidRegex.hasMatch(ep.executorId.trim()) && ep.executorNome.trim().isNotEmpty) {
+        final nome = ep.executorNome.trim();
+        nameToId[nome] = ep.executorId.trim();
+        nameToId[ConflictService.normalizeExecutorKey(nome)] = ep.executorId.trim();
+      }
+    }
+    final resolved = <String>{};
+    for (final id in ConflictDetection.getExecutorIdsForTask(task)) {
+      final t = id.trim();
+      if (t.isEmpty) continue;
+      if (_uuidRegex.hasMatch(t)) {
+        resolved.add(t);
+      } else {
+        final uuid = nameToId[t] ?? nameToId[ConflictService.normalizeExecutorKey(t)];
+        if (uuid != null) resolved.add(uuid);
+      }
+    }
+    return resolved;
+  }
+
+  Map<String, String> _executorIdToNameMap() {
+    final map = <String, String>{};
+    for (final task in _taskList) {
+      for (final ep in task.executorPeriods) {
+        if (ep.executorId.trim().isNotEmpty && ep.executorNome.trim().isNotEmpty) {
+          map[ep.executorId] = ep.executorNome.trim();
+          map[ep.executorNome.trim()] = ep.executorNome.trim();
+        }
+      }
+      if (task.executorIds.isNotEmpty) {
+        final nameList = task.executores.isNotEmpty ? task.executores : task.executor.split(',').map((e) => e.trim()).toList();
+        for (var i = 0; i < task.executorIds.length && i < nameList.length; i++) {
+          final eid = task.executorIds[i].trim();
+          final nome = nameList[i];
+          if (eid.isNotEmpty && nome.isNotEmpty) {
+            map[eid] = nome;
+            map[nome] = nome;
+          }
+        }
+      }
+    }
+    return map;
+  }
+
+  String _executorIdToDisplayName(String execId, Map<String, String> idToName) {
+    final t = execId.trim();
+    if (t.isEmpty) return '';
+    if (_uuidRegex.hasMatch(t)) return idToName[t] ?? '';
+    return idToName[t] ?? t;
   }
 
   // =========================================================================
@@ -1167,15 +1429,18 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
             color: Colors.grey[100],
             border: Border(bottom: BorderSide(color: Colors.grey[300]!, width: 1)),
           ),
-          child: SingleChildScrollView(
+          child: Scrollbar(
             controller: _ganttHeaderHorizController,
-            scrollDirection: Axis.horizontal,
-            physics: const NeverScrollableScrollPhysics(),
-            child: SizedBox(
-              width: totalWidth,
-              height: Responsive.kActivitiesHeaderTopHeight,
-              child: Stack(
-                children: _buildMergedGroupHeaders(periods, periodWidth),
+            child: SingleChildScrollView(
+              controller: _ganttHeaderHorizController,
+              scrollDirection: Axis.horizontal,
+              physics: const NeverScrollableScrollPhysics(),
+              child: SizedBox(
+                width: totalWidth,
+                height: Responsive.kActivitiesHeaderTopHeight,
+                child: Stack(
+                  children: _buildMergedGroupHeaders(periods, periodWidth),
+                ),
               ),
             ),
           ),
@@ -1209,49 +1474,89 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
             },
             onPointerUp: (_) { _isDragging = false; _isDraggingFromEmptyArea = false; },
             onPointerCancel: (_) { _isDragging = false; _isDraggingFromEmptyArea = false; },
-            child: SingleChildScrollView(
+            child: Scrollbar(
               controller: _ganttHorizController,
-              scrollDirection: Axis.horizontal,
-              physics: const ClampingScrollPhysics(),
-              child: SizedBox(
-                width: totalWidth,
-                height: Responsive.kActivitiesHeaderRowHeight,
-                child: Stack(
-                  children: [
-                    SizedBox(width: totalWidth, height: 1),
-                    ...List.generate(periods.length, (i) {
-                      final p = periods[i];
-                      final isDay = widget.scale == GanttScale.daily;
-                      final isWeekend = isDay && _isWeekend(p.start);
-                      final isFeriado = isDay && _isFeriado(p.start);
-                      return Positioned(
-                        left: i * periodWidth,
-                        top: 0,
-                        bottom: 0,
-                        width: periodWidth,
-                        child: Container(
+              child: SingleChildScrollView(
+                  controller: _ganttHorizController,
+                  scrollDirection: Axis.horizontal,
+                  physics: const ClampingScrollPhysics(),
+                  child: SizedBox(
+                  width: totalWidth,
+                  height: Responsive.kActivitiesHeaderRowHeight,
+                  child: Stack(
+                    children: [
+                      SizedBox(width: totalWidth, height: 1),
+                      ...List.generate(periods.length, (i) {
+                        final p = periods[i];
+                        final isDay = widget.scale == GanttScale.daily;
+                        final isWeekend = isDay && _isWeekend(p.start);
+                        final holidayColor = isDay ? _getGlobalHolidayColor(p.start) : null;
+                        final tooltip = isDay ? _getGlobalHolidayTooltip(p.start) : null;
+                        final hasConflict = isDay && _hasAnyExecutorConflictOnDay(p.start);
+
+                        Widget cell = Container(
                           decoration: BoxDecoration(
-                            color: isFeriado ? Colors.purple[100] : isWeekend ? Colors.grey[200] : Colors.white,
+                            color: hasConflict ? Colors.red[100] : (holidayColor ?? (isWeekend ? Colors.grey[200] : Colors.white)),
                             border: Border.all(color: Colors.grey[300]!, width: 1),
                           ),
                           alignment: Alignment.center,
-                          child: Text(p.label, style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis),
+                          child: Center(
+                            child: Text(p.label, 
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: hasConflict ? FontWeight.bold : FontWeight.normal,
+                                color: hasConflict ? Colors.red[900] : Colors.black,
+                              ), 
+                              overflow: TextOverflow.ellipsis
+                            ),
+                          ),
+                        );
+
+                        if (tooltip != null) {
+                          final n = DateTime(p.start.year, p.start.month, p.start.day);
+                          final feriados = _feriadosMap[n] ?? [];
+                          
+                          if (feriados.isNotEmpty) {
+                            final f = feriados.first;
+                            MarkerType mType = MarkerType.nationalHoliday;
+                            if (f.tipo == 'ESTADUAL') mType = MarkerType.stateHoliday;
+                            else if (f.tipo == 'MUNICIPAL') mType = MarkerType.cityHoliday;
+                            else if (f.tipo == 'EVENTO') mType = MarkerType.specialEvent;
+
+                            cell = TaskFlowCalendarMarkerTooltip(
+                              data: CalendarMarkerData(
+                                title: feriados.map((e) => e.descricao).join(' + '),
+                                type: mType,
+                                date: p.start,
+                                observation: f.tipo == 'EVENTO' ? 'Evento Setor Elétrico' : 'Dia não útil',
+                              ),
+                              child: cell,
+                            );
+                          }
+                        }
+
+                        return Positioned(
+                          left: i * periodWidth,
+                          top: 0,
+                          bottom: 0,
+                          width: periodWidth,
+                          child: cell,
+                        );
+                      }),
+                      ..._buildGroupSeparators(periods, periodWidth),
+                      if (todayOffset >= 0)
+                        Positioned(
+                          left: todayOffset + (periodWidth / 2) - 8,
+                          top: 0,
+                          child: Container(
+                            width: 16,
+                            height: 16,
+                            decoration: BoxDecoration(color: Colors.red[500], shape: BoxShape.circle),
+                            child: const Icon(Icons.circle, size: 12, color: Colors.white),
+                          ),
                         ),
-                      );
-                    }),
-                    ..._buildGroupSeparators(periods, periodWidth),
-                    if (todayOffset >= 0)
-                      Positioned(
-                        left: todayOffset + (periodWidth / 2) - 8,
-                        top: 0,
-                        child: Container(
-                          width: 16,
-                          height: 16,
-                          decoration: BoxDecoration(color: Colors.red[500], shape: BoxShape.circle),
-                          child: const Icon(Icons.circle, size: 12, color: Colors.white),
-                        ),
-                      ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -1483,11 +1788,7 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                     : BorderSide.none,
               ),
             ),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              controller: _tableBodyHorizController,
-              physics: const NeverScrollableScrollPhysics(),
-              child: SizedBox(
+            child: SizedBox(
                 width: w.total,
                 child: Row(
                   children: [
@@ -1531,7 +1832,6 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                   ],
                 ),
               ),
-            ),
           ),
         ),
       ),
@@ -1944,7 +2244,7 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                         final p = periods[i];
                         final isDay = widget.scale == GanttScale.daily;
                         final isWknd = isDay && _isWeekend(p.start);
-                        final isFer = isDay && _isFeriado(p.start);
+                        final ferColor = isDay ? _getHolidayColorForTask(p.start, task) : null;
                         return Positioned(
                           left: i * periodWidth,
                           top: 0,
@@ -1952,7 +2252,7 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                           width: periodWidth,
                           child: Container(
                             decoration: BoxDecoration(
-                              color: isFer ? Colors.purple[100] : isWknd ? Colors.grey[200] : Colors.white,
+                              color: ferColor ?? (isWknd ? Colors.grey[200] : Colors.white),
                               border: Border.all(color: Colors.grey[300]!, width: 1),
                             ),
                           ),
@@ -1998,6 +2298,28 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                             ? _getConflictDaysForSegmentFrota(task, start, end).toList()
                             : null;
 
+                        final conflictTooltipMessageByDay = <DateTime, String>{};
+                        if (conflictDays != null) {
+                          for (final d in conflictDays) {
+                            final dayNorm = DateTime(d.year, d.month, d.day);
+                            final msg = _getConflictDetailsMessageForSingleDay(task, dayNorm);
+                            if (msg != null && msg.isNotEmpty) {
+                              conflictTooltipMessageByDay[dayNorm] = msg;
+                            }
+                          }
+                        }
+
+                        final conflictTooltipMessageByDayFrota = <DateTime, String>{};
+                        if (conflictDaysFrota != null) {
+                          for (final d in conflictDaysFrota) {
+                            final dayNorm = DateTime(d.year, d.month, d.day);
+                            final msg = _getFleetConflictDetailsMessageForSingleDay(task, dayNorm);
+                            if (msg != null && msg.isNotEmpty) {
+                              conflictTooltipMessageByDayFrota[dayNorm] = msg;
+                            }
+                          }
+                        }
+
                         return Positioned(
                           left: startOff,
                           top: 0,
@@ -2016,10 +2338,10 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                             textColor: segColor.computeLuminance() > 0.5 ? Colors.black87 : Colors.white,
                             conflictDays: conflictDays,
                             conflictTooltipMessage: null,
-                            conflictTooltipMessageByDay: null,
+                            conflictTooltipMessageByDay: conflictTooltipMessageByDay.isEmpty ? null : conflictTooltipMessageByDay,
                             conflictDaysFrota: conflictDaysFrota,
                             conflictTooltipMessageFrota: null,
-                            conflictTooltipMessageByDayFrota: null,
+                            conflictTooltipMessageByDayFrota: conflictTooltipMessageByDayFrota.isEmpty ? null : conflictTooltipMessageByDayFrota,
                             taskService: widget.taskService,
                             onTasksUpdated: widget.onTasksUpdated,
                             onDragStart: _onSegmentDragStart,
@@ -2034,11 +2356,14 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                           left: todayOffset + (periodWidth / 2),
                           top: 0,
                           bottom: 0,
-                          child: Container(
-                            width: 3,
-                            decoration: BoxDecoration(
-                              color: Colors.red[600],
-                              boxShadow: [BoxShadow(color: Colors.red.withOpacity(0.7), blurRadius: 4, spreadRadius: 1)],
+                          child: IgnorePointer(
+                            ignoring: true,
+                            child: Container(
+                              width: 3,
+                              decoration: BoxDecoration(
+                                color: Colors.red[600],
+                                boxShadow: [BoxShadow(color: Colors.red.withOpacity(0.7), blurRadius: 4, spreadRadius: 1)],
+                              ),
                             ),
                           ),
                         ),
@@ -2078,15 +2403,16 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nenhuma frota vinculada')));
       return;
     }
-    // Reusar dialog do TaskTable — Por ora exibe simples
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Frota: $nome')));
   }
 
   Future<void> _mostrarNotasSAP(Task task) async {
     final notas = await _notaSAPService.getNotasPorTarefa(task.id);
     if (!mounted) return;
-    if (notas.isNotEmpty) setState(() => _notasSAPCount[task.id] = notas.length);
-    if (notas.isEmpty) {
+    if (notas.isNotEmpty) {
+      setState(() => _notasSAPCount[task.id] = notas.length);
+      _mostrarDialogNotasSAP(notas, task);
+    } else {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nenhuma nota SAP vinculada')));
     }
   }
@@ -2094,8 +2420,10 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
   Future<void> _mostrarOrdens(Task task) async {
     final ordens = await _ordemService.getOrdensPorTarefa(task.id);
     if (!mounted) return;
-    if (ordens.isNotEmpty) setState(() => _ordensCount[task.id] = ordens.length);
-    if (ordens.isEmpty) {
+    if (ordens.isNotEmpty) {
+      setState(() => _ordensCount[task.id] = ordens.length);
+      _mostrarDialogOrdens(ordens, task);
+    } else {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nenhuma ordem vinculada')));
     }
   }
@@ -2103,8 +2431,10 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
   Future<void> _mostrarATs(Task task) async {
     final ats = await _atService.getATsPorTarefa(task.id);
     if (!mounted) return;
-    if (ats.isNotEmpty) setState(() => _atsCount[task.id] = ats.length);
-    if (ats.isEmpty) {
+    if (ats.isNotEmpty) {
+      setState(() => _atsCount[task.id] = ats.length);
+      _mostrarDialogATs(ats, task);
+    } else {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nenhuma AT vinculada')));
     }
   }
@@ -2112,8 +2442,10 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
   Future<void> _mostrarSIs(Task task) async {
     final sis = await _siService.getSIsPorTarefa(task.id);
     if (!mounted) return;
-    if (sis.isNotEmpty) setState(() => _sisCount[task.id] = sis.length);
-    if (sis.isEmpty) {
+    if (sis.isNotEmpty) {
+      setState(() => _sisCount[task.id] = sis.length);
+      _mostrarDialogSIs(sis, task);
+    } else {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nenhuma SI vinculada')));
     }
   }
@@ -2235,9 +2567,694 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
             ),
           ),
         ),
+        // ── Barra de Rolagem Horizontal Inferior (Sincronizada) ──────────────
+        if (hierarchicalTasks.isNotEmpty)
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border(top: BorderSide(color: Colors.grey[300]!, width: 1)),
+            ),
+            child: Row(
+              children: [
+                SizedBox(width: _calcTableWidth(isMobile)),
+                Expanded(
+                  child: Container(
+                    height: 18,
+                    color: Colors.grey[50],
+                    child: Scrollbar(
+                      controller: _ganttBottomHorizController,
+                      thickness: 10,
+                      radius: const Radius.circular(5),
+                      child: SingleChildScrollView(
+                        controller: _ganttBottomHorizController,
+                        scrollDirection: Axis.horizontal,
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        child: SizedBox(width: totalWidth, height: 18),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
       ],
     );
   }
+  void _mostrarDialogNotasSAP(List<NotaSAP> notas, Task task) {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Container(
+          width: MediaQuery.of(context).size.width * 0.9,
+          constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
+          child: Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [Colors.blue[600]!, Colors.blue[400]!],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(16),
+                    topRight: Radius.circular(16),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(Icons.description, color: Colors.white, size: 24),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Notas SAP Vinculadas',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Text(
+                            'Tarefa: ${task.tarefa}',
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.9),
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: ListView.builder(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: notas.length,
+                  itemBuilder: (context, index) {
+                    final nota = notas[index];
+                    return _buildNotaSAPCard(nota, index);
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _copiarParaAreaTransferencia(String texto, String mensagemSucesso) async {
+    try {
+      await Clipboard.setData(ClipboardData(text: texto));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(mensagemSucesso), duration: const Duration(seconds: 1)),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Não foi possível copiar: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  Widget _buildNotaSAPCard(NotaSAP nota, int index) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+        border: Border.all(color: Colors.blue.withOpacity(0.2)),
+      ),
+      child: ExpansionTile(
+        leading: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.blue.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: const Icon(Icons.description, color: Colors.blue, size: 20),
+        ),
+        title: Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Nota: ${nota.nota}',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+              onPressed: () => _copiarParaAreaTransferencia(nota.nota, 'Nota copiada!'),
+              tooltip: 'Copiar nota',
+            ),
+          ],
+        ),
+        subtitle: nota.tipo != null ? Text('Tipo: ${nota.tipo}') : null,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildInfoRowModern('Tipo', nota.tipo),
+                _buildInfoRowModern('Status Sistema', nota.statusSistema),
+                _buildInfoRowModern('Status Usuário', nota.statusUsuario),
+                _buildInfoRowModern('Descrição', nota.descricao),
+                _buildInfoRowModern('Detalhes', nota.detalhes),
+                _buildInfoRowModern('Local Instalação', nota.localInstalacao),
+                _buildInfoRowModern('Ordem', nota.ordem),
+                _buildInfoRowModern('GPM', nota.gpm),
+                _buildInfoRowModern('Centro Trabalho', nota.centroTrabalhoResponsavel),
+                if (nota.inicioDesejado != null)
+                  _buildInfoRowModern('Início Desejado', _formatDate(nota.inicioDesejado!)),
+                if (nota.conclusaoDesejada != null)
+                  _buildInfoRowModern('Conclusão Desejada', _formatDate(nota.conclusaoDesejada!)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _mostrarDialogOrdens(List<Ordem> ordens, Task task) {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Container(
+          width: MediaQuery.of(context).size.width * 0.9,
+          constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
+          child: Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [Colors.orange[600]!, Colors.orange[400]!],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(16),
+                    topRight: Radius.circular(16),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(Icons.receipt_long, color: Colors.white, size: 24),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Ordens Vinculadas',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Text(
+                            'Tarefa: ${task.tarefa}',
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.9),
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: ListView.builder(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: ordens.length,
+                  itemBuilder: (context, index) {
+                    final ordem = ordens[index];
+                    return _buildOrdemCard(ordem, index);
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOrdemCard(Ordem ordem, int index) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+        border: Border.all(color: Colors.orange.withOpacity(0.2)),
+      ),
+      child: ExpansionTile(
+        leading: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.orange.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: const Icon(Icons.receipt_long, color: Colors.orange, size: 20),
+        ),
+        title: Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Ordem: ${ordem.ordem}',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+              onPressed: () => _copiarParaAreaTransferencia(ordem.ordem, 'Ordem copiada!'),
+              tooltip: 'Copiar ordem',
+            ),
+          ],
+        ),
+        subtitle: ordem.tipo != null ? Text('Tipo: ${ordem.tipo}') : null,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildInfoRowModern('Tipo', ordem.tipo),
+                _buildInfoRowModern('Status Sistema', ordem.statusSistema),
+                _buildInfoRowModern('Status Usuário', ordem.statusUsuario),
+                _buildInfoRowModern('Texto Breve', ordem.textoBreve),
+                _buildInfoRowModern('Denominação Local', ordem.denominacaoLocalInstalacao),
+                _buildInfoRowModern('Denominação Objeto', ordem.denominacaoObjeto),
+                _buildInfoRowModern('Local Instalação', ordem.localInstalacao),
+                _buildInfoRowModern('Código SI', ordem.codigoSI),
+                _buildInfoRowModern('GPM', ordem.gpm),
+                if (ordem.inicioBase != null)
+                  _buildInfoRowModern('Início Base', _formatDate(ordem.inicioBase!)),
+                if (ordem.fimBase != null)
+                  _buildInfoRowModern('Fim Base', _formatDate(ordem.fimBase!)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _mostrarDialogATs(List<AT> ats, Task task) {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Container(
+          width: MediaQuery.of(context).size.width * 0.9,
+          constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
+          child: Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [Colors.purple[600]!, Colors.purple[400]!],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(16),
+                    topRight: Radius.circular(16),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(Icons.assignment, color: Colors.white, size: 24),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'ATs Vinculadas',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Text(
+                            'Tarefa: ${task.tarefa}',
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.9),
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: ListView.builder(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: ats.length,
+                  itemBuilder: (context, index) {
+                    final at = ats[index];
+                    return _buildATCard(at, index);
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildATCard(AT at, int index) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+        border: Border.all(color: Colors.purple.withOpacity(0.2)),
+      ),
+      child: ExpansionTile(
+        leading: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.purple.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: const Icon(Icons.assignment, color: Colors.purple, size: 20),
+        ),
+        title: Row(
+          children: [
+            Expanded(
+              child: Text(
+                'AT: ${at.autorzTrab}',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+              onPressed: () => _copiarParaAreaTransferencia(at.autorzTrab, 'AT copiada!'),
+              tooltip: 'Copiar AT',
+            ),
+          ],
+        ),
+        subtitle: at.statusSistema != null ? Text('Status: ${at.statusSistema}') : null,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildInfoRowModern('Edificação', at.edificacao),
+                _buildInfoRowModern('Status Sistema', at.statusSistema),
+                _buildInfoRowModern('Status Usuário', at.statusUsuario),
+                _buildInfoRowModern('Texto Breve', at.textoBreve),
+                _buildInfoRowModern('Local Instalação', at.localInstalacao),
+                _buildInfoRowModern('Centro Trabalho', at.cntrTrab),
+                _buildInfoRowModern('Cen', at.cen),
+                _buildInfoRowModern('SI', at.si),
+                if (at.dataInicio != null)
+                  _buildInfoRowModern('Data Início', _formatDate(at.dataInicio!)),
+                if (at.dataFim != null)
+                  _buildInfoRowModern('Data Fim', _formatDate(at.dataFim!)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _mostrarDialogSIs(List<SI> sis, Task task) {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Container(
+          width: MediaQuery.of(context).size.width * 0.9,
+          constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
+          child: Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [Colors.teal[600]!, Colors.teal[400]!],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(16),
+                    topRight: Radius.circular(16),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(Icons.info, color: Colors.white, size: 24),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'SIs Vinculadas',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Text(
+                            'Tarefa: ${task.tarefa}',
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.9),
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: ListView.builder(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: sis.length,
+                  itemBuilder: (context, index) {
+                    final si = sis[index];
+                    return _buildSICard(si, index);
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSICard(SI si, int index) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+        border: Border.all(color: Colors.teal.withOpacity(0.2)),
+      ),
+      child: ExpansionTile(
+        leading: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.teal.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: const Icon(Icons.info, color: Colors.teal, size: 20),
+        ),
+        title: Row(
+          children: [
+            Expanded(
+              child: Text(
+                'SI: ${si.solicitacao}',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+              onPressed: () => _copiarParaAreaTransferencia(si.solicitacao, 'SI copiada!'),
+              tooltip: 'Copiar SI',
+            ),
+          ],
+        ),
+        subtitle: si.tipo != null ? Text('Tipo: ${si.tipo}') : null,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildInfoRowModern('Tipo', si.tipo),
+                _buildInfoRowModern('Status Sistema', si.statusSistema),
+                _buildInfoRowModern('Status Usuário', si.statusUsuario),
+                _buildInfoRowModern('Texto Breve', si.textoBreve),
+                _buildInfoRowModern('Local Instalação', si.localInstalacao),
+                _buildInfoRowModern('Criado Por', si.criadoPor),
+                _buildInfoRowModern('Centro Trabalho', si.cntrTrab),
+                _buildInfoRowModern('Cen', si.cen),
+                _buildInfoRowModern('Atrib AT', si.atribAT),
+                if (si.dataInicio != null)
+                  _buildInfoRowModern('Data Início', _formatDate(si.dataInicio!)),
+                if (si.dataFim != null)
+                  _buildInfoRowModern('Data Fim', _formatDate(si.dataFim!)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInfoRowModern(String label, String? value) {
+    if (value == null || value.isEmpty) return const SizedBox.shrink();
+    
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 140,
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey[700],
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(
+                fontSize: 13,
+                color: Colors.black87,
+                height: 1.4,
+              ),
+              maxLines: label == 'Detalhes' ? null : 3,
+              overflow: label == 'Detalhes' ? TextOverflow.visible : TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+
+  String _formatDate(DateTime date) {
+    return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
+  }
+
 }
 
 /// Larguras das colunas da tabela (centralizado).

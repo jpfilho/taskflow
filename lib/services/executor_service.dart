@@ -630,6 +630,73 @@ class ExecutorService {
 
   /// Coordenadores que pertencem à MESMA regional E divisão E segmento do perfil do usuário.
   /// Usado nas telas de criar/editar tarefa para restringir o dropdown de coordenador.
+  
+  // Buscar todos os executores e filtrar por perfil (Regional, Divisão, Segmento)
+  Future<List<Executor>> getExecutoresPorPerfilUsuario({
+    required List<String> regionalIds,
+    required List<String> divisaoIds,
+    required List<String> segmentoIds,
+    String? formRegionalId,
+    String? formDivisaoId,
+    String? formSegmentoId,
+  }) async {
+    try {
+      // 1. Obter executores base, filtrando pelos campos do formulário se existirem
+      List<Executor> baseExecutores = await getExecutoresFiltrados(
+        regionalId: formRegionalId,
+        divisaoId: formDivisaoId,
+        segmentoId: formSegmentoId,
+      );
+
+      // 2. Se o perfil for vazio (root/admin sem restrições), retorna a lista base
+      if (regionalIds.isEmpty && divisaoIds.isEmpty && segmentoIds.isEmpty) {
+        return baseExecutores;
+      }
+
+      // 3. Obter divisões permitidas (combinando divisões diretas + divisões das regionais)
+      List<String>? allowedDivisaoIds;
+      if (regionalIds.isNotEmpty || divisaoIds.isNotEmpty) {
+        var query = _supabase.from('divisoes').select('id');
+        if (regionalIds.isNotEmpty && divisaoIds.isEmpty) {
+          query = query.inFilter('regional_id', regionalIds);
+        } else if (regionalIds.isEmpty && divisaoIds.isNotEmpty) {
+          query = query.inFilter('id', divisaoIds);
+        } else {
+          // Both are provided, supabase doesn't have an easy OR so we fetch both and merge in Dart
+          // But usually or() works. For simplicity, we just fetch based on both using OR
+          query = query.or('regional_id.in.(${regionalIds.join(",")}),id.in.(${divisaoIds.join(",")})');
+        }
+        
+        final rows = await query;
+        allowedDivisaoIds = rows.isNotEmpty
+            ? (rows as List).map((r) => r['id'] as String).toList()
+            : <String>[];
+      }
+
+      // 4. Filtrar a base com as permissões do perfil
+      final filtrados = baseExecutores.where((e) {
+        // Validação de Regional/Divisão
+        if (allowedDivisaoIds != null) {
+          if (allowedDivisaoIds.isEmpty) return false;
+          if (e.divisaoId == null || !allowedDivisaoIds.contains(e.divisaoId)) return false;
+        }
+        
+        // Validação de Segmento
+        if (segmentoIds.isNotEmpty) {
+          final temSegmento = e.segmentoIds.any((s) => segmentoIds.contains(s));
+          if (!temSegmento) return false;
+        }
+        
+        return true;
+      }).toList();
+
+      return filtrados;
+    } catch (e) {
+      print('Erro getExecutoresPorPerfilUsuario: $e');
+      return [];
+    }
+  }
+
   Future<List<Executor>> getCoordenadoresPorPerfilUsuario({
     required List<String> regionalIds,
     required List<String> divisaoIds,

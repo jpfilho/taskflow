@@ -73,10 +73,14 @@ class _BodyElement extends Element {
   _BodyElement() : super();
 }
 
+class WindowBase {
+  void print() {}
+}
+
 class _Window {
   void print() {}
   _Location get location => _Location();
-  void open(String url, String target) {}
+  WindowBase? open(String url, String target) => null;
 }
 
 class _Location {

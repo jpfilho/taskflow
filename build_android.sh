@@ -10,6 +10,15 @@
 
 set -e
 
+# Configurar JAVA_HOME para Java 21 (Homebrew) para resolver incompatibilidade do Java 25 com Gradle/Kotlin
+if [[ -d "/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home" ]]; then
+  export JAVA_HOME="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home"
+  export PATH="$JAVA_HOME/bin:$PATH"
+  echo -e "${BLUE}☕ Usando Java em: $JAVA_HOME${NC}"
+  java -version
+fi
+
+
 # Cores
 RED='\033[0;31m'
 GREEN='\033[0;32m'

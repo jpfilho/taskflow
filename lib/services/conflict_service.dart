@@ -1,4 +1,5 @@
 import '../config/supabase_config.dart';
+import 'performance_monitor.dart';
 
 /// Informação de conflito para um (executor, dia) vinda do backend.
 class ConflictInfo {
@@ -21,6 +22,14 @@ class ConflictInfo {
 class ConflictService {
   final _supabase = SupabaseConfig.client;
 
+  // Cache de disponibilidade
+  bool? _isBackendAvailableCache;
+  DateTime? _lastAvailabilityCheck;
+  bool? _isFleetBackendAvailableCache;
+  DateTime? _lastFleetAvailabilityCheck;
+  static const _availabilityTtl = Duration(minutes: 5);
+
+
   /// Normaliza chave do executor para comparação (id ou nome).
   static String normalizeExecutorKey(String s) {
     if (s.isEmpty) return '';
@@ -37,40 +46,47 @@ class ConflictService {
   /// Chave do mapa: apenas executor_id + dayKey, para não misturar executores com o mesmo nome.
   Future<Map<String, ConflictInfo>> getConflictsForRange(
     DateTime startDate,
-    DateTime endDate,
-  ) async {
+    DateTime endDate, {
+    List<String>? executorIds,
+  }) async {
+    PerformanceMonitor.start('ConflictService.getConflictsForRange');
     final result = <String, ConflictInfo>{};
     try {
-      final start = DateTime(startDate.year, startDate.month, startDate.day).toUtc().toIso8601String().split('T').first;
-      final end = DateTime(endDate.year, endDate.month, endDate.day).toUtc().toIso8601String().split('T').first;
-      final res = await _supabase
+      final start = '${startDate.year}-${startDate.month.toString().padLeft(2, '0')}-${startDate.day.toString().padLeft(2, '0')}';
+      final end = '${endDate.year}-${endDate.month.toString().padLeft(2, '0')}-${endDate.day.toString().padLeft(2, '0')}';
+      var query = _supabase
           .from('v_conflict_por_dia_executor')
-          .select('executor_id, executor_nome, day, has_conflict, descriptions')
+          .select('executor_id, day, has_conflict')
           .gte('day', start)
           .lte('day', end);
-      for (final row in res as List) {
+      
+      if (executorIds != null && executorIds.isNotEmpty) {
+        query = query.inFilter('executor_id', executorIds);
+      }
+      
+      final res = await query;
+      
+      for (final row in res) {
         final map = row as Map<String, dynamic>;
         final executorId = map['executor_id']?.toString();
         final dayStr = map['day']?.toString();
-        final hasConflict = map['has_conflict'] == true;
-        final descList = map['descriptions'];
-        final descriptions = descList is List
-            ? descList.map((e) => e?.toString() ?? '').where((s) => s.isNotEmpty).toList()
-            : <String>[];
-
+        final hasConflict = map['has_conflict'] == true || map['has_conflict']?.toString() == 'true' || map['has_conflict']?.toString() == 't';
+        
         if (dayStr == null || executorId == null || executorId.isEmpty) continue;
+
         DateTime day;
         try {
           day = DateTime.parse(dayStr);
-        } catch (_) {
+        } catch (e) {
           continue;
         }
         final dayKey = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
-        result['${executorId}_$dayKey'] = ConflictInfo(hasConflict: hasConflict, descriptions: descriptions);
+        result['${executorId.toLowerCase()}_$dayKey'] = ConflictInfo(hasConflict: hasConflict, descriptions: []);
       }
+      PerformanceMonitor.stop('ConflictService.getConflictsForRange');
     } catch (e) {
-      // View pode não existir ou estar indisponível; retorna mapa vazio
-      return result;
+      print('⚠️ [getConflictsForRange] Erro: $e');
+      PerformanceMonitor.stop('ConflictService.getConflictsForRange');
     }
     return result;
   }
@@ -79,17 +95,25 @@ class ConflictService {
   /// Chave do mapa: dayKey (yyyy-MM-dd); valor: lista de eventos naquele dia.
   Future<Map<String, List<ExecutionEventFromBackend>>> getExecutionEventsForRange(
     DateTime startDate,
-    DateTime endDate,
-  ) async {
+    DateTime endDate, {
+    List<String>? executorIds,
+  }) async {
+    PerformanceMonitor.start('ConflictService.getExecutionEventsForRange');
     final result = <String, List<ExecutionEventFromBackend>>{};
     try {
       final start = '${startDate.year}-${startDate.month.toString().padLeft(2, '0')}-${startDate.day.toString().padLeft(2, '0')}';
       final end = '${endDate.year}-${endDate.month.toString().padLeft(2, '0')}-${endDate.day.toString().padLeft(2, '0')}';
-      final res = await _supabase
+      var query = _supabase
           .from('v_conflict_execution_events')
           .select('executor_id, executor_nome, day, location_key, task_id, description')
           .gte('day', start)
           .lte('day', end);
+          
+      if (executorIds != null && executorIds.isNotEmpty) {
+        query = query.inFilter('executor_id', executorIds);
+      }
+      
+      final res = await query;
       for (final row in res as List) {
         final map = row as Map<String, dynamic>;
         final dayStr = map['day']?.toString();
@@ -112,18 +136,45 @@ class ConflictService {
         final dayKey = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
         result.putIfAbsent(dayKey, () => []).add(event);
       }
-    } catch (_) {
-      // view pode não existir
+      PerformanceMonitor.stop('ConflictService.getExecutionEventsForRange');
+    } catch (e) {
+      PerformanceMonitor.stop('ConflictService.getExecutionEventsForRange');
     }
     return result;
   }
 
   /// Verifica se a view de conflitos existe (backend disponível).
   Future<bool> isBackendAvailable() async {
+    if (_lastAvailabilityCheck != null && _isBackendAvailableCache != null &&
+        DateTime.now().difference(_lastAvailabilityCheck!) < _availabilityTtl) {
+      return _isBackendAvailableCache!;
+    }
     try {
       await _supabase.from('v_conflict_por_dia_executor').select('day').limit(1);
+      _isBackendAvailableCache = true;
+      _lastAvailabilityCheck = DateTime.now();
       return true;
     } catch (_) {
+      _isBackendAvailableCache = false;
+      _lastAvailabilityCheck = DateTime.now();
+      return false;
+    }
+  }
+
+  /// Verifica se a view de conflito de frota existe.
+  Future<bool> isFleetConflictBackendAvailable() async {
+    if (_lastFleetAvailabilityCheck != null && _isFleetBackendAvailableCache != null &&
+        DateTime.now().difference(_lastFleetAvailabilityCheck!) < _availabilityTtl) {
+      return _isFleetBackendAvailableCache!;
+    }
+    try {
+      await _supabase.from('v_conflict_por_dia_frota').select('day').limit(1);
+      _isFleetBackendAvailableCache = true;
+      _lastFleetAvailabilityCheck = DateTime.now();
+      return true;
+    } catch (_) {
+      _isFleetBackendAvailableCache = false;
+      _lastFleetAvailabilityCheck = DateTime.now();
       return false;
     }
   }
@@ -133,17 +184,25 @@ class ConflictService {
   /// Conflitos por (frota_id, dia) para exibição em preto (tela de atividades e tela de frota).
   Future<Map<String, ConflictInfo>> getFleetConflictsForRange(
     DateTime startDate,
-    DateTime endDate,
-  ) async {
+    DateTime endDate, {
+    List<String>? frotaIds,
+  }) async {
+    PerformanceMonitor.start('ConflictService.getFleetConflictsForRange');
     final result = <String, ConflictInfo>{};
     try {
-      final start = DateTime(startDate.year, startDate.month, startDate.day).toUtc().toIso8601String().split('T').first;
-      final end = DateTime(endDate.year, endDate.month, endDate.day).toUtc().toIso8601String().split('T').first;
-      final res = await _supabase
+      final start = '${startDate.year}-${startDate.month.toString().padLeft(2, '0')}-${startDate.day.toString().padLeft(2, '0')}';
+      final end = '${endDate.year}-${endDate.month.toString().padLeft(2, '0')}-${endDate.day.toString().padLeft(2, '0')}';
+      var query = _supabase
           .from('v_conflict_por_dia_frota')
-          .select('frota_id, frota_nome, day, has_conflict, descriptions')
+          .select('frota_id, day, has_conflict')
           .gte('day', start)
           .lte('day', end);
+          
+      if (frotaIds != null && frotaIds.isNotEmpty) {
+        query = query.inFilter('frota_id', frotaIds);
+      }
+      
+      final res = await query;
       for (final row in res as List) {
         final map = row as Map<String, dynamic>;
         final frotaId = map['frota_id']?.toString();
@@ -162,9 +221,11 @@ class ConflictService {
           continue;
         }
         final dayKey = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
-        result['${frotaId}_$dayKey'] = ConflictInfo(hasConflict: hasConflict, descriptions: descriptions);
+        result['${frotaId}_$dayKey'] = ConflictInfo(hasConflict: hasConflict, descriptions: []);
       }
+      PerformanceMonitor.stop('ConflictService.getFleetConflictsForRange');
     } catch (e) {
+      PerformanceMonitor.stop('ConflictService.getFleetConflictsForRange');
       return result;
     }
     return result;
@@ -173,17 +234,24 @@ class ConflictService {
   /// Eventos de execução por frota para tooltip (v_conflict_execution_events_frota).
   Future<Map<String, List<FleetExecutionEventFromBackend>>> getFleetExecutionEventsForRange(
     DateTime startDate,
-    DateTime endDate,
-  ) async {
+    DateTime endDate, {
+    List<String>? frotaIds,
+  }) async {
     final result = <String, List<FleetExecutionEventFromBackend>>{};
     try {
       final start = '${startDate.year}-${startDate.month.toString().padLeft(2, '0')}-${startDate.day.toString().padLeft(2, '0')}';
       final end = '${endDate.year}-${endDate.month.toString().padLeft(2, '0')}-${endDate.day.toString().padLeft(2, '0')}';
-      final res = await _supabase
+      var query = _supabase
           .from('v_conflict_execution_events_frota')
           .select('frota_id, frota_nome, day, location_key, task_id, description')
           .gte('day', start)
           .lte('day', end);
+          
+      if (frotaIds != null && frotaIds.isNotEmpty) {
+        query = query.inFilter('frota_id', frotaIds);
+      }
+      
+      final res = await query;
       for (final row in res as List) {
         final map = row as Map<String, dynamic>;
         final dayStr = map['day']?.toString();
@@ -209,17 +277,8 @@ class ConflictService {
     } catch (_) {}
     return result;
   }
-
-  /// Verifica se a view de conflito de frota existe.
-  Future<bool> isFleetConflictBackendAvailable() async {
-    try {
-      await _supabase.from('v_conflict_por_dia_frota').select('day').limit(1);
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
 }
+
 
 /// Evento de execução retornado pelo backend (um executor em uma tarefa em um local em um dia).
 class ExecutionEventFromBackend {

@@ -127,6 +127,7 @@ class FloatingLabelDropdown<T> extends StatelessWidget {
   final void Function(T?) onChanged;
   final bool isDark;
   final String? Function(T?)? validator;
+  final bool showClearButton;
 
   const FloatingLabelDropdown({
     super.key,
@@ -138,6 +139,7 @@ class FloatingLabelDropdown<T> extends StatelessWidget {
     required this.onChanged,
     required this.isDark,
     this.validator,
+    this.showClearButton = true,
   });
 
   @override
@@ -152,7 +154,7 @@ class FloatingLabelDropdown<T> extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             DropdownButtonFormField<T>(
-              initialValue: value,
+              value: value,
               decoration: InputDecoration(
                 labelText: label,
                 labelStyle: TextStyle(
@@ -212,9 +214,26 @@ class FloatingLabelDropdown<T> extends StatelessWidget {
                           child: CircularProgressIndicator(strokeWidth: 2),
                         ),
                       )
-                    : Icon(
-                        Icons.expand_more,
-                        color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
+                    : Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (showClearButton && value != null)
+                            IconButton(
+                              icon: const Icon(Icons.clear, size: 18),
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(),
+                              onPressed: () {
+                                onChanged(null);
+                                field.didChange(null);
+                              },
+                              color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
+                            ),
+                          Icon(
+                            Icons.expand_more,
+                            color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
+                          ),
+                          const SizedBox(width: 8),
+                        ],
                       ),
               ),
               items: isLoading

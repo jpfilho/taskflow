@@ -3,6 +3,8 @@ import '../models/equipe.dart';
 import '../services/equipe_service.dart';
 import 'equipe_form_dialog.dart';
 import '../utils/responsive.dart';
+import '../services/performance_monitor.dart';
+import 'dart:async';
 
 class EquipeListView extends StatefulWidget {
   const EquipeListView({super.key});
@@ -18,6 +20,7 @@ class _EquipeListViewState extends State<EquipeListView> {
   bool _isLoading = true;
   final TextEditingController _searchController = TextEditingController();
   bool _isTableView = false; // false = lista (cards), true = tabela
+  Timer? _searchDebounce;
 
   @override
   void initState() {
@@ -36,11 +39,13 @@ class _EquipeListViewState extends State<EquipeListView> {
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _searchController.dispose();
     super.dispose();
   }
 
   Future<void> _loadEquipes() async {
+    PerformanceMonitor.start('EquipeListView._loadEquipes');
     setState(() {
       _isLoading = true;
     });
@@ -52,7 +57,9 @@ class _EquipeListViewState extends State<EquipeListView> {
         _filteredEquipes = equipes;
         _isLoading = false;
       });
+      PerformanceMonitor.stop('EquipeListView._loadEquipes');
     } catch (e) {
+      PerformanceMonitor.stop('EquipeListView._loadEquipes');
       print('Erro ao carregar equipes: $e');
       setState(() {
         _isLoading = false;
@@ -69,14 +76,32 @@ class _EquipeListViewState extends State<EquipeListView> {
   }
 
   void _onSearchChanged() {
-    final query = _searchController.text.trim();
-    if (query.isEmpty) {
-      setState(() {
-        _filteredEquipes = _equipes;
-      });
-    } else {
-      _searchEquipes(query);
-    }
+    if (_searchDebounce?.isActive ?? false) _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 500), () {
+      final query = _searchController.text.trim().toLowerCase();
+      if (query.isEmpty) {
+        setState(() {
+          _filteredEquipes = _equipes;
+        });
+      } else {
+        // Otimização: Filtrar localmente primeiro se já tivermos dados
+        final localResults = _equipes.where((e) {
+          final matchNome = e.nome.toLowerCase().contains(query);
+          final matchDesc = e.descricao?.toLowerCase().contains(query) ?? false;
+          final matchExec = e.executores.any((ex) => ex.executorNome.toLowerCase().contains(query));
+          return matchNome || matchDesc || matchExec;
+        }).toList();
+
+        setState(() {
+          _filteredEquipes = localResults;
+        });
+
+        // Se o resultado local for pequeno ou vazio, podemos buscar no banco para garantir
+        if (localResults.length < 5) {
+          _searchEquipes(query);
+        }
+      }
+    });
   }
 
   Future<void> _searchEquipes(String query) async {
