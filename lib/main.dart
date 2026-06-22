@@ -1313,6 +1313,14 @@ class _MainScreenState extends State<MainScreen> {
             _tasksVersion++;
           }
         }
+        
+        // Atualizar também na lista sem filtros (_tasksSemFiltros)
+        final semFiltroIndex = _tasksSemFiltros.indexWhere((t) => t.id == taskId);
+        if (semFiltroIndex != -1) {
+          _tasksSemFiltros[semFiltroIndex] = updatedTask;
+        } else {
+          _tasksSemFiltros.add(updatedTask);
+        }
       });
 
       // Recarregar alertas para refletir correção de warning (ex.: status PROG→CONC)
@@ -1588,7 +1596,7 @@ class _MainScreenState extends State<MainScreen> {
                       initialFilters: _currentFilters,
                       startDate: _startDate,
                       endDate: _endDate,
-                      visibleTasks: _tasks,
+                      visibleTasks: _tasksSemFiltros,
                       onSortChanged: _updateSorting,
                       currentSortColumn: _sortColumn,
                       currentSortAscending: _sortAscending,
@@ -1774,7 +1782,7 @@ class _MainScreenState extends State<MainScreen> {
                           initialFilters: _currentFilters,
                           startDate: _startDate,
                           endDate: _endDate,
-                          visibleTasks: _tasks,
+                          visibleTasks: _tasksSemFiltros,
                           onSortChanged: _updateSorting,
                           currentSortColumn: _sortColumn,
                           currentSortAscending: _sortAscending,
@@ -1961,7 +1969,7 @@ class _MainScreenState extends State<MainScreen> {
         }
         // Desktop: widget unificado que elimina dessincronização vertical
         return ActivityGanttView(
-          key: ValueKey('activity_gantt_${_tasksVersion}_${_expandedTasks.length}'),
+          key: const ValueKey('activity_gantt'),
           tasks: _tasksForTable,
           startDate: _startDate,
           endDate: _endDate,
@@ -1970,6 +1978,7 @@ class _MainScreenState extends State<MainScreen> {
           taskService: _taskService,
           conflictService: _conflictService,
           tasksForConflictDetection: _tasksSemFiltros.isNotEmpty ? _tasksSemFiltros : _tasks,
+          tasksVersion: _tasksVersion,
           allSubtasksExpanded: _allSubtasksExpanded,
           onToggleAllSubtasks: _toggleAllSubtasks,
           expandedTasks: _expandedTasks,
@@ -2074,8 +2083,9 @@ class _MainScreenState extends State<MainScreen> {
                   endDate: _endDate,
                 )
               : GanttChart(
-            key: ValueKey('gantt_chart_${_tasksVersion}_${_expandedTasks.length}_${_expandedTasks.toList()..sort()}'),
+            key: ValueKey('gantt_chart_${_expandedTasks.length}_${_expandedTasks.toList()..sort()}'),
             tasks: _tasksForTable,
+            tasksVersion: _tasksVersion,
             startDate: _startDate,
             endDate: _endDate,
             scale: _ganttScale,
@@ -2108,6 +2118,7 @@ class _MainScreenState extends State<MainScreen> {
           startDate: _startDate,
           endDate: _endDate,
           filteredTasks: _tasksSemFiltros, // Equipes deve usar lista sem filtros
+          tasksVersion: _tasksVersion,
           teamFilters: _teamFilters,
           onTeamDataLoaded: (opts) {
             setState(() { _teamFilterOptions = opts; });
@@ -2237,8 +2248,9 @@ class _MainScreenState extends State<MainScreen> {
               },
             ),
             rightChild: GanttChart(
-              key: ValueKey('gantt_chart_${_tasksVersion}_${_expandedTasks.length}_${_expandedTasks.toList()..sort()}'),
+              key: ValueKey('gantt_chart_${_expandedTasks.length}_${_expandedTasks.toList()..sort()}'),
               tasks: _tasksForTable,
+              tasksVersion: _tasksVersion,
               startDate: _startDate,
               endDate: _endDate,
               scale: _ganttScale,
@@ -2413,8 +2425,9 @@ class _MainScreenState extends State<MainScreen> {
             Expanded(
               flex: 1,
               child: GanttChart(
-                key: ValueKey('gantt_chart_${_tasksVersion}_${_expandedTasks.length}_${_expandedTasks.toList()..sort()}'),
+                key: ValueKey('gantt_chart_${_expandedTasks.length}_${_expandedTasks.toList()..sort()}'),
                 tasks: _tasksForTable,
+                tasksVersion: _tasksVersion,
                 startDate: _startDate,
                 endDate: _endDate,
                 scale: _ganttScale,
@@ -2610,6 +2623,7 @@ class _MainScreenState extends State<MainScreen> {
                     child: GanttChart(
                       key: const ValueKey('gantt'),
                       tasks: _tasksForTable,
+                      tasksVersion: _tasksVersion,
                       startDate: _startDate,
                       endDate: _endDate,
                       scale: _ganttScale,
@@ -2686,6 +2700,7 @@ class _MainScreenState extends State<MainScreen> {
           child: GanttChart(
             key: const ValueKey('gantt'),
             tasks: _tasksForTable,
+            tasksVersion: _tasksVersion,
             startDate: _startDate,
             endDate: _endDate,
             scale: _ganttScale,
@@ -3059,7 +3074,10 @@ class _MainScreenState extends State<MainScreen> {
   void _showTaskDetails(Task task) {
     showDialog(
       context: context,
-      builder: (context) => TaskViewDialog(task: task),
+      builder: (context) => TaskViewDialog(
+        task: task,
+        onEdit: (t) => _editTaskById(t.id),
+      ),
     );
   }
 

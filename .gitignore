@@ -21,3 +21,14 @@ web/.dart_tool/
 *.env
 *.env.*
 lib/config/**keys*.dart
+
+# Arquivos de log e depuração locais
+*.txt
+*.py
+test_db.dart
+test_locais.dart
+test_notas.dart
+.agents/
+scratch/
+.DS_Store
+**/.DS_Store

@@ -3247,6 +3247,11 @@ class _TaskFormDialogState extends State<TaskFormDialog>
                             .join(', ');
                       }
                     }
+                    
+                    // Filtrar períodos específicos por frota para conter apenas as selecionadas
+                    _frotaPeriods = _frotaPeriods
+                        .where((fp) => _selectedFrotaIds.contains(fp.frotaId))
+                        .toList();
                   });
                 },
                 hintText: 'Digite para buscar frota...',
@@ -3272,6 +3277,11 @@ class _TaskFormDialogState extends State<TaskFormDialog>
                           .map((f) => '${f.nome} - ${f.placa}')
                           .join(', ');
                     }
+                    
+                    // Filtrar períodos específicos por frota para conter apenas as selecionadas
+                    _frotaPeriods = _frotaPeriods
+                        .where((fp) => _selectedFrotaIds.contains(fp.frotaId))
+                        .toList();
                   });
                 },
                 tooltip: 'Desmarcar frota (deixar sem frota)',
@@ -3296,6 +3306,11 @@ class _TaskFormDialogState extends State<TaskFormDialog>
                           .map((f) => '${f.nome} - ${f.placa}')
                           .join(', ');
                     }
+                    
+                    // Filtrar períodos específicos por frota para conter apenas as selecionadas
+                    _frotaPeriods = _frotaPeriods
+                        .where((fp) => _selectedFrotaIds.contains(fp.frotaId))
+                        .toList();
                   });
                 },
                 tooltip: 'Remover frota',
@@ -3830,6 +3845,24 @@ class _TaskFormDialogState extends State<TaskFormDialog>
             .reduce((a, b) => a.isAfter(b) ? a : b);
       }
 
+      // Filtrar períodos específicos por executor para conter apenas os selecionados
+      if (_tipoExecutorEquipe == 'executor') {
+        _executorPeriods = _executorPeriods
+            .where((ep) => _selectedExecutorIds.contains(ep.executorId))
+            .toList();
+      } else {
+        _executorPeriods = [];
+      }
+
+      // Filtrar períodos específicos por frota para conter apenas as selecionadas
+      if (_selectedFrotaIds.isNotEmpty) {
+        _frotaPeriods = _frotaPeriods
+            .where((fp) => _selectedFrotaIds.contains(fp.frotaId))
+            .toList();
+      } else {
+        _frotaPeriods = [];
+      }
+
       print(
         '💾 TaskFormDialog: Salvando tarefa com ${ganttSegments.length} segmentos',
       );
@@ -4036,6 +4069,7 @@ class _TaskFormDialogState extends State<TaskFormDialog>
                 } else if (value == 'equipe') {
                   _usarEquipe = true;
                   _executor = '';
+                  _executorPeriods = [];
                 }
               });
             },
@@ -4387,6 +4421,11 @@ class _TaskFormDialogState extends State<TaskFormDialog>
                     _usarEquipe = false;
                     _selectedEquipe = null;
                     _selectedEquipeIds.clear();
+                    
+                    // Filtrar períodos específicos por executor para conter apenas os selecionados
+                    _executorPeriods = _executorPeriods
+                        .where((ep) => _selectedExecutorIds.contains(ep.executorId))
+                        .toList();
                   });
                 },
                 hintText: 'Digite para buscar executor...',
@@ -4415,6 +4454,11 @@ class _TaskFormDialogState extends State<TaskFormDialog>
                           .map((e) => e.nome) // Salvar apenas o nome
                           .join(', ');
                     }
+                    
+                    // Filtrar períodos específicos por executor para conter apenas os selecionados
+                    _executorPeriods = _executorPeriods
+                        .where((ep) => _selectedExecutorIds.contains(ep.executorId))
+                        .toList();
                   });
                 },
                 tooltip: 'Remover executor',

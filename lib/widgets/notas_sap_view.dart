@@ -2223,7 +2223,12 @@ class _NotasSAPViewState extends State<NotasSAPView> {
       if (task != null && mounted) {
         showDialog(
           context: context,
-          builder: (context) => TaskViewDialog(task: task),
+          builder: (context) => TaskViewDialog(
+            task: task,
+            onUpdated: (updatedTask) {
+              _loadNotasProgramadas();
+            },
+          ),
         );
       } else {
         if (mounted) {

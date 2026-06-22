@@ -19,11 +19,13 @@ import '../services/executor_service.dart';
 class TaskViewDialog extends StatefulWidget {
   final Task task;
   final Function(Task)? onEdit;
+  final Function(Task)? onUpdated;
 
   const TaskViewDialog({
     super.key,
     required this.task,
     this.onEdit,
+    this.onUpdated,
   });
 
   @override
@@ -136,7 +138,7 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
       // Buscar o contexto raiz para abrir o novo diálogo
       // Usar o contexto do widget pai (que chamou este diálogo)
       final rootContext = Navigator.of(context, rootNavigator: true).context;
-      await showDialog(
+      final result = await showDialog<Task>(
         context: rootContext,
         builder: (context) => TaskFormDialog(
           task: taskAtualizada,
@@ -144,6 +146,21 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
           endDate: taskAtualizada.dataFim,
         ),
       );
+
+      if (result != null) {
+        final updated = await _taskService.updateTask(taskAtualizada.id, result);
+        if (updated != null) {
+          if (widget.onUpdated != null) {
+            widget.onUpdated!(updated);
+          }
+          ScaffoldMessenger.of(rootContext).showSnackBar(
+            const SnackBar(
+              content: Text('Atividade atualizada com sucesso!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      }
     } catch (e) {
       print('⚠️ Erro ao abrir edição de tarefa: $e');
       if (mounted) {
@@ -745,6 +762,7 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
                 _buildInfoRowModern('Descrição', nota.descricao),
                 _buildInfoRowModern('Detalhes', nota.detalhes),
                 _buildInfoRowModern('Local Instalação', nota.localInstalacao),
+                _buildInfoRowModern('Sala', nota.sala),
                 _buildInfoRowModern('Ordem', nota.ordem),
                 _buildInfoRowModern('GPM', nota.gpm),
                 _buildInfoRowModern('Centro Trabalho', nota.centroTrabalhoResponsavel),

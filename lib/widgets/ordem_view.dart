@@ -2015,7 +2015,12 @@ class _OrdemViewState extends State<OrdemView> {
       if (task != null && mounted) {
         await showDialog(
           context: context,
-          builder: (context) => TaskViewDialog(task: task),
+          builder: (context) => TaskViewDialog(
+            task: task,
+            onUpdated: (updatedTask) {
+              _loadOrdensProgramadas();
+            },
+          ),
         );
       }
     } catch (e) {

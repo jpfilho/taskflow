@@ -69,6 +69,7 @@ class GanttChart extends StatefulWidget {
   /// Lista de tarefas usada só para detectar conflitos (ex.: lista sem filtro de executor).
   /// Se null, usa [tasks]. Quando há filtro, passar aqui a lista completa para manter os conflitos visíveis.
   final List<Task>? tasksForConflictDetection;
+  final int tasksVersion; // Versão para detectar atualizações externas
 
   /// Serviço de conflitos no backend (Supabase). Se fornecido e disponível, a detecção de conflitos usa as views em vez do cálculo em memória.
   final ConflictService? conflictService;
@@ -111,6 +112,7 @@ class GanttChart extends StatefulWidget {
     this.sortColumn,
     this.getSortValue,
     this.tasksForConflictDetection,
+    this.tasksVersion = 0,
     this.conflictService,
     this.onConflictsLoaded,
     this.showHourlyView = false,
@@ -238,7 +240,8 @@ class _GanttChartState extends State<GanttChart> {
       if (!_uuidRegex.hasMatch(executorId.trim())) return false;
       final dayKey =
           '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
-      final info = _conflictMapFromBackend!['${executorId}_$dayKey'];
+      final info = _conflictMapFromBackend!['${executorId.toLowerCase()}_$dayKey'] ??
+          _conflictMapFromBackend!['${ConflictService.normalizeExecutorKey(executorId)}_$dayKey'];
       return info?.hasConflict ?? false;
     }
     return ConflictDetection.hasConflictOnDayForExecutor(
@@ -265,7 +268,7 @@ class _GanttChartState extends State<GanttChart> {
         if (events != null && events.isNotEmpty) {
           final list =
               events
-                  .where((e) => e.executorId == executorId)
+                  .where((e) => e.executorId.toLowerCase() == executorId.toLowerCase())
                   .where(
                     (e) => excludeTaskId == null || e.taskId != excludeTaskId,
                   )
@@ -278,7 +281,7 @@ class _GanttChartState extends State<GanttChart> {
         }
       }
       // Fallback: usar descriptions do mapa de conflitos (v_conflict_por_dia_executor)
-      final info = _conflictMapFromBackend?['${executorId}_$dayKey'];
+      final info = _conflictMapFromBackend?['${executorId.toLowerCase()}_$dayKey'];
       if (info != null && info.descriptions.isNotEmpty) {
         return info.descriptions;
       }
@@ -1262,7 +1265,7 @@ class _GanttChartState extends State<GanttChart> {
       final newList = widget.tasksForConflictDetection ?? widget.tasks;
       final oldLen = oldList.length;
       final newLen = newList.length;
-      if (oldLen != newLen || (oldLen == 0 && newLen > 0)) {
+      if (oldLen != newLen || (oldLen == 0 && newLen > 0) || oldWidget.tasksVersion != widget.tasksVersion) {
         _loadBackendConflicts();
       }
     }

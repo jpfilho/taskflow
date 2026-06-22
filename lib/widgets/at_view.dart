@@ -1112,7 +1112,12 @@ class _ATViewState extends State<ATView> {
       if (task != null && mounted) {
         await showDialog(
           context: context,
-          builder: (context) => TaskViewDialog(task: task),
+          builder: (context) => TaskViewDialog(
+            task: task,
+            onUpdated: (updatedTask) {
+              _loadATsProgramadas();
+            },
+          ),
         );
       }
     } catch (e) {

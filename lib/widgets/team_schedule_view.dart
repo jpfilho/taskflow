@@ -38,6 +38,7 @@ class TeamScheduleView extends StatefulWidget {
   /// Quando fornecido, a tela usa as mesmas regras da tela de atividades (Gantt).
   final ConflictService? conflictService;
   final List<Task>? filteredTasks; // Tarefas já filtradas (opcional)
+  final int tasksVersion; // Versão para detectar atualizações externas
   /// Filtros da barra da tela Equipes: divisao, empresa, funcao, matricula, nome (valores separados por vírgula).
   final Map<String, String?>? teamFilters;
   /// Callback com opções para os dropdowns da barra (divisoes, empresas, funcoes, matriculas, nomes) — mesmos dados da tabela.
@@ -56,6 +57,7 @@ class TeamScheduleView extends StatefulWidget {
     required this.endDate,
     this.conflictService,
     this.filteredTasks,
+    this.tasksVersion = 0,
     this.teamFilters,
     this.onTeamDataLoaded,
     this.onTasksUpdated,
@@ -378,6 +380,10 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
       _loadFeriados(); // Recarregar feriados para o novo período
       if (widget.conflictService != null) _loadBackendConflicts();
       _buildExecutorRows();
+    }
+    if (oldWidget.tasksVersion != widget.tasksVersion) {
+      print('🔄 Versão das tarefas mudou de ${oldWidget.tasksVersion} para ${widget.tasksVersion}, recarregando dados...');
+      _loadData(showLoading: false);
     }
     if (oldWidget.teamFilters != widget.teamFilters) {
       setState(() {});
@@ -762,7 +768,9 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
       var conflictDaysByExecutor = <String, Set<DateTime>>{};
       // Helpers para checar vínculo do executor com a tarefa e coletar segmentos não-EXECUÇÃO
       bool matchesExecutor(Executor executor, {String? executorId, String? executorNome}) {
-        if (executorId != null && executorId.isNotEmpty && executorId == executor.id) return true;
+        if (executorId != null && executorId.isNotEmpty) {
+          return executorId == executor.id;
+        }
         if (executorNome != null && executorNome.isNotEmpty) {
           final keys = execKeySetById[executor.id] ?? const {};
           return keys.contains(_normalizeText(executorNome));
@@ -771,8 +779,16 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
       }
 
       bool isTaskAssignedToExecutor(Task task, Executor executor) {
-        // Por ID
-        if (task.executorIds.any((id) => id.isNotEmpty && id == executor.id)) return true;
+        final hasStructuredIds = task.executorIds.any((id) => id.trim().isNotEmpty) ||
+            task.executorPeriods.any((ep) => ep.executorId.trim().isNotEmpty);
+
+        if (hasStructuredIds) {
+          if (task.executorIds.any((id) => id.isNotEmpty && id == executor.id)) return true;
+          for (final ep in task.executorPeriods) {
+            if (ep.executorId.isNotEmpty && ep.executorId == executor.id) return true;
+          }
+          return false;
+        }
 
         // Por nomes/textos livres (usar chaves pré-computadas)
         final keys = execKeySetById[executor.id] ?? const {};
@@ -1004,12 +1020,16 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
         // --- ENRIQUECIMENTO (FIX): Complementar com _tasks para capturar atribuições via equipe ou nomes que a view pode ter perdido ---
         // Isso resolve o problema de executores que aparecem na tela de atividades mas não no Gantt de equipes
         for (final task in _tasks) {
-          final isAssigned = isTaskAssignedToExecutor(task, executor);
-          // Se o status for cancelado ou reprogramado, ignorar (mesma regra da view)
           final cod = task.status.toUpperCase().trim();
-          final isStatusExcluded = cod == 'CANC' || cod == 'REPR' ||
-              cod.contains('CANC') || cod.contains('REPR');
-          
+          final isStatusExcluded = cod == 'CANC' ||
+              cod == 'REPR' ||
+              cod == 'RPGR' ||
+              cod == 'REPROGRAMADA' ||
+              cod == 'CANCELADA' ||
+              cod == 'CANCELADO' ||
+              cod.contains('CANC') ||
+              cod.contains('REPR') ||
+              cod.contains('RPGR');
           if (isStatusExcluded) continue;
 
           if (isTaskAssignedToExecutor(task, executor)) {
@@ -3230,29 +3250,25 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
   }
 
   bool _hasConflictOnDayForExecutor(DateTime day, String executorId) {
+    bool backendConflict = false;
     if (_useBackendConflicts && _conflictMapFromBackend != null) {
       final dayKey = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
-      final k1 = '${executorId}_$dayKey';
+      final k1 = '${executorId.toLowerCase()}_$dayKey';
       final k2 = '${ConflictService.normalizeExecutorKey(executorId)}_$dayKey';
       final info = _conflictMapFromBackend![k1] ?? _conflictMapFromBackend![k2];
-      if (info != null) return info.hasConflict;
-      // Por nome do executor (backend pode retornar por executor_nome)
-      for (final row in _displayExecutorRows) {
-        if (row.executor.id == executorId) {
-          final kn = '${ConflictService.normalizeExecutorKey(row.executor.nome)}_$dayKey';
-          final infoN = _conflictMapFromBackend![kn];
-          if (infoN != null) return infoN.hasConflict;
-          break;
-        }
+      if (info != null && info.hasConflict) {
+        backendConflict = true;
       }
-      return false;
     }
-    return ConflictDetection.hasConflictOnDayForExecutor(
+
+    final localConflict = ConflictDetection.hasConflictOnDayForExecutor(
       _tasksForConflictDetection,
       day,
       executorId,
       _tasksForConflictDetection,
     );
+
+    return backendConflict || localConflict;
   }
 
   // Verificar se qualquer executor possui conflito no dia (para o cabeçalho)
@@ -3281,11 +3297,8 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
       final dayKey = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
       final events = _eventsByDayFromBackend![dayKey];
       if (events == null) return [];
-      final norm = ConflictService.normalizeExecutorKey(executorId);
       final list = events
-          .where((e) =>
-              e.executorId == executorId ||
-              ConflictService.normalizeExecutorKey(e.executorNome) == norm)
+          .where((e) => e.executorId.toLowerCase() == executorId.toLowerCase())
           .where((e) => excludeTaskId == null || e.taskId != excludeTaskId)
           .map((e) => e.description)
           .where((s) => s.isNotEmpty)

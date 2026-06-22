@@ -2319,6 +2319,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
                 _buildInfoRowModern('Status Usuário', nota.statusUsuario),
                 _buildInfoRowModern('Descrição', nota.descricao),
                 _buildInfoRowModern('Local Instalação', nota.localInstalacao),
+                _buildInfoRowModern('Sala', nota.sala),
                 _buildInfoRowModern('Ordem', nota.ordem),
                 _buildInfoRowModern('GPM', nota.gpm),
                 _buildInfoRowModern(

@@ -33,19 +33,20 @@ class ConflictDetection {
     final tipo = task.tipo.trim().toUpperCase();
     if (tipo == 'ADMIN' || tipo == 'ADM' || tipo == 'REUNIAO') return true;
 
-    final cod = task.status.trim().toUpperCase();
-    final nome = task.statusNome.trim().toUpperCase();
-    if (cod.isEmpty && nome.isEmpty) return false;
-    if (cod == 'CANC' || cod == 'RPGR' || cod == 'REPR' || cod == 'RPAR') {
-      return true;
-    }
-    if (cod == 'REPROGRAMADA' || cod == 'CANCELADA' || cod == 'CANCELADO') {
-      return true;
-    }
-    if (nome.contains('CANCELAD') || nome.contains('REPROGRAMAD')) return true;
-    if (cod.contains('RPGR') || cod.contains('REPR') || cod.contains('CANC')) {
-      return true;
-    }
+    // No frontend, a filtragem de status foi desativada para teste (deixando apenas o backend)
+    // final cod = task.status.trim().toUpperCase();
+    // final nome = task.statusNome.trim().toUpperCase();
+    // if (cod.isEmpty && nome.isEmpty) return false;
+    // if (cod == 'CANC' || cod == 'RPGR' || cod == 'REPR' || cod == 'RPAR') {
+    //   return true;
+    // }
+    // if (cod == 'REPROGRAMADA' || cod == 'CANCELADA' || cod == 'CANCELADO') {
+    //   return true;
+    // }
+    // if (nome.contains('CANCELAD') || nome.contains('REPROGRAMAD')) return true;
+    // if (cod.contains('RPGR') || cod.contains('REPR') || cod.contains('CANC')) {
+    //   return true;
+    // }
     return false;
   }
 
@@ -67,10 +68,17 @@ class ConflictDetection {
     return '';
   }
 
+  static final _uuidRegex = RegExp(
+    r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+  );
+
   static bool _executorPeriodMatches(
     ExecutorPeriod ep,
     String executorIdOrName,
   ) {
+    if (ep.executorId.isNotEmpty && _uuidRegex.hasMatch(executorIdOrName)) {
+      return ep.executorId == executorIdOrName;
+    }
     final key = _normalizeExecutorKey(executorIdOrName);
     if (key.isEmpty) return false;
     return _normalizeExecutorKey(ep.executorId) == key ||
@@ -78,6 +86,14 @@ class ConflictDetection {
   }
 
   static bool _taskInvolvesExecutor(Task task, String executorId) {
+    final hasStructuredIds = task.executorIds.any((id) => id.trim().isNotEmpty) ||
+        task.executorPeriods.any((ep) => ep.executorId.trim().isNotEmpty);
+
+    if (hasStructuredIds) {
+      if (task.executorIds.contains(executorId)) return true;
+      return task.executorPeriods.any((ep) => ep.executorId == executorId);
+    }
+
     final executorKeyNorm = _normalizeExecutorKey(executorId);
     final executorNamesNorm = task.executor
         .split(',')
@@ -88,8 +104,7 @@ class ConflictDetection {
         .map((e) => _normalizeExecutorKey(e))
         .where((e) => e.isNotEmpty)
         .toSet();
-    return task.executorIds.contains(executorId) ||
-        executorNamesNorm.contains(executorKeyNorm) ||
+    return executorNamesNorm.contains(executorKeyNorm) ||
         executoresNorm.contains(executorKeyNorm) ||
         task.executorPeriods.any(
           (ep) => _executorPeriodMatches(ep, executorId),
@@ -185,28 +200,44 @@ class ConflictDetection {
     // Se a tarefa tem filhos, o pai NUNCA pode cair em ganttSegments (bloco 4).
     final children = allTasks.where((t) => t.parentId == task.id).toList();
     if (children.isNotEmpty) {
-      final execKey = _normalizeExecutorKey(executorId);
-      final parentNamesNorm = task.executor
-          .split(',')
-          .map((s) => _normalizeExecutorKey(s))
-          .where((s) => s.isNotEmpty)
-          .toSet();
-      final parentInvolvesExecutor =
-          task.executorIds.contains(executorId) ||
-          parentNamesNorm.contains(execKey) ||
-          task.executores.any((e) => _normalizeExecutorKey(e) == execKey);
+      final hasStructuredIds = task.executorIds.any((id) => id.trim().isNotEmpty) ||
+          task.executorPeriods.any((ep) => ep.executorId.trim().isNotEmpty);
+
+      final bool parentInvolvesExecutor;
+      if (hasStructuredIds) {
+        parentInvolvesExecutor = task.executorIds.contains(executorId) ||
+            task.executorPeriods.any((ep) => ep.executorId == executorId);
+      } else {
+        final execKey = _normalizeExecutorKey(executorId);
+        final parentNamesNorm = task.executor
+            .split(',')
+            .map((s) => _normalizeExecutorKey(s))
+            .where((s) => s.isNotEmpty)
+            .toSet();
+        parentInvolvesExecutor = parentNamesNorm.contains(execKey) ||
+            task.executores.any((e) => _normalizeExecutorKey(e) == execKey);
+      }
+
       if (parentInvolvesExecutor) {
         for (final child in children) {
-          final childInvolves =
-              child.executorIds.contains(executorId) ||
-              (child.executor.isNotEmpty &&
-                  _normalizeExecutorKey(child.executor) == execKey) ||
-              child.executores.any(
-                (e) => _normalizeExecutorKey(e) == execKey,
-              ) ||
-              child.executorPeriods.any(
-                (ep) => _executorPeriodMatches(ep, executorId),
-              );
+          final childHasStructuredIds = child.executorIds.any((id) => id.trim().isNotEmpty) ||
+              child.executorPeriods.any((ep) => ep.executorId.trim().isNotEmpty);
+
+          final bool childInvolves;
+          if (childHasStructuredIds) {
+            childInvolves = child.executorIds.contains(executorId) ||
+                child.executorPeriods.any((ep) => ep.executorId == executorId);
+          } else {
+            final execKey = _normalizeExecutorKey(executorId);
+            childInvolves = (child.executor.isNotEmpty &&
+                    _normalizeExecutorKey(child.executor) == execKey) ||
+                child.executores.any(
+                  (e) => _normalizeExecutorKey(e) == execKey,
+                ) ||
+                child.executorPeriods.any(
+                  (ep) => _executorPeriodMatches(ep, executorId),
+                );
+          }
           if (!childInvolves) continue;
           if (taskHasExecutionOnDayForExecutor(
             child,
@@ -231,12 +262,9 @@ class ConflictDetection {
     final idsAll = getExecutorIdsForTask(
       task,
     ).where((e) => e.trim().isNotEmpty).toSet();
-    final uuidRegex = RegExp(
-      r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
-    );
-    final uuidSet = idsAll.where((e) => uuidRegex.hasMatch(e.trim())).toSet();
+    final uuidSet = idsAll.where((e) => _uuidRegex.hasMatch(e.trim())).toSet();
     final nameSet = idsAll
-        .where((e) => !uuidRegex.hasMatch(e.trim()))
+        .where((e) => !_uuidRegex.hasMatch(e.trim()))
         .map((e) => _normalizeExecutorKey(e))
         .where((e) => e.isNotEmpty)
         .toSet();
@@ -255,7 +283,19 @@ class ConflictDetection {
   /// Conjunto de identificadores de executor (id ou nome) que estão alocados à tarefa.
   static Set<String> getExecutorIdsForTask(Task task) {
     final ids = <String>{};
-    ids.addAll(task.executorIds);
+    final hasUUID = task.executorIds.any((id) => id.trim().isNotEmpty) ||
+        task.executorPeriods.any((ep) => ep.executorId.trim().isNotEmpty);
+
+    if (hasUUID) {
+      ids.addAll(task.executorIds.where((id) => id.trim().isNotEmpty));
+      for (final ep in task.executorPeriods) {
+        if (ep.executorId.trim().isNotEmpty) {
+          ids.add(ep.executorId.trim());
+        }
+      }
+      return ids;
+    }
+
     for (final s
         in task.executor
             .split(',')
@@ -268,8 +308,9 @@ class ConflictDetection {
       if (t.isNotEmpty) ids.add(t);
     }
     for (final ep in task.executorPeriods) {
-      if (ep.executorId.isNotEmpty) ids.add(ep.executorId);
-      if (ep.executorNome.trim().isNotEmpty) ids.add(ep.executorNome.trim());
+      if (ep.executorNome.trim().isNotEmpty) {
+        ids.add(ep.executorNome.trim());
+      }
     }
     return ids;
   }

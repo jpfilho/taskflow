@@ -88,11 +88,22 @@ class _ActivityReportViewState extends State<ActivityReportView> {
   @override
   void didUpdateWidget(ActivityReportView old) {
     super.didUpdateWidget(old);
+    final tasksChanged = old.tasks.length != widget.tasks.length ||
+        !_areListsEqual(old.tasks, widget.tasks);
+
     if (old.startDate != widget.startDate ||
         old.endDate != widget.endDate ||
-        old.tasks.length != widget.tasks.length) {
+        tasksChanged) {
       _loadData();
     }
+  }
+
+  bool _areListsEqual(List<Task> a, List<Task> b) {
+    if (a.length != b.length) return false;
+    for (int i = 0; i < a.length; i++) {
+      if (a[i].id != b[i].id) return false;
+    }
+    return true;
   }
 
   // ── Carrega dados em paralelo ──────────────────────────────────────────────
@@ -124,26 +135,24 @@ class _ActivityReportViewState extends State<ActivityReportView> {
         return !inicio.isAfter(widget.endDate) && !fim.isBefore(widget.startDate);
       }
 
-      // Helper: extrai dados da tarefa do tarefaMap (banco) e enriquece com Task se existir
+      // Helper: extrai dados da tarefa do tarefaMap (banco) e filtra baseando-se nas tarefas ativas
       _TaskData? buildTaskData(Map<String, dynamic> tarefaMap) {
         final taskId = tarefaMap['id']?.toString();
         if (taskId == null) return null;
-        final task = taskMap[taskId]; // pode ser null se não está no widget.tasks
+        final task = taskMap[taskId];
+        
+        // Se a tarefa associada não faz parte das tarefas filtradas, ignoramos esta nota/ordem.
+        if (task == null) return null;
+        
         return _TaskData(
           id: taskId,
-          tarefa: task?.tarefa ?? tarefaMap['tarefa']?.toString() ?? '—',
-          status: task?.status ?? tarefaMap['status']?.toString() ?? '',
-          coordenador: task?.coordenador ?? '',
-          executores: task?.executores ?? [],
-          executor: task?.executor ?? '',
-          dataInicio: task?.dataInicio ??
-              (tarefaMap['data_inicio'] != null
-                  ? DateTime.tryParse(tarefaMap['data_inicio'].toString())
-                  : null),
-          dataFim: task?.dataFim ??
-              (tarefaMap['data_fim'] != null
-                  ? DateTime.tryParse(tarefaMap['data_fim'].toString())
-                  : null),
+          tarefa: task.tarefa,
+          status: task.status,
+          coordenador: task.coordenador,
+          executores: task.executores,
+          executor: task.executor,
+          dataInicio: task.dataInicio,
+          dataFim: task.dataFim,
         );
       }
 
@@ -231,175 +240,73 @@ class _ActivityReportViewState extends State<ActivityReportView> {
   }
 
   // ── Ação de impressão ─────────────────────────────────────────────────────
-  // Flutter Web renderiza dentro de um canvas — CSS @media print não enxerga
-  // os widgets. A solução correta é abrir uma nova janela com HTML puro.
   void _print() {
-    final sb = StringBuffer();
-    sb.write('''<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="UTF-8">
-  <title>Relatório de Atividades — ${_fmtPeriod()}</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: Arial, sans-serif; font-size: 9pt; color: #000; background: #fff; }
-    @page { size: A4 landscape; margin: 10mm 12mm; }
-    .header { margin-bottom: 8mm; }
-    .header h1 { font-size: 13pt; font-weight: bold; letter-spacing: 0.5pt; }
-    .header-meta { font-size: 9pt; color: #555; margin-top: 2mm; display: flex; justify-content: space-between; }
-    hr { border: none; border-top: 1.5pt solid #333; margin: 3mm 0; }
-    .section { margin-top: 6mm; }
-    .section-title { font-size: 10pt; font-weight: bold; margin-bottom: 2mm; display: flex; align-items: center; gap: 4pt; }
-    .section-title .badge { font-size: 8pt; font-weight: normal; color: #fff; padding: 1pt 6pt; border-radius: 8pt; }
-    .indigo { color: #3f51b5; }
-    .indigo .badge { background: #3f51b5; }
-    .teal { color: #009688; }
-    .teal .badge { background: #009688; }
-    table { width: 100%; border-collapse: collapse; page-break-inside: auto; margin-bottom: 4mm; }
-    thead tr { background: #e8ebef !important; page-break-after: avoid; }
-    tr { page-break-inside: avoid; page-break-after: auto; }
-    th { font-size: 8pt; font-weight: bold; color: #2c3e50; background: #e8ebef; }
-    td { font-size: 8pt; color: #111; }
-    th, td { border: 0.3pt solid #aaa; padding: 1.5mm 2mm; text-align: left; vertical-align: top; }
-    .even { background: #f9f9f9; }
-    .footer { margin-top: 6mm; font-size: 8pt; color: #999; }
-    .empty { font-size: 9pt; color: #888; padding: 4mm 0; }
-  </style>
-</head>
-<body>
-<div class="header">
-  <h1>RELATÓRIO DE ATIVIDADES PROGRAMADAS</h1>
-  <div class="header-meta">
-    <span>Período: ${_fmtPeriod()}</span>
-    <span>Emissão: ${_fmtNow()}</span>
-  </div>
-</div>
-<hr>
-''');
+    final notasHeaders = [
+      '#', 'Nota', 'Tipo', 'Descrição', 'Local Instalação', 'Sala',
+      'Prioridade', 'Status Nota', 'Atividade', 'Status Ativ.',
+      'Executor(es)', 'Coordenador', 'Início', 'Fim', 'Observação'
+    ];
+    final notasData = _notaRows.asMap().entries.map((e) {
+      final idx = e.key + 1;
+      final row = e.value;
+      final n = row.nota;
+      final t = row.task;
+      return [
+        '$idx',
+        n.nota,
+        n.tipo ?? '-',
+        n.descricao ?? '-',
+        n.localInstalacao ?? '-',
+        n.sala ?? '-',
+        n.textPrioridade ?? '-',
+        n.statusSistema ?? '-',
+        t.tarefa,
+        t.status.isNotEmpty ? t.status : '-',
+        _executores(t),
+        t.coordenador.isNotEmpty ? t.coordenador : '-',
+        _fmtDate(t.dataInicio),
+        _fmtDate(t.dataFim),
+        '', // Coluna Observação vazia para anotações manuais
+      ];
+    }).toList();
 
-    // ── Tabela de Notas ──────────────────────────────────────────────────────
-    sb.write('''
-<div class="section">
-  <div class="section-title indigo">
-    NOTAS SAP PROGRAMADAS NO PERÍODO
-    <span class="badge">${_notaRows.length} registro${_notaRows.length != 1 ? 's' : ''}</span>
-  </div>
-''');
-    if (_notaRows.isEmpty) {
-      sb.write('<p class="empty">Nenhuma nota SAP vinculada às atividades do período.</p>');
-    } else {
-      sb.write('''<table>
-<thead><tr>
-  <th style="width:20pt">#</th>
-  <th style="width:50pt">Nota</th>
-  <th style="width:25pt">Tipo</th>
-  <th>Descrição</th>
-  <th>Local Instalação</th>
-  <th style="width:60pt">Prioridade</th>
-  <th>Status Nota</th>
-  <th>Atividade</th>
-  <th style="width:70pt">Status Ativ.</th>
-  <th>Executor(es)</th>
-  <th>Coordenador</th>
-  <th style="width:42pt">Início</th>
-  <th style="width:42pt">Fim</th>
-</tr></thead>
-<tbody>
-''');
-      for (int i = 0; i < _notaRows.length; i++) {
-        final row = _notaRows[i];
-        final n = row.nota;
-        final t = row.task;
-        final cls = i.isEven ? '' : ' class="even"';
-        sb.write('<tr$cls>');
-        sb.write('<td>${i + 1}</td>');
-        sb.write('<td>${_esc(n.nota)}</td>');
-        sb.write('<td>${_esc(n.tipo)}</td>');
-        sb.write('<td>${_esc(n.descricao)}</td>');
-        sb.write('<td>${_esc(n.localInstalacao)}</td>');
-        sb.write('<td>${_esc(n.textPrioridade)}</td>');
-        sb.write('<td>${_esc(n.statusSistema)}</td>');
-        sb.write('<td>${_esc(t.tarefa)}</td>');
-        sb.write('<td>${_esc(t.status.isNotEmpty ? t.status : null)}</td>');
-        sb.write('<td>${_esc(_executores(t))}</td>');
-        sb.write('<td>${_esc(t.coordenador.isNotEmpty ? t.coordenador : null)}</td>');
-        sb.write('<td>${_fmtDate(t.dataInicio)}</td>');
-        sb.write('<td>${_fmtDate(t.dataFim)}</td>');
-        sb.write('</tr>');
-      }
-      sb.write('</tbody></table>');
-    }
-    sb.write('</div>');
+    final ordensHeaders = [
+      '#', 'Ordem', 'Tipo', 'Texto Breve', 'Local Instalação', 'Sala',
+      'Status Sistema', 'GPM', 'Atividade', 'Executor(es)',
+      'Coordenador', 'Início', 'Fim', 'Observação'
+    ];
+    final ordensData = _ordemRows.asMap().entries.map((e) {
+      final idx = e.key + 1;
+      final row = e.value;
+      final o = row.ordem;
+      final t = row.task;
+      return [
+        '$idx',
+        o.ordem,
+        o.tipo ?? '-',
+        o.textoBreve ?? '-',
+        o.localInstalacao ?? '-',
+        o.sala ?? '-',
+        o.statusSistema ?? '-',
+        o.gpm ?? '-',
+        t.tarefa,
+        _executores(t),
+        t.coordenador.isNotEmpty ? t.coordenador : '-',
+        _fmtDate(t.dataInicio),
+        _fmtDate(t.dataFim),
+        '', // Coluna Observação vazia para anotações manuais
+      ];
+    }).toList();
 
-    // ── Tabela de Ordens ─────────────────────────────────────────────────────
-    sb.write('''
-<div class="section">
-  <div class="section-title teal">
-    ORDENS SAP PROGRAMADAS NO PERÍODO
-    <span class="badge">${_ordemRows.length} registro${_ordemRows.length != 1 ? 's' : ''}</span>
-  </div>
-''');
-    if (_ordemRows.isEmpty) {
-      sb.write('<p class="empty">Nenhuma ordem SAP vinculada às atividades do período.</p>');
-    } else {
-      sb.write('''<table>
-<thead><tr>
-  <th style="width:20pt">#</th>
-  <th style="width:56pt">Ordem</th>
-  <th style="width:28pt">Tipo</th>
-  <th>Texto Breve</th>
-  <th>Local Instalação</th>
-  <th>Status Sistema</th>
-  <th style="width:32pt">GPM</th>
-  <th>Atividade</th>
-  <th>Executor(es)</th>
-  <th>Coordenador</th>
-  <th style="width:42pt">Início</th>
-  <th style="width:42pt">Fim</th>
-</tr></thead>
-<tbody>
-''');
-      for (int i = 0; i < _ordemRows.length; i++) {
-        final row = _ordemRows[i];
-        final o = row.ordem;
-        final t = row.task;
-        final cls = i.isEven ? '' : ' class="even"';
-        sb.write('<tr$cls>');
-        sb.write('<td>${i + 1}</td>');
-        sb.write('<td>${_esc(o.ordem)}</td>');
-        sb.write('<td>${_esc(o.tipo)}</td>');
-        sb.write('<td>${_esc(o.textoBreve)}</td>');
-        sb.write('<td>${_esc(o.localInstalacao)}</td>');
-        sb.write('<td>${_esc(o.statusSistema)}</td>');
-        sb.write('<td>${_esc(o.gpm)}</td>');
-        sb.write('<td>${_esc(t.tarefa)}</td>');
-        sb.write('<td>${_esc(_executores(t))}</td>');
-        sb.write('<td>${_esc(t.coordenador.isNotEmpty ? t.coordenador : null)}</td>');
-        sb.write('<td>${_fmtDate(t.dataInicio)}</td>');
-        sb.write('<td>${_fmtDate(t.dataFim)}</td>');
-        sb.write('</tr>');
-      }
-      sb.write('</tbody></table>');
-    }
-    sb.write('</div>');
-
-    // ── Rodapé e fechamento ──────────────────────────────────────────────────
-    sb.write('''
-<div class="footer">Gerado pelo sistema TaskFlow · ${_fmtNow()}</div>
-</body>
-</html>''');
-
-    platform.printHtml('Relatório de Atividades — ${_fmtPeriod()}', sb.toString());
-  }
-
-  /// Escapa caracteres HTML e substitui null por '—'
-  String _esc(String? value) {
-    if (value == null || value.isEmpty) return '—';
-    return value
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;');
+    platform.printReport(
+      title: 'Relatório de Atividades - ${_fmtPeriod()}',
+      period: _fmtPeriod(),
+      emission: _fmtNow(),
+      notasHeaders: notasHeaders,
+      notasData: notasData,
+      ordensHeaders: ordensHeaders,
+      ordensData: ordensData,
+    );
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -564,24 +471,26 @@ class _ActivityReportViewState extends State<ActivityReportView> {
         else
           _PrintTable(
             columns: const [
-              '#', 'Nota', 'Tipo', 'Descrição', 'Local Instalação',
+              '#', 'Nota', 'Tipo', 'Descrição', 'Local Instalação', 'Sala',
               'Prioridade', 'Status Nota', 'Atividade', 'Status Ativ.',
-              'Executor(es)', 'Coordenador', 'Início', 'Fim'
+              'Executor(es)', 'Coordenador', 'Início', 'Fim', 'Observação'
             ],
             columnWidths: const {
-              0: FixedColumnWidth(30),
-              1: FixedColumnWidth(72),
-              2: FixedColumnWidth(40),
-              3: FlexColumnWidth(2.8),
-              4: FlexColumnWidth(2),
-              5: FixedColumnWidth(80),
-              6: FlexColumnWidth(1.6),
-              7: FlexColumnWidth(2.5),
-              8: FixedColumnWidth(80),
-              9: FlexColumnWidth(2),
-              10: FlexColumnWidth(1.8),
-              11: FixedColumnWidth(64),
-              12: FixedColumnWidth(64),
+              0: FixedColumnWidth(30), // #
+              1: FixedColumnWidth(72), // Nota
+              2: FixedColumnWidth(40), // Tipo
+              3: FlexColumnWidth(2.2), // Descrição
+              4: FlexColumnWidth(1.6), // Local Instalação
+              5: FixedColumnWidth(60), // Sala
+              6: FixedColumnWidth(80), // Prioridade
+              7: FlexColumnWidth(1.3), // Status Nota
+              8: FlexColumnWidth(2.0), // Atividade
+              9: FixedColumnWidth(70), // Status Ativ.
+              10: FlexColumnWidth(1.6), // Executor(es)
+              11: FlexColumnWidth(1.4), // Coordenador
+              12: FixedColumnWidth(64), // Início
+              13: FixedColumnWidth(64), // Fim
+              14: FixedColumnWidth(100), // Observação
             },
             rows: _notaRows.asMap().entries.map((e) {
               final idx = e.key + 1;
@@ -594,6 +503,7 @@ class _ActivityReportViewState extends State<ActivityReportView> {
                 n.tipo ?? '—',
                 n.descricao ?? '—',
                 n.localInstalacao ?? '—',
+                n.sala ?? '—',
                 n.textPrioridade ?? '—',
                 n.statusSistema ?? '—',
                 t.tarefa,
@@ -602,6 +512,7 @@ class _ActivityReportViewState extends State<ActivityReportView> {
                 t.coordenador.isNotEmpty ? t.coordenador : '—',
                 _fmtDate(t.dataInicio),
                 _fmtDate(t.dataFim),
+                '', // Coluna Observação vazia
               ];
             }).toList(),
           ),
@@ -622,23 +533,25 @@ class _ActivityReportViewState extends State<ActivityReportView> {
         else
           _PrintTable(
             columns: const [
-              '#', 'Ordem', 'Tipo', 'Texto Breve', 'Local Instalação',
+              '#', 'Ordem', 'Tipo', 'Texto Breve', 'Local Instalação', 'Sala',
               'Status Sistema', 'GPM', 'Atividade', 'Executor(es)',
-              'Coordenador', 'Início', 'Fim'
+              'Coordenador', 'Início', 'Fim', 'Observação'
             ],
             columnWidths: const {
-              0: FixedColumnWidth(30),
-              1: FixedColumnWidth(80),
-              2: FixedColumnWidth(45),
-              3: FlexColumnWidth(2.5),
-              4: FlexColumnWidth(1.8),
-              5: FlexColumnWidth(1.8),
-              6: FixedColumnWidth(50),
-              7: FlexColumnWidth(2.5),
-              8: FlexColumnWidth(2),
-              9: FlexColumnWidth(1.8),
-              10: FixedColumnWidth(64),
-              11: FixedColumnWidth(64),
+              0: FixedColumnWidth(30), // #
+              1: FixedColumnWidth(80), // Ordem
+              2: FixedColumnWidth(45), // Tipo
+              3: FlexColumnWidth(2.0), // Texto Breve
+              4: FlexColumnWidth(1.4), // Local Instalação
+              5: FixedColumnWidth(60), // Sala
+              6: FlexColumnWidth(1.4), // Status Sistema
+              7: FixedColumnWidth(45), // GPM
+              8: FlexColumnWidth(2.0), // Atividade
+              9: FlexColumnWidth(1.6), // Executor(es)
+              10: FlexColumnWidth(1.4), // Coordenador
+              11: FixedColumnWidth(64), // Início
+              12: FixedColumnWidth(64), // Fim
+              13: FixedColumnWidth(100), // Observação
             },
             rows: _ordemRows.asMap().entries.map((e) {
               final idx = e.key + 1;
@@ -651,6 +564,7 @@ class _ActivityReportViewState extends State<ActivityReportView> {
                 o.tipo ?? '—',
                 o.textoBreve ?? '—',
                 o.localInstalacao ?? '—',
+                o.sala ?? '—',
                 o.statusSistema ?? '—',
                 o.gpm ?? '—',
                 t.tarefa,
@@ -658,6 +572,7 @@ class _ActivityReportViewState extends State<ActivityReportView> {
                 t.coordenador.isNotEmpty ? t.coordenador : '—',
                 _fmtDate(t.dataInicio),
                 _fmtDate(t.dataFim),
+                '', // Coluna Observação vazia
               ];
             }).toList(),
           ),

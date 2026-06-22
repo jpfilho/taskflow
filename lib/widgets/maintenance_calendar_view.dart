@@ -1136,6 +1136,7 @@ class _MaintenanceCalendarViewState extends State<MaintenanceCalendarView> {
                 _buildInfoRowModern('Status Usuário', nota.statusUsuario),
                 _buildInfoRowModern('Descrição', nota.descricao),
                 _buildInfoRowModern('Local Instalação', nota.localInstalacao),
+                _buildInfoRowModern('Sala', nota.sala),
                 _buildInfoRowModern('Ordem', nota.ordem),
                 _buildInfoRowModern('GPM', nota.gpm),
                 _buildInfoRowModern('Centro Trabalho', nota.centroTrabalhoResponsavel),

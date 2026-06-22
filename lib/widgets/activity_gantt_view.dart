@@ -62,6 +62,7 @@ class ActivityGanttView extends StatefulWidget {
   final TaskService? taskService;
   final ConflictService? conflictService;
   final List<Task>? tasksForConflictDetection;
+  final int tasksVersion; // Versão para detectar atualizações externas
   final bool? allSubtasksExpanded;
   final VoidCallback? onToggleAllSubtasks;
   final Set<String>? expandedTasks;
@@ -88,6 +89,7 @@ class ActivityGanttView extends StatefulWidget {
     this.taskService,
     this.conflictService,
     this.tasksForConflictDetection,
+    this.tasksVersion = 0,
     this.allSubtasksExpanded,
     this.onToggleAllSubtasks,
     this.expandedTasks,
@@ -257,7 +259,8 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
     final tasksChanged =
         oldWidget.tasks.length != widget.tasks.length ||
         oldWidget.tasks.map((t) => t.id).join(',') !=
-            widget.tasks.map((t) => t.id).join(',');
+            widget.tasks.map((t) => t.id).join(',') ||
+        oldWidget.tasksVersion != widget.tasksVersion;
     
     final rangeChanged = oldWidget.startDate != widget.startDate || oldWidget.endDate != widget.endDate;
 
@@ -2753,6 +2756,7 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                 _buildInfoRowModern('Descrição', nota.descricao),
                 _buildInfoRowModern('Detalhes', nota.detalhes),
                 _buildInfoRowModern('Local Instalação', nota.localInstalacao),
+                _buildInfoRowModern('Sala', nota.sala),
                 _buildInfoRowModern('Ordem', nota.ordem),
                 _buildInfoRowModern('GPM', nota.gpm),
                 _buildInfoRowModern('Centro Trabalho', nota.centroTrabalhoResponsavel),

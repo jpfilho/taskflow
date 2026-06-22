@@ -154,6 +154,13 @@ class _HorasMetasViewState extends State<HorasMetasView> {
 
   Set<String> _filtroEmpregados = {}; // Multi-seleção para empregados
   List<String> _empregadosDisponiveis = []; // Lista de empregados disponíveis
+  Set<String> _filtroStatus = {}; // Multi-seleção para status
+  final List<String> _statusDisponiveis = [
+    'Meta Atingida',
+    'Em Risco',
+    'Abaixo da Meta',
+    'Sem Apontamento',
+  ];
   Map<String, double>?
   _horasPorDiaChart; // Horas alocadas por dia (data_lancamento) para o gráfico
 
@@ -227,14 +234,63 @@ class _HorasMetasViewState extends State<HorasMetasView> {
     }
   }
 
+  /// Métodos auxiliares para filtro de status
+  Set<String> _obterMatriculasFiltradasPorStatus(List<HorasEmpregadoMes> registros) {
+    if (_filtroStatus.isEmpty) {
+      return registros.map((r) => r.matricula).toSet();
+    }
+    
+    final Map<String, List<HorasEmpregadoMes>> porColaborador = {};
+    for (var r in registros) {
+      porColaborador.putIfAbsent(r.matricula, () => []);
+      porColaborador[r.matricula]!.add(r);
+    }
+    
+    final matriculasPermitidas = <String>{};
+    for (var entry in porColaborador.entries) {
+      final matricula = entry.key;
+      final lista = entry.value;
+      
+      double somaApontadas = 0;
+      double somaMeta = 0;
+      bool todosSemApontamento = true;
+      for (var r in lista) {
+        somaApontadas += r.horasApontadas;
+        somaMeta += r.metaMensal;
+        if (!r.semApontamento) {
+          todosSemApontamento = false;
+        }
+      }
+      
+      final statusText = todosSemApontamento
+          ? 'Sem Apontamento'
+          : somaApontadas >= somaMeta
+          ? 'Meta Atingida'
+          : somaApontadas >= somaMeta * 0.75
+          ? 'Em Risco'
+          : 'Abaixo da Meta';
+          
+      if (_filtroStatus.contains(statusText)) {
+        matriculasPermitidas.add(matricula);
+      }
+    }
+    return matriculasPermitidas;
+  }
+
   /// Dados dos meses selecionados (para cards, tabela e gráfico diário).
   List<HorasEmpregadoMes> get _dadosDoMesSelecionado {
     if (_mesesSelecionados.isEmpty) return [];
-    return _dadosFiltrados
+    final list = _dadosFiltrados
         .where(
           (d) => d.ano == _anoSelecionado && _mesesSelecionados.contains(d.mes),
         )
         .toList();
+        
+    if (_filtroStatus.isNotEmpty) {
+      final permitidas = _dadosTabelaMetas.map((d) => d.matricula).toSet();
+      list.removeWhere((r) => !permitidas.contains(r.matricula));
+    }
+    return list;
   }
 
   /// Dias úteis no mês (segunda a sexta).
@@ -264,51 +320,7 @@ class _HorasMetasViewState extends State<HorasMetasView> {
 
   /// Dados para a tabela de metas: meses selecionados + linhas para quem não alocou nada ainda.
   List<HorasEmpregadoMes> get _dadosTabelaMetas {
-    final doMes = _dadosDoMesSelecionado;
-    if (_mesesSelecionados.isEmpty) return doMes;
-    // Criar linhas para cada mês selecionado para quem não tem apontamento
-    final matriculasPorMes = <int, Set<String>>{};
-    for (var m in _mesesSelecionados) {
-      matriculasPorMes[m] = <String>{};
-    }
-    for (var d in doMes) {
-      matriculasPorMes[d.mes]?.add(_normMat(d.matricula));
-    }
-
-    final mapaEmpregado = <String, String>{};
-    for (var d in _dadosFiltrados) {
-      mapaEmpregado[_normMat(d.matricula)] = d.nomeEmpregado;
-    }
-
-    final resultado = List<HorasEmpregadoMes>.from(doMes);
-    for (var mes in _mesesSelecionados) {
-      final metaMensal = (_diasUteisNoMes(_anoSelecionado, mes) * 8.0).clamp(
-        8.0,
-        250.0,
-      );
-      for (var entry in mapaEmpregado.entries) {
-        if (matriculasPorMes[mes]?.contains(entry.key) == true) continue;
-        resultado.add(
-          HorasEmpregadoMes(
-            numeroPessoa: entry.key,
-            nomeEmpregado: entry.value,
-            matricula: entry.key,
-            ano: _anoSelecionado,
-            mes: mes,
-            horasApontadas: 0,
-            horasFaltantes: metaMensal,
-            semApontamento: true,
-            metaMensal: metaMensal,
-          ),
-        );
-      }
-    }
-    resultado.sort((a, b) {
-      final nome = a.nomeEmpregado.compareTo(b.nomeEmpregado);
-      if (nome != 0) return nome;
-      return a.mes.compareTo(b.mes);
-    });
-    return resultado;
+    return _dadosParaMeses(_mesesSelecionados);
   }
 
   String _formatMesesLabel(Set<int> meses) {
@@ -364,6 +376,13 @@ class _HorasMetasViewState extends State<HorasMetasView> {
         );
       }
     }
+
+    // Filtrar por status se houver filtro selecionado
+    if (_filtroStatus.isNotEmpty) {
+      final permitidas = _obterMatriculasFiltradasPorStatus(resultado);
+      resultado.removeWhere((r) => !permitidas.contains(r.matricula));
+    }
+
     resultado.sort((a, b) {
       final nome = a.nomeEmpregado.compareTo(b.nomeEmpregado);
       if (nome != 0) return nome;
@@ -1289,10 +1308,12 @@ class _HorasMetasViewState extends State<HorasMetasView> {
                                 child: _buildAnoDropdown(),
                               ),
                               const SizedBox(width: 8),
-                              _buildFilterDropdown(
-                                label: 'MÊS',
-                                width: 130,
-                                child: _buildMesesFilter(),
+                              Expanded(
+                                child: _buildFilterDropdown(
+                                  label: 'MÊS',
+                                  width: double.infinity,
+                                  child: _buildMesesFilter(),
+                                ),
                               ),
                             ],
                           ),
@@ -1302,94 +1323,106 @@ class _HorasMetasViewState extends State<HorasMetasView> {
                             width: double.infinity,
                             child: _buildEmpregadosDropdown(),
                           ),
+                          const SizedBox(height: 12),
+                          _buildFilterDropdown(
+                            label: 'STATUS',
+                            width: double.infinity,
+                            child: _buildStatusDropdown(),
+                          ),
                         ],
                       )
-                    : SizedBox(
-                        height: 160,
-                        child: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              // Card combinado (Ano)
-                              SizedBox(
-                                width: 780,
-                                child: _buildResumoInvestCombinadoCard(
-                                  metaTotal:
-                                      (statsAno['metaTotalMes'] as num? ?? 0)
-                                          .toDouble(),
-                                  horasAlocadas:
-                                      (statsAno['horasTotais'] as num? ?? 0)
-                                          .toDouble(),
-                                  horasInvestimento:
-                                      (statsAno['horasInvestimento'] as num? ??
-                                              0)
-                                          .toDouble(),
-                                  horasCusteio:
-                                      (statsAno['horasCusteio'] as num? ?? 0)
-                                          .toDouble(),
-                                  scopeLabel: scopeLabelAno,
-                                  compact: true,
-                                ),
+                    : Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Wrap(
+                          spacing: 16,
+                          runSpacing: 16,
+                          alignment: WrapAlignment.start,
+                          crossAxisAlignment: WrapCrossAlignment.start,
+                          children: [
+                            // Card combinado (Ano)
+                            SizedBox(
+                              width: 600,
+                              height: 148,
+                              child: _buildResumoInvestCombinadoCard(
+                                metaTotal:
+                                    (statsAno['metaTotalMes'] as num? ?? 0)
+                                        .toDouble(),
+                                horasAlocadas:
+                                    (statsAno['horasTotais'] as num? ?? 0)
+                                        .toDouble(),
+                                horasInvestimento:
+                                    (statsAno['horasInvestimento'] as num? ??
+                                            0)
+                                        .toDouble(),
+                                horasCusteio:
+                                    (statsAno['horasCusteio'] as num? ?? 0)
+                                        .toDouble(),
+                                scopeLabel: scopeLabelAno,
+                                compact: true,
                               ),
-                              const SizedBox(width: 16),
-                              // Filtros (ANO, MÊS, EMPREGADOS)
-                              SizedBox(
-                                width: 92 + 16 + 130,
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        _buildFilterDropdown(
-                                          label: 'ANO',
-                                          width: 92,
-                                          child: _buildAnoDropdown(),
-                                        ),
-                                        const SizedBox(width: 16),
-                                        _buildFilterDropdown(
-                                          label: 'MÊS',
-                                          width: 130,
-                                          child: _buildMesesFilter(),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 8),
-                                    _buildFilterDropdown(
-                                      label: 'EMPREGADOS',
-                                      width: double.infinity,
-                                      child: _buildEmpregadosDropdown(),
-                                    ),
-                                  ],
-                                ),
+                            ),
+                            // Filtros (ANO, MÊS, STATUS, EMPREGADOS)
+                            SizedBox(
+                              width: 384, // 92 + 16 + 130 + 16 + 130
+                              height: 148,
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Row(
+                                    children: [
+                                      _buildFilterDropdown(
+                                        label: 'ANO',
+                                        width: 92,
+                                        child: _buildAnoDropdown(),
+                                      ),
+                                      const SizedBox(width: 16),
+                                      _buildFilterDropdown(
+                                        label: 'MÊS',
+                                        width: 130,
+                                        child: _buildMesesFilter(),
+                                      ),
+                                      const SizedBox(width: 16),
+                                      _buildFilterDropdown(
+                                        label: 'STATUS',
+                                        width: 130,
+                                        child: _buildStatusDropdown(),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  _buildFilterDropdown(
+                                    label: 'EMPREGADOS',
+                                    width: double.infinity,
+                                    child: _buildEmpregadosDropdown(),
+                                  ),
+                                ],
                               ),
-                              const SizedBox(width: 12),
-                              // Card combinado (Meses Selecionados)
-                              SizedBox(
-                                width: 780,
-                                child: _buildResumoInvestCombinadoCard(
-                                  metaTotal:
-                                      (statsMes['metaTotalMes'] as num? ?? 0)
-                                          .toDouble(),
-                                  horasAlocadas:
-                                      (statsMes['horasTotais'] as num? ?? 0)
-                                          .toDouble(),
-                                  horasInvestimento:
-                                      (statsMes['horasInvestimento'] as num? ??
-                                              0)
-                                          .toDouble(),
-                                  horasCusteio:
-                                      (statsMes['horasCusteio'] as num? ?? 0)
-                                          .toDouble(),
-                                  scopeLabel: scopeLabelMeses,
-                                  compact: true,
-                                ),
+                            ),
+                            // Card combinado (Meses Selecionados)
+                            SizedBox(
+                              width: 600,
+                              height: 148,
+                              child: _buildResumoInvestCombinadoCard(
+                                metaTotal:
+                                    (statsMes['metaTotalMes'] as num? ?? 0)
+                                        .toDouble(),
+                                horasAlocadas:
+                                    (statsMes['horasTotais'] as num? ?? 0)
+                                        .toDouble(),
+                                horasInvestimento:
+                                    (statsMes['horasInvestimento'] as num? ??
+                                            0)
+                                        .toDouble(),
+                                horasCusteio:
+                                    (statsMes['horasCusteio'] as num? ?? 0)
+                                        .toDouble(),
+                                scopeLabel: scopeLabelMeses,
+                                compact: true,
                               ),
-                            ],
-                          ),
+                            ),
+                          ],
                         ),
                       ),
               ),
@@ -4292,6 +4325,56 @@ class _HorasMetasViewState extends State<HorasMetasView> {
                 _filtroEmpregados.isEmpty
                     ? 'Todos os Colaboradores'
                     : '${_filtroEmpregados.length} selecionado(s)',
+                style: TextStyle(fontSize: 13, color: Colors.grey[800]),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            Icon(Icons.arrow_drop_down, color: Colors.grey[600]),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatusDropdown() {
+    return GestureDetector(
+      onTap: () async {
+        final selecionados = await showDialog<Set<String>>(
+          context: context,
+          builder: (ctx) => MultiSelectFilterDialog(
+            title: 'Selecionar Status',
+            options: _statusDisponiveis,
+            selectedValues: _filtroStatus,
+            onSelectionChanged: (values) {
+              setState(() {
+                _filtroStatus = values;
+              });
+            },
+          ),
+        );
+        if (selecionados != null) {
+          setState(() {
+            _filtroStatus = selecionados;
+          });
+          _carregarGraficoMetas();
+        }
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.grey[50],
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.grey[300]!),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.check_circle_outline, size: 18, color: Colors.grey[600]),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                _filtroStatus.isEmpty
+                    ? 'Todos os Status'
+                    : '${_filtroStatus.length} selecionado(s)',
                 style: TextStyle(fontSize: 13, color: Colors.grey[800]),
                 overflow: TextOverflow.ellipsis,
               ),

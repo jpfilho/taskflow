@@ -886,9 +886,10 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
     final dayStart = DateTime(day.year, day.month, day.day);
     final dayEnd = dayStart.add(const Duration(days: 1));
 
+    bool backendConflict = false;
     final conflicts = _conflictDaysByFrota[frotaId];
     if (conflicts != null && conflicts.contains(dayStart)) {
-      return true;
+      backendConflict = true;
     }
 
     FleetTaskRow? row;
@@ -898,7 +899,7 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
         break;
       }
     }
-    if (row == null || row.tasks.isEmpty) return false;
+    if (row == null || row.tasks.isEmpty) return backendConflict;
 
     final Set<String> locationsWithSegmentsOnDay = {};
     for (final task in row.tasks) {
@@ -906,19 +907,30 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
         continue;
       }
       bool taskHasExecSegmentOnDay = false;
-      for (final segment in task.ganttSegments) {
-        if (segment.tipoPeriodo.toUpperCase() != 'EXECUCAO') continue;
-        if (_overlapsDay(segment.dataInicio, segment.dataFim, dayStart, dayEnd)) {
+      
+      // Se não há segmentos específicos, olhar para a data da tarefa
+      if (task.ganttSegments.isEmpty) {
+        if (_overlapsDay(task.dataInicio, task.dataFim, dayStart, dayEnd)) {
           taskHasExecSegmentOnDay = true;
-          break;
+        }
+      } else {
+        for (final segment in task.ganttSegments) {
+          if (segment.tipoPeriodo.toUpperCase() != 'EXECUCAO') continue;
+          if (_overlapsDay(segment.dataInicio, segment.dataFim, dayStart, dayEnd)) {
+            taskHasExecSegmentOnDay = true;
+            break;
+          }
         }
       }
+      
       if (taskHasExecSegmentOnDay) {
         final locKey = _taskLocationKey(task);
         locationsWithSegmentsOnDay.add(locKey.isNotEmpty ? locKey : 'task-${task.id}');
       }
     }
-    return locationsWithSegmentsOnDay.length > 1;
+    final localConflict = locationsWithSegmentsOnDay.length > 1;
+
+    return backendConflict || localConflict;
   }
 
   /// Se a frota tem conflito em algum dia do período.

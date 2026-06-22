@@ -1786,6 +1786,12 @@ class TaskService {
   static List<Task>? _cachedTasks;
   static DateTime? _lastFetchTime;
   static const _cacheDuration = Duration(seconds: 30);
+
+  void _clearCache() {
+    _cachedTasks = null;
+    _lastFetchTime = null;
+    _logDebug('🧹 Cache de tarefas em memória invalidado');
+  }
   /// Busca tarefas que cruzam o intervalo de datas especificado.
   /// Útil para otimizar o carregamento em telas de cronograma (Gantt/Equipes).
   Future<List<Task>> getTasksForRange({
@@ -2130,9 +2136,22 @@ class TaskService {
   }
 
   Future<Task> createTask(Task task) async {
+    _clearCache();
+    // Filtrar períodos específicos por executor para conter apenas os selecionados
+    final cleanExecutorPeriods = task.executorPeriods
+        .where((ep) => task.executorIds.contains(ep.executorId))
+        .toList();
+
+    // Filtrar períodos específicos por frota para conter apenas as selecionadas
+    final cleanFrotaPeriods = task.frotaPeriods
+        .where((fp) => task.frotaIds.contains(fp.frotaId))
+        .toList();
+
     final newTask = task.copyWith(
       dataCriacao: DateTime.now(),
       dataAtualizacao: DateTime.now(),
+      executorPeriods: cleanExecutorPeriods,
+      frotaPeriods: cleanFrotaPeriods,
     );
 
     if (!_useSupabase) {
@@ -2429,7 +2448,23 @@ class TaskService {
   }
 
   Future<Task?> updateTask(String id, Task updatedTask) async {
-    final task = updatedTask.copyWith(id: id, dataAtualizacao: DateTime.now());
+    _clearCache();
+    // Filtrar períodos específicos por executor para conter apenas os selecionados
+    final cleanExecutorPeriods = updatedTask.executorPeriods
+        .where((ep) => updatedTask.executorIds.contains(ep.executorId))
+        .toList();
+
+    // Filtrar períodos específicos por frota para conter apenas as selecionadas
+    final cleanFrotaPeriods = updatedTask.frotaPeriods
+        .where((fp) => updatedTask.frotaIds.contains(fp.frotaId))
+        .toList();
+
+    final task = updatedTask.copyWith(
+      id: id,
+      dataAtualizacao: DateTime.now(),
+      executorPeriods: cleanExecutorPeriods,
+      frotaPeriods: cleanFrotaPeriods,
+    );
 
     if (!_useSupabase) {
       final index = _tasks.indexWhere((t) => t.id == id);
@@ -2720,6 +2755,7 @@ class TaskService {
   }
 
   Future<bool> deleteTask(String id) async {
+    _clearCache();
     if (!_useSupabase) {
       final index = _tasks.indexWhere((task) => task.id == id);
       if (index == -1) return false;
@@ -2882,6 +2918,7 @@ class TaskService {
   }
 
   Future<Task> createSubtask(String parentId, Task subtask) async {
+    _clearCache();
     final newSubtask = subtask.copyWith(
       parentId: parentId,
       dataCriacao: DateTime.now(),

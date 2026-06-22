@@ -147,5 +147,67 @@ void main() {
       expect(locaisE.length, 1);
       expect(locaisE.single, 'BES');
     });
+
+    test('6) Homônimos em divisões diferentes - priorizar UUID e evitar colisão por nome', () {
+      final uuidA = '11111111-2222-3333-4444-555555555555';
+      final uuidB = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+
+      // Tarefa 1 alocada para Executor A (João Silva da Divisão A) via UUID
+      final t1 = mkTask(
+        id: 't1',
+        locais: ['LocA'],
+        executor: 'João Silva',
+        executorIds: [uuidA],
+        ganttSegments: [seg(DateTime(2026, 2, 10), DateTime(2026, 2, 11))],
+      );
+
+      // Tarefa 2 alocada para Executor B (João Silva da Divisão B) via UUID
+      final t2 = mkTask(
+        id: 't2',
+        locais: ['LocB'],
+        executor: 'João Silva',
+        executorIds: [uuidB],
+        ganttSegments: [seg(DateTime(2026, 2, 10), DateTime(2026, 2, 11))],
+      );
+
+      final tasks = [t1, t2];
+
+      // Executor A (uuidA) não deve ter conflito com tarefa do Executor B (uuidB), mesmo tendo o mesmo nome
+      expect(ConflictDetection.hasConflictOnDayForExecutor(tasks, DateTime(2026, 2, 10), uuidA), isFalse);
+      expect(ConflictDetection.hasConflictOnDayForExecutor(tasks, DateTime(2026, 2, 10), uuidB), isFalse);
+
+      // Cada um deve ter apenas seu próprio evento na sua localização correta
+      final eventsA = ConflictDetection.getExecutionEventsForDay(tasks, DateTime(2026, 2, 10))
+          .where((e) => e.executorId == uuidA)
+          .toList();
+      expect(eventsA.length, 1);
+      expect(eventsA.first.locationKey, 'LocA');
+
+      final eventsB = ConflictDetection.getExecutionEventsForDay(tasks, DateTime(2026, 2, 10))
+          .where((e) => e.executorId == uuidB)
+          .toList();
+      expect(eventsB.length, 1);
+      expect(eventsB.first.locationKey, 'LocB');
+    });
+
+    test('7) Legado por nome - se nenhum UUID estiver presente, deve usar casamento por nome', () {
+      final legacyTask1 = mkTask(
+        id: 't1',
+        locais: ['LocA'],
+        executor: 'João Silva',
+        ganttSegments: [seg(DateTime(2026, 2, 10), DateTime(2026, 2, 11))],
+      );
+      final legacyTask2 = mkTask(
+        id: 't2',
+        locais: ['LocB'],
+        executor: 'João Silva',
+        ganttSegments: [seg(DateTime(2026, 2, 10), DateTime(2026, 2, 11))],
+      );
+
+      final tasks = [legacyTask1, legacyTask2];
+
+      // Casamento por nome para legado deve detectar conflito
+      expect(ConflictDetection.hasConflictOnDayForExecutor(tasks, DateTime(2026, 2, 10), 'João Silva'), isTrue);
+    });
   });
 }

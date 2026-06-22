@@ -1046,7 +1046,12 @@ class _SIViewState extends State<SIView> {
       if (task != null && mounted) {
         await showDialog(
           context: context,
-          builder: (context) => TaskViewDialog(task: task),
+          builder: (context) => TaskViewDialog(
+            task: task,
+            onUpdated: (updatedTask) {
+              _loadSIsProgramadas();
+            },
+          ),
         );
       }
     } catch (e) {
