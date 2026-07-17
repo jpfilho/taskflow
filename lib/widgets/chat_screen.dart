@@ -22,7 +22,20 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'telegram_config_dialog.dart';
-import 'tag_selector_dialog.dart';
+import '../features/chat_feedback/presentation/widgets/chat_feedback_item_picker.dart';
+import '../features/chat_feedback/data/repositories/chat_feedback_repository_impl.dart';
+import '../features/chat_feedback/domain/models/chat_feedback_session.dart';
+import '../features/chat_feedback/domain/models/chat_feedback_item.dart';
+import '../features/chat_feedback/domain/models/chat_item_feedback.dart';
+import '../features/chat_feedback/domain/enums/chat_feedback_session_status.dart';
+import '../features/chat_feedback/domain/enums/chat_feedback_item_type.dart';
+import '../features/chat_feedback/domain/enums/execution_status.dart';
+import '../features/chat_feedback/domain/enums/non_execution_reason.dart';
+import 'package:uuid/uuid.dart';
+import '../services/local_database_service.dart';
+import '../services/sync_service.dart';
+import 'package:sqflite/sqflite.dart';
+import 'dart:convert';
 import '../config/supabase_config.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -71,10 +84,21 @@ class _ChatScreenState extends State<ChatScreen> {
   // Para emoji picker
   bool _mostrarEmojiPicker = false;
 
-  // Para tags Nota/Ordem
+  // Para tags Nota/Ordem (LEGADO)
   String? _selectedRefType; // 'GERAL' | 'NOTA' | 'ORDEM'
   String? _selectedRefId; // UUID da nota ou ordem
   String? _selectedRefLabel; // Label para exibição (ex: "NOTA 12345")
+  bool? _selectedRefExecutado; // Status Executado
+
+  // Novo Sistema de Tags (Múltipla Seleção)
+  bool _isGeralSelected = true;
+  List<String> _selectedNotaIds = [];
+  List<String> _selectedOrdemIds = [];
+  List<Map<String, dynamic>> _selectedNotasInfo = [];
+  List<Map<String, dynamic>> _selectedOrdensInfo = [];
+  Map<String, Map<String, dynamic>> _itemFeedbacks = {};
+  
+  late final ChatFeedbackRepositoryImpl _feedbackRepo = ChatFeedbackRepositoryImpl(LocalDatabaseService());
 
   // Listas de opções
   List<Map<String, dynamic>> _notasDisponiveis = [];
@@ -209,11 +233,45 @@ class _ChatScreenState extends State<ChatScreen> {
 
       _taskId = grupoResponse['tarefa_id'] as String;
 
+      // Tentar carregar rascunho de feedbacks
+      try {
+        final draftData = await _feedbackRepo.getSessionLocal(_taskId!);
+        if (draftData != null) {
+          final session = draftData['session'];
+          final items = draftData['items'] as List;
+          final feedbacks = draftData['feedbacks'] as List;
+          
+          if (mounted) {
+            setState(() {
+              _isGeralSelected = session['isGeral'] == true;
+              _selectedNotaIds = items.where((i) => i['ref_type'] == 'NOTA').map((i) => i['ref_id'] as String).toList();
+              _selectedOrdemIds = items.where((i) => i['ref_type'] == 'ORDEM').map((i) => i['ref_id'] as String).toList();
+              
+              for (var fb in feedbacks) {
+                // Find matching item
+                final item = items.firstWhere((i) => i['id'] == fb['item_id'], orElse: () => null);
+                if (item != null) {
+                  _itemFeedbacks[item['ref_id']] = {
+                    'status': fb['status_execucao'],
+                    'percentual': fb['percentual_execucao'],
+                    'motivoNaoExecucao': fb['motivo_nao_execucao'],
+                    'comentario': fb['comentario'],
+                  };
+                }
+              }
+            });
+            print('✅ [Chat] Rascunho carregado para tarefa $_taskId');
+          }
+        }
+      } catch (e) {
+        print('⚠️ [Chat] Erro ao carregar rascunho: $e');
+      }
+
       // 2. Carregar notas da tarefa
       try {
         final notasResponse = await _supabase
             .from('tasks_notas_sap')
-            .select('nota_sap_id, notas_sap(id, nota, descricao)')
+            .select('nota_sap_id, notas_sap(id, nota, descricao, sala)')
             .eq('task_id', _taskId!);
 
         _notasDisponiveis = (notasResponse as List)
@@ -225,6 +283,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 'nota': nota['nota'],
                 'label': 'NOTA ${nota['nota']}',
                 'descricao': nota['descricao'],
+                'sala': nota['sala'],
               };
             })
             .whereType<Map<String, dynamic>>()
@@ -240,7 +299,7 @@ class _ChatScreenState extends State<ChatScreen> {
       try {
         final ordensResponse = await _supabase
             .from('tasks_ordens')
-            .select('ordem_id, ordens(id, ordem, texto_breve)')
+            .select('ordem_id, ordens(id, ordem, texto_breve, sala)')
             .eq('task_id', _taskId!);
 
         _ordensDisponiveis = (ordensResponse as List)
@@ -252,6 +311,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 'ordem': ordem['ordem'],
                 'label': 'ORDEM ${ordem['ordem']}',
                 'descricao': ordem['texto_breve'],
+                'sala': ordem['sala'],
               };
             })
             .whereType<Map<String, dynamic>>()
@@ -275,14 +335,12 @@ class _ChatScreenState extends State<ChatScreen> {
 
   // ========== WIDGETS DE TAG ==========
 
-  Widget _buildTagSelector() {
-    // Se não tem task_id, não mostrar seletor
-    if (_taskId == null) {
-      return SizedBox.shrink();
-    }
-
+  Widget _buildCurrentTagIndicator() {
+    int totalSelected = _selectedNotaIds.length + _selectedOrdemIds.length;
+    String label = _isGeralSelected ? 'GERAL' : (totalSelected == 1 ? (_selectedNotasInfo.isNotEmpty ? 'NOTA ${_selectedNotasInfo.first['nota']}' : 'ORDEM ${_selectedOrdensInfo.first['ordem']}') : '$totalSelected Itens Vinculados');
+    
     return GestureDetector(
-      onTap: () => _mostrarSeletorTag(),
+      onTap: _mostrarSeletorTag,
       child: Container(
         margin: EdgeInsets.only(bottom: 8, left: 8, right: 8),
         padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -296,7 +354,7 @@ class _ChatScreenState extends State<ChatScreen> {
             Icon(_getTagIcon(), size: 16, color: Colors.white),
             SizedBox(width: 6),
             Text(
-              _selectedRefLabel ?? 'GERAL',
+              label,
               style: TextStyle(
                 color: Colors.white,
                 fontSize: 12,
@@ -312,46 +370,178 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Color _getTagColor() {
-    switch (_selectedRefType) {
-      case 'NOTA':
-        return Colors.blue;
-      case 'ORDEM':
-        return Colors.green;
-      default:
-        return Colors.grey;
-    }
+    if (_isGeralSelected) return Colors.grey.shade600;
+    if (_selectedNotaIds.isNotEmpty && _selectedOrdemIds.isNotEmpty) return Colors.purple;
+    if (_selectedNotaIds.isNotEmpty) return Colors.blue;
+    if (_selectedOrdemIds.isNotEmpty) return Colors.orange;
+    return Colors.grey.shade600;
   }
 
   IconData _getTagIcon() {
-    switch (_selectedRefType) {
-      case 'NOTA':
-        return Icons.push_pin;
-      case 'ORDEM':
-        return Icons.receipt;
-      default:
-        return Icons.chat_bubble_outline;
-    }
+    if (_isGeralSelected) return Icons.chat_bubble_outline;
+    if (_selectedNotaIds.isNotEmpty && _selectedOrdemIds.isNotEmpty) return Icons.list_alt;
+    if (_selectedNotaIds.isNotEmpty) return Icons.push_pin;
+    if (_selectedOrdemIds.isNotEmpty) return Icons.receipt;
+    return Icons.chat_bubble_outline;
   }
 
   Future<void> _mostrarSeletorTag() async {
+    if (_taskId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Tarefa não identificada. Não é possível vincular itens.')),
+      );
+      return;
+    }
+
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (context) => TagSelectorDialog(
-        notasDisponiveis: _notasDisponiveis,
-        ordensDisponiveis: _ordensDisponiveis,
-        refTypeAtual: _selectedRefType,
-        refIdAtual: _selectedRefId,
+      builder: (context) => ChatFeedbackItemPicker(
+        taskId: _taskId!,
+        initialIsGeralSelected: _isGeralSelected,
+        initialSelectedNotaIds: _selectedNotaIds.toSet(),
+        initialSelectedOrdemIds: _selectedOrdemIds.toSet(),
+        initialFeedbacks: _itemFeedbacks,
       ),
     );
 
     if (result != null) {
       setState(() {
-        _selectedRefType = result['ref_type'];
-        _selectedRefId = result['ref_id'];
-        _selectedRefLabel = result['ref_label'];
+        _isGeralSelected = result['isGeral'];
+        _selectedNotaIds = List<String>.from(result['selectedNotaIds']);
+        _selectedOrdemIds = List<String>.from(result['selectedOrdemIds']);
+        _selectedNotasInfo = List<Map<String, dynamic>>.from(result['selectedNotasInfo']);
+        _selectedOrdensInfo = List<Map<String, dynamic>>.from(result['selectedOrdensInfo']);
+        if (result['feedbacks'] != null) {
+          _itemFeedbacks = Map<String, Map<String, dynamic>>.from(result['feedbacks']);
+        }
+        
+        // Compatibilidade temporária com o envio de mensagem legado (Etapa B1 fallback)
+        if (_isGeralSelected) {
+          _selectedRefType = 'GERAL';
+          _selectedRefId = null;
+          _selectedRefLabel = null;
+        } else if (_selectedNotaIds.isNotEmpty && _selectedOrdemIds.isEmpty && _selectedNotaIds.length == 1) {
+          _selectedRefType = 'NOTA';
+          _selectedRefId = _selectedNotaIds.first;
+          _selectedRefLabel = 'NOTA ${_selectedNotasInfo.first['nota']}';
+        } else if (_selectedOrdemIds.isNotEmpty && _selectedNotaIds.isEmpty && _selectedOrdemIds.length == 1) {
+          _selectedRefType = 'ORDEM';
+          _selectedRefId = _selectedOrdemIds.first;
+          _selectedRefLabel = 'ORDEM ${_selectedOrdensInfo.first['ordem']}';
+        } else {
+          // Se houver mais de um, vamos enviar como GERAL por enquanto até a Etapa B2
+          _selectedRefType = 'GERAL';
+          _selectedRefId = null;
+          _selectedRefLabel = null;
+        }
       });
+      _salvarRascunho();
     }
   }
+
+  Future<void> _salvarRascunho() async {
+    if (_taskId == null) return;
+    
+    // Simulate domain models for saving as draft
+    final sessionData = {
+      'id': 'draft',
+      'task_id': _taskId,
+      'isGeral': _isGeralSelected,
+    };
+    
+    final itemsData = [];
+    final feedbacksData = [];
+    
+    for (var id in _selectedNotaIds) {
+      final itemId = 'item_nota_$id';
+      itemsData.add({
+        'id': itemId,
+        'ref_type': 'NOTA',
+        'ref_id': id,
+      });
+      if (_itemFeedbacks.containsKey(id)) {
+        final fb = _itemFeedbacks[id]!;
+        feedbacksData.add({
+          'id': 'fb_$id',
+          'item_id': itemId,
+          'status_execucao': fb['status'],
+          'percentual_execucao': fb['percentual'],
+          'motivo_nao_execucao': fb['motivoNaoExecucao'],
+          'comentario': fb['comentario'],
+        });
+      }
+    }
+    
+    for (var id in _selectedOrdemIds) {
+      final itemId = 'item_ordem_$id';
+      itemsData.add({
+        'id': itemId,
+        'ref_type': 'ORDEM',
+        'ref_id': id,
+      });
+      if (_itemFeedbacks.containsKey(id)) {
+        final fb = _itemFeedbacks[id]!;
+        feedbacksData.add({
+          'id': 'fb_$id',
+          'item_id': itemId,
+          'status_execucao': fb['status'],
+          'percentual_execucao': fb['percentual'],
+          'motivo_nao_execucao': fb['motivoNaoExecucao'],
+          'comentario': fb['comentario'],
+        });
+      }
+    }
+    
+    try {
+      final db = await LocalDatabaseService().database;
+      await db.insert(
+        'chat_feedback_drafts',
+        {
+          'task_id': _taskId,
+          'draft_data': jsonEncode({
+            'session': sessionData,
+            'items': itemsData,
+            'feedbacks': feedbacksData,
+          }),
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      print('✅ [Chat] Rascunho salvo para tarefa $_taskId');
+    } catch (e) {
+      print('⚠️ [Chat] Erro ao salvar rascunho: $e');
+    }
+  }
+
+  Future<void> _limparRascunho() async {
+    if (_taskId == null) return;
+    try {
+      final db = await LocalDatabaseService().database;
+      await db.delete(
+        'chat_feedback_drafts',
+        where: 'task_id = ?',
+        whereArgs: [_taskId],
+      );
+      if (mounted) {
+        setState(() {
+          _isGeralSelected = true;
+          _selectedNotaIds = [];
+          _selectedOrdemIds = [];
+          _selectedNotasInfo = [];
+          _selectedOrdensInfo = [];
+          _itemFeedbacks = {};
+          
+          _selectedRefType = 'GERAL';
+          _selectedRefId = null;
+          _selectedRefLabel = null;
+        });
+      }
+      print('✅ [Chat] Rascunho removido para tarefa $_taskId');
+    } catch (e) {
+      print('⚠️ [Chat] Erro ao remover rascunho: $e');
+    }
+  }
+
 
   Future<void> _mostrarOpcoesAnexo() async {
     showModalBottomSheet(
@@ -817,6 +1007,44 @@ class _ChatScreenState extends State<ChatScreen> {
     final mensagemRespondidaId = _mensagemRespondendo?.id;
     final mensagemRespondida = _mensagemRespondendo;
 
+    Map<String, dynamic>? structuredPayload;
+    if (_selectedNotaIds.isNotEmpty || _selectedOrdemIds.isNotEmpty) {
+      final itemsList = [];
+      for (final id in _selectedNotaIds) {
+        final info = _selectedNotasInfo.firstWhere((e) => e['id'] == id, orElse: () => {});
+        final fb = _itemFeedbacks[id];
+        itemsList.add({
+          'tipo': 'NOTA',
+          'id': id,
+          'numero': info['nota'] ?? '',
+          'descricao': info['descricao'] ?? '',
+          'local': info['local'] ?? '',
+          'sala': info['sala'] ?? '',
+          'status': fb?['status'] ?? 'pendente',
+          'percentual': fb?['percentual'],
+          'motivoNaoExecucao': fb?['motivoNaoExecucao'],
+          'comentario': fb?['comentario'],
+        });
+      }
+      for (final id in _selectedOrdemIds) {
+        final info = _selectedOrdensInfo.firstWhere((e) => e['id'] == id, orElse: () => {});
+        final fb = _itemFeedbacks[id];
+        itemsList.add({
+          'tipo': 'ORDEM',
+          'id': id,
+          'numero': info['ordem'] ?? '',
+          'descricao': info['descricao'] ?? '',
+          'local': info['local'] ?? '',
+          'sala': info['sala'] ?? '',
+          'status': fb?['status'] ?? 'pendente',
+          'percentual': fb?['percentual'],
+          'motivoNaoExecucao': fb?['motivoNaoExecucao'],
+          'comentario': fb?['comentario'],
+        });
+      }
+      structuredPayload = {'items': itemsList};
+    }
+
     // Criar mensagem temporária para adicionar imediatamente (otimistic update)
     final mensagemTemporaria = Mensagem(
       grupoId: widget.grupoId,
@@ -828,6 +1056,7 @@ class _ChatScreenState extends State<ChatScreen> {
       usuariosMencionados: usuariosMencionados.isNotEmpty
           ? usuariosMencionados
           : null,
+      structuredPayload: structuredPayload,
       createdAt: DateTime.now(),
     );
 
@@ -858,6 +1087,8 @@ class _ChatScreenState extends State<ChatScreen> {
         refType: _selectedRefType,
         refId: _selectedRefId,
         refLabel: _selectedRefLabel,
+        refExecutado: _selectedRefExecutado,
+        structuredPayload: structuredPayload,
       );
 
       // Atualizar a mensagem temporária com os dados reais do servidor
@@ -887,6 +1118,103 @@ class _ChatScreenState extends State<ChatScreen> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _scrollToBottom();
       });
+
+      // Enfileirar feedbacks para envio ao backend (Etapa C)
+      if (_taskId != null && (!_isGeralSelected && (_selectedNotaIds.isNotEmpty || _selectedOrdemIds.isNotEmpty))) {
+        try {
+          final uuid = const Uuid();
+          final sessionId = uuid.v4();
+          
+          final session = ChatFeedbackSession(
+            id: sessionId,
+            taskId: _taskId!,
+            messageId: mensagemEnviada.id,
+            status: ChatFeedbackSessionStatus.submitted,
+            createdBy: userId,
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+            submittedAt: DateTime.now(),
+            clientId: uuid.v4(),
+          );
+
+          final items = <ChatFeedbackItem>[];
+          final feedbacks = <ChatItemFeedback>[];
+          
+          for (final id in _selectedNotaIds) {
+            final itemId = uuid.v4();
+            items.add(ChatFeedbackItem(
+              id: itemId,
+              sessionId: sessionId,
+              taskId: _taskId!,
+              itemType: ChatFeedbackItemType.nota,
+              sourceItemId: id,
+              createdBy: userId,
+              createdAt: DateTime.now(),
+            ));
+            if (_itemFeedbacks.containsKey(id)) {
+              final fb = _itemFeedbacks[id]!;
+              feedbacks.add(ChatItemFeedback(
+                id: uuid.v4(),
+                feedbackItemId: itemId,
+                sequenceNumber: 1,
+                executionStatus: ExecutionStatus.fromString(fb['status'] ?? 'pendente'),
+                executionPercentage: fb['percentual'] is double ? fb['percentual'] : (fb['percentual'] as num?)?.toDouble(),
+                nonExecutionReason: fb['motivoNaoExecucao'] != null ? NonExecutionReason.fromString(fb['motivoNaoExecucao']) : null,
+                comment: fb['comentario'],
+                executionDate: DateTime.now(),
+                followUpRequired: false,
+                isClosed: false,
+                createdBy: userId,
+                createdAt: DateTime.now(),
+                updatedAt: DateTime.now(),
+              ));
+            }
+          }
+          
+          for (final id in _selectedOrdemIds) {
+            final itemId = uuid.v4();
+            items.add(ChatFeedbackItem(
+              id: itemId,
+              sessionId: sessionId,
+              taskId: _taskId!,
+              itemType: ChatFeedbackItemType.ordem,
+              sourceItemId: id,
+              createdBy: userId,
+              createdAt: DateTime.now(),
+            ));
+            if (_itemFeedbacks.containsKey(id)) {
+              final fb = _itemFeedbacks[id]!;
+              feedbacks.add(ChatItemFeedback(
+                id: uuid.v4(),
+                feedbackItemId: itemId,
+                sequenceNumber: 1,
+                executionStatus: ExecutionStatus.fromString(fb['status'] ?? 'pendente'),
+                executionPercentage: fb['percentual'] is double ? fb['percentual'] : (fb['percentual'] as num?)?.toDouble(),
+                nonExecutionReason: fb['motivoNaoExecucao'] != null ? NonExecutionReason.fromString(fb['motivoNaoExecucao']) : null,
+                comment: fb['comentario'],
+                executionDate: DateTime.now(),
+                followUpRequired: false,
+                isClosed: false,
+                createdBy: userId,
+                createdAt: DateTime.now(),
+                updatedAt: DateTime.now(),
+              ));
+            }
+          }
+          
+          await _feedbackRepo.enqueueSessionSync(session, items, feedbacks, []);
+          print('✅ [Chat] Sessão de feedback enfileirada: $sessionId');
+          
+          // Disparar sincronização em background para enviar a sessão que acabou de ser enfileirada
+          SyncService().markHasLocalChanges();
+          SyncService().syncAll();
+        } catch (e) {
+          print('⚠️ [Chat] Erro ao enfileirar sessão de feedback: $e');
+        }
+      }
+
+      // Limpar rascunho de feedbacks
+      _limparRascunho();
     } catch (e) {
       // Remover mensagem temporária em caso de erro
       setState(() {
@@ -952,8 +1280,6 @@ class _ChatScreenState extends State<ChatScreen> {
             _recordingDuration++;
           });
         });
-
-        _mostrarDialogoGravacao();
       }
     } catch (e) {
       if (mounted) {
@@ -967,53 +1293,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  Future<void> _mostrarDialogoGravacao() async {
-    final resultado = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) {
-          return AlertDialog(
-            title: const Text('Gravando áudio'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.mic, size: 48, color: Colors.red),
-                const SizedBox(height: 16),
-                Text(
-                  _formatarDuracao(_recordingDuration),
-                  style: const TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  _cancelarGravacao();
-                  Navigator.of(context).pop(false);
-                },
-                child: const Text('Cancelar'),
-              ),
-              TextButton(
-                onPressed: () {
-                  _pararGravacao();
-                  Navigator.of(context).pop(true);
-                },
-                child: const Text('Enviar'),
-              ),
-            ],
-          );
-        },
-      ),
-    );
 
-    if (resultado != true && _isRecording) {
-      _cancelarGravacao();
-    }
-  }
 
   String _formatarDuracao(int segundos) {
     final minutos = segundos ~/ 60;
@@ -1450,6 +1730,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Widget _buildConteudoComMencoes(Mensagem mensagem) {
     final conteudo = mensagem.conteudo;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final textColor = isDark ? Colors.white : Colors.black87;
 
     // Destacar menções e links no texto
     final spans = <TextSpan>[];
@@ -1462,7 +1744,7 @@ class _ChatScreenState extends State<ChatScreen> {
         spans.add(
           TextSpan(
             text: conteudo.substring(lastIndex, match.start),
-            style: const TextStyle(fontSize: 14, color: Colors.black87),
+            style: TextStyle(fontSize: 14, color: textColor),
           ),
         );
       }
@@ -1513,13 +1795,13 @@ class _ChatScreenState extends State<ChatScreen> {
       spans.add(
         TextSpan(
           text: conteudo.substring(lastIndex),
-          style: const TextStyle(fontSize: 14, color: Colors.black87),
+          style: TextStyle(fontSize: 14, color: textColor),
         ),
       );
     }
 
     if (spans.isEmpty) {
-      return Text(conteudo, style: const TextStyle(fontSize: 14));
+      return Text(conteudo, style: TextStyle(fontSize: 14, color: textColor));
     }
 
     return SelectableText.rich(TextSpan(children: spans));
@@ -2116,36 +2398,61 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _vincularMensagem(Mensagem mensagem) async {
+    if (_taskId == null) return;
+
     // Abrir dialog de seleção de tags
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (context) => TagSelectorDialog(
-        notasDisponiveis: _notasDisponiveis,
-        ordensDisponiveis: _ordensDisponiveis,
-        refTypeAtual: mensagem.refType,
-        refIdAtual: mensagem.refId,
+      builder: (context) => ChatFeedbackItemPicker(
+        taskId: _taskId!,
+        initialIsGeralSelected: mensagem.refType == 'GERAL' || mensagem.refType == null,
+        initialSelectedNotaIds: mensagem.refType == 'NOTA' && mensagem.refId != null ? {mensagem.refId!} : {},
+        initialSelectedOrdemIds: mensagem.refType == 'ORDEM' && mensagem.refId != null ? {mensagem.refId!} : {},
       ),
     );
 
     if (result != null) {
       try {
+        final bool isGeral = result['isGeral'];
+        final List<String> selNotas = List<String>.from(result['selectedNotaIds']);
+        final List<String> selOrdens = List<String>.from(result['selectedOrdemIds']);
+        final List<Map<String, dynamic>> selNotasInfo = List<Map<String, dynamic>>.from(result['selectedNotasInfo']);
+        final List<Map<String, dynamic>> selOrdensInfo = List<Map<String, dynamic>>.from(result['selectedOrdensInfo']);
+
+        String newRefType = 'GERAL';
+        String? newRefId;
+        String? newRefLabel;
+
+        if (isGeral) {
+          newRefType = 'GERAL';
+        } else if (selNotas.isNotEmpty && selOrdens.isEmpty && selNotas.length == 1) {
+          newRefType = 'NOTA';
+          newRefId = selNotas.first;
+          newRefLabel = 'NOTA ${selNotasInfo.first['nota']}';
+        } else if (selOrdens.isNotEmpty && selNotas.isEmpty && selOrdens.length == 1) {
+          newRefType = 'ORDEM';
+          newRefId = selOrdens.first;
+          newRefLabel = 'ORDEM ${selOrdensInfo.first['ordem']}';
+        } else {
+          newRefType = 'GERAL';
+        }
+
         // Atualizar tags da mensagem
         await _chatService.atualizarTagsMensagem(
           mensagem.id!,
-          refType: result['ref_type'],
-          refId: result['ref_id'],
-          refLabel: result['ref_label'],
+          refType: newRefType,
+          refId: newRefId,
+          refLabel: newRefLabel,
         );
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(
-                result['ref_type'] == 'GERAL'
-                    ? 'Vínculo removido'
-                    : 'Mensagem vinculada a ${result['ref_label'] ?? result['ref_type']}',
+                newRefType == 'GERAL'
+                    ? 'Mensagem desvinculada (Geral)'
+                    : 'Mensagem vinculada a $newRefLabel',
               ),
-              backgroundColor: Colors.green,
             ),
           );
         }
@@ -2153,7 +2460,7 @@ class _ChatScreenState extends State<ChatScreen> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Erro ao vincular mensagem: $e'),
+              content: Text('Erro ao atualizar: $e'),
               backgroundColor: Colors.red,
             ),
           );
@@ -2412,6 +2719,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final backgroundColor = isDark ? const Color(0xFF0B141A) : const Color(0xFFECE5DD);
     return DropTarget(
       onDragDone: (details) async {
         for (final file in details.files) {
@@ -2457,7 +2766,9 @@ class _ChatScreenState extends State<ChatScreen> {
           children: [
             // Lista de mensagens
             Expanded(
-              child: _isLoading
+              child: Container(
+                color: backgroundColor,
+                child: _isLoading
                   ? const Center(child: CircularProgressIndicator())
                   : _mensagens.isEmpty
                   ? Center(
@@ -2546,15 +2857,18 @@ class _ChatScreenState extends State<ChatScreen> {
                                   ),
                                   decoration: BoxDecoration(
                                     color: isMinhaMensagem
-                                        ? const Color(
-                                            0xFFDCF8C6,
-                                          ) // Verde claro do WhatsApp
-                                        : Colors.white,
-                                    borderRadius: BorderRadius.circular(8),
+                                        ? (isDark ? const Color(0xFF005C4B) : const Color(0xFFD9FDD3))
+                                        : (isDark ? const Color(0xFF202C33) : Colors.white),
+                                    borderRadius: BorderRadius.only(
+                                      topLeft: const Radius.circular(12),
+                                      topRight: const Radius.circular(12),
+                                      bottomLeft: Radius.circular(isMinhaMensagem ? 12 : 0),
+                                      bottomRight: Radius.circular(isMinhaMensagem ? 0 : 12),
+                                    ),
                                     boxShadow: [
                                       BoxShadow(
-                                        color: Colors.black.withOpacity(0.1),
-                                        blurRadius: 2,
+                                        color: Colors.black.withOpacity(isDark ? 0.2 : 0.06),
+                                        blurRadius: 1.5,
                                         offset: const Offset(0, 1),
                                       ),
                                     ],
@@ -2577,8 +2891,12 @@ class _ChatScreenState extends State<ChatScreen> {
                                             ),
                                           ),
                                         ),
-                                      // Exibir badge de tag se houver
-                                      if (mensagem.refType != null &&
+                                      // Exibir payload de feedback estruturado (novo)
+                                      if (mensagem.structuredPayload != null &&
+                                          mensagem.structuredPayload!['items'] != null)
+                                        _buildFeedbackCard(mensagem)
+                                      // Exibir badge de tag legado se houver
+                                      else if (mensagem.refType != null &&
                                           mensagem.refType != 'GERAL')
                                         Padding(
                                           padding: const EdgeInsets.only(
@@ -2667,6 +2985,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         );
                       },
                     ),
+              ),
             ),
             // Preview da resposta (se houver)
             if (_mensagemRespondendo != null)
@@ -2750,97 +3069,138 @@ class _ChatScreenState extends State<ChatScreen> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       // Seletor de tag (badge)
-                      _buildTagSelector(),
-                      Row(
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.attach_file),
-                            onPressed: _mostrarOpcoesAnexo,
-                          ),
-                          Expanded(
-                            child: Focus(
-                              onKeyEvent: (node, event) {
-                                // Detectar Enter pressionado sem Shift
-                                if (event is KeyDownEvent &&
-                                    event.logicalKey ==
-                                        LogicalKeyboardKey.enter) {
-                                  // Verificar se Shift não está pressionado
-                                  final isShiftPressed =
-                                      HardwareKeyboard.instance.isShiftPressed;
-                                  if (!isShiftPressed &&
-                                      _messageController.text
-                                          .trim()
-                                          .isNotEmpty) {
-                                    // Enviar mensagem
-                                    _enviarMensagem();
-                                    return KeyEventResult.handled;
-                                  }
-                                }
-                                return KeyEventResult.ignored;
-                              },
-                              child: TextField(
-                                controller: _messageController,
-                                focusNode: _focusNode,
-                                onTap: () {
-                                  // Fechar emoji picker quando focar no campo de texto
-                                  if (_mostrarEmojiPicker) {
-                                    setState(() {
-                                      _mostrarEmojiPicker = false;
-                                    });
-                                  }
-                                },
-                                decoration: InputDecoration(
-                                  hintText: _mensagemRespondendo != null
-                                      ? 'Digite sua resposta...'
-                                      : 'Digite uma mensagem...',
-                                  border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(24),
-                                    borderSide: BorderSide.none,
-                                  ),
-                                  filled: true,
-                                  fillColor: Colors.grey[200],
-                                  contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 16,
-                                    vertical: 10,
+                      if (_taskId != null) _buildCurrentTagIndicator(),
+                      _isRecording
+                          ? Row(
+                              children: [
+                                const SizedBox(width: 12),
+                                const _PulsingRecordIcon(),
+                                const SizedBox(width: 8),
+                                Text(
+                                  'Gravando... ${_formatarDuracao(_recordingDuration)}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.red,
+                                    fontSize: 15,
                                   ),
                                 ),
-                                maxLines: null,
-                                minLines: 1,
-                                textCapitalization:
-                                    TextCapitalization.sentences,
-                                textInputAction: TextInputAction.newline,
-                              ),
+                                const Spacer(),
+                                IconButton(
+                                  icon: const Icon(Icons.delete, color: Colors.red),
+                                  onPressed: _cancelarGravacao,
+                                  tooltip: 'Cancelar gravação',
+                                ),
+                                const SizedBox(width: 8),
+                                Container(
+                                  margin: const EdgeInsets.only(right: 4),
+                                  decoration: const BoxDecoration(
+                                    color: Color(0xFF075E54),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: IconButton(
+                                    icon: const Icon(Icons.send, color: Colors.white, size: 20),
+                                    onPressed: _pararGravacao,
+                                    tooltip: 'Enviar áudio',
+                                  ),
+                                ),
+                              ],
+                            )
+                          : Row(
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.attach_file),
+                                  onPressed: _mostrarOpcoesAnexo,
+                                ),
+                                Expanded(
+                                  child: Focus(
+                                    onKeyEvent: (node, event) {
+                                      // Detectar Enter pressionado sem Shift
+                                      if (event is KeyDownEvent &&
+                                          event.logicalKey ==
+                                              LogicalKeyboardKey.enter) {
+                                        // Verificar se Shift não está pressionado
+                                        final isShiftPressed =
+                                            HardwareKeyboard.instance.isShiftPressed;
+                                        if (!isShiftPressed &&
+                                            _messageController.text
+                                                .trim()
+                                                .isNotEmpty) {
+                                          // Enviar mensagem
+                                          _enviarMensagem();
+                                          return KeyEventResult.handled;
+                                        }
+                                      }
+                                      return KeyEventResult.ignored;
+                                    },
+                                    child: TextField(
+                                      controller: _messageController,
+                                      focusNode: _focusNode,
+                                      onTap: () {
+                                        // Fechar emoji picker quando focar no campo de texto
+                                        if (_mostrarEmojiPicker) {
+                                          setState(() {
+                                            _mostrarEmojiPicker = false;
+                                          });
+                                        }
+                                      },
+                                      decoration: InputDecoration(
+                                        hintText: _mensagemRespondendo != null
+                                            ? 'Digite sua resposta...'
+                                            : 'Digite uma mensagem...',
+                                        border: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(24),
+                                          borderSide: BorderSide.none,
+                                        ),
+                                        filled: true,
+                                        fillColor: Colors.grey[200],
+                                        contentPadding: const EdgeInsets.symmetric(
+                                          horizontal: 16,
+                                          vertical: 10,
+                                        ),
+                                      ),
+                                      maxLines: null,
+                                      minLines: 1,
+                                      textCapitalization:
+                                          TextCapitalization.sentences,
+                                      textInputAction: TextInputAction.newline,
+                                    ),
+                                  ),
+                                ),
+                                IconButton(
+                                  icon: Icon(
+                                    _mostrarEmojiPicker
+                                        ? Icons.keyboard
+                                        : Icons.emoji_emotions,
+                                    color: _mostrarEmojiPicker
+                                        ? Colors.blue
+                                        : Colors.grey[600],
+                                  ),
+                                  onPressed: () {
+                                    setState(() {
+                                      _mostrarEmojiPicker = !_mostrarEmojiPicker;
+                                    });
+                                    if (_mostrarEmojiPicker) {
+                                      _focusNode.unfocus();
+                                    } else {
+                                      _focusNode.requestFocus();
+                                    }
+                                  },
+                                ),
+                                ValueListenableBuilder<TextEditingValue>(
+                                  valueListenable: _messageController,
+                                  builder: (context, value, child) {
+                                    final temTexto = value.text.trim().isNotEmpty;
+                                    return IconButton(
+                                      icon: Icon(
+                                        temTexto ? Icons.send : Icons.mic,
+                                        color: const Color(0xFF075E54),
+                                      ),
+                                      onPressed: temTexto ? _enviarMensagem : _iniciarGravacaoAudio,
+                                    );
+                                  },
+                                ),
+                              ],
                             ),
-                          ),
-                          IconButton(
-                            icon: Icon(
-                              _mostrarEmojiPicker
-                                  ? Icons.keyboard
-                                  : Icons.emoji_emotions,
-                              color: _mostrarEmojiPicker
-                                  ? Colors.blue
-                                  : Colors.grey[600],
-                            ),
-                            onPressed: () {
-                              setState(() {
-                                _mostrarEmojiPicker = !_mostrarEmojiPicker;
-                              });
-                              if (_mostrarEmojiPicker) {
-                                _focusNode.unfocus();
-                              } else {
-                                _focusNode.requestFocus();
-                              }
-                            },
-                          ),
-                          IconButton(
-                            icon: const Icon(
-                              Icons.send,
-                              color: Color(0xFF075E54),
-                            ),
-                            onPressed: _enviarMensagem,
-                          ),
-                        ],
-                      ),
                       // Emoji picker
                       if (_mostrarEmojiPicker)
                         SizedBox(
@@ -2884,6 +3244,180 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
       ),
+    );
+  }
+  Widget _buildFeedbackCard(Mensagem mensagem) {
+    final items = mensagem.structuredPayload!['items'] as List;
+    if (items.isEmpty) return const SizedBox.shrink();
+
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8, top: 4),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+          width: 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Row(
+              children: [
+                Icon(Icons.assignment_turned_in, size: 16, color: isDark ? Colors.blue[300] : Colors.blue[700]),
+                const SizedBox(width: 6),
+                Text(
+                  'Feedbacks de Execução',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: isDark ? Colors.blue[300] : Colors.blue[700],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1, thickness: 1),
+          ...items.map((item) {
+            final tipo = item['tipo'] ?? '';
+            final numero = item['numero'] ?? '';
+            final status = item['status'] ?? 'pendente';
+            
+            Color statusColor;
+            IconData statusIcon;
+            String statusText;
+            
+            switch (status) {
+              case 'executado':
+                statusColor = Colors.green;
+                statusIcon = Icons.check_circle;
+                statusText = 'Executado';
+                break;
+              case 'parcial':
+                statusColor = Colors.orange;
+                statusIcon = Icons.timelapse;
+                statusText = 'Parcial';
+                break;
+              case 'nao_executado':
+                statusColor = Colors.red;
+                statusIcon = Icons.cancel;
+                statusText = 'Não Executado';
+                break;
+              case 'nao_aplicavel':
+                statusColor = Colors.grey;
+                statusIcon = Icons.block;
+                statusText = 'Não Aplicável';
+                break;
+              default:
+                statusColor = Colors.blueGrey;
+                statusIcon = Icons.pending;
+                statusText = 'Pendente';
+            }
+
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: (tipo == 'NOTA' ? Colors.blue : Colors.teal).withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(
+                                color: (tipo == 'NOTA' ? Colors.blue : Colors.teal).withOpacity(0.3),
+                              ),
+                            ),
+                            child: Text(
+                              '$tipo $numero',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: tipo == 'NOTA' ? Colors.blue : Colors.teal,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      Row(
+                        children: [
+                          Icon(statusIcon, size: 14, color: statusColor),
+                          const SizedBox(width: 4),
+                          Text(
+                            statusText,
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: statusColor,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  if (item['comentario'] != null && item['comentario'].toString().isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        '"${item['comentario']}"',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontStyle: FontStyle.italic,
+                          color: isDark ? Colors.grey[400] : Colors.grey[700],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+}
+
+class _PulsingRecordIcon extends StatefulWidget {
+  const _PulsingRecordIcon();
+
+  @override
+  State<_PulsingRecordIcon> createState() => _PulsingRecordIconState();
+}
+
+class _PulsingRecordIconState extends State<_PulsingRecordIcon>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1000),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: Tween<double>(begin: 0.2, end: 1.0).animate(_controller),
+      child: const Icon(Icons.fiber_manual_record, color: Colors.red, size: 20),
     );
   }
 }

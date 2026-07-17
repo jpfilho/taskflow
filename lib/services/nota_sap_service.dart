@@ -615,13 +615,15 @@ class NotaSAPService {
         }
       }
 
-      // Ordenar por prazo (dias_restantes) antes da paginação
-      // NULLS LAST para colocar notas sem prazo por último
-      // Ordem crescente: vencidas (negativas) primeiro, depois as que ainda não venceram (positivas)
-      query = query.order('dias_restantes', ascending: true, nullsFirst: false);
+      // Ordenar por criado_em (coluna física indexada) para evitar timeouts com a coluna calculada dias_restantes.
+      // A ordenação final por criticidade (diasRestantes) é realizada em memória no Dart.
+      query = query.order('criado_em', ascending: false);
 
       if (limit != null) {
         query = query.limit(limit);
+      } else {
+        // Limite de segurança padrão contra timeouts na VPS
+        query = query.limit(1000);
       }
 
       if (offset != null) {
@@ -1192,6 +1194,21 @@ class NotaSAPService {
     try {
       if (taskIds.isEmpty) return {};
 
+      if (taskIds.length > 100) {
+        final chunks = <List<String>>[];
+        for (var i = 0; i < taskIds.length; i += 100) {
+          chunks.add(taskIds.sublist(i, i + 100 > taskIds.length ? taskIds.length : i + 100));
+        }
+        final futures = chunks.map((chunk) => contarNotasPorTarefas(chunk));
+        final results = await Future.wait(futures);
+        
+        final Map<String, int> merged = {};
+        for (final r in results) {
+          merged.addAll(r);
+        }
+        return merged;
+      }
+
       // Usar VIEW otimizada do Supabase para buscar todas as contagens de uma vez
       // Usar .or() para múltiplos valores (já funciona no código)
       dynamic query = _supabase
@@ -1717,52 +1734,141 @@ class NotaSAPService {
         }
       }
       
-      // Buscar valores para cada campo separadamente
-      final campos = [
-        {'nome': 'local', 'campo': 'local'},
-        {'nome': 'sala', 'campo': 'sala'},
-        {'nome': 'tipo', 'campo': 'tipo'},
-        {'nome': 'nota', 'campo': 'nota'},
-        {'nome': 'prioridade', 'campo': 'text_prioridade'},
-        {'nome': 'status_usuario', 'campo': 'status_usuario'},
-        {'nome': 'responsavel', 'campo': 'denominacao_executor'},
-        {'nome': 'gpm', 'campo': 'gpm'},
-      ];
+      // Fazer apenas uma consulta trazendo todas as notas com os campos de interesse (filtrando pelo perfil de centros de trabalho)
+      // Limitamos a 1000 registros e ordenamos por criado_em para evitar timeouts na VPS
+      dynamic queryBase = _supabase.from('notas_sap_com_prazo')
+          .select('status_sistema, local, sala, tipo, nota, text_prioridade, status_usuario, denominacao_executor, gpm');
       
-      for (final campoInfo in campos) {
-        final campoNome = campoInfo['nome'] as String;
-        
-        dynamic campoQuery = _supabase.from('notas_sap_com_prazo').select('status_sistema, local, sala, tipo, nota, text_prioridade, status_usuario, denominacao_executor, gpm');
-        
-        // Aplicar filtros de perfil (mesma lógica do query principal)
-        if (usuario != null && usuario.isRoot) {
-          // Sem filtros de perfil para root
-        } else {
-          final centrosTrabalhoUsuario = await _obterCentrosTrabalhoUsuario();
-          if (centrosTrabalhoUsuario.isNotEmpty) {
-            final centrosCompletos = centrosTrabalhoUsuario.map((c) => c.trim()).toList();
-            if (centrosCompletos.length == 1) {
-              campoQuery = campoQuery.ilike('centro_trabalho_responsavel', '%${centrosCompletos[0]}%');
-            } else {
-              final orConditions = centrosCompletos.map((centro) => 'centro_trabalho_responsavel.ilike.%$centro%').join(',');
-              campoQuery = campoQuery.or(orConditions);
-            }
+      if (usuario != null && usuario.isRoot) {
+        // Sem filtros de perfil para root
+      } else {
+        final centrosTrabalhoUsuario = await _obterCentrosTrabalhoUsuario();
+        if (centrosTrabalhoUsuario.isNotEmpty) {
+          final centrosCompletos = centrosTrabalhoUsuario.map((c) => c.trim()).toList();
+          if (centrosCompletos.length == 1) {
+            queryBase = queryBase.ilike('centro_trabalho_responsavel', '%${centrosCompletos[0]}%');
           } else {
-            if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
-              continue; // Pular este campo se não há filtros de perfil
-            }
+            final orConditions = centrosCompletos.map((centro) => 'centro_trabalho_responsavel.ilike.%$centro%').join(',');
+            queryBase = queryBase.or(orConditions);
+          }
+        } else {
+          if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
+            return {
+              'status': [],
+              'local': [],
+              'sala': [],
+              'tipo': [],
+              'nota': [],
+              'prioridade': [],
+              'status_usuario': [],
+              'responsavel': [],
+              'gpm': [],
+            };
           }
         }
+      }
+
+      queryBase = queryBase.order('criado_em', ascending: false).limit(1000);
+
+      try {
+        final response = await queryBase;
+        final todasNotas = response as List;
         
-        // Aplicar todos os filtros EXCETO o do próprio campo
-        campoQuery = aplicarFiltrosExceto(campoQuery, campoNome);
-        
-        try {
-          final campoResponse = await campoQuery;
-          processarResposta(campoResponse as List, campoNome);
-        } catch (e) {
-          print('⚠️ Erro ao buscar valores para campo $campoNome: $e');
+        // Função auxiliar no Dart para decidir se a nota atende aos filtros de outros campos (filtros interdependentes / facetados)
+        bool atendeFiltrosExceto(Map<String, dynamic> item, String campoExcluir) {
+          final status = (item['status_sistema'] as String? ?? '').toUpperCase();
+          
+          // Sempre excluir se contém MREL
+          if (status.contains('MREL')) return false;
+          
+          // Aplicar filtro de tipo de nota
+          if (filtroTipoNota == 'abertas' && status.contains('MSEN')) return false;
+          if (filtroTipoNota == 'concluidas' && !status.contains('MSEN')) return false;
+
+          // Filtro de locais
+          if (campoExcluir != 'local' && filtroLocais != null && filtroLocais.isNotEmpty) {
+            final loc = item['local'] as String? ?? '';
+            if (!filtroLocais.any((l) => loc.toLowerCase().contains(l.toLowerCase()))) {
+              return false;
+            }
+          }
+
+          // Filtro de salas
+          if (campoExcluir != 'sala' && filtroSalas != null && filtroSalas.isNotEmpty) {
+            final salaVal = item['sala'] as String? ?? '';
+            if (!filtroSalas.any((s) => salaVal.toLowerCase().contains(s.toLowerCase()))) {
+              return false;
+            }
+          }
+
+          // Filtro de tipos
+          if (campoExcluir != 'tipo' && filtroTipos != null && filtroTipos.isNotEmpty) {
+            if (!filtroTipos.contains(item['tipo'])) return false;
+          }
+
+          // Filtro de notas
+          if (campoExcluir != 'nota' && filtroNotas != null && filtroNotas.isNotEmpty) {
+            if (!filtroNotas.contains(item['nota'])) return false;
+          }
+
+          // Filtro de prioridades
+          if (campoExcluir != 'prioridade' && filtroPrioridades != null && filtroPrioridades.isNotEmpty) {
+            if (!filtroPrioridades.contains(item['text_prioridade'])) return false;
+          }
+
+          // Filtro de status_usuario
+          if (campoExcluir != 'status_usuario' && filtroStatusUsuario != null && filtroStatusUsuario.isNotEmpty) {
+            if (!filtroStatusUsuario.contains(item['status_usuario'])) return false;
+          }
+
+          // Filtro de responsáveis
+          if (campoExcluir != 'responsavel' && filtroResponsaveis != null && filtroResponsaveis.isNotEmpty) {
+            final resp = item['denominacao_executor'] as String? ?? '';
+            if (!filtroResponsaveis.any((r) => resp.toLowerCase().contains(r.toLowerCase()))) {
+              return false;
+            }
+          }
+
+          // Filtro de GPMs
+          if (campoExcluir != 'gpm' && filtroGPMs != null && filtroGPMs.isNotEmpty) {
+            if (!filtroGPMs.contains(item['gpm']?.toString())) return false;
+          }
+
+          return true;
         }
+
+        // Processar os itens e popular os sets
+        for (var itemRaw in todasNotas) {
+          if (itemRaw is! Map) continue;
+          final item = itemRaw.map((key, value) => MapEntry(key.toString(), value));
+          
+          if (item['local'] != null && atendeFiltrosExceto(item, 'local')) {
+            localSet.add(item['local'] as String);
+          }
+          if (item['sala'] != null && atendeFiltrosExceto(item, 'sala')) {
+            salaSet.add(item['sala'] as String);
+          }
+          if (item['tipo'] != null && atendeFiltrosExceto(item, 'tipo')) {
+            tipoSet.add(item['tipo'] as String);
+          }
+          if (item['nota'] != null && atendeFiltrosExceto(item, 'nota')) {
+            notaSet.add(item['nota'] as String);
+          }
+          if (item['text_prioridade'] != null && atendeFiltrosExceto(item, 'prioridade')) {
+            prioridadeSet.add(item['text_prioridade'] as String);
+          }
+          if (item['status_usuario'] != null && atendeFiltrosExceto(item, 'status_usuario')) {
+            statusUsuarioSet.add(item['status_usuario'] as String);
+          }
+          if (item['denominacao_executor'] != null && atendeFiltrosExceto(item, 'responsavel')) {
+            responsavelSet.add(item['denominacao_executor'] as String);
+          }
+          if (item['gpm'] != null && atendeFiltrosExceto(item, 'gpm')) {
+            gpmSet.add(item['gpm'].toString());
+          }
+        }
+      } catch (e) {
+        print('❌ Erro na consulta única de filtros: $e');
       }
 
       return {

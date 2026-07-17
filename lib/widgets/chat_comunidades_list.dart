@@ -6,6 +6,7 @@ class ChatComunidadesList extends StatelessWidget {
   final Map<String, int> unreadPerCommunity;
   final Function(String?) onComunidadeSelected;
   final VoidCallback onRefresh;
+  final VoidCallback? onMenuPressed;
 
   const ChatComunidadesList({
     super.key,
@@ -13,6 +14,7 @@ class ChatComunidadesList extends StatelessWidget {
     this.unreadPerCommunity = const {},
     required this.onComunidadeSelected,
     required this.onRefresh,
+    this.onMenuPressed,
   });
 
   @override
@@ -22,6 +24,12 @@ class ChatComunidadesList extends StatelessWidget {
         title: const Text('Comunidades'),
         backgroundColor: const Color(0xFF075E54), // Cor verde do WhatsApp
         foregroundColor: Colors.white,
+        leading: onMenuPressed != null
+            ? IconButton(
+                icon: const Icon(Icons.menu),
+                onPressed: onMenuPressed,
+              )
+            : null,
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),

@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/si.dart';
 import '../utils/responsive.dart';
+import 'multi_select_filter_dialog.dart';
+import '../services/si_service.dart';
 
 class SISelectionDialog extends StatefulWidget {
   final List<SI> sis;
@@ -34,6 +36,7 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
   final int _itemsPerPage = 50;
   int _currentPage = 0;
   final ScrollController _scrollController = ScrollController();
+  final ScrollController _horizontalScrollController = ScrollController();
 
   @override
   void initState() {
@@ -61,6 +64,7 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
   @override
   void dispose() {
     _scrollController.dispose();
+    _horizontalScrollController.dispose();
     super.dispose();
   }
 
@@ -193,7 +197,7 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
     return Dialog(
       insetPadding: const EdgeInsets.all(16),
       child: SizedBox(
-        width: isMobile ? double.infinity : 900,
+        width: isMobile ? double.infinity : 1100,
         height: isMobile ? double.infinity : 700,
         child: Column(
           children: [
@@ -249,34 +253,59 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
               ),
               child: Column(
                 children: [
-                  // Campo de pesquisa
-                  TextField(
-                    decoration: InputDecoration(
-                      hintText: 'Pesquisar si, texto breve, local, objeto...',
-                      prefixIcon: const Icon(Icons.search),
-                      suffixIcon: _searchQuery.isNotEmpty
-                          ? IconButton(
-                              icon: const Icon(Icons.clear),
-                              onPressed: () {
-                                setState(() {
-                                  _searchQuery = '';
-                                  _applyFilters();
-                                });
-                              },
-                            )
-                          : null,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
+                  // Campo de pesquisa e botão de adicionar
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          decoration: InputDecoration(
+                            hintText: '00000000/00H ou texto breve, local...',
+                            prefixIcon: const Icon(Icons.search),
+                            suffixIcon: _searchQuery.isNotEmpty
+                                ? IconButton(
+                                    icon: const Icon(Icons.clear),
+                                    onPressed: () {
+                                      setState(() {
+                                        _searchQuery = '';
+                                        _applyFilters();
+                                      });
+                                    },
+                                  )
+                                : null,
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            filled: true,
+                            fillColor: Colors.white,
+                          ),
+                          onChanged: (value) {
+                            setState(() {
+                              _searchQuery = value;
+                              _applyFilters();
+                            });
+                          },
+                        ),
                       ),
-                      filled: true,
-                      fillColor: Colors.white,
-                    ),
-                    onChanged: (value) {
-                      setState(() {
-                        _searchQuery = value;
-                        _applyFilters();
-                      });
-                    },
+                      const SizedBox(width: 16),
+                      Tooltip(
+                        message: 'Inserir SI Manual',
+                        child: ElevatedButton.icon(
+                          onPressed: _abrirDialogCadastroManual,
+                          icon: const Icon(Icons.add_box_rounded),
+                          label: const Text('Inserir SI Manual', style: TextStyle(fontWeight: FontWeight.bold)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.blue[50],
+                            foregroundColor: Colors.blue[700],
+                            elevation: 0,
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                              side: BorderSide(color: Colors.blue[200]!),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 12),
                   // Filtros e visualização
@@ -424,6 +453,30 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
                                 child: const Text('Limpar filtros'),
                               ),
                             ),
+                          Padding(
+                            padding: const EdgeInsets.only(top: 16),
+                            child: ElevatedButton.icon(
+                              onPressed: () {
+                                if (RegExp(r'^\d{8}/\d{2}[A-Z]$').hasMatch(_searchQuery.trim().toUpperCase())) {
+                                  _adicionarSIManualmente(_searchQuery.trim().toUpperCase());
+                                } else {
+                                  _abrirDialogCadastroManual();
+                                }
+                              },
+                              icon: const Icon(Icons.add_box_rounded),
+                              label: const Text('Inserir SI Manualmente', style: TextStyle(fontWeight: FontWeight.bold)),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.blue[50],
+                                foregroundColor: Colors.blue[700],
+                                elevation: 0,
+                                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                  side: BorderSide(color: Colors.blue[200]!),
+                                ),
+                              ),
+                            ),
+                          ),
                         ],
                       ),
                     )
@@ -475,6 +528,120 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
     );
   }
 
+  void _abrirDialogCadastroManual() {
+    final TextEditingController siController = TextEditingController();
+    
+    // Se a busca atual já tem alguns números, podemos pré-preencher
+    final numsOnly = _searchQuery.replaceAll(RegExp(r'[^0-9A-Za-z]'), '').toUpperCase();
+    if (numsOnly.isNotEmpty) {
+       // Aproveita a máscara do formatador para o texto inicial
+       final formatador = _SIMaskTextInputFormatter();
+       final newVal = formatador.formatEditUpdate(
+         const TextEditingValue(text: ''), 
+         TextEditingValue(text: numsOnly)
+       );
+       siController.text = newVal.text;
+    }
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.edit_document, color: Colors.blue[700]),
+            const SizedBox(width: 8),
+            const Text('Inserir SI Manual', style: TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Insira o número da SI seguindo o padrão oficial.',
+              style: TextStyle(color: Colors.grey, fontSize: 13),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: siController,
+              inputFormatters: [_SIMaskTextInputFormatter()],
+              decoration: InputDecoration(
+                labelText: 'Número da SI',
+                hintText: '00000000/00H',
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                filled: true,
+                fillColor: Colors.grey[50],
+                prefixIcon: const Icon(Icons.numbers),
+              ),
+              autofocus: true,
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, letterSpacing: 1.2),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancelar', style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              final numero = siController.text.trim().toUpperCase();
+              if (RegExp(r'^\d{8}/\d{2}[A-Z]$').hasMatch(numero)) {
+                Navigator.pop(context);
+                _adicionarSIManualmente(numero);
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Formato inválido. Use: 00000000/00H')),
+                );
+              }
+            },
+            icon: const Icon(Icons.check),
+            label: const Text('Salvar e Selecionar'),
+            style: ElevatedButton.styleFrom(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _adicionarSIManualmente(String numero) async {
+    if (!RegExp(r'^\d{8}/\d{2}[A-Z]$').hasMatch(numero)) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      final existingSI = await SIService().getSIPorSolicitacao(numero);
+      if (mounted) Navigator.pop(context); // close loading
+
+      if (existingSI != null) {
+        if (mounted) Navigator.of(context).pop<List<SI>>([existingSI]);
+      } else {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => const Center(child: CircularProgressIndicator()),
+        );
+        final newSI = await SIService().criarSIManual(numero);
+        if (mounted) Navigator.pop(context); // close loading
+        if (mounted) Navigator.of(context).pop<List<SI>>([newSI]);
+      }
+    } catch (e) {
+      if (mounted) Navigator.pop(context); // close loading
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro ao criar SI manualmente: $e')),
+        );
+      }
+    }
+  }
+
   void _toggleSISelection(String siId) {
     setState(() {
       if (_selectedSIIds.contains(siId)) {
@@ -506,43 +673,54 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
     required List<String> items,
   }) {
     final displayText = selected.isEmpty ? 'Todos' : selected.length == 1 ? selected.first : '${selected.length} selecionado(s)';
-    return InkWell(
-      onTap: () async {
-        final result = await _showMultiSelectDialog(label, items, selected);
-        if (result != null) {
-          setState(() {
-            selected
-              ..clear()
-              ..addAll(result);
-            _applyFilters();
-          });
-        }
-      },
-      borderRadius: BorderRadius.circular(8),
-      child: InputDecorator(
-        decoration: InputDecoration(
-          labelText: label,
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-          filled: true,
-          fillColor: Colors.white,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 2, bottom: 4),
+          child: Text(
+            label,
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+          ),
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          mainAxisSize: MainAxisSize.max,
-          children: [
-            Expanded(
-              child: Text(
-                displayText,
-                style: const TextStyle(fontSize: 14),
-                overflow: TextOverflow.ellipsis,
-                maxLines: 1,
-              ),
+        InkWell(
+          onTap: () async {
+            final result = await _showMultiSelectDialog(label, items, selected);
+            if (result != null) {
+              setState(() {
+                selected
+                  ..clear()
+                  ..addAll(result);
+                _applyFilters();
+              });
+            }
+          },
+          borderRadius: BorderRadius.circular(8),
+          child: InputDecorator(
+            decoration: InputDecoration(
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+              filled: true,
+              fillColor: Colors.white,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
             ),
-            const Icon(Icons.arrow_drop_down),
-          ],
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              mainAxisSize: MainAxisSize.max,
+              children: [
+                Expanded(
+                  child: Text(
+                    displayText,
+                    style: const TextStyle(fontSize: 14),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                ),
+                const Icon(Icons.arrow_drop_down),
+              ],
+            ),
+          ),
         ),
-      ),
+      ],
     );
   }
 
@@ -551,71 +729,15 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
     List<String> options,
     Set<String> current,
   ) async {
-    final temp = {...current};
-    String searchQuery = '';
     return showDialog<Set<String>>(
       context: context,
       builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setStateDialog) {
-            final filtered = searchQuery.isEmpty
-                ? options
-                : options.where((o) => o.toLowerCase().contains(searchQuery.toLowerCase())).toList();
-            return AlertDialog(
-              title: Text('Selecionar $title'),
-              content: SizedBox(
-                width: 320,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    TextField(
-                      decoration: const InputDecoration(
-                        hintText: 'Pesquisar...',
-                        prefixIcon: Icon(Icons.search),
-                        border: OutlineInputBorder(),
-                        isDense: true,
-                      ),
-                      onChanged: (v) => setStateDialog(() => searchQuery = v),
-                    ),
-                    const SizedBox(height: 12),
-                    Flexible(
-                      child: ListView(
-                        shrinkWrap: true,
-                        children: filtered
-                            .map(
-                              (opt) => CheckboxListTile(
-                                dense: true,
-                                value: temp.contains(opt),
-                                title: Text(opt),
-                                onChanged: (checked) {
-                                  setStateDialog(() {
-                                    if (checked == true) {
-                                      temp.add(opt);
-                                    } else {
-                                      temp.remove(opt);
-                                    }
-                                  });
-                                },
-                              ),
-                            )
-                            .toList(),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Cancelar'),
-                ),
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(temp),
-                  child: const Text('Aplicar'),
-                ),
-              ],
-            );
-          },
+        return MultiSelectFilterDialog(
+          title: title.toUpperCase(),
+          options: options,
+          selectedValues: current,
+          searchHint: 'Pesquisar...',
+          onSelectionChanged: (selected) {},
         );
       },
     );
@@ -896,132 +1018,119 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
   }
 
   Widget _buildTableView() {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
+    return Scrollbar(
+      controller: _horizontalScrollController,
+      thumbVisibility: true,
       child: SingleChildScrollView(
-        controller: _scrollController,
+        controller: _horizontalScrollController,
+        scrollDirection: Axis.horizontal,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          minWidth: MediaQuery.of(context).size.width * 0.8,
+        ),
         child: DataTable(
-          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
+          headingRowColor: WidgetStateProperty.all(Colors.grey[100]),
           columns: const [
-            DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Local', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('SI', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Tipo', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Texto Breve', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Centro Trabalho', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Data Início', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Data Fim', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Status Usuário', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('CEN', style: TextStyle(fontWeight: FontWeight.bold))),
+            DataColumn(label: Text('')),
+            DataColumn(label: Text('Status')),
+            DataColumn(label: Text('Local')),
+            DataColumn(label: Text('SI')),
+            DataColumn(label: Text('Tipo')),
+            DataColumn(label: Text('Texto Breve')),
+            DataColumn(label: Text('Centro Trabalho')),
+            DataColumn(label: Text('Data Início')),
+            DataColumn(label: Text('Data Fim')),
+            DataColumn(label: Text('Status Usuário')),
+            DataColumn(label: Text('CEN')),
+            DataColumn(label: Text('AT')),
           ],
           rows: [
-            ..._displayedSIs.map((si) {
-            final isSelected = _selectedSIIds.contains(si.id);
-            return DataRow(
-              selected: isSelected,
-              cells: [
-                DataCell(
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: _getStatusColor(si.statusUsuario),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(
-                      _statusUsuarioShort(si.statusUsuario),
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ),
-                DataCell(
-                  SizedBox(
-                    width: 120,
-                    child: Text(
-                      si.local != null && si.local!.isNotEmpty ? si.local! : (si.localInstalacao ?? '-'),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ),
-                DataCell(
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        si.solicitacao,
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(width: 8),
-                      InkWell(
-                        onTap: () => _copiarSI(si.solicitacao),
-                        child: const Icon(Icons.copy, size: 16, color: Colors.blue),
-                      ),
-                    ],
-                  ),
-                ),
-                DataCell(
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[300],
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(si.tipo ?? '-'),
-                  ),
-                ),
-                DataCell(
-                  SizedBox(
-                    width: 200,
-                    child: Text(
-                      si.textoBreve ?? '-',
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ),
-                DataCell(
-                  SizedBox(
-                    width: 150,
-                    child: Text(
-                      si.cntrTrab ?? '-',
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ),
-                DataCell(
-                  Text(si.dataInicio != null ? _formatDate(si.dataInicio!) : '-'),
-                ),
-                DataCell(
-                  Text(si.dataFim != null ? _formatDate(si.dataFim!) : '-'),
-                ),
-                DataCell(Text(si.statusUsuario ?? '-')),
-                DataCell(Text(si.cen ?? '-')),
-              ],
-              onSelectChanged: (_) => _toggleSISelection(si.id),
-            );
-            }),
-            if (_displayedSIs.length < _filteredSIs.length)
+            for (var si in _displayedSIs)
               DataRow(
-                cells: List.generate(10, (_) => const DataCell(
-                  Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(16.0),
-                      child: CircularProgressIndicator(),
+                selected: _selectedSIIds.contains(si.id),
+                onSelectChanged: (_) => _toggleSISelection(si.id),
+                cells: [
+                  DataCell(
+                    Checkbox(
+                      value: _selectedSIIds.contains(si.id),
+                      onChanged: (_) => _toggleSISelection(si.id),
                     ),
                   ),
-                )),
+                  DataCell(
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: _getStatusColor(si.statusUsuario),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        _statusUsuarioShort(si.statusUsuario),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                  DataCell(Text(
+                    (si.local != null && si.local!.isNotEmpty)
+                        ? si.local!
+                        : (si.localInstalacao ?? ''),
+                    style: const TextStyle(fontSize: 12),
+                  )),
+                  DataCell(
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          si.solicitacao,
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(width: 4),
+                        InkWell(
+                          onTap: () => _copiarSI(si.solicitacao),
+                          child: const Icon(Icons.copy, size: 14, color: Colors.blue),
+                        ),
+                      ],
+                    ),
+                  ),
+                  DataCell(
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[200],
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        si.tipo ?? '-',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  ),
+                  DataCell(
+                    SizedBox(
+                      width: 250,
+                      child: Text(
+                        si.textoBreve ?? '-',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  ),
+                  DataCell(Text(si.cntrTrab ?? '-', style: const TextStyle(fontSize: 12))),
+                  DataCell(Text(si.dataInicio != null ? _formatDate(si.dataInicio!) : '-', style: const TextStyle(fontSize: 12))),
+                  DataCell(Text(si.dataFim != null ? _formatDate(si.dataFim!) : '-', style: const TextStyle(fontSize: 12))),
+                  DataCell(Text(si.statusUsuario ?? '-', style: const TextStyle(fontSize: 12))),
+                  DataCell(Text(si.cen ?? '-', style: const TextStyle(fontSize: 12))),
+                  DataCell(Text(si.atribAT ?? '-', style: const TextStyle(fontSize: 12))),
+                ],
               ),
           ],
         ),
       ),
+    ),
     );
   }
 
@@ -1039,6 +1148,48 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _SIMaskTextInputFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+      TextEditingValue oldValue, TextEditingValue newValue) {
+    if (newValue.text.length < oldValue.text.length) {
+      return newValue;
+    }
+    String text = newValue.text.toUpperCase().replaceAll(RegExp(r'[^0-9A-Z]'), '');
+    String newText = '';
+    int index = 0;
+    for (int i = 0; i < text.length; i++) {
+      if (index < 8) {
+        if (RegExp(r'[0-9]').hasMatch(text[i])) {
+          newText += text[i];
+          index++;
+        }
+      } else if (index == 8) {
+        newText += '/';
+        if (RegExp(r'[0-9]').hasMatch(text[i])) {
+          newText += text[i];
+          index++;
+        }
+      } else if (index == 9) {
+        if (RegExp(r'[0-9]').hasMatch(text[i])) {
+          newText += text[i];
+          index++;
+        }
+      } else if (index == 10) {
+        if (RegExp(r'[A-Z]').hasMatch(text[i])) {
+          newText += text[i];
+          index++;
+        }
+      }
+    }
+    if (newText.length > 12) newText = newText.substring(0, 12);
+    return TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: newText.length),
     );
   }
 }

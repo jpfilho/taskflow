@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/nota_sap.dart';
 import '../utils/responsive.dart';
+import 'multi_select_filter_dialog.dart';
 
 class NotaSAPSelectionDialog extends StatefulWidget {
   final List<NotaSAP> notas;
@@ -720,50 +721,15 @@ class _NotaSAPSelectionDialogState extends State<NotaSAPSelectionDialog> {
     List<String> options,
     Set<String> current,
   ) async {
-    final temp = {...current};
     return showDialog<Set<String>>(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          title: Text('Selecionar $title'),
-          content: SizedBox(
-            width: 320,
-            child: StatefulBuilder(
-              builder: (context, setStateDialog) {
-                return ListView(
-                  shrinkWrap: true,
-                  children: options
-                      .map(
-                        (opt) => CheckboxListTile(
-                          dense: true,
-                          value: temp.contains(opt),
-                          title: Text(opt),
-                          onChanged: (checked) {
-                            setStateDialog(() {
-                              if (checked == true) {
-                                temp.add(opt);
-                              } else {
-                                temp.remove(opt);
-                              }
-                            });
-                          },
-                        ),
-                      )
-                      .toList(),
-                );
-              },
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancelar'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(temp),
-              child: const Text('Aplicar'),
-            ),
-          ],
+        return MultiSelectFilterDialog(
+          title: title.toUpperCase(),
+          options: options,
+          selectedValues: current,
+          searchHint: 'Pesquisar...',
+          onSelectionChanged: (selected) {},
         );
       },
     );

@@ -633,11 +633,13 @@ class _OrdemViewState extends State<OrdemView> {
 
   Future<void> _loadFiltros() async {
     final valores = await _service.getValoresFiltros();
-    setState(() {
-      _statusDisponiveis = valores['status'] ?? [];
-      _locaisDisponiveis = valores['local'] ?? [];
-      _tiposDisponiveis = valores['tipo'] ?? [];
-    });
+    if (mounted) {
+      setState(() {
+        _statusDisponiveis = valores['status'] ?? [];
+        _locaisDisponiveis = valores['local'] ?? [];
+        _tiposDisponiveis = valores['tipo'] ?? [];
+      });
+    }
   }
 
   Future<void> _loadOrdens() async {
@@ -657,32 +659,56 @@ class _OrdemViewState extends State<OrdemView> {
         offset: null,
       );
 
+      // Carregar todos os locais para matching determinístico em memória no frontend
+      // Isso garante que mesmo se houver fallback para a tabela física (timeout da view),
+      // a coluna Local continuará funcionando perfeitamente!
+      final locaisList = await LocalService().getAllLocais();
+      
+      final ordensComLocal = ordensBrutas.map((o) {
+        if (o.local != null && o.local!.isNotEmpty) {
+          return o;
+        }
+        
+        final inst = o.localInstalacao;
+        if (inst != null) {
+          for (final loc in locaisList) {
+            final sap = loc.localInstalacaoSap;
+            if (sap != null && sap.trim().isNotEmpty && inst.contains(sap)) {
+              return o.copyWith(local: loc.local);
+            }
+          }
+        }
+        return o;
+      }).toList();
+
       // Evitar duplicação por número de ordem (mantém primeira ocorrência)
-      final ordens = _dedupePorNumero(ordensBrutas);
+      final ordens = _dedupePorNumero(ordensComLocal);
 
       final filtradas = _aplicarFiltrosLocais(ordens);
 
-      setState(() {
-        _ordensOriginais = ordens;
-        _todasOrdensOriginais = ordens;
-        _todasOrdens = filtradas;
-        _isLoading = false;
-        // Opções dos filtros no mesmo frame para não ter tela com ordens e opções vazias
-        _locaisDisponiveisFiltro = _ordenarOpcoes(
-          ordens.map((o) => o.local).where((v) => (v ?? '').isNotEmpty).cast<String>().toSet(),
-        );
-        _salasDisponiveis = _ordenarOpcoes(
-          ordens.map((o) => o.sala).where((v) => (v ?? '').isNotEmpty).cast<String>().toSet(),
-        );
-        _tiposDisponiveisFiltro = _ordenarOpcoes(
-          ordens.map((o) => o.tipo).where((v) => (v ?? '').isNotEmpty).cast<String>().toSet(),
-        );
-        _ordensDisponiveis = _ordenarOpcoes(ordens.map((o) => o.ordem).toSet());
-        _gpmsDisponiveis = _ordenarOpcoes(
-          ordens.map((o) => o.gpm).where((v) => (v ?? '').isNotEmpty).cast<String>().toSet(),
-        );
-        // _statusTarefaDisponiveis continua do _ordensProgramadasInfo (atualizado em _loadOrdensProgramadas)
-      });
+      if (mounted) {
+        setState(() {
+          _ordensOriginais = ordens;
+          _todasOrdensOriginais = ordens;
+          _todasOrdens = filtradas;
+          _isLoading = false;
+          // Opções dos filtros no mesmo frame para não ter tela com ordens e opções vazias
+          _locaisDisponiveisFiltro = _ordenarOpcoes(
+            ordens.map((o) => o.local).where((v) => (v ?? '').isNotEmpty).cast<String>().toSet(),
+          );
+          _salasDisponiveis = _ordenarOpcoes(
+            ordens.map((o) => o.sala).where((v) => (v ?? '').isNotEmpty).cast<String>().toSet(),
+          );
+          _tiposDisponiveisFiltro = _ordenarOpcoes(
+            ordens.map((o) => o.tipo).where((v) => (v ?? '').isNotEmpty).cast<String>().toSet(),
+          );
+          _ordensDisponiveis = _ordenarOpcoes(ordens.map((o) => o.ordem).toSet());
+          _gpmsDisponiveis = _ordenarOpcoes(
+            ordens.map((o) => o.gpm).where((v) => (v ?? '').isNotEmpty).cast<String>().toSet(),
+          );
+          // _statusTarefaDisponiveis continua do _ordensProgramadasInfo (atualizado em _loadOrdensProgramadas)
+        });
+      }
 
       _aplicarOrdenacaoEPaginacao();
 
@@ -690,10 +716,10 @@ class _OrdemViewState extends State<OrdemView> {
       if (mounted) _atualizarOpcoesFiltros();
       if (mounted) _loadAlbumInfoForOrdens();
     } catch (e) {
-      setState(() {
-        _isLoading = false;
-      });
       if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Erro ao carregar ordens: $e'),
@@ -2267,6 +2293,24 @@ class _OrdemViewState extends State<OrdemView> {
                     ),
                   ),
                 ],
+                if (ordem.local != null && ordem.local!.isNotEmpty) ...[
+                  const SizedBox(width: 16),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: _getLocalColor(ordem.local),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      ordem.local!,
+                      style: TextStyle(
+                        color: _getLocalTextColor(_getLocalColor(ordem.local)),
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ],
@@ -2284,6 +2328,7 @@ class _OrdemViewState extends State<OrdemView> {
                 _buildInfoRow('Denominação Objeto', ordem.denominacaoObjeto),
                 _buildInfoRow('Texto Breve', ordem.textoBreve),
                 _buildInfoRow('Local Instalação', ordem.localInstalacao),
+                _buildInfoRow('Local', ordem.local),
                 _buildInfoRow('Código SI', ordem.codigoSI),
                 _buildInfoRow('GPM', ordem.gpm),
                 if (ordem.inicioBase != null)
@@ -2552,6 +2597,32 @@ class _OrdemViewState extends State<OrdemView> {
     return Colors.grey;
   }
 
+  Color _getLocalColor(String? local) {
+    if (local == null || local.isEmpty) return Colors.grey[300]!;
+    
+    // Usar hash do local para gerar cores consistentes
+    final hash = local.hashCode;
+    final colors = [
+      Colors.blue[200]!,
+      Colors.green[200]!,
+      Colors.orange[200]!,
+      Colors.purple[200]!,
+      Colors.teal[200]!,
+      Colors.pink[200]!,
+      Colors.indigo[200]!,
+      Colors.cyan[200]!,
+      Colors.amber[200]!,
+      Colors.lime[200]!,
+    ];
+    return colors[hash.abs() % colors.length];
+  }
+
+  Color _getLocalTextColor(Color backgroundColor) {
+    // Retornar cor de texto com bom contraste baseada na cor de fundo
+    final brightness = backgroundColor.computeLuminance();
+    return brightness > 0.5 ? Colors.black87 : Colors.white;
+  }
+
   int _diasRestantes(Ordem ordem) {
     if (ordem.tolerancia == null) return 999999; // sem prazo vai para o fim
     final hoje = DateTime.now();
@@ -2579,7 +2650,7 @@ class _OrdemViewState extends State<OrdemView> {
         return (titulo ?? '').toLowerCase();
       }
       case 'Local':
-        return _localParaExibicao(o).toLowerCase();
+        return (o.local ?? '').toLowerCase();
       case 'Sala':
         return (o.sala ?? '').trim().toLowerCase();
       case 'Álbum':
@@ -2727,7 +2798,6 @@ class _OrdemViewState extends State<OrdemView> {
   static const double _kTableHeaderFontSize = 11;
   static const double _kTableDataFontSize = 10;
   static const double _wTarefaVinculada = 200;
-  static const double _wLocal = 72;
   static const double _wSala = 72;
   static const double _wTextoBreve = 250;
   static const double _wLocalInstalacao = 170;
@@ -3004,14 +3074,34 @@ class _OrdemViewState extends State<OrdemView> {
                       : Text('-', style: dataStyle.copyWith(color: Colors.grey)),
                 ),
                 DataCell(
-                  SizedBox(
-                    width: _wLocal,
-                    child: Text(
-                      _localParaExibicao(ordem),
-                      style: dataStyle,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                  Builder(
+                    builder: (context) {
+                      final localColor = _getLocalColor(ordem.local);
+                      final textColor = _getLocalTextColor(localColor);
+                      return Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: localColor,
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(
+                            color: ordem.local != null && ordem.local!.isNotEmpty 
+                                ? localColor.withOpacity(0.8)
+                                : Colors.grey[300]!,
+                            width: 1.5,
+                          ),
+                        ),
+                        child: Text(
+                          ordem.local ?? '-',
+                          style: TextStyle(
+                            fontSize: _kTableDataFontSize,
+                            fontWeight: ordem.local != null && ordem.local!.isNotEmpty 
+                                ? FontWeight.bold 
+                                : FontWeight.normal,
+                            color: textColor,
+                          ),
+                        ),
+                      );
+                    },
                   ),
                 ),
                 DataCell(
@@ -3145,6 +3235,7 @@ class _OrdemViewState extends State<OrdemView> {
               _buildInfoRow('Denominação Local', ordem.denominacaoLocalInstalacao),
               _buildInfoRow('Denominação Objeto', ordem.denominacaoObjeto),
               _buildInfoRow('Local Instalação', ordem.localInstalacao),
+              _buildInfoRow('Local', ordem.local),
               _buildInfoRow('Código SI', ordem.codigoSI),
               _buildInfoRow('GPM', ordem.gpm),
               if (ordem.inicioBase != null)

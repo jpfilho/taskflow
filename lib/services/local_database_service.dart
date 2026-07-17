@@ -11,7 +11,7 @@ class LocalDatabaseService {
 
   static Database? _database;
   static const String _databaseName = 'taskflow_local.db';
-  static const int _databaseVersion = 6;
+  static const int _databaseVersion = 7;
 
   Future<Database> get database async {
     if (_database != null) return _database!;
@@ -361,6 +361,15 @@ class LocalDatabaseService {
       )
     ''');
 
+    // Tabela de rascunhos de feedback de chat (Etapa B2)
+    await db.execute('''
+      CREATE TABLE chat_feedback_drafts (
+        task_id TEXT PRIMARY KEY,
+        draft_data TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+
     // Índices para melhor performance
     await db.execute('CREATE INDEX idx_tasks_local_parent_id ON tasks_local(parent_id)');
     await db.execute('CREATE INDEX idx_tasks_local_status ON tasks_local(status)');
@@ -465,10 +474,22 @@ class LocalDatabaseService {
         ''');
       } catch (_) {}
       try {
-        await db.execute('CREATE INDEX IF NOT EXISTS idx_melhorias_bugs_local_status ON melhorias_bugs_local(status)');
+        await db.execute('''
+          CREATE INDEX IF NOT EXISTS idx_melhorias_bugs_local_status ON melhorias_bugs_local(status);
+          CREATE INDEX IF NOT EXISTS idx_melhorias_bugs_local_versao_id ON melhorias_bugs_local(versao_id);
+        ''');
       } catch (_) {}
+    }
+    if (oldVersion < 7) {
+      // Tabela de rascunhos de feedback de chat
       try {
-        await db.execute('CREATE INDEX IF NOT EXISTS idx_melhorias_bugs_local_versao_id ON melhorias_bugs_local(versao_id)');
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS chat_feedback_drafts (
+            task_id TEXT PRIMARY KEY,
+            draft_data TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          )
+        ''');
       } catch (_) {}
     }
   }

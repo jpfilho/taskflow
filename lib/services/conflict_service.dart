@@ -54,19 +54,42 @@ class ConflictService {
     try {
       final start = '${startDate.year}-${startDate.month.toString().padLeft(2, '0')}-${startDate.day.toString().padLeft(2, '0')}';
       final end = '${endDate.year}-${endDate.month.toString().padLeft(2, '0')}-${endDate.day.toString().padLeft(2, '0')}';
-      var query = _supabase
-          .from('v_conflict_por_dia_executor')
-          .select('executor_id, day, has_conflict')
-          .gte('day', start)
-          .lte('day', end);
-      
-      if (executorIds != null && executorIds.isNotEmpty) {
-        query = query.inFilter('executor_id', executorIds);
+
+      List rawRows = [];
+      if (executorIds != null && executorIds.length > 100) {
+        final chunks = <List<String>>[];
+        for (var i = 0; i < executorIds.length; i += 100) {
+          chunks.add(executorIds.sublist(i, i + 100 > executorIds.length ? executorIds.length : i + 100));
+        }
+        
+        final futures = chunks.map((chunk) async {
+          final query = _supabase
+              .from('v_conflict_por_dia_executor')
+              .select('executor_id, day, has_conflict')
+              .gte('day', start)
+              .lte('day', end)
+              .inFilter('executor_id', chunk);
+          return await query;
+        }).toList();
+
+        final responses = await Future.wait(futures);
+        rawRows = responses.expand((r) => r as List).toList();
+      } else {
+        var query = _supabase
+            .from('v_conflict_por_dia_executor')
+            .select('executor_id, day, has_conflict')
+            .gte('day', start)
+            .lte('day', end);
+        
+        if (executorIds != null && executorIds.isNotEmpty) {
+          query = query.inFilter('executor_id', executorIds);
+        }
+        
+        final res = await query;
+        rawRows = res as List;
       }
       
-      final res = await query;
-      
-      for (final row in res) {
+      for (final row in rawRows) {
         final map = row as Map<String, dynamic>;
         final executorId = map['executor_id']?.toString();
         final dayStr = map['day']?.toString();
@@ -103,18 +126,42 @@ class ConflictService {
     try {
       final start = '${startDate.year}-${startDate.month.toString().padLeft(2, '0')}-${startDate.day.toString().padLeft(2, '0')}';
       final end = '${endDate.year}-${endDate.month.toString().padLeft(2, '0')}-${endDate.day.toString().padLeft(2, '0')}';
-      var query = _supabase
-          .from('v_conflict_execution_events')
-          .select('executor_id, executor_nome, day, location_key, task_id, description')
-          .gte('day', start)
-          .lte('day', end);
-          
-      if (executorIds != null && executorIds.isNotEmpty) {
-        query = query.inFilter('executor_id', executorIds);
-      }
       
-      final res = await query;
-      for (final row in res as List) {
+      List rawRows = [];
+      if (executorIds != null && executorIds.length > 100) {
+        final chunks = <List<String>>[];
+        for (var i = 0; i < executorIds.length; i += 100) {
+          chunks.add(executorIds.sublist(i, i + 100 > executorIds.length ? executorIds.length : i + 100));
+        }
+
+        final futures = chunks.map((chunk) async {
+          final query = _supabase
+              .from('v_conflict_execution_events')
+              .select('executor_id, executor_nome, day, location_key, task_id, description')
+              .gte('day', start)
+              .lte('day', end)
+              .inFilter('executor_id', chunk);
+          return await query;
+        }).toList();
+
+        final responses = await Future.wait(futures);
+        rawRows = responses.expand((r) => r as List).toList();
+      } else {
+        var query = _supabase
+            .from('v_conflict_execution_events')
+            .select('executor_id, executor_nome, day, location_key, task_id, description')
+            .gte('day', start)
+            .lte('day', end);
+            
+        if (executorIds != null && executorIds.isNotEmpty) {
+          query = query.inFilter('executor_id', executorIds);
+        }
+        
+        final res = await query;
+        rawRows = res as List;
+      }
+
+      for (final row in rawRows) {
         final map = row as Map<String, dynamic>;
         final dayStr = map['day']?.toString();
         if (dayStr == null) continue;

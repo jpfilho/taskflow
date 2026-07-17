@@ -16,6 +16,8 @@ import 'task_view_dialog.dart';
 import 'multi_select_filter_dialog.dart';
 import 'notas_sap_calendar_view.dart';
 import 'notas_sap_dashboard_view.dart';
+import 'gantt_chart.dart';
+import 'resizable_panel.dart';
 
 class NotasSAPView extends StatefulWidget {
   final String? searchQuery;
@@ -84,6 +86,36 @@ class _NotasSAPViewState extends State<NotasSAPView> {
   bool _temSegmentoLinhasTransmissao = false; // Indica se o usuário tem o segmento "Linhas de Transmissão"
   final AuthServiceSimples _authService = AuthServiceSimples();
   final ExecutorService _executorService = ExecutorService();
+  bool _exibirGantt = false;
+  GanttScale _ganttScale = GanttScale.daily;
+  final ScrollController _tableVerticalScrollController = ScrollController();
+  final ScrollController _ganttVerticalScrollController = ScrollController();
+  bool _isScrolling = false;
+
+  void _sincronizarScrolls() {
+    _tableVerticalScrollController.addListener(() {
+      if (_tableVerticalScrollController.hasClients && 
+          _ganttVerticalScrollController.hasClients && 
+          _tableVerticalScrollController.position.isScrollingNotifier.value) {
+        final targetOffset = _tableVerticalScrollController.offset.clamp(
+          0.0,
+          _ganttVerticalScrollController.position.maxScrollExtent,
+        );
+        _ganttVerticalScrollController.jumpTo(targetOffset);
+      }
+    });
+    _ganttVerticalScrollController.addListener(() {
+      if (_ganttVerticalScrollController.hasClients && 
+          _tableVerticalScrollController.hasClients && 
+          _ganttVerticalScrollController.position.isScrollingNotifier.value) {
+        final targetOffset = _ganttVerticalScrollController.offset.clamp(
+          0.0,
+          _tableVerticalScrollController.position.maxScrollExtent,
+        );
+        _tableVerticalScrollController.jumpTo(targetOffset);
+      }
+    });
+  }
 
   int _totalFiltrosAtivos() {
     return _filtroLocais.length +
@@ -186,6 +218,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
   @override
   void initState() {
     super.initState();
+    _sincronizarScrolls();
     if (widget.modoVisualizacao != null) {
       _modoVisualizacao = widget.modoVisualizacao!;
       _visualizacaoTabela = widget.modoVisualizacao == 'tabela';
@@ -211,6 +244,13 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         });
       }
     });
+  }
+
+  @override
+  void dispose() {
+    _tableVerticalScrollController.dispose();
+    _ganttVerticalScrollController.dispose();
+    super.dispose();
   }
 
   Future<void> _verificarSegmentoLinhasTransmissao() async {
@@ -1047,6 +1087,23 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                       ),
                     ),
                   ),
+                if (_modoVisualizacao == 'tabela')
+                  IconButton(
+                    tooltip: _exibirGantt ? 'Ocultar Gantt' : 'Exibir Gantt',
+                    icon: Icon(_exibirGantt ? Icons.timeline : Icons.timeline_outlined, color: _exibirGantt ? Colors.blue[700] : Colors.grey[700]),
+                    style: IconButton.styleFrom(
+                      backgroundColor: _exibirGantt ? Colors.blue[50] : Colors.white,
+                      side: BorderSide(color: Colors.grey[300]!, width: 1),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        _exibirGantt = !_exibirGantt;
+                      });
+                    },
+                  ),
                 ElevatedButton.icon(
                   onPressed: () {
                     setState(() {
@@ -1442,7 +1499,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                                 notas: _todasNotasOrdenadas,
                               )
                             : _visualizacaoTabela
-                                ? _buildTabelaView()
+                                ? (_exibirGantt ? _buildSplitTabelaGanttView() : _buildTabelaView())
                                 : ListView.builder(
                                 itemCount: _notas.length,
                                 itemBuilder: (context, index) {
@@ -2131,6 +2188,9 @@ class _NotasSAPViewState extends State<NotasSAPView> {
           case 'Local':
             valor = nota.local;
             break;
+          case 'Sala':
+            valor = nota.sala;
+            break;
           case 'Tipo':
             valor = nota.tipo;
             break;
@@ -2378,10 +2438,119 @@ class _NotasSAPViewState extends State<NotasSAPView> {
     );
   }
 
+  Task _convertNotaSAPToTask(NotaSAP nota) {
+    final listVinc = _notasProgramadasInfo[nota.id];
+    final programadaInfo = listVinc?.isNotEmpty == true ? listVinc!.first : null;
+    final tarefaVinc = programadaInfo?['tarefa'] as Map<String, dynamic>?;
+
+    final id = tarefaVinc?['id'] as String? ?? 'simulado_${nota.id}';
+    final status = tarefaVinc?['status'] as String? ?? 'ANDA';
+    final regional = tarefaVinc?['regional'] as String? ?? '';
+    final divisao = tarefaVinc?['divisao'] as String? ?? '';
+    final tipo = tarefaVinc?['tipo'] as String? ?? nota.tipo ?? 'NM';
+    final nomeTarefa = tarefaVinc?['tarefa'] as String? ?? nota.descricao ?? 'Nota ${nota.nota}';
+    final coordenador = tarefaVinc?['coordenador'] as String? ?? '';
+    
+    DateTime inicio = DateTime.now();
+    if (tarefaVinc?['data_inicio'] != null) {
+      if (tarefaVinc!['data_inicio'] is String) {
+        inicio = DateTime.parse(tarefaVinc['data_inicio'] as String);
+      } else {
+        inicio = tarefaVinc['data_inicio'] as DateTime;
+      }
+    } else {
+      inicio = nota.inicioDesejado ?? nota.data ?? DateTime.now();
+    }
+
+    DateTime fim = DateTime.now().add(const Duration(days: 1));
+    if (tarefaVinc?['data_fim'] != null) {
+      if (tarefaVinc!['data_fim'] is String) {
+        fim = DateTime.parse(tarefaVinc['data_fim'] as String);
+      } else {
+        fim = tarefaVinc['data_fim'] as DateTime;
+      }
+    } else {
+      fim = nota.conclusaoDesejada ?? nota.dataVencimento ?? DateTime.now().add(const Duration(days: 1));
+    }
+
+    return Task(
+      id: id,
+      status: status,
+      regional: regional,
+      divisao: divisao,
+      tipo: tipo,
+      tarefa: nomeTarefa,
+      coordenador: coordenador,
+      dataInicio: inicio,
+      dataFim: fim,
+      ordem: nota.ordem,
+      si: tarefaVinc?['si'] as String? ?? '',
+      observacoes: nota.detalhes,
+      prioridade: nota.textPrioridade,
+    );
+  }
+
+  Widget _buildSplitTabelaGanttView() {
+    final List<Task> tasksForGantt = _notas.map((n) => _convertNotaSAPToTask(n)).toList();
+    
+    DateTime ganttStartDate = DateTime.now().subtract(const Duration(days: 7));
+    DateTime ganttEndDate = DateTime.now().add(const Duration(days: 30));
+    
+    if (_notas.isNotEmpty) {
+      DateTime? minDate;
+      DateTime? maxDate;
+      for (final nota in _notas) {
+        final listVinc = _notasProgramadasInfo[nota.id];
+        final programadaInfo = listVinc?.isNotEmpty == true ? listVinc!.first : null;
+        final tarefaVinc = programadaInfo?['tarefa'] as Map<String, dynamic>?;
+        
+        DateTime? inicio = nota.inicioDesejado ?? nota.data;
+        if (tarefaVinc?['data_inicio'] != null) {
+          inicio = tarefaVinc!['data_inicio'] is String 
+              ? DateTime.parse(tarefaVinc['data_inicio'] as String) 
+              : tarefaVinc['data_inicio'] as DateTime;
+        }
+        
+        DateTime? fim = nota.conclusaoDesejada ?? nota.dataVencimento;
+        if (tarefaVinc?['data_fim'] != null) {
+          fim = tarefaVinc!['data_fim'] is String 
+              ? DateTime.parse(tarefaVinc['data_fim'] as String) 
+              : tarefaVinc['data_fim'] as DateTime;
+        }
+        
+        if (inicio != null) {
+          if (minDate == null || inicio.isBefore(minDate)) minDate = inicio;
+        }
+        if (fim != null) {
+          if (maxDate == null || fim.isAfter(maxDate)) maxDate = fim;
+        }
+      }
+      if (minDate != null) ganttStartDate = minDate.subtract(const Duration(days: 2));
+      if (maxDate != null) ganttEndDate = maxDate.add(const Duration(days: 5));
+    }
+
+    return ResizablePanel(
+      initialLeftWidth: MediaQuery.of(context).size.width * 0.5,
+      minLeftWidth: 200,
+      minRightWidth: 200,
+      leftChild: _buildTabelaView(),
+      rightChild: GanttChart(
+        key: ValueKey('gantt_chart_notas_${tasksForGantt.length}_${_ganttScale}'),
+        tasks: tasksForGantt,
+        startDate: ganttStartDate,
+        endDate: ganttEndDate,
+        scale: _ganttScale,
+        onScaleChanged: (v) => setState(() => _ganttScale = v),
+        scrollController: _ganttVerticalScrollController,
+      ),
+    );
+  }
+
   Widget _buildTabelaView() {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: SingleChildScrollView(
+        controller: _tableVerticalScrollController,
         child: DataTable(
           sortColumnIndex: _sortColumnIndex,
           sortAscending: _ordenacaoAscendente,

@@ -42,6 +42,8 @@ class HeaderBar extends StatefulWidget {
   /// Visualização horária do Gantt
   final bool? showHourlyView;
   final VoidCallback? onToggleHourlyView;
+  final bool isConflictFilterActive;
+  final VoidCallback? onClearConflictFilter;
 
   const HeaderBar({
     super.key,
@@ -75,6 +77,8 @@ class HeaderBar extends StatefulWidget {
     this.onRefreshHoras,
     this.showHourlyView,
     this.onToggleHourlyView,
+    this.isConflictFilterActive = false,
+    this.onClearConflictFilter,
   });
 
   @override
@@ -400,6 +404,14 @@ class _HeaderBarState extends State<HeaderBar> {
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  if (widget.isConflictFilterActive)
+                    IconButton(
+                      icon: const Icon(Icons.filter_alt_off, color: Colors.red, size: 20),
+                      onPressed: widget.onClearConflictFilter,
+                      tooltip: 'Limpar Filtro',
+                      padding: const EdgeInsets.symmetric(horizontal: 2),
+                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                    ),
                   IconButton(
                     icon: Icon(Icons.add, color: iconColor, size: 20),
                     onPressed: widget.canEditTasks ? widget.onCreate : null,
@@ -727,6 +739,21 @@ class _HeaderBarState extends State<HeaderBar> {
             onPressed: widget.canEditTasks ? widget.onCreate : null,
             tooltip: 'Criar',
           ),
+          if (widget.isConflictFilterActive)
+            Padding(
+              padding: const EdgeInsets.only(right: 8.0),
+              child: ElevatedButton.icon(
+                onPressed: widget.onClearConflictFilter,
+                icon: const Icon(Icons.filter_alt_off, size: 18),
+                label: const Text('Limpar Filtro'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red,
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(0, 36),
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                ),
+              ),
+            ),
           Badge(
             isLabelVisible: widget.unreadChatCount > 0,
             label: Text(

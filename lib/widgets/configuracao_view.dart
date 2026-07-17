@@ -20,6 +20,7 @@ import '../utils/responsive.dart';
 import '../providers/theme_provider.dart';
 import '../services/theme_service.dart';
 import 'color_picker_dialog.dart';
+import 'cluster_ativos_view.dart';
 
 class ConfiguracaoView extends StatefulWidget {
   final ThemeProvider? themeProvider;
@@ -135,6 +136,20 @@ class _ConfiguracaoViewState extends State<ConfiguracaoView> {
                 context,
                 MaterialPageRoute(
                   builder: (context) => const EquipeListView(),
+                ),
+              );
+            },
+          },
+          {
+            'icon': Icons.grid_view,
+            'title': 'Clusterização de Ativos',
+            'subtitle': 'Visualização agrupada de demandas por local e sala.',
+            'color': Colors.deepOrange,
+            'onTap': () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const ClusterAtivosView(),
                 ),
               );
             },

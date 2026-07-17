@@ -41,6 +41,7 @@ import '../services/ordem_service.dart';
 import '../models/at.dart';
 import '../services/at_service.dart';
 import '../services/si_service.dart';
+import '../services/conflict_service.dart';
 import 'pex_apr_crc_view.dart';
 
 class TaskFormDialog extends StatefulWidget {
@@ -59,7 +60,14 @@ class TaskFormDialog extends StatefulWidget {
     this.parentTaskId,
     this.notaSAP,
     this.ordem,
+    this.initialTabIndex,
+    this.initialExecutorIdToEdit,
+    this.initialFrotaIdToEdit,
   });
+
+  final int? initialTabIndex;
+  final String? initialExecutorIdToEdit;
+  final String? initialFrotaIdToEdit;
 
   @override
   State<TaskFormDialog> createState() => _TaskFormDialogState();
@@ -162,6 +170,7 @@ class _TaskFormDialogState extends State<TaskFormDialog>
 
   // Períodos específicos por executor
   List<ExecutorPeriod> _executorPeriods = [];
+  int _selectedExecutorPeriodIndex = 0;
   // Períodos específicos por frota
   List<FrotaPeriod> _frotaPeriods = [];
 
@@ -228,6 +237,41 @@ class _TaskFormDialogState extends State<TaskFormDialog>
     super.dispose();
   }
 
+  Set<String> _executoresComConflito = {};
+
+  Future<void> _checkExecutorConflicts() async {
+    if (_executorPeriods.isEmpty) return;
+
+    final cs = ConflictService();
+    final start = widget.startDate; 
+    final end = widget.endDate;
+
+    final executorIds = _executorPeriods.map((e) => e.executorId).toList();
+    final conflicts = await cs.getConflictsForRange(start, end, executorIds: executorIds);
+
+    final Set<String> comConflito = {};
+    for (final ep in _executorPeriods) {
+      for (final period in ep.periods) {
+        DateTime current = period.dataInicio;
+        while (current.isBefore(period.dataFim) || current.isAtSameMomentAs(period.dataFim)) {
+          final dayKey = '${current.year}-${current.month.toString().padLeft(2, '0')}-${current.day.toString().padLeft(2, '0')}';
+          final key = '${ep.executorId.toLowerCase()}_$dayKey';
+          if (conflicts[key]?.hasConflict == true) {
+            comConflito.add(ep.executorId);
+            break;
+          }
+          current = current.add(const Duration(days: 1));
+        }
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _executoresComConflito = comConflito;
+      });
+    }
+  }
+
   // Obter ou criar ScrollController para uma tab específica
   ScrollController _getScrollController(int tabIndex) {
     if (!_scrollControllers.containsKey(tabIndex)) {
@@ -263,7 +307,11 @@ class _TaskFormDialogState extends State<TaskFormDialog>
     super.initState();
     // Inicializar com 7 tabs por padrão (incluindo Frota, sem PEX/APR)
     // Será ajustado para 8 se o usuário for root
-    _tabController = TabController(length: 7, vsync: this);
+    _tabController = TabController(
+      length: 7, 
+      vsync: this,
+      initialIndex: widget.initialTabIndex ?? 0,
+    );
 
     // Listener para salvar posição do scroll ao trocar de tab
     _tabController.addListener(() {
@@ -327,6 +375,12 @@ class _TaskFormDialogState extends State<TaskFormDialog>
 
       // Carregar períodos por executor
       _executorPeriods = List<ExecutorPeriod>.from(task.executorPeriods);
+      if (widget.initialExecutorIdToEdit != null) {
+        final idx = _executorPeriods.indexWhere((ep) => ep.executorId == widget.initialExecutorIdToEdit);
+        if (idx != -1) {
+          _selectedExecutorPeriodIndex = idx;
+        }
+      }
       // Carregar períodos por frota vindos da tarefa (pode vir vazio em alguns fluxos)
       _frotaPeriods = List<FrotaPeriod>.from(task.frotaPeriods);
       // Garantir que períodos por frota sejam buscados do Supabase caso não tenham vindo com a tarefa
@@ -415,6 +469,7 @@ class _TaskFormDialogState extends State<TaskFormDialog>
         _loadOrdens();
         _loadATs();
         _loadSIs();
+        _checkExecutorConflicts();
       }
     });
   }
@@ -958,7 +1013,7 @@ class _TaskFormDialogState extends State<TaskFormDialog>
         // 6 tabs básicas + 1 PEX/APR (apenas root) + 1 SAP = 7 ou 8
         final int numTabs = _isUserRoot ? 8 : 7;
         if (_tabController.length != numTabs) {
-          final int oldIndex = _tabController.index;
+          final int oldIndex = widget.initialTabIndex ?? _tabController.index;
           _tabController.dispose();
           _tabController = TabController(
             length: numTabs,
@@ -4722,10 +4777,39 @@ class _TaskFormDialogState extends State<TaskFormDialog>
           )
         else
           Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              ...List.generate(_executorPeriods.length, (index) {
-                return _buildExecutorPeriodCard(index);
-              }),
+              Wrap(
+                spacing: 8.0,
+                runSpacing: 8.0,
+                children: List.generate(_executorPeriods.length, (index) {
+                  final ep = _executorPeriods[index];
+                  final isSelected = _selectedExecutorPeriodIndex == index;
+                  final hasConflict = _executoresComConflito.contains(ep.executorId);
+                  
+                  return ChoiceChip(
+                    label: Text(ep.executorNome.split(' - ').first),
+                    selected: isSelected,
+                    shape: hasConflict 
+                        ? RoundedRectangleBorder(
+                            side: const BorderSide(color: Colors.red, width: 2),
+                            borderRadius: BorderRadius.circular(8),
+                          )
+                        : null,
+                    onSelected: (selected) {
+                      if (selected) {
+                        setState(() {
+                          _selectedExecutorPeriodIndex = index;
+                        });
+                      }
+                    },
+                  );
+                }),
+              ),
+              const SizedBox(height: 12),
+              if (_selectedExecutorPeriodIndex >= 0 && _selectedExecutorPeriodIndex < _executorPeriods.length)
+                _buildExecutorPeriodCard(_selectedExecutorPeriodIndex),
+              const SizedBox(height: 12),
               ElevatedButton.icon(
                 onPressed: () {
                   if (_selectedExecutorIds.isEmpty) {
@@ -4780,6 +4864,7 @@ class _TaskFormDialogState extends State<TaskFormDialog>
                         periods: baseSegments,
                       ),
                     );
+                    _selectedExecutorPeriodIndex = _executorPeriods.length - 1;
                   });
                 },
                 icon: const Icon(Icons.add),
@@ -4824,6 +4909,12 @@ class _TaskFormDialogState extends State<TaskFormDialog>
                   onPressed: () {
                     setState(() {
                       _executorPeriods.removeAt(index);
+                      if (_selectedExecutorPeriodIndex >= _executorPeriods.length) {
+                        _selectedExecutorPeriodIndex = _executorPeriods.length - 1;
+                      }
+                      if (_selectedExecutorPeriodIndex < 0) {
+                        _selectedExecutorPeriodIndex = 0;
+                      }
                     });
                   },
                   tooltip: 'Remover Executor',

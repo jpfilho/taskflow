@@ -458,8 +458,6 @@ class ChatService {
     // Verificar cache
     if (_lastCountsFetch != null && 
         DateTime.now().difference(_lastCountsFetch!) < _countsCacheDuration) {
-      // Se todos os IDs solicitados estão no cache, podemos retornar
-      // Mas para simplificar, se o cache é recente, retornamos o que temos
       PerformanceMonitor.stop('ChatService.contarMensagensPorTarefas');
       return Map<String, int>.from(_cachedMessageCounts);
     }
@@ -469,22 +467,42 @@ class ChatService {
       return {};
     }
 
+    final totalContagens = <String, int>{};
+    const int chunkSize = 100;
+    final futures = <Future<Map<String, int>>>[];
+
+    for (var i = 0; i < tarefaIds.length; i += chunkSize) {
+      final chunk = tarefaIds.sublist(
+        i,
+        i + chunkSize > tarefaIds.length ? tarefaIds.length : i + chunkSize,
+      );
+      futures.add(_contarMensagensPorTarefasChunk(chunk));
+    }
+
+    final results = await Future.wait(futures);
+    for (final res in results) {
+      totalContagens.addAll(res);
+    }
+
+    // Atualizar cache global
+    totalContagens.forEach((k, v) => _cachedMessageCounts[k] = v);
+    _lastCountsFetch = DateTime.now();
+
+    PerformanceMonitor.stop('ChatService.contarMensagensPorTarefas');
+    return totalContagens;
+  }
+
+  // Método auxiliar para contar um chunk de no máximo 100 IDs concorrentemente
+  Future<Map<String, int>> _contarMensagensPorTarefasChunk(List<String> chunk) async {
+    if (chunk.isEmpty) return {};
+    
     // Tentativa 1: usar VIEW otimizada
     try {
-      dynamic query = _supabase
+      final response = await _supabase
           .from('contagens_mensagens_tarefas')
-          .select('task_id, quantidade');
+          .select('task_id, quantidade')
+          .inFilter('task_id', chunk) as List;
 
-      if (tarefaIds.length == 1) {
-        query = query.eq('task_id', tarefaIds[0]);
-      } else {
-        final orConditions = tarefaIds.map((id) => 'task_id.eq.$id').join(',');
-        query = query.or(orConditions);
-      }
-
-      final response = await query as List;
-
-      // Se a VIEW retornou dados, usá-los
       if (response.isNotEmpty) {
         final contagens = <String, int>{};
         for (var item in response) {
@@ -492,28 +510,22 @@ class ChatService {
           final quantidade = item['quantidade'] as int? ?? 0;
           if (quantidade > 0) {
             contagens[taskId] = quantidade;
-            _cachedMessageCounts[taskId] = quantidade;
           }
         }
-        _lastCountsFetch = DateTime.now();
-        PerformanceMonitor.stop('ChatService.contarMensagensPorTarefas');
         return contagens;
       }
-
-      print('⚠️ VIEW contagens_mensagens_tarefas retornou vazio — usando fallback direto.');
     } catch (e) {
-      print('⚠️ VIEW contagens_mensagens_tarefas falhou ($e) — usando fallback direto.');
+      print('⚠️ VIEW contagens_mensagens_tarefas falhou para o chunk ($e) — usando fallback.');
     }
 
     // Tentativa 2: fallback — buscar grupos das tarefas e contar mensagens diretamente
     try {
-      // Buscar grupos_chat das tarefas
       final gruposResp = await _supabase
           .from('grupos_chat')
           .select('id, tarefa_id')
-          .inFilter('tarefa_id', tarefaIds);
+          .inFilter('tarefa_id', chunk) as List;
 
-      if ((gruposResp as List).isEmpty) return {};
+      if (gruposResp.isEmpty) return {};
 
       // Mapear grupoId -> tarefaId
       final grupoParaTarefa = <String, String>{};
@@ -526,33 +538,23 @@ class ChatService {
       final grupoIds = grupoParaTarefa.keys.toList();
 
       // Contar mensagens por grupo (excluindo soft-deleted)
-      // Fazemos em lote: buscar todas as mensagens dos grupos e contar no cliente
       final mensagensResp = await _supabase
           .from('mensagens')
           .select('grupo_id')
           .inFilter('grupo_id', grupoIds)
-          .filter('deleted_at', 'is', null);
+          .filter('deleted_at', 'is', null) as List;
 
       final contagens = <String, int>{};
-      for (var m in mensagensResp as List) {
+      for (var m in mensagensResp) {
         final grupoId = m['grupo_id'] as String;
         final tarefaId = grupoParaTarefa[grupoId];
         if (tarefaId != null) {
           contagens[tarefaId] = (contagens[tarefaId] ?? 0) + 1;
         }
       }
-
-      print('✅ Fallback chat count: ${contagens.length} tarefas com mensagens');
-      
-      // Atualizar cache global
-      contagens.forEach((k, v) => _cachedMessageCounts[k] = v);
-      _lastCountsFetch = DateTime.now();
-      
-      PerformanceMonitor.stop('ChatService.contarMensagensPorTarefas');
       return contagens;
     } catch (e) {
-      print('❌ Erro no fallback de contarMensagensPorTarefas: $e');
-      PerformanceMonitor.stop('ChatService.contarMensagensPorTarefas');
+      print('❌ Erro no fallback de contarMensagensPorTarefas para o chunk: $e');
       return {};
     }
   }
@@ -600,6 +602,8 @@ class ChatService {
     String? refType,  // 'GERAL' | 'NOTA' | 'ORDEM'
     String? refId,    // UUID da nota_sap ou ordem
     String? refLabel, // Label para exibição (ex: "NOTA 12345")
+    bool? refExecutado, // Status Executado (Sim/Não)
+    Map<String, dynamic>? structuredPayload, // Payload do feedback estruturado
   }) async {
     try {
       final userId = currentUserId ?? 'anonymous';
@@ -637,9 +641,16 @@ class ChatService {
         if (refLabel != null) {
           data['ref_label'] = refLabel;
         }
+        if (refExecutado != null) {
+          data['ref_executado'] = refExecutado;
+        }
       } else {
         // Se não fornecido, usar 'GERAL' como padrão (compatibilidade)
         data['ref_type'] = 'GERAL';
+      }
+
+      if (structuredPayload != null) {
+        data['structured_payload'] = structuredPayload;
       }
       
       final response = await _supabase
@@ -678,6 +689,7 @@ class ChatService {
     String? refType,
     String? refId,
     String? refLabel,
+    bool? refExecutado,
   }) async {
     try {
       final updateData = <String, dynamic>{
@@ -696,11 +708,17 @@ class ChatService {
         } else {
           updateData['ref_label'] = null;
         }
+        if (refExecutado != null) {
+          updateData['ref_executado'] = refExecutado;
+        } else {
+          updateData['ref_executado'] = null;
+        }
       } else {
         // Se refType é null, resetar para GERAL
         updateData['ref_type'] = 'GERAL';
         updateData['ref_id'] = null;
         updateData['ref_label'] = null;
+        updateData['ref_executado'] = null;
       }
       
       final response = await _supabase
@@ -1068,20 +1086,28 @@ class ChatService {
 
       if (todasMensagens.isEmpty) return {};
 
-      // 2. Buscar quais mensagens o usuário já leu (filtrado pelos IDs relevantes, em chunks)
+      // 2. Buscar quais mensagens o usuário já leu (filtrado pelos IDs relevantes, em chunks concorrentes)
       final mensagemIds = todasMensagens.map((m) => m['id'] as String).toList();
       final lidasSet = <String>{};
+      final futuresLidas = <Future<List<dynamic>>>[];
 
       for (var i = 0; i < mensagemIds.length; i += chunkSize) {
         final chunk = mensagemIds.sublist(
           i,
           i + chunkSize > mensagemIds.length ? mensagemIds.length : i + chunkSize,
         );
-        final lidas = await _supabase
-            .from('mensagens_lidas')
-            .select('mensagem_id')
-            .eq('usuario_id', userId)
-            .inFilter('mensagem_id', chunk);
+        futuresLidas.add(
+          _supabase
+              .from('mensagens_lidas')
+              .select('mensagem_id')
+              .eq('usuario_id', userId)
+              .inFilter('mensagem_id', chunk)
+              .then((value) => value as List<dynamic>),
+        );
+      }
+
+      final resultsLidas = await Future.wait(futuresLidas);
+      for (final lidas in resultsLidas) {
         for (final m in lidas) {
           lidasSet.add(m['mensagem_id'] as String);
         }

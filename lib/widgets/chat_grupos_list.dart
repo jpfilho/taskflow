@@ -37,10 +37,9 @@ class _ChatGruposListState extends State<ChatGruposList> {
     if (!mounted) return;
     setState(() => _isLoading = true);
     try {
-      // Carregar grupos da comunidade
+      // Carregar grupos da comunidade (já vem com a última mensagem pré-populada!)
       var grupos = await _chatService.listarGruposPorComunidade(widget.comunidadeId);
 
-      // Otimização: Coletar IPs sem precisar de N+1 queries.
       final gruposIds = grupos.where((g) => g.id != null).map((g) => g.id!).toList();
 
       if (gruposIds.isEmpty) {
@@ -52,38 +51,18 @@ class _ChatGruposListState extends State<ChatGruposList> {
          return;
       }
 
-      // 1. Obter a última mensagem de todos os grupos listados
-      final ultimasMsgsMap = await _chatService.obterUltimaMensagemPorGrupos(gruposIds);
+      // Buscar mensagens não lidas de todos os grupos em lote
+      final naoLidasMap = await _chatService.contarMensagensNaoLidasEmLote(gruposIds);
 
-      // 2. Identificar grupos válidos e puxar Lidas
-      final gruposAtivosIds = ultimasMsgsMap.keys.toList();
-
-      if (gruposAtivosIds.isEmpty) {
-         if (!mounted) return;
-         setState(() {
-            _grupos = [];
-            _isLoading = false;
-         });
-         return;
-      }
-
-      final naoLidasMap = await _chatService.contarMensagensNaoLidasEmLote(gruposAtivosIds);
-
-      // 3. Montar matriz
-      var gruposComMensagem = <GrupoChat>[];
-      for (var grupo in grupos) {
-         if (grupo.id != null && ultimasMsgsMap.containsKey(grupo.id!)) {
-            final ultima = ultimasMsgsMap[grupo.id!]!;
-            gruposComMensagem.add(grupo.copyWith(
-               ultimaMensagemAt: ultima.createdAt,
-               ultimaMensagemPreview: ultima.conteudo,
-               mensagensNaoLidas: naoLidasMap[grupo.id!] ?? 0
-            ));
-         }
-      }
+      // Mapear as contagens de não lidas para cada grupo
+      var gruposProcessados = grupos.map((grupo) {
+        return grupo.copyWith(
+          mensagensNaoLidas: naoLidasMap[grupo.id] ?? 0,
+        );
+      }).toList();
 
       // Ordenar por última mensagem (mais recente primeiro)
-      gruposComMensagem.sort((a, b) {
+      gruposProcessados.sort((a, b) {
         final aData = a.ultimaMensagemAt ?? a.updatedAt ?? a.createdAt ?? DateTime(1970);
         final bData = b.ultimaMensagemAt ?? b.updatedAt ?? b.createdAt ?? DateTime(1970);
         return bData.compareTo(aData);
@@ -91,7 +70,7 @@ class _ChatGruposListState extends State<ChatGruposList> {
 
       if (!mounted) return;
       setState(() {
-        _grupos = gruposComMensagem;
+        _grupos = gruposProcessados;
         _isLoading = false;
       });
     } catch (e) {

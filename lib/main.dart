@@ -74,6 +74,7 @@ import 'modules/gtd/domain/gtd_session.dart';
 import 'modules/gtd/presentation/screens/gtd_home_page.dart';
 import 'modules/melhorias_bugs/presentation/screens/melhorias_bugs_home_screen.dart';
 import 'widgets/activity_report_view.dart';
+import 'features/ai_assistants/presentation/screens/ai_assistants_list_screen.dart';
 // sqflite: factory obrigatória antes de qualquer openDatabase (web e desktop)
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart';
@@ -454,6 +455,7 @@ class _MainScreenState extends State<MainScreen> {
   Map<String, String?> _teamFilters = {}; // Filtros da tela Equipes (divisao, empresa, funcao, matricula, nome)
   Map<String, List<String>>? _teamFilterOptions; // Opções dos dropdowns da Equipes
   String _searchQuery = ''; // Termo de busca atual
+  Set<String>? _conflictFilterTaskIds; // Filtro de tarefas com conflitos
   // Inicializar com primeiro e último dia do mês/ano atual
   late DateTime _startDate;
   late DateTime _endDate;
@@ -1381,18 +1383,18 @@ class _MainScreenState extends State<MainScreen> {
         dataFimMax: _endDate,
       );
 
-      // Aplicar filtros em memória para evitar segunda query ao Supabase
-      List<Task> filtered;
-      if (_currentFilters.isNotEmpty) {
-        filtered = _applyLocalFilters(baseTasks, _currentFilters);
-      } else {
-        filtered = baseTasks;
-      }
+      _tasksSemFiltros = baseTasks;
 
       if (mounted) {
+        if (_currentFilters.isNotEmpty) {
+          await _applyFilters(_currentFilters);
+        } else {
+          setState(() {
+            _tasks = baseTasks;
+          });
+        }
+
         setState(() {
-          _tasksSemFiltros = baseTasks;
-          _tasks = filtered;
           _isTasksLoading = false;
           _tasksVersion++;
         });
@@ -1410,42 +1412,7 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
-  // Novo método para filtrar tarefas em memória (muito mais rápido que nova query)
-  List<Task> _applyLocalFilters(List<Task> tasks, Map<String, String?> filters) {
-    return tasks.where((task) {
-      // Filtro de Status
-      if (filters['status'] != null) {
-        final statusFilter = _parseFilterList(filters['status']);
-        if (statusFilter != null && !statusFilter.contains(task.status)) return false;
-      }
-      // Filtro de Regional
-      if (filters['regional'] != null) {
-        final regionalFilter = _parseFilterList(filters['regional']);
-        if (regionalFilter != null && !regionalFilter.contains(task.regional)) return false;
-      }
-      // Filtro de Divisão
-      if (filters['divisao'] != null) {
-        final divisaoFilter = _parseFilterList(filters['divisao']);
-        if (divisaoFilter != null && !divisaoFilter.contains(task.divisaoId)) return false;
-      }
-      // Filtro de Local
-      if (filters['local'] != null) {
-        final localFilter = _parseFilterList(filters['local']);
-        if (localFilter != null && !task.locais.any((l) => localFilter.contains(l))) return false;
-      }
-      // Filtro de Executor
-      if (filters['executor'] != null) {
-        final executorFilter = _parseFilterList(filters['executor']);
-        if (executorFilter != null && !task.executores.any((e) => executorFilter.contains(e))) return false;
-      }
-      // Filtro de Frota
-      if (filters['frota'] != null) {
-        final frotaFilter = _parseFilterList(filters['frota']);
-        if (frotaFilter != null && !task.frota.contains(frotaFilter.first)) return false;
-      }
-      return true;
-    }).toList();
-  }
+
 
   @override
   Widget build(BuildContext context) {
@@ -1475,7 +1442,7 @@ class _MainScreenState extends State<MainScreen> {
               child: Column(
                 children: [
                   // Header Bar
-                  HeaderBar(
+                  if (_sidebarSelectedIndex != 15) HeaderBar(
                     startDate: _startDate,
                     endDate: _endDate,
                     onDateRangeChanged: (start, end) {
@@ -1502,6 +1469,12 @@ class _MainScreenState extends State<MainScreen> {
                       });
                     },
                     unreadChatCount: _unreadChatCount,
+                    isConflictFilterActive: _conflictFilterTaskIds != null,
+                    onClearConflictFilter: () {
+                      setState(() {
+                        _conflictFilterTaskIds = null;
+                      });
+                    },
                     onConfig: () {
                       setState(() {
                         _setSidebarIndex(14);
@@ -1578,7 +1551,8 @@ class _MainScreenState extends State<MainScreen> {
                       endDate: _endDate,
                       visibleTasks: _tasksSemFiltros,
                     )
-                  else if (_sidebarSelectedIndex != 14 &&
+                  else if (_sidebarSelectedIndex != 3 &&
+                      _sidebarSelectedIndex != 14 &&
                       _sidebarSelectedIndex != 14 &&
                       _sidebarSelectedIndex != 15 &&
                       _sidebarSelectedIndex != 16 &&
@@ -1590,7 +1564,9 @@ class _MainScreenState extends State<MainScreen> {
                       _sidebarSelectedIndex != 22 &&
                       _sidebarSelectedIndex != 23 &&
                       _sidebarSelectedIndex != 25 &&
-                      _sidebarSelectedIndex != 26)
+                      _sidebarSelectedIndex != 26 &&
+                      _sidebarSelectedIndex != 27 &&
+                      _sidebarSelectedIndex != 28)
                     FilterBar(
                       onFiltersChanged: _applyFilters,
                       initialFilters: _currentFilters,
@@ -1687,6 +1663,12 @@ class _MainScreenState extends State<MainScreen> {
                           });
                         },
                         unreadChatCount: _unreadChatCount,
+                        isConflictFilterActive: _conflictFilterTaskIds != null,
+                        onClearConflictFilter: () {
+                          setState(() {
+                            _conflictFilterTaskIds = null;
+                          });
+                        },
                         onConfig: () {
                           setState(() {
                             _setSidebarIndex(14);
@@ -1764,7 +1746,8 @@ class _MainScreenState extends State<MainScreen> {
                           endDate: _endDate,
                           visibleTasks: _tasksSemFiltros,
                         )
-                      else if (_sidebarSelectedIndex != 14 &&
+                      else if (_sidebarSelectedIndex != 3 &&
+                          _sidebarSelectedIndex != 14 &&
                           _sidebarSelectedIndex != 14 &&
                           _sidebarSelectedIndex != 15 &&
                           _sidebarSelectedIndex != 16 &&
@@ -1776,7 +1759,9 @@ class _MainScreenState extends State<MainScreen> {
                           _sidebarSelectedIndex != 22 &&
                           _sidebarSelectedIndex != 23 &&
                           _sidebarSelectedIndex != 25 &&
-                          _sidebarSelectedIndex != 26)
+                          _sidebarSelectedIndex != 26 &&
+                          _sidebarSelectedIndex != 27 &&
+                          _sidebarSelectedIndex != 28)
                         FilterBar(
                           onFiltersChanged: _applyFilters,
                           initialFilters: _currentFilters,
@@ -1987,8 +1972,18 @@ class _MainScreenState extends State<MainScreen> {
           getSortValue: _getSortValue,
           warningsByTaskId: _warningsByTaskIdForTable,
           isLoading: _isTasksLoading,
+          conflictFilterTaskIds: _conflictFilterTaskIds,
+          onFilterConflictTasks: (taskIds) {
+            setState(() {
+              _conflictFilterTaskIds = taskIds;
+            });
+          },
           onTaskSelected: (task) => _showTaskDetails(task),
-          onEdit: (task) => _editTaskById(task.id),
+          onEdit: (task, {executorIdToEdit}) => _editTaskById(
+            task.id,
+            initialTabIndex: executorIdToEdit != null ? 3 : null,
+            initialExecutorIdToEdit: executorIdToEdit,
+          ),
           onDelete: (task) => _deleteTaskById(task.id),
           onDuplicate: (task) => _duplicateTask(task),
           onCreateSubtask: (task) {
@@ -2123,7 +2118,11 @@ class _MainScreenState extends State<MainScreen> {
           onTeamDataLoaded: (opts) {
             setState(() { _teamFilterOptions = opts; });
                     },
-          onEdit: (task) => _editTaskById(task.id),
+          onEdit: (task, {executorIdToEdit}) => _editTaskById(
+            task.id,
+            initialTabIndex: 3, // Aba Datas
+            initialExecutorIdToEdit: executorIdToEdit,
+          ),
           onDelete: (task) => _deleteTaskById(task.id),
           onDuplicate: (task) => _duplicateTask(task),
           onCreateSubtask: (task) {
@@ -2313,7 +2312,11 @@ class _MainScreenState extends State<MainScreen> {
       case 14: // Configuração
         return ConfiguracaoView(themeProvider: widget.themeProvider);
       case 15: // Chat
-        return const ChatView();
+        return ChatView(
+          onMenuPressed: () {
+            _scaffoldKey.currentState?.openDrawer();
+          },
+        );
       case 16: // Notas SAP
         return NotasSAPView(
           searchQuery: _searchQuery,
@@ -2364,6 +2367,8 @@ class _MainScreenState extends State<MainScreen> {
         return const MelhoriasBugsHomeScreen();
       case 27: // Confirmação de Ordens
         return const ConfirmacaoOrdensView();
+      case 28: // Assistentes IA
+        return const AiAssistantsListScreen();
       default:
         if (!_showGantt) {
           return TaskTable(
@@ -2916,7 +2921,7 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
-  Future<void> _editTaskById(String taskId) async {
+  Future<void> _editTaskById(String taskId, {int? initialTabIndex, String? initialExecutorIdToEdit}) async {
     if (!await _ensureCanEditTasks()) return;
     final task = await _taskService.getTaskById(taskId);
     if (task == null) {
@@ -2930,6 +2935,8 @@ class _MainScreenState extends State<MainScreen> {
         task: task,
         startDate: _startDate,
         endDate: _endDate,
+        initialTabIndex: initialTabIndex,
+        initialExecutorIdToEdit: initialExecutorIdToEdit,
       ),
     );
 

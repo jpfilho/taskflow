@@ -189,8 +189,7 @@ class _SidebarState extends State<Sidebar> {
                     endIndent: isMobile ? 8 : 12,
                     color: iconColor.withOpacity(0.2),
                   ),
-                  if (widget.isRoot)
-                    _buildSidebarIcon(Icons.checklist_rtl, 3, 'Demandas', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
+                  // _buildSidebarIcon(Icons.checklist_rtl, 3, 'Demandas', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
                   if (widget.isRoot || widget.showGtdAndSupressao) ...[
                     Divider(
                       height: isMobile ? 16 : 24,
@@ -235,6 +234,7 @@ class _SidebarState extends State<Sidebar> {
                     color: iconColor.withOpacity(0.2),
                   ),
                   _buildSidebarIcon(Icons.bug_report, 26, 'Melhorias e Bugs', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
+                  // _buildSidebarIcon(Icons.smart_toy, 28, 'Assistentes IA', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
                 ],
               ),
             ),

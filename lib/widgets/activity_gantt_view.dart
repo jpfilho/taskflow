@@ -70,7 +70,7 @@ class ActivityGanttView extends StatefulWidget {
   final String? sortColumn;
   final Function(Task)? getSortValue;
   final Function(Task)? onTaskSelected;
-  final Function(Task)? onEdit;
+  final void Function(Task, {String? executorIdToEdit})? onEdit;
   final Function(Task)? onDelete;
   final Function(Task)? onDuplicate;
   final Function(Task)? onCreateSubtask;
@@ -78,6 +78,8 @@ class ActivityGanttView extends StatefulWidget {
   final bool isLoading;
   final VoidCallback? onTasksUpdated;
   final VoidCallback? onConflictsLoaded;
+  final Set<String>? conflictFilterTaskIds;
+  final ValueChanged<Set<String>?>? onFilterConflictTasks;
 
   const ActivityGanttView({
     super.key,
@@ -105,6 +107,8 @@ class ActivityGanttView extends StatefulWidget {
     this.isLoading = false,
     this.onTasksUpdated,
     this.onConflictsLoaded,
+    this.conflictFilterTaskIds,
+    this.onFilterConflictTasks,
   });
 
   @override
@@ -665,14 +669,42 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
 
   List<Task> _buildHierarchicalTasks() {
     final List<Task> result = [];
-    final mainTasks = widget.tasks.where((t) => t.parentId == null).toList();
+    
+    Set<String>? finalFilterIds;
+    if (widget.conflictFilterTaskIds != null) {
+      finalFilterIds = Set<String>.from(widget.conflictFilterTaskIds!);
+      // If a subtask is in the conflict filter, ensure its parent is also included so it can be rendered
+      for (final t in widget.tasks) {
+        if (widget.conflictFilterTaskIds!.contains(t.id) && t.parentId != null) {
+          finalFilterIds.add(t.parentId!);
+        }
+      }
+      for (final sublist in _loadedSubtasks.values) {
+        for (final sub in sublist) {
+          if (widget.conflictFilterTaskIds!.contains(sub.id) && sub.parentId != null) {
+            finalFilterIds.add(sub.parentId!);
+          }
+        }
+      }
+    }
+    
+    final sourceTasks = finalFilterIds != null 
+        ? widget.tasks.where((t) => finalFilterIds!.contains(t.id)).toList()
+        : widget.tasks;
+        
+    final mainTasks = sourceTasks.where((t) => t.parentId == null).toList();
 
     for (final main in mainTasks) {
       result.add(main);
       final isExpanded = _expandedTasks.contains(main.id);
 
       if (isExpanded && _loadedSubtasks.containsKey(main.id)) {
-        result.addAll(_loadedSubtasks[main.id]!);
+        final subs = _loadedSubtasks[main.id]!;
+        if (finalFilterIds != null) {
+          result.addAll(subs.where((s) => finalFilterIds!.contains(s.id)));
+        } else {
+          result.addAll(subs);
+        }
       }
 
       if (isExpanded) {
@@ -1236,6 +1268,29 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
     }
 
     return null;
+  }
+
+  Set<String> _getConflictTaskIdsForSingleDay(Task task, DateTime day) {
+    final executorIds = _getExecutorIdsForConflictLookup(task);
+    if (executorIds.isEmpty) return {};
+
+    if (widget.conflictService != null && _useBackendConflicts && _eventsByDayFromBackend != null) {
+      final key = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+      final allEvents = _eventsByDayFromBackend![key] ?? [];
+      if (allEvents.isEmpty) return {};
+
+      final relevantEvents = allEvents.where((e) => executorIds.contains(e.executorId)).toList();
+      return relevantEvents.map((e) => e.taskId).toSet();
+    }
+    
+    final events = ConflictDetection.getExecutionEventsForDay(
+      _taskList, day, _taskList,
+    );
+    return events
+        .where((e) => executorIds.contains(e.executorId))
+        .map((e) => e.taskId)
+        .where((s) => s.isNotEmpty)
+        .toSet();
   }
 
   String? _getFleetConflictDetailsMessageForSingleDay(Task task, DateTime day) {
@@ -1922,12 +1977,24 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
           padding: EdgeInsets.zero,
           constraints: const BoxConstraints(),
           onSelected: (val) {
+            final baseId = task.id.split('_executor_').first.split('_frota_').first;
+            final originalTask = task.copyWith(id: baseId);
+            
+            // Extract executor ID if it's an executor row
+            String? executorId;
+            if (task.id.contains('_executor_')) {
+              final parts = task.id.split('_executor_');
+              if (parts.length > 1) {
+                executorId = parts[1];
+              }
+            }
+            
             switch (val) {
-              case 'view': widget.onTaskSelected?.call(task); break;
-              case 'edit': widget.onEdit?.call(task); break;
-              case 'delete': widget.onDelete?.call(task); break;
-              case 'duplicate': widget.onDuplicate?.call(task); break;
-              case 'subtask': widget.onCreateSubtask?.call(task); break;
+              case 'view': widget.onTaskSelected?.call(originalTask); break;
+              case 'edit': widget.onEdit?.call(originalTask, executorIdToEdit: executorId); break;
+              case 'delete': widget.onDelete?.call(originalTask); break;
+              case 'duplicate': widget.onDuplicate?.call(originalTask); break;
+              case 'subtask': widget.onCreateSubtask?.call(originalTask); break;
             }
           },
           itemBuilder: (_) => [
@@ -2302,12 +2369,17 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                             : null;
 
                         final conflictTooltipMessageByDay = <DateTime, String>{};
+                        final conflictTaskIdsByDay = <DateTime, Set<String>>{};
                         if (conflictDays != null) {
                           for (final d in conflictDays) {
                             final dayNorm = DateTime(d.year, d.month, d.day);
                             final msg = _getConflictDetailsMessageForSingleDay(task, dayNorm);
                             if (msg != null && msg.isNotEmpty) {
                               conflictTooltipMessageByDay[dayNorm] = msg;
+                            }
+                            final ids = _getConflictTaskIdsForSingleDay(task, dayNorm);
+                            if (ids.isNotEmpty) {
+                              conflictTaskIdsByDay[dayNorm] = ids;
                             }
                           }
                         }
@@ -2342,6 +2414,7 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                             conflictDays: conflictDays,
                             conflictTooltipMessage: null,
                             conflictTooltipMessageByDay: conflictTooltipMessageByDay.isEmpty ? null : conflictTooltipMessageByDay,
+                            conflictTaskIdsByDay: conflictTaskIdsByDay.isEmpty ? null : conflictTaskIdsByDay,
                             conflictDaysFrota: conflictDaysFrota,
                             conflictTooltipMessageFrota: null,
                             conflictTooltipMessageByDayFrota: conflictTooltipMessageByDayFrota.isEmpty ? null : conflictTooltipMessageByDayFrota,
@@ -2350,6 +2423,12 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                             onDragStart: _onSegmentDragStart,
                             onDragEnd: _onSegmentDragEnd,
                             conflictsVersionNotifier: _conflictsVersionNotifier,
+                            onFilterConflictTasks: (Set<String> taskIds) {
+                              if (widget.onFilterConflictTasks != null) {
+                                widget.onFilterConflictTasks!(taskIds.isEmpty ? null : taskIds);
+                              }
+                            },
+                            isConflictFilterActive: widget.conflictFilterTaskIds != null,
                           ),
                         );
                       }),

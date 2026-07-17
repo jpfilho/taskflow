@@ -79,7 +79,7 @@ class AppMenuConfig {
     AppMenuItem(index: 17, label: 'Ordens', icon: Icons.list_alt),
     AppMenuItem(index: 18, label: 'ATs', icon: Icons.assignment),
     AppMenuItem(index: 19, label: 'SIs', icon: Icons.description),
-    AppMenuItem(index: 3, label: 'Demandas', icon: Icons.checklist_rtl, forRootOnly: true),
+    // AppMenuItem(index: 3, label: 'Demandas', icon: Icons.checklist_rtl, forRootOnly: true),
     AppMenuItem(index: 21, label: 'Linhas de Transmissão', icon: Icons.alt_route, forRootOnly: true),
     AppMenuItem(index: 22, label: 'Supressão de Vegetação', icon: Icons.eco, forGtdAndSupressaoOnly: true),
     AppMenuItem(index: 24, label: 'Documentos', icon: Icons.folder, forRootOnly: true),

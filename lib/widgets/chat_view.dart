@@ -8,11 +8,13 @@ import 'chat_screen.dart';
 class ChatView extends StatefulWidget {
   final String? initialComunidadeId;
   final String? initialGrupoId;
+  final VoidCallback? onMenuPressed;
 
   const ChatView({
     super.key,
     this.initialComunidadeId,
     this.initialGrupoId,
+    this.onMenuPressed,
   });
 
   @override
@@ -41,6 +43,19 @@ class _ChatViewState extends State<ChatView> {
     try {
       // Carregar comunidades diretamente (sem recriar/verificar a cada abertura)
       final comunidades = await _chatService.listarComunidades();
+      
+      // Se a comunidade selecionada não estiver na lista de comunidades, 
+      // busca diretamente pelo ID no banco de dados para evitar erro no DropdownButton.
+      if (_selectedComunidadeId != null && !comunidades.any((c) => c.id == _selectedComunidadeId)) {
+        try {
+          final c = await _chatService.obterComunidadePorId(_selectedComunidadeId!);
+          if (c != null) {
+            comunidades.add(c);
+          }
+        } catch (e) {
+          print('Erro ao obter comunidade específica $_selectedComunidadeId: $e');
+        }
+      }
       
       setState(() {
         _comunidades = comunidades;
@@ -162,7 +177,7 @@ class _ChatViewState extends State<ChatView> {
                         isEmbedded: true,
                         embeddedTitle: DropdownButtonHideUnderline(
                           child: DropdownButton<String>(
-                            value: _selectedComunidadeId,
+                            value: _comunidades.any((c) => c.id == _selectedComunidadeId) ? _selectedComunidadeId : null,
                             isExpanded: true,
                             dropdownColor: const Color(0xFF075E54),
                             icon: const Icon(Icons.arrow_drop_down, color: Colors.white),
@@ -253,6 +268,7 @@ class _ChatViewState extends State<ChatView> {
           unreadPerCommunity: _unreadPerCommunity,
           onComunidadeSelected: _onComunidadeSelected,
           onRefresh: _loadData,
+          onMenuPressed: widget.onMenuPressed,
         );
       },
     );

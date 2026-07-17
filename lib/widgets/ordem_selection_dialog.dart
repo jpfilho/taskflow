@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/ordem.dart';
 import '../utils/responsive.dart';
+import 'multi_select_filter_dialog.dart';
 
 class OrdemSelectionDialog extends StatefulWidget {
   final List<Ordem> ordens;
@@ -669,100 +670,77 @@ class _OrdemSelectionDialogState extends State<OrdemSelectionDialog> {
   }) {
     final displayText = selected.isEmpty ? 'Todos' : selected.join(', ');
 
-    return InkWell(
-      onTap: () async {
-        final result = await _showMultiSelectDialog(label, items, selected);
-        if (result != null) {
-          setState(() {
-            selected
-              ..clear()
-              ..addAll(result);
-            _applyFilters();
-          });
-        }
-      },
-      borderRadius: BorderRadius.circular(8),
-      child: InputDecorator(
-        decoration: InputDecoration(
-          labelText: label,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-          ),
-          filled: true,
-          fillColor: Colors.white,
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 12,
-            vertical: 8,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 2, bottom: 4),
+          child: Text(
+            label,
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
           ),
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          mainAxisSize: MainAxisSize.max,
-          children: [
-            Expanded(
-              child: Text(
-                displayText,
-                style: const TextStyle(fontSize: 14),
-                overflow: TextOverflow.ellipsis,
-                maxLines: 1,
+        InkWell(
+          onTap: () async {
+            final result = await _showMultiSelectDialog(label, items, selected);
+            if (result != null) {
+              setState(() {
+                selected
+                  ..clear()
+                  ..addAll(result);
+                _applyFilters();
+              });
+            }
+          },
+          borderRadius: BorderRadius.circular(8),
+          child: InputDecorator(
+            decoration: InputDecoration(
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+              filled: true,
+              fillColor: Colors.white,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 10,
+                vertical: 10,
               ),
             ),
-            const Icon(Icons.arrow_drop_down),
-          ],
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              mainAxisSize: MainAxisSize.max,
+              children: [
+                Expanded(
+                  child: Text(
+                    displayText,
+                    style: const TextStyle(fontSize: 14),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                ),
+                const Icon(Icons.arrow_drop_down),
+              ],
+            ),
+          ),
         ),
-      ),
+      ],
     );
   }
+
 
   Future<Set<String>?> _showMultiSelectDialog(
     String title,
     List<String> options,
     Set<String> current,
   ) async {
-    final temp = {...current};
     return showDialog<Set<String>>(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          title: Text('Selecionar $title'),
-          content: SizedBox(
-            width: 320,
-            child: StatefulBuilder(
-              builder: (context, setStateDialog) {
-                return ListView(
-                  shrinkWrap: true,
-                  children: options
-                      .map(
-                        (opt) => CheckboxListTile(
-                          dense: true,
-                          value: temp.contains(opt),
-                          title: Text(opt),
-                          onChanged: (checked) {
-                            setStateDialog(() {
-                              if (checked == true) {
-                                temp.add(opt);
-                              } else {
-                                temp.remove(opt);
-                              }
-                            });
-                          },
-                        ),
-                      )
-                      .toList(),
-                );
-              },
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancelar'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(temp),
-              child: const Text('Aplicar'),
-            ),
-          ],
+        return MultiSelectFilterDialog(
+          title: title.toUpperCase(),
+          options: options,
+          selectedValues: current,
+          searchHint: 'Pesquisar...',
+          onSelectionChanged: (selected) {},
         );
       },
     );

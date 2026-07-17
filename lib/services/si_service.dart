@@ -173,6 +173,28 @@ class SIService {
     }
   }
 
+  // Criar SI Manualmente (apenas com o número)
+  Future<SI> criarSIManual(String solicitacao) async {
+    try {
+      final si = SI(
+        id: '', // banco gera
+        solicitacao: solicitacao,
+        statusSistema: 'CRI.', // status default
+        dataCriacao: DateTime.now(),
+        dataImportacao: DateTime.now(),
+      );
+      
+      final map = si.toMap();
+      final sanitized = map.map((key, value) => MapEntry(key, _sanitizeForSupabase(value)));
+      
+      final response = await _supabase.from('sis').insert(sanitized).select().single();
+      return SI.fromMap(response);
+    } catch (e) {
+      print('❌ Erro ao criar SI manual: $e');
+      rethrow;
+    }
+  }
+
   // Sanitizar valores para Supabase
   dynamic _sanitizeForSupabase(dynamic value) {
     if (value == null) return null;
@@ -571,6 +593,21 @@ class SIService {
   Future<Map<String, int>> contarSIsPorTarefas(List<String> taskIds) async {
     try {
       if (taskIds.isEmpty) return {};
+
+      if (taskIds.length > 100) {
+        final chunks = <List<String>>[];
+        for (var i = 0; i < taskIds.length; i += 100) {
+          chunks.add(taskIds.sublist(i, i + 100 > taskIds.length ? taskIds.length : i + 100));
+        }
+        final futures = chunks.map((chunk) => contarSIsPorTarefas(chunk));
+        final results = await Future.wait(futures);
+        
+        final Map<String, int> merged = {};
+        for (final r in results) {
+          merged.addAll(r);
+        }
+        return merged;
+      }
 
       // Usar VIEW otimizada do Supabase para buscar todas as contagens de uma vez
       // Usar .or() para múltiplos valores (já funciona no código)

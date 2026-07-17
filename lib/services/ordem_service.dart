@@ -952,6 +952,21 @@ class OrdemService {
     try {
       if (taskIds.isEmpty) return {};
 
+      if (taskIds.length > 100) {
+        final chunks = <List<String>>[];
+        for (var i = 0; i < taskIds.length; i += 100) {
+          chunks.add(taskIds.sublist(i, i + 100 > taskIds.length ? taskIds.length : i + 100));
+        }
+        final futures = chunks.map((chunk) => contarOrdensPorTarefas(chunk));
+        final results = await Future.wait(futures);
+        
+        final Map<String, int> merged = {};
+        for (final r in results) {
+          merged.addAll(r);
+        }
+        return merged;
+      }
+
       // Usar VIEW otimizada do Supabase para buscar todas as contagens de uma vez
       // Usar .or() para múltiplos valores (já funciona no código)
       dynamic query = _supabase

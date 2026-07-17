@@ -44,7 +44,7 @@ class TeamScheduleView extends StatefulWidget {
   /// Callback com opções para os dropdowns da barra (divisoes, empresas, funcoes, matriculas, nomes) — mesmos dados da tabela.
   final void Function(Map<String, List<String>>)? onTeamDataLoaded;
   final VoidCallback? onTasksUpdated; // Callback para notificar quando tarefas são atualizadas
-  final Function(Task)? onEdit; // Callback para editar tarefa
+  final void Function(Task, {String? executorIdToEdit})? onEdit; // Callback para editar tarefa
   final Function(Task)? onDelete; // Callback para deletar tarefa
   final Function(Task)? onDuplicate; // Callback para duplicar tarefa
   final Function(Task)? onCreateSubtask; // Callback para criar subtarefa
@@ -87,6 +87,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
   bool _isLoading = true;
   List<ExecutorTaskRow> _executorRows = [];
   Map<String, Set<DateTime>> _conflictDaysByExecutor = {};
+  List<Task> _cachedTasksForConflict = [];
   final ScrollController _tableVerticalScrollController = ScrollController();
   final ScrollController _ganttVerticalScrollController = ScrollController();
   final ScrollController _ganttHorizontalScrollController = ScrollController();
@@ -97,6 +98,9 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
   // Controle de scroll horizontal das linhas (um controller por linha para evitar assertion error)
   final List<ScrollController> _rowScrollControllers = [];
   bool _isHorizScrolling = false;
+
+  Set<String>? _conflictFilterTaskIds;
+  String? _conflictFilterExecutorId;
 
   ScrollController _getRowController(int index) {
     while (_rowScrollControllers.length <= index) {
@@ -325,6 +329,8 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
           _useBackendConflicts = false;
           _conflictMapFromBackend = null;
           _eventsByDayFromBackend = null;
+          _conflictFilterTaskIds = null;
+          _conflictFilterExecutorId = null;
         });
       }
       return;
@@ -337,8 +343,11 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
     setState(() {
       _conflictMapFromBackend = map;
       _eventsByDayFromBackend = events;
+      _conflictFilterTaskIds = null;
+      _conflictFilterExecutorId = null;
       _useBackendConflicts = true;
     });
+    await _buildExecutorRowsFromView();
   }
 
   Future<void> _loadSAPCounts() async {
@@ -386,12 +395,26 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
       _loadData(showLoading: false);
     }
     if (oldWidget.teamFilters != widget.teamFilters) {
-      setState(() {});
+      setState(() {
+        _conflictFilterTaskIds = null;
+        _conflictFilterExecutorId = null;
+      });
     }
   }
 
-  /// Linhas de executores após aplicar filtros da barra (divisao, empresa, funcao, matricula, nome).
-  List<ExecutorTaskRow> get _displayExecutorRows => _applyTeamFilters(_executorRows);
+  /// Linhas de executores após aplicar filtros da barra e o filtro de conflito local
+  List<ExecutorTaskRow> get _displayExecutorRows {
+    var rows = _applyTeamFilters(_executorRows);
+    if (_conflictFilterTaskIds != null && _conflictFilterExecutorId != null) {
+      rows = rows.map((row) {
+        if (row.executor.id != _conflictFilterExecutorId) return null;
+        final filteredTasks = row.tasks.where((t) => _conflictFilterTaskIds!.contains(t.id)).toList();
+        if (filteredTasks.isEmpty) return null;
+        return ExecutorTaskRow(executor: row.executor, tasks: filteredTasks);
+      }).whereType<ExecutorTaskRow>().toList();
+    }
+    return rows;
+  }
 
   List<ExecutorTaskRow> _applyTeamFilters(List<ExecutorTaskRow> rows) {
     final filters = widget.teamFilters;
@@ -1062,7 +1085,13 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                   
                   DateTime d = DateTime(seg.dataInicio.year, seg.dataInicio.month, seg.dataInicio.day);
                   final end = DateTime(seg.dataFim.year, seg.dataFim.month, seg.dataFim.day);
+                  int loopGuard1 = 0;
                   while (!d.isAfter(end)) {
+                    loopGuard1++;
+                    if (loopGuard1 > 1000) {
+                      print('⚠️ [TeamScheduleView] loopGuard atingido em _buildExecutorRowsFromView (segmentos)');
+                      break;
+                    }
                     if (!(d.isAfter(periodEnd) || d.isBefore(periodStart))) {
                       // Mesclar apenas se o dia ainda não estiver na lista
                       if (!daysList.any((existingDay) => 
@@ -1072,14 +1101,20 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                         daysList.add(d);
                       }
                     }
-                    d = d.add(const Duration(days: 1));
+                    d = DateTime(d.year, d.month, d.day + 1);
                   }
                 }
               } else {
                 final daysList = daysByTipo.putIfAbsent('EXECUCAO', () => []);
                 DateTime d = DateTime(task.dataInicio.year, task.dataInicio.month, task.dataInicio.day);
                 final end = DateTime(task.dataFim.year, task.dataFim.month, task.dataFim.day);
+                int loopGuard2 = 0;
                 while (!d.isAfter(end)) {
+                  loopGuard2++;
+                  if (loopGuard2 > 1000) {
+                    print('⚠️ [TeamScheduleView] loopGuard atingido em _buildExecutorRowsFromView (tarefa simples)');
+                    break;
+                  }
                   if (!(d.isAfter(periodEnd) || d.isBefore(periodStart))) {
                     if (!daysList.any((existingDay) => 
                         existingDay.year == d.year && 
@@ -1088,7 +1123,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                       daysList.add(d);
                     }
                   }
-                  d = d.add(const Duration(days: 1));
+                  d = DateTime(d.year, d.month, d.day + 1);
                 }
               }
             }
@@ -1263,12 +1298,27 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
           tasks: tasksById.values.toList(),
         ));
       }
+
+      // Pré-computar as tarefas usadas para detecção de conflitos
+      final cachedTasks = <String, Task>{};
+      for (final row in executorRows) {
+        for (final task in row.tasks) {
+          cachedTasks[task.id] = task;
+        }
+      }
+      for (final t in _tasks) {
+        cachedTasks.putIfAbsent(t.id, () => t);
+      }
+      final cachedTasksList = cachedTasks.values.toList();
+
+
       processSw.stop();
       print('⏱ [TeamScheduleView] Processamento de executores concluído em ${processSw.elapsedMilliseconds}ms | executores=$executorCount | tarefas=$totalTasksProcessed');
 
       final setStateSw = Stopwatch()..start();
       setState(() {
         _executorRows = executorRows;
+        _cachedTasksForConflict = cachedTasksList;
         _conflictDaysByExecutor = conflictDaysByExecutor;
       });
       _notifyTeamFilterOptions(executorRows);
@@ -1284,6 +1334,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
       print(st);
       setState(() {
         _executorRows = [];
+        _cachedTasksForConflict = [];
         _conflictDaysByExecutor = {};
       });
     }
@@ -1331,9 +1382,15 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
     var currentDate = DateTime(widget.startDate.year, widget.startDate.month, widget.startDate.day);
     final endDate = DateTime(widget.endDate.year, widget.endDate.month, widget.endDate.day);
     
-    while (currentDate.isBefore(endDate.add(const Duration(days: 1)))) {
-      days.add(DateTime(currentDate.year, currentDate.month, currentDate.day));
-      currentDate = currentDate.add(const Duration(days: 1));
+    int loopGuard = 0;
+    while (!currentDate.isAfter(endDate)) {
+      loopGuard++;
+      if (loopGuard > 1000) {
+        print('⚠️ [TeamScheduleView] loopGuard atingido em _getDaysInPeriod');
+        break;
+      }
+      days.add(currentDate);
+      currentDate = DateTime(currentDate.year, currentDate.month, currentDate.day + 1);
     }
     return days;
   }
@@ -2368,12 +2425,18 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                       // e o segmento cobre o dia, marcamos como conflito (independente de outras checagens locais).
                       List<DateTime> conflictDays = [];
                       var currentDay = visibleStart;
-                      while (currentDay.isBefore(visibleEnd.add(const Duration(days: 1)))) {
+                      int loopGuard = 0;
+                      while (!currentDay.isAfter(visibleEnd)) {
+                        loopGuard++;
+                        if (loopGuard > 1000) {
+                          print('⚠️ [TeamScheduleView] loopGuard atingido em _buildGanttRow');
+                          break;
+                        }
                         final hasConflictThisExecutor = _hasConflictOnDayForExecutor(currentDay, row.executor.id);
                         if (hasConflictThisExecutor) {
                           conflictDays.add(currentDay);
                         }
-                        currentDay = currentDay.add(const Duration(days: 1));
+                        currentDay = DateTime(currentDay.year, currentDay.month, currentDay.day + 1);
                       }
                       final conflictTooltipMessage = conflictDays.isNotEmpty
                           ? _getConflictDetailsMessageForSegment(task, row.executor.id, conflictDays)
@@ -2470,6 +2533,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                         
                         if (hasConflictOnDay) {
                           final tasksInConflict = _getConflictTaskDescriptionsForDay(day, row.executor.id);
+                          final taskIdsInConflict = _getConflictTaskIdsForDay(day, row.executor.id);
                           return TaskFlowTooltip(
                             content: TooltipContent(
                               title: 'Conflito de agenda',
@@ -2477,6 +2541,18 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                               executor: row.executor.nome,
                               reason: 'Mesmo executor alocado em mais de um local/tarefa neste dia.',
                               tasks: tasksInConflict.toList()..sort(),
+                              actionLabel: _conflictFilterTaskIds != null ? 'Remover Filtro' : 'Filtrar Conflitos',
+                              onAction: () {
+                                setState(() {
+                                  if (_conflictFilterTaskIds != null) {
+                                    _conflictFilterTaskIds = null;
+                                    _conflictFilterExecutorId = null;
+                                  } else {
+                                    _conflictFilterExecutorId = row.executor.id;
+                                    _conflictFilterTaskIds = taskIdsInConflict.toSet();
+                                  }
+                                });
+                              },
                             ),
                             child: dayCell,
                           );
@@ -2748,7 +2824,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
 
   Widget _buildTaskCard(Task task, {
     List<String>? imagens,
-    Function(Task)? onEdit,
+    void Function(Task, {String? executorIdToEdit})? onEdit,
     Function(Task)? onDelete,
     Function(Task)? onDuplicate,
     Function(Task)? onCreateSubtask,
@@ -2840,7 +2916,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                     onSelected: (value) async {
                       switch (value) {
                         case 'edit':
-                          onEdit?.call(task);
+                          onEdit?.call(task); // We can pass executorId here if needed, but it's not the executor modal here. This is general. Wait, in _buildTaskCard we do have executor? No, _buildTaskCard does not have executor directly. Wait, _ExecutorTasksModal has executor.
                           break;
                         case 'delete':
                           final res = onDelete?.call(task);
@@ -3237,6 +3313,9 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
 
   /// Lista de tarefas para detecção de conflito: tarefas de todos os executores + _tasks (para pai e enriquecimento).
   List<Task> get _tasksForConflictDetection {
+    if (_cachedTasksForConflict.isNotEmpty) {
+      return _cachedTasksForConflict;
+    }
     final byId = <String, Task>{};
     for (final row in _displayExecutorRows) {
       for (final task in row.tasks) {
@@ -3250,46 +3329,16 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
   }
 
   bool _hasConflictOnDayForExecutor(DateTime day, String executorId) {
-    bool backendConflict = false;
-    if (_useBackendConflicts && _conflictMapFromBackend != null) {
-      final dayKey = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
-      final k1 = '${executorId.toLowerCase()}_$dayKey';
-      final k2 = '${ConflictService.normalizeExecutorKey(executorId)}_$dayKey';
-      final info = _conflictMapFromBackend![k1] ?? _conflictMapFromBackend![k2];
-      if (info != null && info.hasConflict) {
-        backendConflict = true;
-      }
-    }
-
-    final localConflict = ConflictDetection.hasConflictOnDayForExecutor(
-      _tasksForConflictDetection,
-      day,
-      executorId,
-      _tasksForConflictDetection,
-    );
-
-    return backendConflict || localConflict;
+    final dayKey = DateTime(day.year, day.month, day.day);
+    final days = _conflictDaysByExecutor[executorId];
+    return days != null && days.contains(dayKey);
   }
 
-  // Verificar se qualquer executor possui conflito no dia (para o cabeçalho)
-  bool _hasAnyExecutorConflictOnDay(DateTime day) {
-    for (var row in _displayExecutorRows) {
-      if (_hasConflictOnDayForExecutor(day, row.executor.id)) {
-        return true;
-      }
-    }
-    return false;
-  }
 
   // Verificar se um executor tem conflito em qualquer dia do período
   bool _hasConflictForExecutor(String executorId) {
-    final days = _getDaysInPeriod();
-    for (var day in days) {
-      if (_hasConflictOnDayForExecutor(day, executorId)) {
-        return true;
-      }
-    }
-    return false;
+    final days = _conflictDaysByExecutor[executorId];
+    return days != null && days.isNotEmpty;
   }
 
   List<String> _getConflictTaskDescriptionsForDay(DateTime day, String executorId, {String? excludeTaskId}) {
@@ -3314,6 +3363,35 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
       excludeTaskId: excludeTaskId,
       allTasks: _tasksForConflictDetection,
     );
+  }
+
+  List<String> _getConflictTaskIdsForDay(DateTime day, String executorId, {String? excludeTaskId}) {
+    if (_useBackendConflicts && _eventsByDayFromBackend != null) {
+      final dayKey = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+      final events = _eventsByDayFromBackend![dayKey];
+      if (events == null) return [];
+      final list = events
+          .where((e) => e.executorId.toLowerCase() == executorId.toLowerCase())
+          .where((e) => excludeTaskId == null || e.taskId != excludeTaskId)
+          .map((e) => e.taskId)
+          .where((s) => s.isNotEmpty)
+          .toSet()
+          .toList();
+      list.sort();
+      return list;
+    }
+    final events = ConflictDetection.getExecutionEventsForDay(
+      _tasksForConflictDetection, 
+      day, 
+      _tasksForConflictDetection,
+    );
+    return events
+        .where((e) => e.executorId.toLowerCase() == executorId.toLowerCase())
+        .where((e) => excludeTaskId == null || e.taskId != excludeTaskId)
+        .map((e) => e.taskId)
+        .where((s) => s.isNotEmpty)
+        .toSet()
+        .toList();
   }
 
   /// Monta mensagem do tooltip de conflito: executor(es) e motivo (outros locais/tarefas).
@@ -3920,9 +3998,9 @@ class _ExecutorTasksModal extends StatefulWidget {
   final List<Task> tasks;
   final DateTime startDate;
   final DateTime endDate;
-  final Widget Function(Task, {List<String>? imagens, Function(Task)? onEdit, Function(Task)? onDelete, Function(Task)? onDuplicate, Function(Task)? onCreateSubtask, Map<String, PageController>? imagePageControllers, Map<String, int>? currentImageIndex, VoidCallback? onImagePageChanged}) buildTaskCard;
+  final Widget Function(Task, {List<String>? imagens, void Function(Task, {String? executorIdToEdit})? onEdit, Function(Task)? onDelete, Function(Task)? onDuplicate, Function(Task)? onCreateSubtask, Map<String, PageController>? imagePageControllers, Map<String, int>? currentImageIndex, VoidCallback? onImagePageChanged}) buildTaskCard;
   final Color Function(String) getStatusColor;
-  final Function(Task)? onEdit;
+  final void Function(Task, {String? executorIdToEdit})? onEdit;
   final Function(Task)? onDelete;
   final Function(Task)? onDuplicate;
   final Function(Task)? onCreateSubtask;
@@ -4116,7 +4194,7 @@ class _ExecutorTasksModalState extends State<_ExecutorTasksModal> {
                         widget.buildTaskCard(
                           task,
                           imagens: imagens,
-                          onEdit: widget.onEdit,
+                          onEdit: widget.onEdit != null ? (t, {executorIdToEdit}) => widget.onEdit!(t, executorIdToEdit: widget.executor.id) : null,
                           onDelete: widget.onDelete,
                           onDuplicate: widget.onDuplicate,
                           onCreateSubtask: widget.onCreateSubtask,

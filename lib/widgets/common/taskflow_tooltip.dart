@@ -13,6 +13,8 @@ class TooltipContent {
   final List<String>? tasks;
   final String? status;
   final String? period;
+  final String? actionLabel;
+  final VoidCallback? onAction;
 
   const TooltipContent({
     required this.title,
@@ -22,6 +24,8 @@ class TooltipContent {
     this.tasks,
     this.status,
     this.period,
+    this.actionLabel,
+    this.onAction,
   });
 }
 
@@ -330,6 +334,29 @@ class _TaskFlowTooltipState extends State<TaskFlowTooltip> {
                             }).toList(),
                           ),
                         ),
+                      ),
+                    ),
+                  ],
+                  
+                  if (widget.content.actionLabel != null && widget.content.onAction != null) ...[
+                    const SizedBox(height: 16),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton.icon(
+                        icon: Icon(Icons.filter_list, size: 16, color: severityColor),
+                        label: Text(
+                          widget.content.actionLabel!,
+                          style: TextStyle(color: severityColor, fontWeight: FontWeight.bold),
+                        ),
+                        style: TextButton.styleFrom(
+                          backgroundColor: severityColor.withOpacity(0.1),
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                        onPressed: () {
+                          _hideOverlay();
+                          widget.content.onAction!();
+                        },
                       ),
                     ),
                   ],

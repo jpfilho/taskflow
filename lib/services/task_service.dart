@@ -63,6 +63,20 @@ class TaskService {
   }) async {
     if (executorIds.isEmpty) return [];
 
+    if (executorIds.length > 100) {
+      final chunks = <List<String>>[];
+      for (var i = 0; i < executorIds.length; i += 100) {
+        chunks.add(executorIds.sublist(i, i + 100 > executorIds.length ? executorIds.length : i + 100));
+      }
+      final futures = chunks.map((chunk) => getExecucoesDia(
+        executorIds: chunk,
+        startDate: startDate,
+        endDate: endDate,
+      ));
+      final results = await Future.wait(futures);
+      return results.expand((r) => r).toList();
+    }
+
     try {
       final rawRows = await _supabase
           .from('v_execucoes_dia_completa')
@@ -75,7 +89,7 @@ class TaskService {
     } catch (e) {
       // Fallback para view materializada se a normal não existir
       _logDebug(
-        '⚠️ [getExecucoesDia] View normal não encontrada, tentando view materializada: $e',
+        '⚠️ [getExecucoesDia] View normal não encontrada, trying view materializada: $e',
       );
       try {
         final rows = await _supabase
@@ -153,6 +167,20 @@ class TaskService {
     required DateTime endDate,
   }) async {
     if (frotaIds.isEmpty) return [];
+
+    if (frotaIds.length > 100) {
+      final chunks = <List<String>>[];
+      for (var i = 0; i < frotaIds.length; i += 100) {
+        chunks.add(frotaIds.sublist(i, i + 100 > frotaIds.length ? frotaIds.length : i + 100));
+      }
+      final futures = chunks.map((chunk) => getExecucoesDiaFrota(
+        frotaIds: chunk,
+        startDate: startDate,
+        endDate: endDate,
+      ));
+      final results = await Future.wait(futures);
+      return results.expand((r) => r).toList();
+    }
 
     try {
       final rows = await _supabase
@@ -256,7 +284,8 @@ class TaskService {
     }
     final map = <String, List<GanttSegment>>{};
     try {
-      // Evitar URL longa demais (Failed to fetch): fazer várias requisições com poucos IDs
+      final futures = <Future<dynamic>>[];
+      // Evitar URL longa demais (Failed to fetch): fazer várias requisições concorrentes com poucos IDs
       for (var i = 0; i < taskIds.length; i += _ganttSegmentsChunkSize) {
         final chunk = taskIds.skip(i).take(_ganttSegmentsChunkSize).toList();
         var query = _supabase
@@ -269,7 +298,11 @@ class TaskService {
         if (dataInicioMin != null) {
           query = query.gte('data_fim', dataInicioMin.toIso8601String());
         }
-        final rows = await query;
+        futures.add(query);
+      }
+
+      final results = await Future.wait(futures);
+      for (final rows in results) {
         for (final row in rows as List) {
           final taskId = row['task_id'] as String?;
           if (taskId == null) continue;
@@ -283,6 +316,7 @@ class TaskService {
           map.putIfAbsent(taskId, () => []).add(seg);
         }
       }
+
       if (limitPerTask != null && limitPerTask > 0) {
         for (final entry in map.entries) {
           if (entry.value.length > limitPerTask) {
@@ -311,6 +345,7 @@ class TaskService {
     }
     final taskExecutorMap = <String, Map<String, ExecutorPeriod>>{};
     try {
+      final futures = <Future<dynamic>>[];
       for (var i = 0; i < taskIds.length; i += _ganttSegmentsChunkSize) {
         final chunk = taskIds.skip(i).take(_ganttSegmentsChunkSize).toList();
         var query = _supabase
@@ -324,9 +359,11 @@ class TaskService {
         if (dataInicioMin != null) {
           query = query.gte('data_fim', dataInicioMin.toIso8601String());
         }
+        futures.add(query);
+      }
 
-        final rows = await query;
-
+      final results = await Future.wait(futures);
+      for (final rows in results) {
         for (final row in rows as List) {
           try {
             final taskId = row['task_id']?.toString();
@@ -1845,11 +1882,15 @@ class TaskService {
         tasks.add(_taskFromMap(map as Map<String, dynamic>));
       }
 
-      // Carregar segmentos e períodos em lote para estas tarefas
+      // Carregar segmentos e períodos em lote para estas tarefas concorrentemente
       if (tasks.isNotEmpty) {
         final taskIds = tasks.map((t) => t.id).toList();
-        final segments = await _loadGanttSegmentsBatch(taskIds);
-        final periods = await _loadExecutorPeriodsBatch(taskIds);
+        final results = await Future.wait([
+          _loadGanttSegmentsBatch(taskIds),
+          _loadExecutorPeriodsBatch(taskIds),
+        ]);
+        final segments = results[0] as Map<String, List<GanttSegment>>;
+        final periods = results[1] as Map<String, List<ExecutorPeriod>>;
         
         for (var i = 0; i < tasks.length; i++) {
           tasks[i] = tasks[i].copyWith(

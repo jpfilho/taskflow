@@ -19,6 +19,10 @@ class Mensagem {
   final String? refType; // 'GERAL' | 'NOTA' | 'ORDEM'
   final String? refId; // UUID da nota_sap ou ordem
   final String? refLabel; // Label para exibição (ex: "NOTA 12345", "ORDEM 67890")
+  final bool? refExecutado; // Status Executado vinculado a esta tag
+  
+  // Novo payload estruturado
+  final Map<String, dynamic>? structuredPayload;
 
   Mensagem({
     this.id,
@@ -39,6 +43,8 @@ class Mensagem {
       this.refType,
       this.refId,
       this.refLabel,
+      this.refExecutado,
+      this.structuredPayload,
   });
 
   factory Mensagem.fromMap(Map<String, dynamic> map) {
@@ -95,6 +101,10 @@ class Mensagem {
       refType: map['ref_type'] as String?,
       refId: map['ref_id'] as String?,
       refLabel: map['ref_label'] as String?,
+      refExecutado: map['ref_executado'] as bool?,
+      structuredPayload: map['structured_payload'] != null 
+          ? Map<String, dynamic>.from(map['structured_payload'] as Map)
+          : null,
     );
   }
 
@@ -121,6 +131,8 @@ class Mensagem {
       'ref_type': refType,
       'ref_id': refId,
       'ref_label': refLabel,
+      'ref_executado': refExecutado,
+      'structured_payload': structuredPayload,
     };
   }
 
@@ -143,6 +155,8 @@ class Mensagem {
     String? refType,
     String? refId,
     String? refLabel,
+    bool? refExecutado,
+    Map<String, dynamic>? structuredPayload,
   }) {
     return Mensagem(
       id: id ?? this.id,
@@ -163,6 +177,8 @@ class Mensagem {
       refType: refType ?? this.refType,
       refId: refId ?? this.refId,
       refLabel: refLabel ?? this.refLabel,
+      refExecutado: refExecutado ?? this.refExecutado,
+      structuredPayload: structuredPayload ?? this.structuredPayload,
     );
   }
 }

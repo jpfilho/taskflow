@@ -34,6 +34,8 @@ class GanttSegmentWidget extends StatefulWidget {
 
   /// Tooltip por dia: ao passar o mouse no dia, mostra só os conflitos daquele dia.
   final Map<DateTime, String>? conflictTooltipMessageByDay;
+  
+  final Map<DateTime, Set<String>>? conflictTaskIdsByDay;
 
   /// Dias de conflito de FROTA (exibição em preto com letras brancas).
   final List<DateTime>? conflictDaysFrota;
@@ -45,6 +47,8 @@ class GanttSegmentWidget extends StatefulWidget {
   final VoidCallback? onDragStart;
   final VoidCallback? onDragEnd;
   final ValueNotifier<int>? conflictsVersionNotifier;
+  final void Function(Set<String>)? onFilterConflictTasks;
+  final bool isConflictFilterActive;
 
   const GanttSegmentWidget({
     super.key,
@@ -61,6 +65,7 @@ class GanttSegmentWidget extends StatefulWidget {
     this.conflictDays,
     this.conflictTooltipMessage,
     this.conflictTooltipMessageByDay,
+    this.conflictTaskIdsByDay,
     this.conflictDaysFrota,
     this.conflictTooltipMessageFrota,
     this.conflictTooltipMessageByDayFrota,
@@ -70,6 +75,8 @@ class GanttSegmentWidget extends StatefulWidget {
     this.onDragStart,
     this.onDragEnd,
     this.conflictsVersionNotifier,
+    this.onFilterConflictTasks,
+    this.isConflictFilterActive = false,
   });
 
   @override
@@ -1249,6 +1256,7 @@ class _GanttSegmentWidgetState extends State<GanttSegmentWidget> {
               if (isConflictDay) {
                 title = 'Conflito de agenda';
                 executorName = _getExecutorLabel();
+                final taskIdsInConflict = <String>{};
                 reason = widget.conflictTooltipMessageByDay?[day] ?? 'Mesmo executor alocado em mais de um local/tarefa neste dia.';
                 if (widget.taskService != null) {
                   // Se tivermos os ids dos executores, podemos pegar as tarefas de todos eles
@@ -1266,6 +1274,20 @@ class _GanttSegmentWidgetState extends State<GanttSegmentWidget> {
                     tasksList.addAll(descs);
                   }
                   tasksList = tasksList.toSet().toList()..sort();
+                  
+                  if (widget.onFilterConflictTasks != null && widget.taskService != null) {
+                    for (final eid in executorIds) {
+                      final events = ConflictDetection.getExecutionEventsForDay(
+                        widget.taskService!.tasks, day, widget.taskService!.tasks,
+                      );
+                      taskIdsInConflict.addAll(
+                        events
+                            .where((e) => e.executorId.toLowerCase() == eid.toLowerCase())
+                            .map((e) => e.taskId)
+                            .where((s) => s.isNotEmpty)
+                      );
+                    }
+                  }
                 }
               } else if (isConflictDayFrota) {
                 title = 'Conflito de Frota';
@@ -1282,6 +1304,41 @@ class _GanttSegmentWidgetState extends State<GanttSegmentWidget> {
                   executor: executorName,
                   reason: reason,
                   tasks: tasksList,
+                  actionLabel: widget.onFilterConflictTasks != null && !isConflictDayFrota && isConflictDay
+                      ? (widget.isConflictFilterActive ? 'Remover Filtro' : 'Filtrar Conflitos')
+                      : null,
+                  onAction: widget.onFilterConflictTasks != null && !isConflictDayFrota && isConflictDay
+                      ? () {
+                          if (widget.isConflictFilterActive) {
+                            widget.onFilterConflictTasks!(<String>{});
+                          } else {
+                            Set<String> ids = {};
+                            if (widget.conflictTaskIdsByDay != null && widget.conflictTaskIdsByDay!.containsKey(day)) {
+                              ids = widget.conflictTaskIdsByDay![day]!;
+                            } else if (widget.taskService != null) {
+                              final executorIds = <String>{};
+                              executorIds.addAll(widget.task.executorIds);
+                              for (var ep in widget.task.executorPeriods) {
+                                if (ep.executorId.isNotEmpty) executorIds.add(ep.executorId);
+                              }
+                              if (widget.task.executor.isNotEmpty) executorIds.add(widget.task.executor);
+                              
+                              for (final eid in executorIds) {
+                                final events = ConflictDetection.getExecutionEventsForDay(
+                                  widget.taskService!.tasks, day, widget.taskService!.tasks,
+                                );
+                                ids.addAll(
+                                  events
+                                      .where((e) => e.executorId.toLowerCase() == eid.toLowerCase())
+                                      .map((e) => e.taskId)
+                                      .where((s) => s.isNotEmpty)
+                                );
+                              }
+                            }
+                            widget.onFilterConflictTasks!(ids);
+                          }
+                        }
+                      : null,
                 ),
                 child: cell,
               );
