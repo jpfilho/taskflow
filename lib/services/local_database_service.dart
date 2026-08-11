@@ -11,7 +11,7 @@ class LocalDatabaseService {
 
   static Database? _database;
   static const String _databaseName = 'taskflow_local.db';
-  static const int _databaseVersion = 7;
+  static const int _databaseVersion = 8;
 
   Future<Database> get database async {
     if (_database != null) return _database!;
@@ -370,6 +370,209 @@ class LocalDatabaseService {
       )
     ''');
 
+    // Tabelas do Módulo de Projetos
+    await db.execute('''
+      CREATE TABLE projetos_local (
+        id TEXT PRIMARY KEY,
+        codigo TEXT,
+        nome TEXT NOT NULL,
+        descricao TEXT,
+        categoria TEXT,
+        tipo TEXT,
+        status TEXT DEFAULT 'EM PLANEJAMENTO',
+        prioridade TEXT DEFAULT 'MEDIA',
+        regional_id TEXT,
+        divisao_id TEXT,
+        segmento_id TEXT,
+        local_id TEXT,
+        coordenador_id TEXT,
+        responsavel_id TEXT,
+        data_inicio_prevista INTEGER,
+        data_fim_prevista INTEGER,
+        data_inicio_real INTEGER,
+        data_fim_real INTEGER,
+        progresso REAL DEFAULT 0,
+        orcamento_previsto REAL,
+        orcamento_realizado REAL,
+        created_by TEXT,
+        updated_by TEXT,
+        created_at INTEGER,
+        updated_at INTEGER,
+        deleted_at INTEGER,
+        sync_status TEXT DEFAULT 'pending',
+        last_synced INTEGER
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE projeto_membros_local (
+        id TEXT PRIMARY KEY,
+        projeto_id TEXT NOT NULL,
+        usuario_id TEXT NOT NULL,
+        papel TEXT NOT NULL,
+        pode_visualizar INTEGER DEFAULT 1,
+        pode_editar INTEGER DEFAULT 0,
+        pode_planejar INTEGER DEFAULT 0,
+        pode_aprovar INTEGER DEFAULT 0,
+        pode_encerrar INTEGER DEFAULT 0,
+        created_at INTEGER,
+        updated_at INTEGER,
+        sync_status TEXT DEFAULT 'pending',
+        last_synced INTEGER,
+        FOREIGN KEY (projeto_id) REFERENCES projetos_local(id) ON DELETE CASCADE
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE projeto_macroetapas_local (
+        id TEXT PRIMARY KEY,
+        projeto_id TEXT NOT NULL,
+        nome TEXT NOT NULL,
+        descricao TEXT,
+        ordem INTEGER DEFAULT 0,
+        data_inicio_prevista INTEGER,
+        data_fim_prevista INTEGER,
+        data_inicio_real INTEGER,
+        data_fim_real INTEGER,
+        status TEXT DEFAULT 'PENDENTE',
+        progresso REAL DEFAULT 0,
+        peso REAL DEFAULT 1,
+        created_at INTEGER,
+        updated_at INTEGER,
+        deleted_at INTEGER,
+        sync_status TEXT DEFAULT 'pending',
+        last_synced INTEGER,
+        FOREIGN KEY (projeto_id) REFERENCES projetos_local(id) ON DELETE CASCADE
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE projeto_etapas_local (
+        id TEXT PRIMARY KEY,
+        projeto_id TEXT NOT NULL,
+        macroetapa_id TEXT NOT NULL,
+        nome TEXT NOT NULL,
+        descricao TEXT,
+        ordem INTEGER DEFAULT 0,
+        data_inicio_prevista INTEGER,
+        data_fim_prevista INTEGER,
+        data_inicio_real INTEGER,
+        data_fim_real INTEGER,
+        status TEXT DEFAULT 'PENDENTE',
+        progresso REAL DEFAULT 0,
+        peso REAL DEFAULT 1,
+        created_at INTEGER,
+        updated_at INTEGER,
+        deleted_at INTEGER,
+        sync_status TEXT DEFAULT 'pending',
+        last_synced INTEGER,
+        FOREIGN KEY (projeto_id) REFERENCES projetos_local(id) ON DELETE CASCADE,
+        FOREIGN KEY (macroetapa_id) REFERENCES projeto_macroetapas_local(id) ON DELETE CASCADE
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE projeto_atividades_local (
+        id TEXT PRIMARY KEY,
+        projeto_id TEXT NOT NULL,
+        macroetapa_id TEXT NOT NULL,
+        etapa_id TEXT NOT NULL,
+        nome TEXT NOT NULL,
+        descricao TEXT,
+        ordem INTEGER DEFAULT 0,
+        data_inicio_prevista INTEGER,
+        data_fim_prevista INTEGER,
+        data_inicio_real INTEGER,
+        data_fim_real INTEGER,
+        status TEXT DEFAULT 'PENDENTE',
+        progresso REAL DEFAULT 0,
+        peso REAL DEFAULT 1,
+        prioridade TEXT DEFAULT 'MEDIA',
+        criticidade TEXT DEFAULT 'MEDIA',
+        bloqueada INTEGER DEFAULT 0,
+        motivo_bloqueio TEXT,
+        executor_id TEXT,
+        equipe_id TEXT,
+        horas_previstas REAL,
+        horas_realizadas REAL,
+        task_id TEXT,
+        created_by TEXT,
+        updated_by TEXT,
+        created_at INTEGER,
+        updated_at INTEGER,
+        deleted_at INTEGER,
+        sync_status TEXT DEFAULT 'pending',
+        last_synced INTEGER,
+        FOREIGN KEY (projeto_id) REFERENCES projetos_local(id) ON DELETE CASCADE,
+        FOREIGN KEY (macroetapa_id) REFERENCES projeto_macroetapas_local(id) ON DELETE CASCADE,
+        FOREIGN KEY (etapa_id) REFERENCES projeto_etapas_local(id) ON DELETE CASCADE
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE projeto_atividade_dependencias_local (
+        id TEXT PRIMARY KEY,
+        projeto_id TEXT NOT NULL,
+        atividade_predecessora_id TEXT NOT NULL,
+        atividade_sucessora_id TEXT NOT NULL,
+        tipo TEXT NOT NULL,
+        lag_dias REAL DEFAULT 0,
+        created_at INTEGER,
+        updated_at INTEGER,
+        deleted_at INTEGER,
+        sync_status TEXT DEFAULT 'pending',
+        last_synced INTEGER,
+        FOREIGN KEY (projeto_id) REFERENCES projetos_local(id) ON DELETE CASCADE,
+        FOREIGN KEY (atividade_predecessora_id) REFERENCES projeto_atividades_local(id) ON DELETE CASCADE,
+        FOREIGN KEY (atividade_sucessora_id) REFERENCES projeto_atividades_local(id) ON DELETE CASCADE
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE projeto_marcos_local (
+        id TEXT PRIMARY KEY,
+        projeto_id TEXT NOT NULL,
+        nome TEXT NOT NULL,
+        descricao TEXT,
+        data_prevista INTEGER,
+        data_real INTEGER,
+        status TEXT DEFAULT 'PENDENTE',
+        ordem INTEGER DEFAULT 0,
+        criticidade TEXT DEFAULT 'ALTA',
+        created_at INTEGER,
+        updated_at INTEGER,
+        deleted_at INTEGER,
+        sync_status TEXT DEFAULT 'pending',
+        last_synced INTEGER,
+        FOREIGN KEY (projeto_id) REFERENCES projetos_local(id) ON DELETE CASCADE
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE projeto_riscos_local (
+        id TEXT PRIMARY KEY,
+        projeto_id TEXT NOT NULL,
+        titulo TEXT NOT NULL,
+        descricao TEXT,
+        categoria TEXT,
+        probabilidade TEXT,
+        impacto TEXT,
+        criticidade TEXT,
+        responsavel_id TEXT,
+        plano_mitigacao TEXT,
+        plano_contingencia TEXT,
+        status TEXT DEFAULT 'IDENTIFICADO',
+        data_identificacao INTEGER,
+        data_limite INTEGER,
+        created_at INTEGER,
+        updated_at INTEGER,
+        deleted_at INTEGER,
+        sync_status TEXT DEFAULT 'pending',
+        last_synced INTEGER,
+        FOREIGN KEY (projeto_id) REFERENCES projetos_local(id) ON DELETE CASCADE
+      )
+    ''');
+
     // Índices para melhor performance
     await db.execute('CREATE INDEX idx_tasks_local_parent_id ON tasks_local(parent_id)');
     await db.execute('CREATE INDEX idx_tasks_local_status ON tasks_local(status)');
@@ -491,6 +694,218 @@ class LocalDatabaseService {
           )
         ''');
       } catch (_) {}
+    if (oldVersion < 8) {
+      // Módulo de Projetos
+      try {
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS projetos_local (
+            id TEXT PRIMARY KEY,
+            codigo TEXT,
+            nome TEXT NOT NULL,
+            descricao TEXT,
+            categoria TEXT,
+            tipo TEXT,
+            status TEXT DEFAULT 'EM PLANEJAMENTO',
+            prioridade TEXT DEFAULT 'MEDIA',
+            regional_id TEXT,
+            divisao_id TEXT,
+            segmento_id TEXT,
+            local_id TEXT,
+            coordenador_id TEXT,
+            responsavel_id TEXT,
+            data_inicio_prevista INTEGER,
+            data_fim_prevista INTEGER,
+            data_inicio_real INTEGER,
+            data_fim_real INTEGER,
+            progresso REAL DEFAULT 0,
+            orcamento_previsto REAL,
+            orcamento_realizado REAL,
+            created_by TEXT,
+            updated_by TEXT,
+            created_at INTEGER,
+            updated_at INTEGER,
+            deleted_at INTEGER,
+            sync_status TEXT DEFAULT 'pending',
+            last_synced INTEGER
+          )
+        ''');
+      } catch (_) {}
+      try {
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS projeto_membros_local (
+            id TEXT PRIMARY KEY,
+            projeto_id TEXT NOT NULL,
+            usuario_id TEXT NOT NULL,
+            papel TEXT NOT NULL,
+            pode_visualizar INTEGER DEFAULT 1,
+            pode_editar INTEGER DEFAULT 0,
+            pode_planejar INTEGER DEFAULT 0,
+            pode_aprovar INTEGER DEFAULT 0,
+            pode_encerrar INTEGER DEFAULT 0,
+            created_at INTEGER,
+            updated_at INTEGER,
+            sync_status TEXT DEFAULT 'pending',
+            last_synced INTEGER,
+            FOREIGN KEY (projeto_id) REFERENCES projetos_local(id) ON DELETE CASCADE
+          )
+        ''');
+      } catch (_) {}
+      try {
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS projeto_macroetapas_local (
+            id TEXT PRIMARY KEY,
+            projeto_id TEXT NOT NULL,
+            nome TEXT NOT NULL,
+            descricao TEXT,
+            ordem INTEGER DEFAULT 0,
+            data_inicio_prevista INTEGER,
+            data_fim_prevista INTEGER,
+            data_inicio_real INTEGER,
+            data_fim_real INTEGER,
+            status TEXT DEFAULT 'PENDENTE',
+            progresso REAL DEFAULT 0,
+            peso REAL DEFAULT 1,
+            created_at INTEGER,
+            updated_at INTEGER,
+            deleted_at INTEGER,
+            sync_status TEXT DEFAULT 'pending',
+            last_synced INTEGER,
+            FOREIGN KEY (projeto_id) REFERENCES projetos_local(id) ON DELETE CASCADE
+          )
+        ''');
+      } catch (_) {}
+      try {
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS projeto_etapas_local (
+            id TEXT PRIMARY KEY,
+            projeto_id TEXT NOT NULL,
+            macroetapa_id TEXT NOT NULL,
+            nome TEXT NOT NULL,
+            descricao TEXT,
+            ordem INTEGER DEFAULT 0,
+            data_inicio_prevista INTEGER,
+            data_fim_prevista INTEGER,
+            data_inicio_real INTEGER,
+            data_fim_real INTEGER,
+            status TEXT DEFAULT 'PENDENTE',
+            progresso REAL DEFAULT 0,
+            peso REAL DEFAULT 1,
+            created_at INTEGER,
+            updated_at INTEGER,
+            deleted_at INTEGER,
+            sync_status TEXT DEFAULT 'pending',
+            last_synced INTEGER,
+            FOREIGN KEY (projeto_id) REFERENCES projetos_local(id) ON DELETE CASCADE,
+            FOREIGN KEY (macroetapa_id) REFERENCES projeto_macroetapas_local(id) ON DELETE CASCADE
+          )
+        ''');
+      } catch (_) {}
+      try {
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS projeto_atividades_local (
+            id TEXT PRIMARY KEY,
+            projeto_id TEXT NOT NULL,
+            macroetapa_id TEXT NOT NULL,
+            etapa_id TEXT NOT NULL,
+            nome TEXT NOT NULL,
+            descricao TEXT,
+            ordem INTEGER DEFAULT 0,
+            data_inicio_prevista INTEGER,
+            data_fim_prevista INTEGER,
+            data_inicio_real INTEGER,
+            data_fim_real INTEGER,
+            status TEXT DEFAULT 'PENDENTE',
+            progresso REAL DEFAULT 0,
+            peso REAL DEFAULT 1,
+            prioridade TEXT DEFAULT 'MEDIA',
+            criticidade TEXT DEFAULT 'MEDIA',
+            bloqueada INTEGER DEFAULT 0,
+            motivo_bloqueio TEXT,
+            executor_id TEXT,
+            equipe_id TEXT,
+            horas_previstas REAL,
+            horas_realizadas REAL,
+            task_id TEXT,
+            created_by TEXT,
+            updated_by TEXT,
+            created_at INTEGER,
+            updated_at INTEGER,
+            deleted_at INTEGER,
+            sync_status TEXT DEFAULT 'pending',
+            last_synced INTEGER,
+            FOREIGN KEY (projeto_id) REFERENCES projetos_local(id) ON DELETE CASCADE,
+            FOREIGN KEY (macroetapa_id) REFERENCES projeto_macroetapas_local(id) ON DELETE CASCADE,
+            FOREIGN KEY (etapa_id) REFERENCES projeto_etapas_local(id) ON DELETE CASCADE
+          )
+        ''');
+      } catch (_) {}
+      try {
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS projeto_atividade_dependencias_local (
+            id TEXT PRIMARY KEY,
+            projeto_id TEXT NOT NULL,
+            atividade_predecessora_id TEXT NOT NULL,
+            atividade_sucessora_id TEXT NOT NULL,
+            tipo TEXT NOT NULL,
+            lag_dias REAL DEFAULT 0,
+            created_at INTEGER,
+            updated_at INTEGER,
+            deleted_at INTEGER,
+            sync_status TEXT DEFAULT 'pending',
+            last_synced INTEGER,
+            FOREIGN KEY (projeto_id) REFERENCES projetos_local(id) ON DELETE CASCADE,
+            FOREIGN KEY (atividade_predecessora_id) REFERENCES projeto_atividades_local(id) ON DELETE CASCADE,
+            FOREIGN KEY (atividade_sucessora_id) REFERENCES projeto_atividades_local(id) ON DELETE CASCADE
+          )
+        ''');
+      } catch (_) {}
+      try {
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS projeto_marcos_local (
+            id TEXT PRIMARY KEY,
+            projeto_id TEXT NOT NULL,
+            nome TEXT NOT NULL,
+            descricao TEXT,
+            data_prevista INTEGER,
+            data_real INTEGER,
+            status TEXT DEFAULT 'PENDENTE',
+            ordem INTEGER DEFAULT 0,
+            criticidade TEXT DEFAULT 'ALTA',
+            created_at INTEGER,
+            updated_at INTEGER,
+            deleted_at INTEGER,
+            sync_status TEXT DEFAULT 'pending',
+            last_synced INTEGER,
+            FOREIGN KEY (projeto_id) REFERENCES projetos_local(id) ON DELETE CASCADE
+          )
+        ''');
+      } catch (_) {}
+      try {
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS projeto_riscos_local (
+            id TEXT PRIMARY KEY,
+            projeto_id TEXT NOT NULL,
+            titulo TEXT NOT NULL,
+            descricao TEXT,
+            categoria TEXT,
+            probabilidade TEXT,
+            impacto TEXT,
+            criticidade TEXT,
+            responsavel_id TEXT,
+            plano_mitigacao TEXT,
+            plano_contingencia TEXT,
+            status TEXT DEFAULT 'IDENTIFICADO',
+            data_identificacao INTEGER,
+            data_limite INTEGER,
+            created_at INTEGER,
+            updated_at INTEGER,
+            deleted_at INTEGER,
+            sync_status TEXT DEFAULT 'pending',
+            last_synced INTEGER,
+            FOREIGN KEY (projeto_id) REFERENCES projetos_local(id) ON DELETE CASCADE
+          )
+        ''');
+      } catch (_) {}
     }
   }
 
@@ -550,7 +965,18 @@ class LocalDatabaseService {
       where: 'sync_status = ?',
       whereArgs: ['pending'],
     );
-    return queue.length + tasks.length + segments.length + melhoriasBugs.length + versoes.length;
+    final projetos = await db.query('projetos_local', where: 'sync_status = ?', whereArgs: ['pending']);
+    final projetoMembros = await db.query('projeto_membros_local', where: 'sync_status = ?', whereArgs: ['pending']);
+    final projetoMacroetapas = await db.query('projeto_macroetapas_local', where: 'sync_status = ?', whereArgs: ['pending']);
+    final projetoEtapas = await db.query('projeto_etapas_local', where: 'sync_status = ?', whereArgs: ['pending']);
+    final projetoAtividades = await db.query('projeto_atividades_local', where: 'sync_status = ?', whereArgs: ['pending']);
+    final projetoDependencias = await db.query('projeto_atividade_dependencias_local', where: 'sync_status = ?', whereArgs: ['pending']);
+    final projetoMarcos = await db.query('projeto_marcos_local', where: 'sync_status = ?', whereArgs: ['pending']);
+    final projetoRiscos = await db.query('projeto_riscos_local', where: 'sync_status = ?', whereArgs: ['pending']);
+
+    return queue.length + tasks.length + segments.length + melhoriasBugs.length + versoes.length +
+           projetos.length + projetoMembros.length + projetoMacroetapas.length + projetoEtapas.length + 
+           projetoAtividades.length + projetoDependencias.length + projetoMarcos.length + projetoRiscos.length;
   }
 
   Future<List<Map<String, dynamic>>> getPendingSyncItems() async {
@@ -697,6 +1123,16 @@ class LocalDatabaseService {
     await db.delete('feriados_local');
     await db.delete('melhorias_bugs_local');
     await db.delete('versoes_local');
+    
+    // Módulo Projetos
+    await db.delete('projeto_riscos_local');
+    await db.delete('projeto_marcos_local');
+    await db.delete('projeto_atividade_dependencias_local');
+    await db.delete('projeto_atividades_local');
+    await db.delete('projeto_etapas_local');
+    await db.delete('projeto_macroetapas_local');
+    await db.delete('projeto_membros_local');
+    await db.delete('projetos_local');
   }
 
   // Fechar banco

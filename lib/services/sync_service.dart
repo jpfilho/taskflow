@@ -99,6 +99,16 @@ class SyncService {
       await _syncTable('versoes_local', 'versoes');
       await _syncTable('melhorias_bugs_local', 'melhorias_bugs');
 
+      // Módulo Projetos
+      await _syncTable('projetos_local', 'projetos');
+      await _syncTable('projeto_membros_local', 'projeto_membros');
+      await _syncTable('projeto_macroetapas_local', 'projeto_macroetapas');
+      await _syncTable('projeto_etapas_local', 'projeto_etapas');
+      await _syncTable('projeto_atividades_local', 'projeto_atividades');
+      await _syncTable('projeto_atividade_dependencias_local', 'projeto_atividade_dependencias');
+      await _syncTable('projeto_marcos_local', 'projeto_marcos');
+      await _syncTable('projeto_riscos_local', 'projeto_riscos');
+
       // Baixar dados atualizados do Supabase
       await _pullFromSupabase();
 
@@ -207,6 +217,16 @@ class SyncService {
       await _pullTable('gantt_segments', 'gantt_segments_local');
       await _pullTable('versoes', 'versoes_local');
       await _pullTable('melhorias_bugs', 'melhorias_bugs_local');
+      
+      // Módulo Projetos
+      await _pullTable('projetos', 'projetos_local');
+      await _pullTable('projeto_membros', 'projeto_membros_local');
+      await _pullTable('projeto_macroetapas', 'projeto_macroetapas_local');
+      await _pullTable('projeto_etapas', 'projeto_etapas_local');
+      await _pullTable('projeto_atividades', 'projeto_atividades_local');
+      await _pullTable('projeto_atividade_dependencias', 'projeto_atividade_dependencias_local');
+      await _pullTable('projeto_marcos', 'projeto_marcos_local');
+      await _pullTable('projeto_riscos', 'projeto_riscos_local');
     } catch (e) {
       print('Erro ao baixar dados do Supabase: $e');
     } finally {
