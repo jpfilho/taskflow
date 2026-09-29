@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
+import '../design_system/taskflow_design_system.dart';
 import '../models/empresa.dart';
 import '../services/empresa_service.dart';
 import 'empresa_form_dialog.dart';
-import '../utils/responsive.dart';
 
 class EmpresaListView extends StatefulWidget {
   const EmpresaListView({super.key});
@@ -16,22 +16,94 @@ class _EmpresaListViewState extends State<EmpresaListView> {
   List<Empresa> _empresas = [];
   List<Empresa> _filteredEmpresas = [];
   bool _isLoading = true;
+  bool _isTableView = true;
   final TextEditingController _searchController = TextEditingController();
-  bool _isTableView = false; // false = lista (cards), true = tabela
+
+  // Filtros multiescolha por coluna
+  Set<String> _selectedRegionais = {};
+  Set<String> _selectedDivisoes = {};
+  Set<String> _selectedTipos = {};
+
+  bool get _hasActiveFilters =>
+      _selectedRegionais.isNotEmpty ||
+      _selectedDivisoes.isNotEmpty ||
+      _selectedTipos.isNotEmpty ||
+      _searchController.text.trim().isNotEmpty;
+
+  void _clearAllFilters() {
+    setState(() {
+      _selectedRegionais.clear();
+      _selectedDivisoes.clear();
+      _selectedTipos.clear();
+      _searchController.clear();
+      _filteredEmpresas = _applyFilter(_empresas);
+    });
+  }
+
+  List<String> _getUniqueRegionais() {
+    return _empresas
+        .map((e) => e.regional.trim())
+        .where((r) => r.isNotEmpty && r != '-')
+        .toSet()
+        .toList()
+      ..sort();
+  }
+
+  List<String> _getUniqueDivisoes() {
+    return _empresas
+        .map((e) => e.divisao.trim())
+        .where((d) => d.isNotEmpty && d != '-')
+        .toSet()
+        .toList()
+      ..sort();
+  }
+
+  List<String> _getUniqueTipos() {
+    return _empresas
+        .map((e) => e.tipo.trim())
+        .where((t) => t.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+  }
+
+  List<Empresa> _applyFilter(List<Empresa> list) {
+    final query = _searchController.text.trim().toLowerCase();
+
+    return list.where((e) {
+      final regStr = e.regional.trim();
+      final divStr = e.divisao.trim();
+      final tipoStr = e.tipo.trim();
+
+      // Filtros multiescolha
+      if (_selectedRegionais.isNotEmpty && !_selectedRegionais.contains(regStr)) {
+        return false;
+      }
+      if (_selectedDivisoes.isNotEmpty && !_selectedDivisoes.contains(divStr)) {
+        return false;
+      }
+      if (_selectedTipos.isNotEmpty && !_selectedTipos.contains(tipoStr)) {
+        return false;
+      }
+
+      // Busca geral por texto
+      if (query.isNotEmpty) {
+        final matchEmp = e.empresa.toLowerCase().contains(query);
+        final matchReg = regStr.toLowerCase().contains(query);
+        final matchDiv = divStr.toLowerCase().contains(query);
+        final matchTipo = tipoStr.toLowerCase().contains(query);
+        if (!matchEmp && !matchReg && !matchDiv && !matchTipo) return false;
+      }
+
+      return true;
+    }).toList();
+  }
 
   @override
   void initState() {
     super.initState();
     _loadEmpresas();
     _searchController.addListener(_onSearchChanged);
-    // No desktop, tabela é o padrão
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && Responsive.isDesktop(context)) {
-        setState(() {
-          _isTableView = true;
-        });
-      }
-    });
   }
 
   @override
@@ -49,7 +121,7 @@ class _EmpresaListViewState extends State<EmpresaListView> {
       final empresas = await _empresaService.getAllEmpresas();
       setState(() {
         _empresas = empresas;
-        _filteredEmpresas = empresas;
+        _filteredEmpresas = _applyFilter(empresas);
         _isLoading = false;
       });
     } catch (e) {
@@ -69,30 +141,15 @@ class _EmpresaListViewState extends State<EmpresaListView> {
   }
 
   void _onSearchChanged() {
-    final query = _searchController.text.trim();
-    if (query.isEmpty) {
-      setState(() {
-        _filteredEmpresas = _empresas;
-      });
-    } else {
-      _searchEmpresas(query);
-    }
-  }
-
-  Future<void> _searchEmpresas(String query) async {
-    try {
-      final results = await _empresaService.searchEmpresas(query);
-      setState(() {
-        _filteredEmpresas = results;
-      });
-    } catch (e) {
-      print('Erro ao buscar empresas: $e');
-    }
+    setState(() {
+      _filteredEmpresas = _applyFilter(_empresas);
+    });
   }
 
   Future<void> _createEmpresa() async {
     final result = await showDialog<Empresa>(
       context: context,
+      barrierDismissible: true,
       builder: (context) => const EmpresaFormDialog(),
     );
 
@@ -122,7 +179,6 @@ class _EmpresaListViewState extends State<EmpresaListView> {
   }
 
   Future<void> _duplicateEmpresa(Empresa empresa) async {
-    // Criar cópia com nome modificado
     final duplicated = empresa.copyWith(
       id: '',
       empresa: '${empresa.empresa} (Cópia)',
@@ -130,6 +186,7 @@ class _EmpresaListViewState extends State<EmpresaListView> {
 
     final result = await showDialog<Empresa>(
       context: context,
+      barrierDismissible: true,
       builder: (context) => EmpresaFormDialog(empresa: duplicated),
     );
 
@@ -149,7 +206,7 @@ class _EmpresaListViewState extends State<EmpresaListView> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Erro ao duplicar empresa'),
+              content: Text('Erro ao duplicar empresa.'),
               backgroundColor: Colors.red,
             ),
           );
@@ -159,7 +216,6 @@ class _EmpresaListViewState extends State<EmpresaListView> {
   }
 
   Future<void> _editEmpresa(Empresa empresa) async {
-    // Buscar empresa atualizada do banco para garantir dados completos
     final fetchedEmpresa = await _empresaService.getEmpresaById(empresa.id);
     if (fetchedEmpresa == null) {
       if (mounted) {
@@ -173,8 +229,11 @@ class _EmpresaListViewState extends State<EmpresaListView> {
       return;
     }
 
+    if (!mounted) return;
+
     final result = await showDialog<Empresa>(
       context: context,
+      barrierDismissible: true,
       builder: (context) => EmpresaFormDialog(empresa: fetchedEmpresa),
     );
 
@@ -204,23 +263,15 @@ class _EmpresaListViewState extends State<EmpresaListView> {
   }
 
   Future<void> _deleteEmpresa(Empresa empresa) async {
-    final confirm = await showDialog<bool>(
+    final confirm = await TFModalDialog.confirm(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Confirmar exclusão'),
-        content: Text('Deseja realmente excluir a empresa "${empresa.empresa}"?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Excluir'),
-          ),
-        ],
-      ),
+      title: 'Confirmar exclusão',
+      message: 'Deseja realmente excluir a empresa "${empresa.empresa}"?\n\n'
+          'Regional: ${empresa.regional}\n'
+          'Divisão: ${empresa.divisao}',
+      confirmLabel: 'Excluir',
+      cancelLabel: 'Cancelar',
+      isDestructive: true,
     );
 
     if (confirm == true) {
@@ -250,169 +301,305 @@ class _EmpresaListViewState extends State<EmpresaListView> {
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = TFBreakpoints.isMobile(context);
+    final spacing = context.tfSpacing;
+    final colors = context.tfColors;
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Cadastro de Empresas'),
-        actions: [
-          // Toggle de visualização
-          IconButton(
-            icon: Icon(_isTableView ? Icons.view_list : Icons.table_chart),
-            onPressed: () {
-              setState(() {
-                _isTableView = !_isTableView;
-              });
-            },
-            tooltip: _isTableView ? 'Visualização em Lista' : 'Visualização em Tabela',
-          ),
-          IconButton(
-            icon: const Icon(Icons.add),
-            onPressed: _createEmpresa,
-            tooltip: 'Nova Empresa',
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: TextField(
-              controller: _searchController,
-              decoration: const InputDecoration(
-                labelText: 'Buscar empresas',
-                prefixIcon: Icon(Icons.search),
-                border: OutlineInputBorder(),
+      backgroundColor: colors.background,
+      body: SafeArea(
+        child: Padding(
+          padding: EdgeInsets.all(isMobile ? spacing.sm : spacing.base),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TFPageHeader(
+                title: 'Cadastro de Empresas',
+                subtitle: 'Gerenciamento de empresas prestadoras e parceiras operacionais',
+                onBack: () => Navigator.of(context).pop(),
+                primaryAction: TFButton(
+                  label: 'Nova Empresa',
+                  leadingIcon: TFIcons.add,
+                  onPressed: _createEmpresa,
+                ),
+                secondaryActions: [
+                  TFIconButton(
+                    icon: _isTableView ? Icons.view_list_rounded : Icons.table_chart_rounded,
+                    tooltip: _isTableView ? 'Visualizar em Lista' : 'Visualizar em Tabela',
+                    variant: TFIconButtonVariant.subtle,
+                    onPressed: () {
+                      setState(() {
+                        _isTableView = !_isTableView;
+                      });
+                    },
+                  ),
+                  TFIconButton(
+                    icon: TFIcons.refresh,
+                    tooltip: 'Recarregar empresas',
+                    variant: TFIconButtonVariant.subtle,
+                    onPressed: _loadEmpresas,
+                  ),
+                ],
               ),
-            ),
-          ),
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _filteredEmpresas.isEmpty
-                    ? const Center(
-                        child: Text('Nenhuma empresa encontrada.'),
+              SizedBox(height: spacing.sm),
+              Row(
+                children: [
+                  Expanded(
+                    child: TFTextField(
+                      controller: _searchController,
+                      hint: 'Buscar empresas por nome, regional ou divisão...',
+                      prefixIcon: Icon(TFIcons.search, size: 18, color: colors.textSecondary),
+                    ),
+                  ),
+                  if (_hasActiveFilters) ...[
+                    SizedBox(width: spacing.sm),
+                    TFButton(
+                      label: 'Limpar Filtros',
+                      variant: TFButtonVariant.secondary,
+                      leadingIcon: Icons.filter_alt_off,
+                      onPressed: _clearAllFilters,
+                    ),
+                  ],
+                ],
+              ),
+              SizedBox(height: spacing.sm),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 170,
+                      child: TFMultiSelectFilterField(
+                        label: 'Regional',
+                        selectedValues: _selectedRegionais,
+                        options: _getUniqueRegionais(),
+                        isCompact: true,
+                        onChanged: (values) {
+                          setState(() {
+                            _selectedRegionais = values;
+                            _filteredEmpresas = _applyFilter(_empresas);
+                          });
+                        },
+                      ),
+                    ),
+                    SizedBox(width: spacing.sm),
+                    SizedBox(
+                      width: 170,
+                      child: TFMultiSelectFilterField(
+                        label: 'Divisão',
+                        selectedValues: _selectedDivisoes,
+                        options: _getUniqueDivisoes(),
+                        isCompact: true,
+                        onChanged: (values) {
+                          setState(() {
+                            _selectedDivisoes = values;
+                            _filteredEmpresas = _applyFilter(_empresas);
+                          });
+                        },
+                      ),
+                    ),
+                    SizedBox(width: spacing.sm),
+                    SizedBox(
+                      width: 170,
+                      child: TFMultiSelectFilterField(
+                        label: 'Tipo',
+                        selectedValues: _selectedTipos,
+                        options: _getUniqueTipos(),
+                        isCompact: true,
+                        onChanged: (values) {
+                          setState(() {
+                            _selectedTipos = values;
+                            _filteredEmpresas = _applyFilter(_empresas);
+                          });
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(height: spacing.base),
+              Expanded(
+                child: _isLoading
+                    ? const TFLoading(
+                        mode: TFLoadingMode.section,
+                        message: 'Carregando empresas cadastradas...',
                       )
-                    : _isTableView
-                        ? _buildTableView()
-                        : _buildListView(),
+                    : _filteredEmpresas.isEmpty
+                        ? TFEmptyState(
+                            icon: TFIcons.search,
+                            title: _empresas.isEmpty
+                                ? 'Nenhuma empresa cadastrada'
+                                : 'Nenhuma empresa encontrada',
+                            description: _empresas.isEmpty
+                                ? 'Cadastre a primeira empresa para iniciar a alocação de equipes.'
+                                : 'Tente buscar por outro termo ou limpe o campo de busca.',
+                            action: _empresas.isEmpty
+                                ? TFButton(
+                                    label: 'Cadastrar Primeira Empresa',
+                                    leadingIcon: TFIcons.add,
+                                    onPressed: _createEmpresa,
+                                  )
+                                : TFButton(
+                                    label: 'Limpar Busca',
+                                    variant: TFButtonVariant.secondary,
+                                    onPressed: () => _searchController.clear(),
+                                  ),
+                          )
+                        : (isMobile || !_isTableView)
+                            ? _buildMobileList()
+                            : _buildDesktopTable(),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
 
-  Widget _buildListView() {
-    return ListView.builder(
+  Widget _buildDesktopTable() {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
+    return TFDataTable<Empresa>(
+      items: _filteredEmpresas,
+      zebra: true,
+      columns: [
+        TFDataColumn<Empresa>.text(
+          id: 'empresa',
+          title: 'Empresa',
+          cellBuilder: (context, empresa) => Text(
+            empresa.empresa,
+            style: typography.bodyMedium.copyWith(
+              color: colors.textPrimary,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+        TFDataColumn<Empresa>.text(
+          id: 'regional',
+          title: 'Regional',
+          cellBuilder: (context, empresa) => Text(
+            empresa.regional.isNotEmpty ? empresa.regional : '-',
+            style: typography.bodyMedium.copyWith(color: colors.textSecondary),
+          ),
+        ),
+        TFDataColumn<Empresa>.text(
+          id: 'divisao',
+          title: 'Divisão',
+          cellBuilder: (context, empresa) => Text(
+            empresa.divisao.isNotEmpty ? empresa.divisao : '-',
+            style: typography.bodyMedium.copyWith(color: colors.textSecondary),
+          ),
+        ),
+        TFDataColumn<Empresa>(
+          id: 'tipo',
+          label: const Text('Tipo'),
+          width: 120,
+          cellBuilder: (context, empresa) => TFStatusBadge(
+            label: empresa.tipo == 'PROPRIA' ? 'Própria' : 'Terceira',
+            severity: empresa.tipo == 'PROPRIA' ? TFStatusSeverity.info : TFStatusSeverity.warning,
+            compact: true,
+          ),
+        ),
+        TFDataColumn<Empresa>(
+          id: 'acoes',
+          label: const Text('Ações'),
+          width: 160,
+          alignment: Alignment.centerRight,
+          cellBuilder: (context, empresa) => Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TFIconButton(
+                icon: TFIcons.edit,
+                tooltip: 'Editar empresa',
+                variant: TFIconButtonVariant.standard,
+                onPressed: () => _editEmpresa(empresa),
+              ),
+              TFIconButton(
+                icon: Icons.copy_rounded,
+                tooltip: 'Duplicar empresa',
+                variant: TFIconButtonVariant.subtle,
+                onPressed: () => _duplicateEmpresa(empresa),
+              ),
+              TFIconButton(
+                icon: TFIcons.delete,
+                tooltip: 'Excluir empresa',
+                variant: TFIconButtonVariant.danger,
+                onPressed: () => _deleteEmpresa(empresa),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMobileList() {
+    final spacing = context.tfSpacing;
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
+    return ListView.separated(
       itemCount: _filteredEmpresas.length,
+      separatorBuilder: (_, __) => SizedBox(height: spacing.sm),
       itemBuilder: (context, index) {
         final empresa = _filteredEmpresas[index];
-        return Card(
-          margin: const EdgeInsets.symmetric(
-            horizontal: 16.0,
-            vertical: 8.0,
-          ),
-          child: ListTile(
-            title: Text(empresa.empresa),
-            subtitle: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Regional: ${empresa.regional}'),
-                Text('Divisão: ${empresa.divisao}'),
-                Text('Tipo: ${empresa.tipo}'),
-              ],
-            ),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.edit),
-                  onPressed: () => _editEmpresa(empresa),
-                  tooltip: 'Editar',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.copy),
-                  color: Colors.orange,
-                  onPressed: () => _duplicateEmpresa(empresa),
-                  tooltip: 'Duplicar',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.delete),
-                  onPressed: () => _deleteEmpresa(empresa),
-                  tooltip: 'Excluir',
-                  color: Colors.red,
-                ),
-              ],
-            ),
+        return TFCard(
+          variant: TFCardVariant.defaultCard,
+          padding: EdgeInsets.symmetric(horizontal: spacing.base, vertical: spacing.sm),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      empresa.empresa,
+                      style: typography.cardTitle.copyWith(color: colors.textPrimary),
+                    ),
+                  ),
+                  TFStatusBadge(
+                    label: empresa.tipo == 'PROPRIA' ? 'Própria' : 'Terceira',
+                    severity: empresa.tipo == 'PROPRIA' ? TFStatusSeverity.info : TFStatusSeverity.warning,
+                    compact: true,
+                  ),
+                ],
+              ),
+              SizedBox(height: spacing.xs),
+              Text(
+                'Regional: ${empresa.regional.isNotEmpty ? empresa.regional : "-"}  •  Divisão: ${empresa.divisao.isNotEmpty ? empresa.divisao : "-"}',
+                style: typography.bodySmall.copyWith(color: colors.textSecondary),
+              ),
+              SizedBox(height: spacing.sm),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TFButton(
+                    label: 'Editar',
+                    leadingIcon: TFIcons.edit,
+                    variant: TFButtonVariant.secondary,
+                    onPressed: () => _editEmpresa(empresa),
+                  ),
+                  SizedBox(width: spacing.xs),
+                  TFIconButton(
+                    icon: Icons.copy_rounded,
+                    tooltip: 'Duplicar',
+                    variant: TFIconButtonVariant.subtle,
+                    onPressed: () => _duplicateEmpresa(empresa),
+                  ),
+                  TFIconButton(
+                    icon: TFIcons.delete,
+                    tooltip: 'Excluir',
+                    variant: TFIconButtonVariant.danger,
+                    onPressed: () => _deleteEmpresa(empresa),
+                  ),
+                ],
+              ),
+            ],
           ),
         );
       },
     );
   }
-
-  Widget _buildTableView() {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: SingleChildScrollView(
-        child: DataTable(
-          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
-          columns: const [
-            DataColumn(label: Text('Empresa', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Regional', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Divisão', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Tipo', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Ações', style: TextStyle(fontWeight: FontWeight.bold))),
-          ],
-          rows: _filteredEmpresas.map((empresa) {
-            return DataRow(
-              cells: [
-                DataCell(
-                  Text(
-                    empresa.empresa,
-                    style: const TextStyle(fontWeight: FontWeight.w500),
-                  ),
-                ),
-                DataCell(Text(empresa.regional.isNotEmpty ? empresa.regional : '-')),
-                DataCell(Text(empresa.divisao.isNotEmpty ? empresa.divisao : '-')),
-                DataCell(Text(empresa.tipo)),
-                DataCell(
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.edit, size: 20, color: Colors.blue),
-                        onPressed: () => _editEmpresa(empresa),
-                        tooltip: 'Editar',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.copy, size: 20, color: Colors.orange),
-                        onPressed: () => _duplicateEmpresa(empresa),
-                        tooltip: 'Duplicar',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.delete, size: 20, color: Colors.red),
-                        onPressed: () => _deleteEmpresa(empresa),
-                        tooltip: 'Excluir',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            );
-          }).toList(),
-        ),
-      ),
-    );
-  }
 }
-
-
-
-
-
-
-

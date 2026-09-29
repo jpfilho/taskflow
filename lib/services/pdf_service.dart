@@ -18,6 +18,7 @@ class PDFService {
     pdf.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4.landscape,
+        maxPages: 1000,
         margin: const pw.EdgeInsets.all(20),
         build: (pw.Context context) {
           return [
@@ -685,6 +686,7 @@ class PDFService {
     pdf.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
+        maxPages: 1000,
         margin: const pw.EdgeInsets.all(40),
         build: (pw.Context context) {
           return [
@@ -752,6 +754,7 @@ class PDFService {
     pdf.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
+        maxPages: 1000,
         margin: const pw.EdgeInsets.all(40),
         build: (pw.Context context) {
           return [
@@ -847,5 +850,403 @@ class PDFService {
         ],
       ),
     );
+  }
+
+  static String _sanitizePdfText(String? input) {
+    if (input == null || input.isEmpty) return '-';
+    return input
+        .replaceAll('•', '-')
+        .replaceAll('—', '-')
+        .replaceAll('–', '-')
+        .replaceAll('…', '...')
+        .replaceAll('“', '"')
+        .replaceAll('”', '"')
+        .replaceAll('’', "'")
+        .replaceAll('‘', "'")
+        .replaceAll('«', '"')
+        .replaceAll('»', '"')
+        .replaceAll('\r\n', ' ')
+        .replaceAll('\n', ' ')
+        .trim();
+  }
+
+  static PdfColor _getTipoColor(String tipo) {
+    final t = tipo.toUpperCase().trim();
+    if (t.contains('OBRA')) return PdfColor.fromHex('#FFA000'); // Laranja/Ouro
+    if (t.contains('R&M') || t.contains('RM') || t.contains('EMERG')) return PdfColor.fromHex('#D32F2F'); // Vermelho
+    if (t == 'MP' || t.contains('PREVENTIVA')) return PdfColor.fromHex('#FBC02D'); // Amarelo
+    if (t.contains('MANUT') || t.contains('PMP')) return PdfColor.fromHex('#FB8C00'); // Laranja
+    if (t.contains('TRMNT') || t.contains('TREINA')) return PdfColor.fromHex('#8E24AA'); // Roxo/Marrom
+    if (t.contains('OUTROS') || t.contains('APOIO') || t.contains('TELECOM')) return PdfColor.fromHex('#00ACC1'); // Ciano/Azul
+    if (t.contains('NM') || t.contains('CORRETIVA')) return PdfColor.fromHex('#388E3C'); // Verde
+    if (t.contains('ADMIN') || t.contains('FERIAS') || t.contains('FOLGA') || t.contains('COMP')) return PdfColor.fromHex('#757575'); // Cinza
+    return PdfColor.fromHex('#1976D2'); // Azul padrão
+  }
+
+  static PdfColor _getStatusColor(String status) {
+    final s = status.toUpperCase().trim();
+    if (s.startsWith('CONC')) return PdfColor.fromHex('#388E3C'); // Verde
+    if (s.startsWith('PROG')) return PdfColor.fromHex('#1976D2'); // Azul
+    if (s.startsWith('ANDA')) return PdfColor.fromHex('#F57C00'); // Laranja
+    if (s.startsWith('CANC')) return PdfColor.fromHex('#D32F2F'); // Vermelho
+    if (s.startsWith('SUSP')) return PdfColor.fromHex('#757575'); // Cinza
+    if (s.startsWith('REPR')) return PdfColor.fromHex('#7B1FA2'); // Roxo
+    return PdfColor.fromHex('#1976D2');
+  }
+
+  /// Gera PDF com o layout idêntico ao navegador (Tabela de Atividades na esquerda + Gráfico Gantt com Timeline na direita)
+  Future<Uint8List> generateTasksPDF(
+    List<Task> tasks, {
+    String title = 'PROGRAMAÇÃO DE ATIVIDADES',
+    DateTime? startDate,
+    DateTime? endDate,
+  }) async {
+    final pdf = pw.Document();
+    final dateFormat = DateFormat('dd/MM/yyyy');
+    final emissionFormat = DateFormat('dd/MM/yyyy HH:mm');
+    final now = DateTime.now();
+
+    // Determinar o período do Gantt
+    final effectiveStart = startDate ?? (tasks.isNotEmpty
+        ? tasks.map((t) => t.dataInicio).reduce((a, b) => a.isBefore(b) ? a : b)
+        : DateTime(now.year, now.month, 1));
+    final effectiveEnd = endDate ?? (tasks.isNotEmpty
+        ? tasks.map((t) => t.dataFim).reduce((a, b) => a.isAfter(b) ? a : b)
+        : DateTime(now.year, now.month + 1, 0));
+
+    final rangeStart = DateTime(effectiveStart.year, effectiveStart.month, effectiveStart.day);
+    final rangeEnd = DateTime(effectiveEnd.year, effectiveEnd.month, effectiveEnd.day);
+    final totalDays = (rangeEnd.difference(rangeStart).inDays + 1).clamp(1, 45);
+
+    const double tableWidth = 395.0;
+    const double ganttWidth = 418.0;
+    final double dayWidth = ganttWidth / totalDays;
+
+    // Gerar lista de dias para a timeline
+    final daysList = List.generate(totalDays, (i) => rangeStart.add(Duration(days: i)));
+
+    pdf.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4.landscape,
+        maxPages: 1000,
+        margin: const pw.EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        header: (pw.Context context) {
+          return pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              // Topo institucional
+              pw.Container(
+                margin: const pw.EdgeInsets.only(bottom: 6),
+                padding: const pw.EdgeInsets.only(bottom: 4),
+                decoration: const pw.BoxDecoration(
+                  border: pw.Border(bottom: pw.BorderSide(color: PdfColors.blue900, width: 1.5)),
+                ),
+                child: pw.Row(
+                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                  children: [
+                    pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        pw.Text(
+                          _sanitizePdfText(title),
+                          style: pw.TextStyle(
+                            fontSize: 13,
+                            fontWeight: pw.FontWeight.bold,
+                            color: PdfColors.blue900,
+                          ),
+                        ),
+                        pw.Text(
+                          'Período: ${dateFormat.format(rangeStart)} até ${dateFormat.format(rangeEnd)} | Total: ${tasks.length} atividades',
+                          style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey700),
+                        ),
+                      ],
+                    ),
+                    pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.end,
+                      children: [
+                        pw.Text(
+                          'TaskFlow',
+                          style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold, color: PdfColors.blue700),
+                        ),
+                        pw.Text(
+                          'Emissão: ${emissionFormat.format(now)}',
+                          style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey700),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+
+              // Cabeçalho da Tabela + Linha do Tempo Gantt
+              pw.Container(
+                height: 20,
+                decoration: const pw.BoxDecoration(
+                  color: PdfColor.fromInt(0xFF1565C0), // Azul da tela principal
+                ),
+                child: pw.Row(
+                  children: [
+                    // Colunas da Tabela
+                    pw.Container(
+                      width: tableWidth,
+                      padding: const pw.EdgeInsets.symmetric(horizontal: 2),
+                      child: pw.Row(
+                        children: [
+                          pw.Container(
+                            width: 32,
+                            alignment: pw.Alignment.center,
+                            child: pw.Text('STATUS', style: pw.TextStyle(color: PdfColors.white, fontSize: 6.5, fontWeight: pw.FontWeight.bold)),
+                          ),
+                          pw.Container(
+                            width: 52,
+                            padding: const pw.EdgeInsets.only(left: 2),
+                            child: pw.Text('LOCAL', style: pw.TextStyle(color: PdfColors.white, fontSize: 6.5, fontWeight: pw.FontWeight.bold)),
+                          ),
+                          pw.Container(
+                            width: 36,
+                            padding: const pw.EdgeInsets.only(left: 2),
+                            child: pw.Text('TIPO', style: pw.TextStyle(color: PdfColors.white, fontSize: 6.5, fontWeight: pw.FontWeight.bold)),
+                          ),
+                          pw.Container(
+                            width: 135,
+                            padding: const pw.EdgeInsets.only(left: 2),
+                            child: pw.Text('TAREFA', style: pw.TextStyle(color: PdfColors.white, fontSize: 6.5, fontWeight: pw.FontWeight.bold)),
+                          ),
+                          pw.Container(
+                            width: 80,
+                            padding: const pw.EdgeInsets.only(left: 2),
+                            child: pw.Text('EXECUTOR', style: pw.TextStyle(color: PdfColors.white, fontSize: 6.5, fontWeight: pw.FontWeight.bold)),
+                          ),
+                          pw.Container(
+                            width: 60,
+                            padding: const pw.EdgeInsets.only(left: 2),
+                            child: pw.Text('COORDENADOR', style: pw.TextStyle(color: PdfColors.white, fontSize: 6.5, fontWeight: pw.FontWeight.bold)),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    // Cabeçalho dos Dias do Gantt
+                    pw.Container(
+                      width: ganttWidth,
+                      child: pw.Row(
+                        children: daysList.map((day) {
+                          final isWeekend = day.weekday == DateTime.saturday || day.weekday == DateTime.sunday;
+                          final isToday = day.year == now.year && day.month == now.month && day.day == now.day;
+                          final dayBg = isWeekend ? const PdfColor.fromInt(0xFFFFCDD2) : const PdfColor.fromInt(0xFF1976D2);
+                          final textColor = isWeekend ? const PdfColor.fromInt(0xFFB71C1C) : PdfColors.white;
+
+                          return pw.Container(
+                            width: dayWidth,
+                            height: 20,
+                            alignment: pw.Alignment.center,
+                            decoration: pw.BoxDecoration(
+                              color: isToday ? const PdfColor.fromInt(0xFFD32F2F) : dayBg,
+                              border: pw.Border(
+                                right: const pw.BorderSide(color: PdfColors.white, width: 0.5),
+                              ),
+                            ),
+                            child: pw.Text(
+                              '${day.day}',
+                              style: pw.TextStyle(
+                                color: isToday ? PdfColors.white : textColor,
+                                fontSize: 6.5,
+                                fontWeight: pw.FontWeight.bold,
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          );
+        },
+        footer: (pw.Context context) {
+          return pw.Container(
+            margin: const pw.EdgeInsets.only(top: 4),
+            child: pw.Row(
+              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+              children: [
+                pw.Text('TaskFlow - Gestão de Atividades', style: const pw.TextStyle(fontSize: 7.5, color: PdfColors.grey600)),
+                pw.Text('Página ${context.pageNumber} de ${context.pagesCount}', style: const pw.TextStyle(fontSize: 7.5, color: PdfColors.grey600)),
+              ],
+            ),
+          );
+        },
+        build: (pw.Context context) {
+          return tasks.map((task) {
+            final statusColor = _getStatusColor(task.status);
+            final barColor = _getTipoColor(task.tipo);
+            final statusText = task.status.length > 4 ? task.status.substring(0, 4) : task.status;
+            final locaisStr = task.locais.isNotEmpty ? task.locais.join(', ') : '-';
+            final executorStr = task.executores.isNotEmpty
+                ? task.executores.join(', ')
+                : (task.executor.isNotEmpty ? task.executor : '-');
+            final coordenadorStr = task.coordenador.isNotEmpty ? task.coordenador : '-';
+
+            // Cálculo do intervalo da barra de Gantt
+            final taskStart = DateTime(task.dataInicio.year, task.dataInicio.month, task.dataInicio.day);
+            final taskEnd = DateTime(task.dataFim.year, task.dataFim.month, task.dataFim.day);
+
+            final bool hasBar = !(taskEnd.isBefore(rangeStart) || taskStart.isAfter(rangeEnd));
+            double barLeft = 0;
+            double barW = 0;
+
+            if (hasBar) {
+              final clampedStart = taskStart.isBefore(rangeStart) ? rangeStart : taskStart;
+              final clampedEnd = taskEnd.isAfter(rangeEnd) ? rangeEnd : taskEnd;
+              final startIdx = clampedStart.difference(rangeStart).inDays;
+              final endIdx = clampedEnd.difference(rangeStart).inDays;
+              barLeft = startIdx * dayWidth;
+              barW = (endIdx - startIdx + 1) * dayWidth;
+            }
+
+            return pw.Container(
+              height: 18,
+              decoration: const pw.BoxDecoration(
+                border: pw.Border(bottom: pw.BorderSide(color: PdfColors.grey300, width: 0.5)),
+              ),
+              child: pw.Row(
+                children: [
+                  // Colunas da Tabela (Esquerda)
+                  pw.Container(
+                    width: tableWidth,
+                    height: 18,
+                    padding: const pw.EdgeInsets.symmetric(horizontal: 2),
+                    child: pw.Row(
+                      children: [
+                        // Status Badge
+                        pw.Container(
+                          width: 32,
+                          alignment: pw.Alignment.center,
+                          child: pw.Container(
+                            padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 1),
+                            decoration: pw.BoxDecoration(
+                              color: statusColor,
+                              borderRadius: const pw.BorderRadius.all(pw.Radius.circular(2)),
+                            ),
+                            child: pw.Text(
+                              statusText,
+                              style: const pw.TextStyle(color: PdfColors.white, fontSize: 5.5),
+                              textAlign: pw.TextAlign.center,
+                            ),
+                          ),
+                        ),
+                        // Local
+                        pw.Container(
+                          width: 52,
+                          padding: const pw.EdgeInsets.only(left: 2),
+                          child: pw.Text(
+                            _sanitizePdfText(locaisStr),
+                            style: const pw.TextStyle(fontSize: 6),
+                            maxLines: 1,
+                          ),
+                        ),
+                        // Tipo
+                        pw.Container(
+                          width: 36,
+                          padding: const pw.EdgeInsets.only(left: 2),
+                          child: pw.Text(
+                            _sanitizePdfText(task.tipo),
+                            style: const pw.TextStyle(fontSize: 6),
+                            maxLines: 1,
+                          ),
+                        ),
+                        // Tarefa
+                        pw.Container(
+                          width: 135,
+                          padding: const pw.EdgeInsets.only(left: 2),
+                          child: pw.Text(
+                            _sanitizePdfText(task.tarefa),
+                            style: const pw.TextStyle(fontSize: 6),
+                            maxLines: 1,
+                          ),
+                        ),
+                        // Executor
+                        pw.Container(
+                          width: 80,
+                          padding: const pw.EdgeInsets.only(left: 2),
+                          child: pw.Text(
+                            _sanitizePdfText(executorStr),
+                            style: const pw.TextStyle(fontSize: 6),
+                            maxLines: 1,
+                          ),
+                        ),
+                        // Coordenador
+                        pw.Container(
+                          width: 60,
+                          padding: const pw.EdgeInsets.only(left: 2),
+                          child: pw.Text(
+                            _sanitizePdfText(coordenadorStr),
+                            style: const pw.TextStyle(fontSize: 6),
+                            maxLines: 1,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Área da Linha do Tempo Gantt (Direita)
+                  pw.Container(
+                    width: ganttWidth,
+                    height: 18,
+                    child: pw.Stack(
+                      children: [
+                        // Grade de dias de fundo
+                        pw.Row(
+                          children: daysList.map((day) {
+                            final isWeekend = day.weekday == DateTime.saturday || day.weekday == DateTime.sunday;
+                            return pw.Container(
+                              width: dayWidth,
+                              height: 18,
+                              decoration: pw.BoxDecoration(
+                                color: isWeekend ? const PdfColor.fromInt(0xFFFFF0F2) : PdfColors.white,
+                                border: const pw.Border(
+                                  right: pw.BorderSide(color: PdfColors.grey200, width: 0.5),
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+
+                        // Barra de Gantt
+                        if (hasBar && barW > 0)
+                          pw.Positioned(
+                            left: barLeft,
+                            top: 2,
+                            child: pw.Container(
+                              width: barW,
+                              height: 14,
+                              padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 1),
+                              decoration: pw.BoxDecoration(
+                                color: barColor,
+                                borderRadius: const pw.BorderRadius.all(pw.Radius.circular(2)),
+                                border: pw.Border.all(color: PdfColors.grey800, width: 0.2),
+                              ),
+                              child: pw.Text(
+                                _sanitizePdfText('${task.locais.isNotEmpty ? task.locais.first + ' - ' : ''}${task.tarefa}'),
+                                style: const pw.TextStyle(
+                                  color: PdfColors.black,
+                                  fontSize: 5,
+                                ),
+                                maxLines: 1,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }).toList();
+        },
+      ),
+    );
+
+    return pdf.save();
   }
 }

@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'dart:async';
+import '../design_system/taskflow_design_system.dart';
 import '../models/at.dart';
 import '../services/at_service.dart';
+import '../services/auth_service_simples.dart';
+import '../services/executor_service.dart';
 import '../utils/responsive.dart';
 import 'task_form_dialog.dart';
 import 'task_selection_dialog.dart';
@@ -14,6 +16,9 @@ import 'task_view_dialog.dart';
 import 'multi_select_filter_dialog.dart';
 import 'ats_dashboard_view.dart';
 import 'ats_calendar_view.dart';
+import 'gantt_chart.dart';
+import 'resizable_panel.dart';
+import '../utils/clipboard_helper.dart';
 
 class ATView extends StatefulWidget {
   const ATView({super.key});
@@ -25,6 +30,13 @@ class ATView extends StatefulWidget {
 class _ATViewState extends State<ATView> {
   final ATService _service = ATService();
   final StatusService _statusService = StatusService();
+  final AuthServiceSimples _authService = AuthServiceSimples();
+  final ExecutorService _executorService = ExecutorService();
+
+  bool _canEditTasks = false;
+  bool _canEditTasksChecked = false;
+  final Set<String> _atsVinculando = {};
+
   List<AT> _ats = [];
   List<AT> _todasATs = []; // Todas as ATs para calcular estatísticas
   Set<String> _atsProgramadasIds = {}; // IDs das ATs vinculadas a tarefas
@@ -52,8 +64,13 @@ class _ATViewState extends State<ATView> {
   String _filtroProgramacao =
       'todas'; // 'todas', 'programadas', 'nao_programadas'
   String _filtroTipoAT = 'abertas'; // 'todas', 'abertas', 'concluidas'
-  bool _visualizacaoTabela = true;
   bool _filtrosVisiveis = false;
+
+  // Variáveis para integração do Gantt Chart
+  bool _exibirGantt = false;
+  GanttScale _ganttScale = GanttScale.daily;
+  final ScrollController _tableVerticalScrollController = ScrollController();
+  final ScrollController _ganttVerticalScrollController = ScrollController();
 
   final viewOptions = [
     ('tabela', Icons.table_chart, 'Tabela'),
@@ -66,11 +83,8 @@ class _ATViewState extends State<ATView> {
   @override
   void initState() {
     super.initState();
-    // Filtro default de datas removido para igualar o comportamento de Notas SAP
-    // que carrega o histórico do usuário paginado.
-    // _dataInicio = null;
-    // _dataFim = null;
-
+    _sincronizarScrolls();
+    _loadTaskEditPermission();
     _loadStatus();
     _loadFiltros();
     _loadATs();
@@ -87,15 +101,100 @@ class _ATViewState extends State<ATView> {
           _modoVisualizacao = Responsive.isDesktop(context)
               ? 'tabela'
               : 'cards';
-          _visualizacaoTabela = _modoVisualizacao == 'tabela';
         });
       }
     });
   }
 
+  Future<void> _loadTaskEditPermission() async {
+    try {
+      final usuario = _authService.currentUser;
+      if (usuario == null) {
+        _canEditTasks = false;
+        _canEditTasksChecked = true;
+        return;
+      }
+      if (usuario.isRoot) {
+        _canEditTasks = true;
+        _canEditTasksChecked = true;
+        return;
+      }
+      final email = usuario.email;
+      if (email.isEmpty) {
+        _canEditTasks = false;
+        _canEditTasksChecked = true;
+        return;
+      }
+      final permitido = await _executorService.isCoordenadorOuGerentePorLogin(email);
+      _canEditTasks = permitido;
+      _canEditTasksChecked = true;
+    } catch (e) {
+      _canEditTasks = false;
+      _canEditTasksChecked = true;
+    } finally {
+      if (mounted) setState(() {});
+    }
+  }
+
+  Future<bool> _ensureCanEditTasks() async {
+    if (!_canEditTasksChecked) {
+      await _loadTaskEditPermission();
+    }
+    if (!_canEditTasks) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Apenas coordenador ou gerente pode criar/editar tarefas.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return false;
+    }
+    return true;
+  }
+
+  void _sincronizarScrolls() {
+    _tableVerticalScrollController.addListener(() {
+      if (_tableVerticalScrollController.hasClients &&
+          _ganttVerticalScrollController.hasClients &&
+          _tableVerticalScrollController.position.isScrollingNotifier.value) {
+        final targetOffset = _tableVerticalScrollController.offset.clamp(
+          0.0,
+          _ganttVerticalScrollController.position.maxScrollExtent,
+        );
+        _ganttVerticalScrollController.jumpTo(targetOffset);
+      }
+    });
+
+    _ganttVerticalScrollController.addListener(() {
+      if (_ganttVerticalScrollController.hasClients &&
+          _tableVerticalScrollController.hasClients &&
+          _ganttVerticalScrollController.position.isScrollingNotifier.value) {
+        final targetOffset = _ganttVerticalScrollController.offset.clamp(
+          0.0,
+          _tableVerticalScrollController.position.maxScrollExtent,
+        );
+        _tableVerticalScrollController.jumpTo(targetOffset);
+      }
+    });
+  }
+
+  int _totalFiltrosAtivos() {
+    return _filtroStatus.length +
+        _filtroLocal.length +
+        _filtroStatusUsuario.length +
+        (_dataInicio != null ? 1 : 0) +
+        (_dataFim != null ? 1 : 0) +
+        (_filtroAnoFim != null ? 1 : 0) +
+        (_filtroMesFim != null ? 1 : 0);
+  }
+
   @override
   void dispose() {
     _statusChangeSubscription?.cancel();
+    _tableVerticalScrollController.dispose();
+    _ganttVerticalScrollController.dispose();
     super.dispose();
   }
 
@@ -137,8 +236,14 @@ class _ATViewState extends State<ATView> {
       // Ordenar cada lista por data de vinculação (mais recente primeiro)
       for (final atId in info.keys) {
         info[atId]!.sort((a, b) {
-          final dataA = a['vinculado_em'] as DateTime?;
-          final dataB = b['vinculado_em'] as DateTime?;
+          DateTime? parseDate(dynamic v) {
+            if (v == null) return null;
+            if (v is DateTime) return v;
+            if (v is String) return DateTime.tryParse(v);
+            return null;
+          }
+          final dataA = parseDate(a['vinculado_em']);
+          final dataB = parseDate(b['vinculado_em']);
           if (dataA == null && dataB == null) return 0;
           if (dataA == null) return 1;
           if (dataB == null) return -1;
@@ -395,32 +500,32 @@ class _ATViewState extends State<ATView> {
             ),
           ];
 
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final totalFiltros = _totalFiltrosAtivos();
+
     return Scaffold(
+      backgroundColor: colors.background,
       body: Column(
         children: [
-          // Header unificado igual Notas SAP
+          // Header com botões responsivos
           Container(
-            padding: const EdgeInsets.all(16),
+            padding: EdgeInsets.all(isCompact ? 8 : 12),
             decoration: BoxDecoration(
-              color: Colors.white,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.grey.withOpacity(0.1),
-                  spreadRadius: 1,
-                  blurRadius: 3,
-                  offset: const Offset(0, 2),
-                ),
-              ],
+              color: colors.surface,
+              border: Border(
+                bottom: BorderSide(color: colors.borderSubtle),
+              ),
             ),
             child: Wrap(
               spacing: 12,
-              runSpacing: 12,
+              runSpacing: 8,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 if (!isCompact)
-                  const Text(
+                  Text(
                     'ATs',
-                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                    style: typography.sectionTitle,
                   ),
 
                 SegmentedButton<String>(
@@ -435,13 +540,13 @@ class _ATViewState extends State<ATView> {
                     _loadTodasATsParaEstatisticas();
                   },
                   style: SegmentedButton.styleFrom(
-                    backgroundColor: Colors.grey[200],
-                    selectedBackgroundColor: Colors.blue[600],
+                    backgroundColor: colors.surfaceSecondary,
+                    selectedBackgroundColor: colors.primary,
                     selectedForegroundColor: Colors.white,
-                    foregroundColor: Colors.grey[700],
-                    side: BorderSide(color: Colors.grey[300]!, width: 1),
+                    foregroundColor: colors.textSecondary,
+                    side: BorderSide(color: colors.borderSubtle, width: 1),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(TFRadius.r8),
                     ),
                   ),
                 ),
@@ -452,22 +557,22 @@ class _ATViewState extends State<ATView> {
                   onSelectionChanged: (Set<String> newSelection) {
                     setState(() {
                       _filtroProgramacao = newSelection.first;
-                      _paginaAtual =
-                          0; // O filtro acontece ram, mas resetamos a página por precaução
+                      _paginaAtual = 0;
                     });
                   },
                   style: SegmentedButton.styleFrom(
-                    backgroundColor: Colors.grey[200],
-                    selectedBackgroundColor: Colors.blue[600],
+                    backgroundColor: colors.surfaceSecondary,
+                    selectedBackgroundColor: colors.primary,
                     selectedForegroundColor: Colors.white,
-                    foregroundColor: Colors.grey[700],
-                    side: BorderSide(color: Colors.grey[300]!, width: 1),
+                    foregroundColor: colors.textSecondary,
+                    side: BorderSide(color: colors.borderSubtle, width: 1),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(TFRadius.r8),
                     ),
                   ),
                 ),
 
+                // Seletor de modo de visualização (SegmentedButton no desktop)
                 if (!isCompact)
                   SegmentedButton<String>(
                     segments: viewOptions.map((opt) {
@@ -481,18 +586,17 @@ class _ATViewState extends State<ATView> {
                     onSelectionChanged: (Set<String> newSelection) {
                       setState(() {
                         _modoVisualizacao = newSelection.first;
-                        _visualizacaoTabela = _modoVisualizacao == 'tabela';
                       });
                     },
                     showSelectedIcon: false,
                     style: SegmentedButton.styleFrom(
-                      backgroundColor: Colors.white,
-                      selectedBackgroundColor: Colors.blue[50],
-                      selectedForegroundColor: Colors.blue[700],
-                      foregroundColor: Colors.grey[700],
-                      side: BorderSide(color: Colors.grey[300]!, width: 1),
+                      backgroundColor: colors.surface,
+                      selectedBackgroundColor: colors.primary.withValues(alpha: 0.12),
+                      selectedForegroundColor: colors.primary,
+                      foregroundColor: colors.textSecondary,
+                      side: BorderSide(color: colors.borderSubtle, width: 1),
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(TFRadius.r8),
                       ),
                     ),
                   )
@@ -504,23 +608,24 @@ class _ATViewState extends State<ATView> {
                         vertical: 8,
                       ),
                       decoration: BoxDecoration(
-                        color: Colors.white,
-                        border: Border.all(color: Colors.grey[300]!),
-                        borderRadius: BorderRadius.circular(8),
+                        color: colors.surface,
+                        border: Border.all(color: colors.borderSubtle),
+                        borderRadius: BorderRadius.circular(TFRadius.r8),
                       ),
                       child: DropdownButton<String>(
                         value: _modoVisualizacao,
                         isDense: true,
                         icon: const Icon(Icons.arrow_drop_down),
+                        dropdownColor: colors.surface,
                         items: viewOptions.map((opt) {
                           return DropdownMenuItem<String>(
                             value: opt.$1,
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(opt.$2, size: 18, color: Colors.blue[700]),
+                                Icon(opt.$2, size: 18, color: colors.primary),
                                 const SizedBox(width: 8),
-                                Text(opt.$3),
+                                Text(opt.$3, style: typography.bodySmall),
                               ],
                             ),
                           );
@@ -529,14 +634,29 @@ class _ATViewState extends State<ATView> {
                           if (newValue != null) {
                             setState(() {
                               _modoVisualizacao = newValue;
-                              _visualizacaoTabela =
-                                  _modoVisualizacao == 'tabela';
                             });
                           }
                         },
                       ),
                     ),
                   ),
+
+                // Botão de alternância do Gantt desabilitado temporariamente
+                /*
+                if (_modoVisualizacao == 'tabela')
+                  IconButton(
+                    icon: Icon(
+                      _exibirGantt ? Icons.view_sidebar : Icons.view_sidebar_outlined,
+                      color: _exibirGantt ? colors.primary : colors.textSecondary,
+                    ),
+                    tooltip: _exibirGantt ? 'Ocultar Gantt' : 'Exibir Gantt',
+                    onPressed: () {
+                      setState(() {
+                        _exibirGantt = !_exibirGantt;
+                      });
+                    },
+                  ),
+                */
 
                 ElevatedButton.icon(
                   onPressed: () {
@@ -547,14 +667,17 @@ class _ATViewState extends State<ATView> {
                     _loadTodasATsParaEstatisticas();
                   },
                   icon: const Icon(Icons.refresh),
-                  label: isCompact
-                      ? const SizedBox.shrink()
-                      : const Text('Atualizar'),
+                  label: isCompact ? const SizedBox.shrink() : const Text('Atualizar'),
                   style: ElevatedButton.styleFrom(
-                    minimumSize: Size(isCompact ? 44 : 0, 36),
+                    backgroundColor: colors.primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(TFRadius.r8),
+                    ),
+                    minimumSize: Size(isCompact ? 40 : 0, 36),
                     padding: EdgeInsets.symmetric(
-                      horizontal: isCompact ? 12 : 16,
-                      vertical: 12,
+                      horizontal: isCompact ? 10 : 16,
+                      vertical: 10,
                     ),
                   ),
                 ),
@@ -565,18 +688,30 @@ class _ATViewState extends State<ATView> {
                       _filtrosVisiveis = !_filtrosVisiveis;
                     });
                   },
-                  icon: Icon(
-                    _filtrosVisiveis ? Icons.filter_alt_off : Icons.filter_alt,
+                  icon: Badge(
+                    isLabelVisible: totalFiltros > 0,
+                    label: Text('$totalFiltros'),
+                    child: Icon(
+                      _filtrosVisiveis ? Icons.filter_alt_off : Icons.filter_alt,
+                      color: totalFiltros > 0 ? colors.primary : colors.textSecondary,
+                    ),
                   ),
-                  label: isCompact
-                      ? const SizedBox.shrink()
-                      : Text(
-                          _filtrosVisiveis
-                              ? 'Esconder Filtros'
-                              : 'Mostrar Filtros',
-                        ),
+                  label: isCompact ? const SizedBox.shrink() : const Text('Filtros'),
                   style: OutlinedButton.styleFrom(
-                    minimumSize: Size(isCompact ? 44 : 0, 36),
+                    backgroundColor: _filtrosVisiveis
+                        ? colors.primary.withValues(alpha: 0.08)
+                        : colors.surface,
+                    side: BorderSide(
+                      color: _filtrosVisiveis ? colors.primary : colors.borderDefault,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(TFRadius.r8),
+                    ),
+                    minimumSize: Size(isCompact ? 40 : 0, 36),
+                    padding: EdgeInsets.symmetric(
+                      horizontal: isCompact ? 10 : 16,
+                      vertical: 10,
+                    ),
                   ),
                 ),
               ],
@@ -878,69 +1013,108 @@ class _ATViewState extends State<ATView> {
                     ),
             ),
 
-          // Tabs: Barras x Distribuição e Header removido
-
-          // Main View Content
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _modoVisualizacao == 'dashboard'
-                ? AtsDashboardView(
-                    ats: _todasATs,
-                    atsProgramadasIds: _atsProgramadasIds,
-                  )
-                : _modoVisualizacao == 'calendario'
-                ? AtsCalendarView(ats: _todasATs)
-                : _ats.isEmpty
-                ? const Center(
-                    child: Text(
-                      'Nenhuma AT encontrada',
-                      style: TextStyle(fontSize: 16, color: Colors.grey),
-                    ),
-                  )
-                : _visualizacaoTabela
-                ? CustomScrollView(
-                    slivers: [
-                      SliverToBoxAdapter(
-                        child: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: ConstrainedBox(
-                            constraints: BoxConstraints(
-                              minWidth: MediaQuery.of(context).size.width,
-                            ),
-                            child: _ats.isNotEmpty
-                                // Temporarily use original method or rebuild table passing list
-                                ? _buildTabelaView() // Let's keep original for now to avoid errors, we'll refactor it later if needed
-                                : const SizedBox.shrink(),
-                          ),
-                        ),
-                      ),
-                    ],
-                  )
-                : ListView.builder(
-                    itemCount: _ats.length,
-                    itemBuilder: (context, index) {
-                      final at = _ats[index];
-                      return _buildATCard(at);
-                    },
-                  ),
-          ),
-
-          // Paginação (somente para tabela/cards)
-          if ((_modoVisualizacao == 'tabela' || _modoVisualizacao == 'cards') &&
-              _totalATs > _itensPorPagina)
+          // Contador de resultados (não exibir no dashboard)
+          if (_modoVisualizacao != 'dashboard')
             Container(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               decoration: BoxDecoration(
-                color: Colors.white,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.grey.withOpacity(0.1),
-                    spreadRadius: 1,
-                    blurRadius: 2,
-                    offset: const Offset(0, -1),
+                color: colors.surface,
+                border: Border(
+                  bottom: BorderSide(color: colors.borderSubtle),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Total: $_totalATs ATs (${paginatedList.length} nesta página)',
+                      style: typography.labelMedium.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: colors.primary,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Página ${_paginaAtual + 1} de ${(_totalATs / _itensPorPagina).ceil()}',
+                    style: typography.labelMedium.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: colors.textSecondary,
+                    ),
                   ),
                 ],
+              ),
+            ),
+
+          // Conteúdo Principal (Dashboard, Calendário, Tabela ou Cards)
+          Expanded(
+            child: _isLoading
+                ? const Center(child: TFLoading(message: 'Carregando ATs...'))
+                : _modoVisualizacao == 'dashboard'
+                    ? AtsDashboardView(
+                        key: ValueKey(
+                          'dashboard_${allAtsList.length}_${_filtroTipoAT}_${_filtroLocal.length}_${_filtroStatus.length}_${_filtroStatusUsuario.length}',
+                        ),
+                        ats: allAtsList,
+                        atsProgramadasIds: _atsProgramadasIds,
+                      )
+                    : _modoVisualizacao == 'calendario'
+                        ? AtsCalendarView(ats: allAtsList)
+                        : paginatedList.isEmpty
+                            ? Center(
+                                child: TFEmptyState(
+                                  icon: Icons.search_off,
+                                  title: 'Nenhuma AT encontrada',
+                                  description: _totalFiltrosAtivos() > 0
+                                      ? 'Não há ATs correspondentes aos filtros aplicados.'
+                                      : 'Não há ATs cadastradas.',
+                                  action: _totalFiltrosAtivos() > 0
+                                      ? OutlinedButton(
+                                          onPressed: () {
+                                            setState(() {
+                                              _filtroStatus.clear();
+                                              _filtroLocal.clear();
+                                              _filtroStatusUsuario.clear();
+                                              _dataInicio = null;
+                                              _dataFim = null;
+                                              _filtroAnoFim = null;
+                                              _filtroMesFim = null;
+                                              _paginaAtual = 0;
+                                            });
+                                            _loadATs();
+                                            _loadTodasATsParaEstatisticas();
+                                          },
+                                          child: const Text('Limpar Filtros'),
+                                        )
+                                      : null,
+                                ),
+                              )
+                            : _modoVisualizacao == 'tabela'
+                                ? (_exibirGantt
+                                    ? _buildSplitTabelaGanttView()
+                                    : _buildTabelaView(controller: _tableVerticalScrollController))
+                                : ListView.builder(
+                                    itemCount: paginatedList.length,
+                                    itemBuilder: (context, index) {
+                                      final at = paginatedList[index];
+                                      return _buildATCard(at);
+                                    },
+                                  ),
+          ),
+
+          // Paginação (não mostrar no dashboard nem no calendário)
+          if (_modoVisualizacao != 'dashboard' &&
+              _modoVisualizacao != 'calendario' &&
+              _totalATs > _itensPorPagina)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: colors.surface,
+                border: Border(
+                  top: BorderSide(color: colors.borderSubtle),
+                ),
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -954,10 +1128,14 @@ class _ATViewState extends State<ATView> {
                             _loadATs();
                           }
                         : null,
-                    icon: const Icon(Icons.chevron_left),
+                    icon: Icon(
+                      Icons.chevron_left,
+                      color: _paginaAtual > 0 ? colors.primary : colors.textSecondary.withValues(alpha: 0.4),
+                    ),
                   ),
                   Text(
                     'Página ${_paginaAtual + 1} de ${(_totalATs / _itensPorPagina).ceil()}',
+                    style: typography.bodySmall.copyWith(color: colors.textSecondary),
                   ),
                   IconButton(
                     onPressed: (_paginaAtual + 1) * _itensPorPagina < _totalATs
@@ -968,7 +1146,12 @@ class _ATViewState extends State<ATView> {
                             _loadATs();
                           }
                         : null,
-                    icon: const Icon(Icons.chevron_right),
+                    icon: Icon(
+                      Icons.chevron_right,
+                      color: (_paginaAtual + 1) * _itensPorPagina < _totalATs
+                          ? colors.primary
+                          : colors.textSecondary.withValues(alpha: 0.4),
+                    ),
                   ),
                 ],
               ),
@@ -980,6 +1163,7 @@ class _ATViewState extends State<ATView> {
 
   // Criar tarefa a partir de uma at
   Future<void> _criarTarefaDaAT(AT at) async {
+    if (!await _ensureCanEditTasks()) return;
     try {
       // Calcular datas padrão
       final dataInicio = at.dataInicio ?? DateTime.now();
@@ -1037,6 +1221,11 @@ class _ATViewState extends State<ATView> {
 
   // Vincular at a uma tarefa existente
   Future<void> _vincularATATarefaExistente(AT at) async {
+    if (_atsVinculando.contains(at.id)) return;
+    setState(() {
+      _atsVinculando.add(at.id);
+    });
+
     try {
       final taskService = TaskService();
       final todasTarefas = await taskService.getAllTasks();
@@ -1052,6 +1241,8 @@ class _ATViewState extends State<ATView> {
         }
         return;
       }
+
+      if (!mounted) return;
 
       final tarefaSelecionada = await showDialog<Task>(
         context: context,
@@ -1097,6 +1288,12 @@ class _ATViewState extends State<ATView> {
             duration: const Duration(seconds: 3),
           ),
         );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _atsVinculando.remove(at.id);
+        });
       }
     }
   }
@@ -1226,28 +1423,17 @@ class _ATViewState extends State<ATView> {
     String texto,
     String mensagemSucesso,
   ) async {
-    try {
-      await Clipboard.setData(ClipboardData(text: texto));
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(mensagemSucesso),
-          duration: const Duration(seconds: 1),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Não foi possível copiar: $e'),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 3),
-        ),
-      );
-    }
+    await ClipboardHelper.copyAndNotify(
+      context,
+      texto,
+      successMessage: mensagemSucesso,
+      errorMessage: 'Não foi possível copiar o texto.',
+      duration: const Duration(seconds: 1),
+    );
   }
 
   Widget _buildATCard(AT at) {
+    final colors = context.tfColors;
     final isProgramada = _atsProgramadasIds.contains(at.id);
     final programadasList = isProgramada ? _atsProgramadasInfo[at.id] : null;
     final programadaInfo = programadasList?.isNotEmpty == true
@@ -1440,21 +1626,32 @@ class _ATViewState extends State<ATView> {
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
                     ElevatedButton.icon(
-                      onPressed: () => _criarTarefaDaAT(at),
+                      onPressed: _canEditTasks ? () => _criarTarefaDaAT(at) : null,
                       icon: const Icon(Icons.add_task, size: 18),
                       label: const Text('Criar Tarefa'),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green,
-                        foregroundColor: Colors.white,
+                        backgroundColor: colors.success,
+                        foregroundColor: colors.surface,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(TFRadius.r8)),
                       ),
                     ),
                     const SizedBox(width: 8),
                     OutlinedButton.icon(
-                      onPressed: () => _vincularATATarefaExistente(at),
-                      icon: const Icon(Icons.link, size: 18),
+                      onPressed: _atsVinculando.contains(at.id)
+                          ? null
+                          : () => _vincularATATarefaExistente(at),
+                      icon: _atsVinculando.contains(at.id)
+                          ? SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: colors.primary),
+                            )
+                          : const Icon(Icons.link, size: 18),
                       label: const Text('Vincular a Tarefa'),
                       style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.blue,
+                        foregroundColor: colors.primary,
+                        side: BorderSide(color: colors.borderSubtle),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(TFRadius.r8)),
                       ),
                     ),
                   ],
@@ -1830,12 +2027,145 @@ class _ATViewState extends State<ATView> {
     return Colors.grey;
   }
 
-  Widget _buildTabelaView() {
+  Color _getLocalColor(String? local) {
+    if (local == null || local.isEmpty) return Colors.grey[300]!;
+    final hash = local.hashCode;
+    final colors = [
+      Colors.blue[200]!,
+      Colors.green[200]!,
+      Colors.orange[200]!,
+      Colors.purple[200]!,
+      Colors.teal[200]!,
+      Colors.pink[200]!,
+      Colors.indigo[200]!,
+      Colors.cyan[200]!,
+      Colors.amber[200]!,
+      Colors.lime[200]!,
+    ];
+    return colors[hash.abs() % colors.length];
+  }
+
+  Color _getLocalTextColor(Color backgroundColor) {
+    final brightness = backgroundColor.computeLuminance();
+    return brightness > 0.5 ? Colors.black87 : Colors.white;
+  }
+
+  Task _convertATToTask(AT at) {
+    final listVinc = _atsProgramadasInfo[at.id];
+    final programadaInfo = listVinc?.isNotEmpty == true ? listVinc!.first : null;
+    final tarefaVinc = programadaInfo?['tarefa'] as Map<String, dynamic>?;
+
+    final id = tarefaVinc?['id'] as String? ?? 'simulado_${at.id}';
+    final status = tarefaVinc?['status'] as String? ?? 'ANDA';
+    final regional = tarefaVinc?['regional'] as String? ?? '';
+    final divisao = tarefaVinc?['divisao'] as String? ?? '';
+    final coordenador = tarefaVinc?['coordenador'] as String? ?? '';
+    final nomeTarefa = tarefaVinc?['tarefa'] as String? ?? (at.textoBreve ?? 'AT ${at.autorzTrab}');
+    final tipo = tarefaVinc?['tipo'] as String? ?? 'Manutenção';
+
+    DateTime? inicio = at.dataInicio ?? at.dataCriacao;
+    if (tarefaVinc?['data_inicio'] != null) {
+      if (tarefaVinc!['data_inicio'] is String) {
+        inicio = DateTime.parse(tarefaVinc['data_inicio'] as String);
+      } else {
+        inicio = tarefaVinc['data_inicio'] as DateTime;
+      }
+    }
+
+    DateTime? fim;
+    if (tarefaVinc?['data_fim'] != null) {
+      if (tarefaVinc!['data_fim'] is String) {
+        fim = DateTime.parse(tarefaVinc['data_fim'] as String);
+      } else {
+        fim = tarefaVinc['data_fim'] as DateTime;
+      }
+    } else {
+      fim = at.dataFim ?? (inicio != null ? inicio.add(const Duration(days: 1)) : DateTime.now().add(const Duration(days: 1)));
+    }
+
+    final localStr = at.local ?? at.edificacao ?? at.localInstalacao;
+
+    return Task(
+      id: id,
+      status: status,
+      regional: regional,
+      divisao: divisao,
+      tipo: tipo,
+      tarefa: nomeTarefa,
+      coordenador: coordenador,
+      dataInicio: inicio ?? DateTime.now(),
+      dataFim: fim,
+      locais: [if (localStr != null && localStr.isNotEmpty) localStr],
+    );
+  }
+
+  Widget _buildSplitTabelaGanttView() {
+    final List<Task> tasksForGantt = _ats.map((at) => _convertATToTask(at)).toList();
+
+    DateTime ganttStartDate = DateTime.now().subtract(const Duration(days: 7));
+    DateTime ganttEndDate = DateTime.now().add(const Duration(days: 30));
+
+    if (_ats.isNotEmpty) {
+      DateTime? minDate;
+      DateTime? maxDate;
+      for (final at in _ats) {
+        final listVinc = _atsProgramadasInfo[at.id];
+        final programadaInfo = listVinc?.isNotEmpty == true ? listVinc!.first : null;
+        final tarefaVinc = programadaInfo?['tarefa'] as Map<String, dynamic>?;
+
+        DateTime? inicio = at.dataInicio ?? at.dataCriacao;
+        if (tarefaVinc?['data_inicio'] != null) {
+          inicio = tarefaVinc!['data_inicio'] is String
+              ? DateTime.parse(tarefaVinc['data_inicio'] as String)
+              : tarefaVinc['data_inicio'] as DateTime;
+        }
+
+        DateTime? fim = at.dataFim;
+        if (tarefaVinc?['data_fim'] != null) {
+          fim = tarefaVinc!['data_fim'] is String
+              ? DateTime.parse(tarefaVinc['data_fim'] as String)
+              : tarefaVinc['data_fim'] as DateTime;
+        }
+
+        if (inicio != null) {
+          if (minDate == null || inicio.isBefore(minDate)) minDate = inicio;
+        }
+        if (fim != null) {
+          if (maxDate == null || fim.isAfter(maxDate)) maxDate = fim;
+        }
+      }
+      if (minDate != null) ganttStartDate = minDate.subtract(const Duration(days: 2));
+      if (maxDate != null) ganttEndDate = maxDate.add(const Duration(days: 5));
+    }
+
+    return ResizablePanel(
+      initialLeftWidth: MediaQuery.of(context).size.width * 0.5,
+      minLeftWidth: 200,
+      minRightWidth: 200,
+      leftChild: _buildTabelaView(controller: _tableVerticalScrollController),
+      rightChild: GanttChart(
+        key: ValueKey('gantt_chart_ats_${tasksForGantt.length}_$_ganttScale'),
+        tasks: tasksForGantt,
+        startDate: ganttStartDate,
+        endDate: ganttEndDate,
+        scale: _ganttScale,
+        onScaleChanged: (v) => setState(() => _ganttScale = v),
+        scrollController: _ganttVerticalScrollController,
+      ),
+    );
+  }
+
+  Widget _buildTabelaView({ScrollController? controller}) {
+    final colors = context.tfColors;
+    final now = DateTime.now();
+    final hojeSemHora = DateTime(now.year, now.month, now.day);
+
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: SingleChildScrollView(
+        controller: controller,
         child: DataTable(
-          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
+          headingRowColor: WidgetStateProperty.all(colors.primary.withValues(alpha: 0.08)),
           columns: const [
             DataColumn(
               label: Text(
@@ -1884,7 +2214,7 @@ class _ATViewState extends State<ATView> {
             ),
             DataColumn(
               label: Text(
-                'Local Instalação',
+                'Local',
                 style: TextStyle(fontWeight: FontWeight.bold),
               ),
             ),
@@ -1919,9 +2249,18 @@ class _ATViewState extends State<ATView> {
                 : null;
             final totalVinculacoes = programadasList?.length ?? 0;
 
+            final localStr = at.local ?? at.edificacao ?? at.localInstalacao;
+            final localBg = _getLocalColor(localStr);
+            final localFg = _getLocalTextColor(localBg);
+
+            final fim = at.dataFim;
+            final fimSemHora = fim != null ? DateTime(fim.year, fim.month, fim.day) : null;
+            final isConcluida = (at.statusUsuario ?? '').toUpperCase().contains('CONC');
+            final isVencida = fimSemHora != null && fimSemHora.isBefore(hojeSemHora) && !isConcluida;
+
             return DataRow(
               color: isProgramada && statusColor != null
-                  ? WidgetStateProperty.all(statusColor.withOpacity(0.1))
+                  ? WidgetStateProperty.all(statusColor.withValues(alpha: 0.1))
                   : null,
               cells: [
                 DataCell(
@@ -1929,48 +2268,83 @@ class _ATViewState extends State<ATView> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Tooltip(
-                        message: 'Criar Tarefa',
+                        message: 'Ver Detalhes',
                         child: Material(
                           color: Colors.transparent,
                           child: InkWell(
-                            onTap: () => _criarTarefaDaAT(at),
-                            borderRadius: BorderRadius.circular(4),
+                            onTap: () => _mostrarDetalhesAT(at),
+                            borderRadius: BorderRadius.circular(TFRadius.r4),
                             child: Container(
-                              padding: const EdgeInsets.all(8),
+                              padding: const EdgeInsets.all(6),
                               decoration: BoxDecoration(
-                                color: Colors.green[50],
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(color: Colors.green[300]!),
+                                color: colors.surfaceSecondary,
+                                borderRadius: BorderRadius.circular(TFRadius.r4),
+                                border: Border.all(color: colors.borderSubtle),
                               ),
-                              child: const Icon(
-                                Icons.add_task,
-                                size: 20,
-                                color: Colors.green,
+                              child: Icon(
+                                Icons.visibility,
+                                size: 16,
+                                color: colors.primary,
                               ),
                             ),
                           ),
                         ),
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 6),
+                      Tooltip(
+                        message: 'Criar Tarefa',
+                        child: Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: _canEditTasks ? () => _criarTarefaDaAT(at) : null,
+                            borderRadius: BorderRadius.circular(TFRadius.r4),
+                            child: Container(
+                              padding: const EdgeInsets.all(6),
+                              decoration: BoxDecoration(
+                                color: colors.surfaceSecondary,
+                                borderRadius: BorderRadius.circular(TFRadius.r4),
+                                border: Border.all(color: colors.borderSubtle),
+                              ),
+                              child: Icon(
+                                Icons.add_task,
+                                size: 16,
+                                color: _canEditTasks ? colors.success : colors.textDisabled,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
                       Tooltip(
                         message: 'Vincular a Tarefa',
                         child: Material(
                           color: Colors.transparent,
                           child: InkWell(
-                            onTap: () => _vincularATATarefaExistente(at),
-                            borderRadius: BorderRadius.circular(4),
+                            onTap: _atsVinculando.contains(at.id)
+                                ? null
+                                : () => _vincularATATarefaExistente(at),
+                            borderRadius: BorderRadius.circular(TFRadius.r4),
                             child: Container(
-                              padding: const EdgeInsets.all(8),
+                              padding: const EdgeInsets.all(6),
                               decoration: BoxDecoration(
-                                color: Colors.blue[50],
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(color: Colors.blue[300]!),
+                                color: colors.surfaceSecondary,
+                                borderRadius: BorderRadius.circular(TFRadius.r4),
+                                border: Border.all(color: colors.borderSubtle),
                               ),
-                              child: const Icon(
-                                Icons.link,
-                                size: 20,
-                                color: Colors.blue,
-                              ),
+                              child: _atsVinculando.contains(at.id)
+                                  ? SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: colors.primary,
+                                      ),
+                                    )
+                                  : Icon(
+                                      Icons.link,
+                                      size: 16,
+                                      color: colors.info,
+                                    ),
                             ),
                           ),
                         ),
@@ -2014,7 +2388,7 @@ class _ATViewState extends State<ATView> {
                                     vertical: 2,
                                   ),
                                   decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.3),
+                                    color: Colors.white.withValues(alpha: 0.3),
                                     borderRadius: BorderRadius.circular(8),
                                   ),
                                   child: Text(
@@ -2036,7 +2410,7 @@ class _ATViewState extends State<ATView> {
                             vertical: 4,
                           ),
                           decoration: BoxDecoration(
-                            color: Colors.grey[200],
+                            color: colors.surfaceSecondary,
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: Row(
@@ -2044,14 +2418,14 @@ class _ATViewState extends State<ATView> {
                             children: [
                               Icon(
                                 Icons.cancel_outlined,
-                                color: Colors.grey[600],
+                                color: colors.textSecondary,
                                 size: 14,
                               ),
                               const SizedBox(width: 4),
                               Text(
                                 'Não Programada',
                                 style: TextStyle(
-                                  color: Colors.grey[700],
+                                  color: colors.textSecondary,
                                   fontSize: 10,
                                   fontWeight: FontWeight.w500,
                                 ),
@@ -2082,7 +2456,7 @@ class _ATViewState extends State<ATView> {
                                       fontWeight: FontWeight.w500,
                                       color: totalVinculacoes > 1
                                           ? Colors.orange
-                                          : Colors.blue,
+                                          : colors.primary,
                                       decoration: TextDecoration.underline,
                                     ),
                                     maxLines: 1,
@@ -2114,7 +2488,7 @@ class _ATViewState extends State<ATView> {
                             ),
                           ),
                         )
-                      : const Text('-', style: TextStyle(color: Colors.grey)),
+                      : Text('-', style: TextStyle(color: colors.textSecondary)),
                 ),
                 DataCell(
                   Row(
@@ -2130,10 +2504,10 @@ class _ATViewState extends State<ATView> {
                           at.autorzTrab,
                           'AT copiada!',
                         ),
-                        child: const Icon(
+                        child: Icon(
                           Icons.copy,
                           size: 16,
-                          color: Colors.blue,
+                          color: colors.primary,
                         ),
                       ),
                     ],
@@ -2147,7 +2521,7 @@ class _ATViewState extends State<ATView> {
                       vertical: 4,
                     ),
                     decoration: BoxDecoration(
-                      color: Colors.grey[300],
+                      color: colors.surfaceSecondary,
                       borderRadius: BorderRadius.circular(4),
                     ),
                     child: Text(at.statusUsuario ?? '-'),
@@ -2155,7 +2529,7 @@ class _ATViewState extends State<ATView> {
                 ),
                 DataCell(
                   SizedBox(
-                    width: 300,
+                    width: 260,
                     child: Text(
                       at.textoBreve ?? '-',
                       maxLines: 2,
@@ -2181,11 +2555,20 @@ class _ATViewState extends State<ATView> {
                 ),
                 DataCell(Text(at.statusUsuario ?? '-')),
                 DataCell(
-                  SizedBox(
-                    width: 200,
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: localBg,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
                     child: Text(
-                      at.localInstalacao ?? '-',
-                      maxLines: 2,
+                      localStr ?? '-',
+                      style: TextStyle(
+                        color: localFg,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
@@ -2196,7 +2579,23 @@ class _ATViewState extends State<ATView> {
                   ),
                 ),
                 DataCell(
-                  Text(at.dataFim != null ? _formatDate(at.dataFim!) : '-'),
+                  isVencida
+                      ? Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: colors.danger.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            at.dataFim != null ? _formatDate(at.dataFim!) : '-',
+                            style: TextStyle(
+                              color: colors.danger,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                            ),
+                          ),
+                        )
+                      : Text(at.dataFim != null ? _formatDate(at.dataFim!) : '-'),
                 ),
                 DataCell(Text(at.cen ?? '-')),
               ],

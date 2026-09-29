@@ -298,6 +298,8 @@ class SIService {
     DateTime? dataFim,
     int? limit,
     int? offset,
+    String? orderBy,
+    bool ascending = false,
   }) async {
     try {
       dynamic query = _supabase.from('sis_com_local').select();
@@ -351,7 +353,11 @@ class SIService {
         query = query.lte('data_fim', dataFim.toIso8601String().split('T')[0]);
       }
 
-      query = query.order('created_at', ascending: false);
+      final orderCol = orderBy ?? 'data_inicio';
+      query = query.order(orderCol, ascending: ascending, nullsFirst: false);
+      if (orderCol != 'created_at') {
+        query = query.order('created_at', ascending: false);
+      }
 
       if (limit != null) {
         query = query.limit(limit);
@@ -609,30 +615,30 @@ class SIService {
         return merged;
       }
 
-      // Usar VIEW otimizada do Supabase para buscar todas as contagens de uma vez
-      // Usar .or() para múltiplos valores (já funciona no código)
-      dynamic query = _supabase
-          .from('contagens_sis_tarefas')
-          .select('task_id, quantidade');
-      
-      if (taskIds.length == 1) {
-        query = query.eq('task_id', taskIds[0]);
-      } else {
-        final orConditions = taskIds.map((id) => 'task_id.eq.$id').join(',');
-        query = query.or(orConditions);
+      final chunks = <List<String>>[];
+      for (var i = 0; i < taskIds.length; i += 80) {
+        chunks.add(taskIds.sublist(i, i + 80 > taskIds.length ? taskIds.length : i + 80));
       }
-      
-      final response = await query;
 
       final contagens = <String, int>{};
-      for (var item in response) {
-        final taskId = item['task_id'] as String;
-        final quantidade = item['quantidade'] as int;
-        if (quantidade > 0) {
-          contagens[taskId] = quantidade;
-        }
-      }
+      final futures = chunks.map((chunk) async {
+        try {
+          final response = await _supabase
+              .from('contagens_sis_tarefas')
+              .select('task_id, quantidade')
+              .inFilter('task_id', chunk);
 
+          for (var item in response) {
+            final taskId = item['task_id']?.toString() ?? '';
+            final quantidade = item['quantidade'] as int? ?? 0;
+            if (taskId.isNotEmpty && quantidade > 0) {
+              contagens[taskId] = quantidade;
+            }
+          }
+        } catch (_) {}
+      });
+
+      await Future.wait(futures);
       return contagens;
     } catch (e) {
       print('❌ Erro ao contar SIs das tarefas: $e');

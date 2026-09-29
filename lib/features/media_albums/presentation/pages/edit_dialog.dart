@@ -13,7 +13,10 @@ import '../../../../models/regional.dart';
 import '../../../../models/divisao.dart';
 import '../../../../models/local.dart';
 import 'package:dropdown_search/dropdown_search.dart';
+import '../../../../design_system/taskflow_design_system.dart';
+import '../widgets/status_badge.dart';
 
+/// Diálogo modal TFDS para edição de metadados e hierarquia de imagem de mídia.
 class EditDialog extends StatefulWidget {
   final MediaImage image;
 
@@ -227,7 +230,6 @@ class _EditDialogState extends State<EditDialog> {
     });
   }
 
-  /// Valida se o segmentId existe na lista antes de retornar
   String? _getValidRegionalValue() {
     if (_editedImage.regionalId == null) return null;
     final exists = _regionais.any((r) => r.id == _editedImage.regionalId);
@@ -246,14 +248,12 @@ class _EditDialogState extends State<EditDialog> {
     return exists ? _editedImage.segmentId : null;
   }
 
-  /// Valida se o localId existe na lista antes de retornar
   String? _getValidLocalValue() {
     if (_editedImage.localId == null) return null;
     final exists = _locais.any((l) => l.id == _editedImage.localId);
     return exists ? _editedImage.localId : null;
   }
 
-  /// Valida se o roomId existe na lista antes de retornar
   String? _getValidRoomValue() {
     if (_editedImage.roomId == null) return null;
     final exists = _rooms.any((r) => r.id == _editedImage.roomId);
@@ -278,415 +278,159 @@ class _EditDialogState extends State<EditDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final width = MediaQuery.of(context).size.width;
-    final isMobile = width < 600;
-    final dialogPadding = isMobile ? 12.0 : (width < 1024 ? 20.0 : 24.0);
-    final maxDialogWidth = isMobile ? width * 0.96 : 700.0;
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final spacing = context.tfSpacing;
 
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      insetPadding: EdgeInsets.all(dialogPadding),
-      child: Container(
-        constraints: BoxConstraints(
-          maxWidth: maxDialogWidth,
-          maxHeight: MediaQuery.of(context).size.height * 0.9,
-        ),
-        decoration: BoxDecoration(
-          color: isDark ? const Color(0xFF1e293b) : Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.2),
-              blurRadius: 20,
-              offset: const Offset(0, 10),
-            ),
-          ],
-        ),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+    return TFFormDialog(
+      title: 'Editar Imagem',
+      subtitle: 'Atualize os metadados e hierarquia da mídia.',
+      onCancel: () => Navigator.of(context).pop(),
+      onSave: _save,
+      saveLabel: 'Salvar Alterações',
+      maxWidth: 680,
+      formKey: _formKey,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 1. Dados Básicos
+          TFTextField(
+            label: 'Título *',
+            controller: _titleController,
+            hint: 'Título da foto técnica',
+            validator: (value) {
+              if (value == null || value.trim().isEmpty) {
+                return 'O título é obrigatório';
+              }
+              return null;
+            },
+          ),
+          SizedBox(height: spacing.md),
+          TFTextField(
+            label: 'Descrição',
+            controller: _descriptionController,
+            hint: 'Observações técnicas, anomalias ou detalhes',
+            maxLines: 3,
+          ),
+          SizedBox(height: spacing.lg),
+
+          // 2. Hierarquia de Ativos
+          Row(
             children: [
-              // Header
-              Container(
-                padding: EdgeInsets.all(isMobile ? 16 : 24),
-                decoration: BoxDecoration(
-                  border: Border(
-                    bottom: BorderSide(
-                      color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                      width: 1,
-                    ),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        'Editar Imagem',
-                        style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                          color: isDark ? Colors.white : const Color(0xFF1e293b),
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      icon: Icon(
-                        Icons.close_rounded,
-                        color: isDark ? Colors.grey[400] : Colors.grey[600],
-                      ),
-                    ),
-                  ],
+              Text(
+                'HIERARQUIA DE ATIVOS',
+                style: typography.labelMedium.copyWith(
+                  color: colors.textSecondary,
+                  letterSpacing: 1.1,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
-              // Campos
-              Flexible(
-                child: SingleChildScrollView(
-                  padding: EdgeInsets.all(isMobile ? 16 : 24),
-                  child: _buildFormFields(theme, isDark),
+              if (_loadingReferences) ...[
+                SizedBox(width: spacing.sm),
+                const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2),
                 ),
+              ],
+            ],
+          ),
+          SizedBox(height: spacing.md),
+          TFDropdown<String?>(
+            label: 'Regional',
+            value: _getValidRegionalValue(),
+            items: [null, ..._regionais.map((r) => r.id)],
+            displayText: (id) => id == null ? 'Nenhuma' : _regionais.where((r) => r.id == id).firstOrNull?.regional ?? 'Nenhuma',
+            onChanged: _handleRegionalChanged,
+          ),
+          SizedBox(height: spacing.md),
+          TFDropdown<String?>(
+            label: 'Divisão',
+            value: _getValidDivisaoValue(),
+            items: [null, ..._divisoes.map((d) => d.id)],
+            displayText: (id) => id == null ? 'Nenhuma' : _divisoes.where((d) => d.id == id).firstOrNull?.divisao ?? 'Nenhuma',
+            onChanged: _handleDivisaoChanged,
+          ),
+          SizedBox(height: spacing.md),
+          TFDropdown<String?>(
+            label: 'Segmento',
+            value: _getValidSegmentValue(),
+            items: [null, ..._segments.map((s) => s.id)],
+            displayText: (id) => id == null ? 'Nenhum' : _segments.where((s) => s.id == id).firstOrNull?.name ?? 'Nenhum',
+            onChanged: _handleSegmentChanged,
+          ),
+          SizedBox(height: spacing.md),
+          _buildLocalDropdown(context, colors, typography, spacing),
+          SizedBox(height: spacing.md),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: _buildSalaDropdown(context, colors, typography, spacing),
               ),
-              // Botões
-              Container(
-                padding: EdgeInsets.all(isMobile ? 16 : 24),
-                decoration: BoxDecoration(
-                  color: isDark ? const Color(0xFF0f172a).withOpacity(0.5) : const Color(0xFFf8fafc),
-                  border: Border(
-                    top: BorderSide(
-                      color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                      width: 1,
-                    ),
-                  ),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    OutlinedButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                        side: BorderSide(
-                          color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                      ),
-                      child: Text(
-                        'Cancelar',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          color: isDark ? Colors.grey[300] : const Color(0xFF1e293b),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    ElevatedButton(
-                      onPressed: _save,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF1e40af),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        elevation: 4,
-                      ),
-                      child: const Text(
-                        'Salvar Alterações',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+              SizedBox(width: spacing.md),
+              Expanded(
+                child: _buildStatusField(context, colors, typography, spacing),
               ),
             ],
           ),
-        ),
+          SizedBox(height: spacing.lg),
+
+          // 3. Tags
+          Text(
+            'Tags',
+            style: typography.labelMedium.copyWith(
+              color: colors.textPrimary,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          SizedBox(height: spacing.xs),
+          _buildTagsContainer(colors, typography, spacing),
+        ],
       ),
     );
   }
 
-  Widget _buildFormFields(ThemeData theme, bool isDark) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // Título e Descrição
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _buildFloatingLabelField(
-              context,
-              'Título *',
-              _titleController,
-              validator: (value) {
-                if (value == null || value.trim().isEmpty) {
-                  return 'O título é obrigatório';
-                }
-                return null;
-              },
-              isDark: isDark,
-            ),
-            const SizedBox(height: 16),
-            _buildFloatingLabelTextArea(
-              context,
-              'Descrição',
-              _descriptionController,
-              isDark: isDark,
-            ),
-          ],
-        ),
-        const SizedBox(height: 24),
-        // Divisor
-        Divider(
-          color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-          height: 32,
-        ),
-        // Hierarquia
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              'HIERARQUIA DE ATIVOS',
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 1.2,
-                color: isDark ? Colors.grey[500] : Colors.grey[500],
-              ),
-            ),
-            const SizedBox(height: 16),
-            _buildFloatingLabelDropdown<String>(
-              context,
-              'Regional',
-              _getValidRegionalValue(),
-              [
-                const DropdownMenuItem(value: null, child: Text('Nenhuma')),
-                ..._regionais.map((r) => DropdownMenuItem(
-                      value: r.id,
-                      child: Text(r.regional),
-                    )),
-              ],
-              _handleRegionalChanged,
-              isDark: isDark,
-            ),
-            const SizedBox(height: 16),
-            _buildFloatingLabelDropdown<String>(
-              context,
-              'Divisão',
-              _getValidDivisaoValue(),
-              [
-                const DropdownMenuItem(value: null, child: Text('Nenhuma')),
-                ..._divisoes.map((d) => DropdownMenuItem(
-                      value: d.id,
-                      child: Text(d.divisao),
-                    )),
-              ],
-              _handleDivisaoChanged,
-              isDark: isDark,
-            ),
-            const SizedBox(height: 16),
-            _buildFloatingLabelDropdown<String>(
-              context,
-              'Segmento',
-              _getValidSegmentValue(),
-              [
-                const DropdownMenuItem(value: null, child: Text('Nenhum')),
-                ..._segments.map((s) => DropdownMenuItem(
-                      value: s.id,
-                      child: Text(s.name),
-                    )),
-              ],
-              _handleSegmentChanged,
-              isDark: isDark,
-            ),
-            const SizedBox(height: 16),
-            _buildLocalDropdownWithSearch(context, isDark),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: _buildSalaDropdownWithSearch(context, isDark),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: _buildStatusField(context, isDark),
-                ),
-              ],
-            ),
-          ],
-        ),
-        const SizedBox(height: 24),
-        // Tags
-        Text(
-          'Tags',
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w500,
-            color: isDark ? Colors.grey[300] : const Color(0xFF1e293b),
-          ),
-        ),
-        const SizedBox(height: 8),
-        _buildTagsField(context, isDark),
-      ],
-    );
-  }
-
-  Widget _buildFloatingLabelField(
+  Widget _buildLocalDropdown(
     BuildContext context,
-    String label,
-    TextEditingController controller, {
-    String? Function(String?)? validator,
-    bool isDark = false,
-  }) {
-    return Stack(
-      children: [
-        TextFormField(
-          controller: controller,
-          validator: validator,
-          style: TextStyle(
-            color: isDark ? Colors.white : const Color(0xFF1e293b),
-          ),
-          decoration: InputDecoration(
-            contentPadding: const EdgeInsets.only(top: 20, bottom: 8, left: 12, right: 12),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(
-                color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-              ),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(
-                color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-              ),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: const BorderSide(
-                color: Color(0xFF2563eb),
-                width: 2,
-              ),
-            ),
-            filled: false,
-          ),
-        ),
-        Positioned(
-          left: 12,
-          top: 0,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            color: isDark ? const Color(0xFF1e293b) : Colors.white,
-            child: Text(
-              label,
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
-                color: isDark ? Colors.grey[500] : Colors.grey[500],
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildFloatingLabelTextArea(
-    BuildContext context,
-    String label,
-    TextEditingController controller, {
-    bool isDark = false,
-  }) {
-    return Stack(
-      children: [
-        TextFormField(
-          controller: controller,
-          maxLines: 3,
-          style: TextStyle(
-            color: isDark ? Colors.white : const Color(0xFF1e293b),
-          ),
-          decoration: InputDecoration(
-            contentPadding: const EdgeInsets.only(top: 20, bottom: 8, left: 12, right: 12),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(
-                color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-              ),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(
-                color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-              ),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: const BorderSide(
-                color: Color(0xFF2563eb),
-                width: 2,
-              ),
-            ),
-            filled: false,
-          ),
-        ),
-        Positioned(
-          left: 12,
-          top: 0,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            color: isDark ? const Color(0xFF1e293b) : Colors.white,
-            child: Text(
-              label,
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
-                color: isDark ? Colors.grey[500] : Colors.grey[500],
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildLocalDropdownWithSearch(BuildContext context, bool isDark) {
+    dynamic colors,
+    dynamic typography,
+    dynamic spacing,
+  ) {
     final validLocalId = _getValidLocalValue();
     final selectedLocal = validLocalId != null
         ? _locais.where((l) => l.id == validLocalId).firstOrNull
         : null;
-    return Stack(
-      clipBehavior: Clip.none,
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Text(
+          'Local',
+          style: typography.label.copyWith(color: colors.textPrimary),
+        ),
+        SizedBox(height: spacing.xs),
         DropdownSearch<Local>(
           popupProps: PopupProps.menu(
             showSearchBox: true,
             searchFieldProps: TextFieldProps(
+              autofocus: true,
               decoration: InputDecoration(
                 hintText: 'Digite para buscar local...',
+                contentPadding: EdgeInsets.symmetric(horizontal: spacing.md, vertical: spacing.sm),
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: BorderSide(
-                    color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-                  ),
+                  borderRadius: TFRadius.borderRadiusMd,
+                  borderSide: BorderSide(color: colors.borderDefault),
                 ),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                filled: true,
-                fillColor: isDark ? const Color(0xFF1e293b) : Colors.white,
               ),
             ),
             menuProps: MenuProps(
               elevation: 4,
-              color: isDark ? const Color(0xFF1e293b) : Colors.white,
+              color: colors.surface,
             ),
             constraints: BoxConstraints(
-              maxHeight: MediaQuery.of(context).size.height * 0.5,
-              minHeight: 200,
+              maxHeight: MediaQuery.of(context).size.height * 0.45,
+              minHeight: 180,
             ),
           ),
           items: (String filter, LoadProps? loadProps) async => _locais,
@@ -703,96 +447,78 @@ class _EditDialogState extends State<EditDialog> {
           },
           decoratorProps: DropDownDecoratorProps(
             decoration: InputDecoration(
-              contentPadding: const EdgeInsets.only(top: 20, bottom: 8, left: 12, right: 32),
+              contentPadding: EdgeInsets.symmetric(horizontal: spacing.md, vertical: spacing.sm),
               border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-                borderSide: BorderSide(
-                  color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-                ),
+                borderRadius: TFRadius.borderRadiusMd,
+                borderSide: BorderSide(color: colors.borderDefault),
               ),
               enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-                borderSide: BorderSide(
-                  color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-                ),
+                borderRadius: TFRadius.borderRadiusMd,
+                borderSide: BorderSide(color: colors.borderDefault),
               ),
               focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-                borderSide: const BorderSide(
-                  color: Color(0xFF2563eb),
-                  width: 2,
-                ),
+                borderRadius: TFRadius.borderRadiusMd,
+                borderSide: BorderSide(color: colors.primary, width: 2),
               ),
-              filled: false,
+              filled: true,
+              fillColor: colors.surface,
             ),
           ),
           dropdownBuilder: (context, selectedItem) {
-            return Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                selectedItem?.local ?? 'Nenhum',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: isDark ? Colors.white : const Color(0xFF1e293b),
-                ),
-                overflow: TextOverflow.ellipsis,
+            return Text(
+              selectedItem?.local ?? 'Nenhum local selecionado',
+              style: typography.bodyMedium.copyWith(
+                color: selectedItem != null ? colors.textPrimary : colors.textPlaceholder,
               ),
+              overflow: TextOverflow.ellipsis,
             );
           },
-        ),
-        Positioned(
-          left: 12,
-          top: 0,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            color: isDark ? const Color(0xFF1e293b) : Colors.white,
-            child: Text(
-              'LOCAL',
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
-                color: isDark ? Colors.grey[500] : Colors.grey[500],
-              ),
-            ),
-          ),
         ),
       ],
     );
   }
 
-  Widget _buildSalaDropdownWithSearch(BuildContext context, bool isDark) {
+  Widget _buildSalaDropdown(
+    BuildContext context,
+    dynamic colors,
+    dynamic typography,
+    dynamic spacing,
+  ) {
     final enabled = _editedImage.localId != null;
     final validRoomId = _getValidRoomValue();
     final selectedRoom = validRoomId != null
         ? _rooms.where((r) => r.id == validRoomId).firstOrNull
         : null;
-    final widget = Stack(
-      clipBehavior: Clip.none,
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Text(
+          'Sala',
+          style: typography.label.copyWith(color: colors.textPrimary),
+        ),
+        SizedBox(height: spacing.xs),
         DropdownSearch<Room>(
           popupProps: PopupProps.menu(
             showSearchBox: true,
             searchFieldProps: TextFieldProps(
+              autofocus: true,
               decoration: InputDecoration(
                 hintText: 'Digite para buscar sala...',
+                contentPadding: EdgeInsets.symmetric(horizontal: spacing.md, vertical: spacing.sm),
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: BorderSide(
-                    color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-                  ),
+                  borderRadius: TFRadius.borderRadiusMd,
+                  borderSide: BorderSide(color: colors.borderDefault),
                 ),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                filled: true,
-                fillColor: isDark ? const Color(0xFF1e293b) : Colors.white,
               ),
             ),
             menuProps: MenuProps(
               elevation: 4,
-              color: isDark ? const Color(0xFF1e293b) : Colors.white,
+              color: colors.surface,
             ),
             constraints: BoxConstraints(
-              maxHeight: MediaQuery.of(context).size.height * 0.5,
-              minHeight: 200,
+              maxHeight: MediaQuery.of(context).size.height * 0.45,
+              minHeight: 180,
             ),
           ),
           items: (String filter, LoadProps? loadProps) async => _rooms,
@@ -814,364 +540,163 @@ class _EditDialogState extends State<EditDialog> {
           },
           decoratorProps: DropDownDecoratorProps(
             decoration: InputDecoration(
-              contentPadding: const EdgeInsets.only(top: 20, bottom: 8, left: 12, right: 32),
+              contentPadding: EdgeInsets.symmetric(horizontal: spacing.md, vertical: spacing.sm),
               border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-                borderSide: BorderSide(
-                  color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-                ),
+                borderRadius: TFRadius.borderRadiusMd,
+                borderSide: BorderSide(color: colors.borderDefault),
               ),
               enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-                borderSide: BorderSide(
-                  color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-                ),
+                borderRadius: TFRadius.borderRadiusMd,
+                borderSide: BorderSide(color: colors.borderDefault),
               ),
               focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-                borderSide: const BorderSide(
-                  color: Color(0xFF2563eb),
-                  width: 2,
-                ),
+                borderRadius: TFRadius.borderRadiusMd,
+                borderSide: BorderSide(color: colors.primary, width: 2),
               ),
-              filled: false,
+              filled: true,
+              fillColor: colors.surface,
             ),
           ),
           dropdownBuilder: (context, selectedItem) {
-            return Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                selectedItem?.name ?? 'Nenhuma',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: isDark ? Colors.white : const Color(0xFF1e293b),
-                ),
-                overflow: TextOverflow.ellipsis,
+            return Text(
+              selectedItem?.name ?? (enabled ? 'Nenhuma sala selecionada' : 'Selecione um local primeiro'),
+              style: typography.bodyMedium.copyWith(
+                color: selectedItem != null ? colors.textPrimary : colors.textPlaceholder,
               ),
+              overflow: TextOverflow.ellipsis,
             );
           },
         ),
-        Positioned(
-          left: 12,
-          top: 0,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            color: isDark ? const Color(0xFF1e293b) : Colors.white,
-            child: Text(
-              'SALA',
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
-                color: isDark ? Colors.grey[500] : Colors.grey[500],
-              ),
-            ),
-          ),
-        ),
       ],
     );
-    if (!enabled) {
-      return IgnorePointer(
-        child: Opacity(opacity: 0.6, child: widget),
-      );
-    }
-    return widget;
   }
 
-  Widget _buildFloatingLabelDropdown<T>(
+  Widget _buildStatusField(
     BuildContext context,
-    String label,
-    T? value,
-    List<DropdownMenuItem<T>> items,
-    ValueChanged<T?>? onChanged, {
-    bool isDark = false,
-  }) {
-    return Stack(
-      children: [
-        DropdownButtonFormField<T>(
-          initialValue: value,
-          items: items,
-          onChanged: onChanged,
-          style: TextStyle(
-            color: isDark ? Colors.white : const Color(0xFF1e293b),
-            fontSize: 14,
-          ),
-          decoration: InputDecoration(
-            contentPadding: const EdgeInsets.only(top: 20, bottom: 8, left: 12, right: 32),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(
-                color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-              ),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(
-                color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-              ),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: const BorderSide(
-                color: Color(0xFF2563eb),
-                width: 2,
-              ),
-            ),
-            filled: false,
-          ),
-          icon: Icon(
-            Icons.expand_more_rounded,
-            color: isDark ? Colors.grey[400] : Colors.grey[500],
-          ),
-          dropdownColor: isDark ? const Color(0xFF1e293b) : Colors.white,
-        ),
-        Positioned(
-          left: 12,
-          top: 0,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            color: isDark ? const Color(0xFF1e293b) : Colors.white,
-            child: Text(
-              label.toUpperCase(),
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
-                color: isDark ? Colors.grey[500] : Colors.grey[500],
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildStatusField(BuildContext context, bool isDark) {
-    // Usar statusAlbum se disponível, senão usar status enum
+    dynamic colors,
+    dynamic typography,
+    dynamic spacing,
+  ) {
     final selectedStatusAlbumId = _editedImage.statusAlbumId;
-    final selectedStatus = selectedStatusAlbumId != null
+    final selectedStatus = selectedStatusAlbumId != null && _statusAlbums.isNotEmpty
         ? _statusAlbums.firstWhere(
             (s) => s.id == selectedStatusAlbumId,
-            orElse: () => _statusAlbums.isNotEmpty ? _statusAlbums.first : StatusAlbum(id: '', nome: 'Revisão'),
+            orElse: () => _statusAlbums.first,
           )
         : null;
 
-    return Stack(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Text(
+          'Status',
+          style: typography.labelMedium.copyWith(color: colors.textPrimary),
+        ),
+        SizedBox(height: spacing.xs),
         Container(
-          padding: const EdgeInsets.only(top: 20, bottom: 8, left: 12, right: 12),
+          padding: EdgeInsets.symmetric(horizontal: spacing.md, vertical: spacing.xs),
           decoration: BoxDecoration(
-            border: Border.all(
-              color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-            ),
-            borderRadius: BorderRadius.circular(8),
+            color: colors.surface,
+            borderRadius: TFRadius.borderRadiusMd,
+            border: Border.all(color: colors.borderDefault),
           ),
           child: Row(
             children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: selectedStatus != null
-                      ? selectedStatus.backgroundColor
-                      : _getStatusColor(_editedImage.status, isDark),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      selectedStatus != null
-                          ? _getStatusIconFromName(selectedStatus.nome)
-                          : _getStatusIcon(_editedImage.status),
-                      size: 14,
-                      color: selectedStatus != null
-                          ? selectedStatus.textColor
-                          : _getStatusColor(_editedImage.status, isDark),
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      selectedStatus != null
-                          ? selectedStatus.nome
-                          : _editedImage.status.displayName,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: selectedStatus != null
-                            ? selectedStatus.textColor
-                            : _getStatusColor(_editedImage.status, isDark),
-                      ),
-                    ),
-                  ],
-                ),
+              StatusBadge(
+                status: _editedImage.status,
+                statusAlbum: selectedStatus,
               ),
-              const SizedBox(width: 8),
+              SizedBox(width: spacing.sm),
               Expanded(
-                child: _statusAlbums.isEmpty
-                    ? Center(
-                        child: _loadingReferences
-                            ? const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(strokeWidth: 2),
-                              )
-                            : Text(
-                                'Nenhum status disponível',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: isDark ? Colors.grey[400] : Colors.grey[600],
-                                ),
-                              ),
-                      )
-                    : DropdownButtonHideUnderline(
-                        child: DropdownButton<String>(
-                          value: selectedStatusAlbumId ?? (_statusAlbums.isNotEmpty ? _statusAlbums.first.id : null),
-                          items: [
-                            ..._statusAlbums.map((s) => DropdownMenuItem<String>(
-                                  value: s.id,
-                                  child: Row(
-                                    children: [
-                                      Container(
-                                        width: 16,
-                                        height: 16,
-                                        decoration: BoxDecoration(
-                                          color: s.backgroundColor,
-                                          shape: BoxShape.circle,
-                                          border: Border.all(
-                                            color: s.textColor,
-                                            width: 1,
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Text(s.nome),
-                                    ],
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    value: selectedStatusAlbumId,
+                    items: [
+                      ..._statusAlbums.map((s) => DropdownMenuItem<String>(
+                            value: s.id,
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 12,
+                                  height: 12,
+                                  decoration: BoxDecoration(
+                                    color: s.backgroundColor,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(color: s.textColor, width: 1),
                                   ),
-                                )),
-                          ],
-                          onChanged: (value) {
-                            if (value != null) {
-                              setState(() {
-                                _editedImage = _editedImage.copyWith(statusAlbumId: value);
-                                // Atualizar status enum para compatibilidade
-                                final statusAlbum = _statusAlbums.firstWhere(
-                                  (s) => s.id == value,
-                                  orElse: () => _statusAlbums.isNotEmpty ? _statusAlbums.first : StatusAlbum(id: '', nome: 'Revisão'),
-                                );
-                                MediaImageStatus newStatus;
-                                if (statusAlbum.nome.toLowerCase().contains('ok')) {
-                                  newStatus = MediaImageStatus.ok;
-                                } else if (statusAlbum.nome.toLowerCase().contains('atenção') || statusAlbum.nome.toLowerCase().contains('atencao')) {
-                                  newStatus = MediaImageStatus.attention;
-                                } else {
-                                  newStatus = MediaImageStatus.review;
-                                }
-                                _editedImage = _editedImage.copyWith(status: newStatus);
-                              });
-                            }
-                          },
-                          style: TextStyle(
-                            color: isDark ? Colors.white : const Color(0xFF1e293b),
-                            fontSize: 14,
-                          ),
-                          dropdownColor: isDark ? const Color(0xFF1e293b) : Colors.white,
-                          icon: const SizedBox.shrink(),
-                        ),
-                      ),
+                                ),
+                                SizedBox(width: spacing.xs),
+                                Text(
+                                  s.nome,
+                                  style: typography.bodyMedium.copyWith(color: colors.textPrimary),
+                                ),
+                              ],
+                            ),
+                          )),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() {
+                          _editedImage = _editedImage.copyWith(statusAlbumId: value);
+                        });
+                      }
+                    },
+                    dropdownColor: colors.surface,
+                    icon: Icon(TFIcons.chevronDown, size: 16, color: colors.textSecondary),
+                  ),
+                ),
               ),
             ],
           ),
         ),
-        Positioned(
-          left: 12,
-          top: 0,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            color: isDark ? const Color(0xFF1e293b) : Colors.white,
-            child: Text(
-              'STATUS',
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
-                color: isDark ? Colors.grey[500] : Colors.grey[500],
-              ),
-            ),
-          ),
-        ),
       ],
     );
   }
 
-  IconData _getStatusIcon(MediaImageStatus status) {
-    switch (status) {
-      case MediaImageStatus.ok:
-        return Icons.check_circle_rounded;
-      case MediaImageStatus.attention:
-        return Icons.error_outline_rounded;
-      case MediaImageStatus.review:
-        return Icons.feedback_rounded;
-    }
-  }
-
-  IconData _getStatusIconFromName(String nome) {
-    final nomeLower = nome.toLowerCase();
-    if (nomeLower.contains('ok') || nomeLower.contains('aprovado')) {
-      return Icons.check_circle_rounded;
-    } else if (nomeLower.contains('atenção') || nomeLower.contains('alerta') || nomeLower.contains('erro') || nomeLower.contains('atencao')) {
-      return Icons.error_outline_rounded;
-    } else {
-      return Icons.feedback_rounded;
-    }
-  }
-
-  Color _getStatusColor(MediaImageStatus status, bool isDark) {
-    switch (status) {
-      case MediaImageStatus.ok:
-        return isDark ? const Color(0xFF6ee7b7) : const Color(0xFF065f46);
-      case MediaImageStatus.attention:
-        return isDark ? const Color(0xFFfca5a5) : const Color(0xFF991b1b);
-      case MediaImageStatus.review:
-        return isDark ? const Color(0xFFfbbf24) : const Color(0xFF92400e);
-    }
-  }
-
-  Widget _buildTagsField(BuildContext context, bool isDark) {
+  Widget _buildTagsContainer(
+    dynamic colors,
+    dynamic typography,
+    dynamic spacing,
+  ) {
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: EdgeInsets.all(spacing.sm),
       decoration: BoxDecoration(
-        border: Border.all(
-          color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-        ),
-        borderRadius: BorderRadius.circular(8),
+        color: colors.surface,
+        borderRadius: TFRadius.borderRadiusMd,
+        border: Border.all(color: colors.borderDefault),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Wrap(
-            spacing: 8,
-            runSpacing: 8,
+            spacing: spacing.xs,
+            runSpacing: spacing.xs,
             children: [
               ..._editedImage.tags.map((tag) {
                 return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: EdgeInsets.symmetric(horizontal: spacing.sm, vertical: spacing.xxs),
                   decoration: BoxDecoration(
-                    color: isDark ? const Color(0xFF334155) : const Color(0xFFf1f5f9),
-                    borderRadius: BorderRadius.circular(6),
+                    color: colors.surfaceSecondary,
+                    borderRadius: TFRadius.borderRadiusSm,
+                    border: Border.all(color: colors.borderSubtle),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                        tag.startsWith('#') ? tag : '#$tag',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: isDark ? Colors.grey[300] : Colors.grey[700],
+                        tag,
+                        style: typography.bodySmall.copyWith(
+                          color: colors.textPrimary,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
-                      const SizedBox(width: 4),
+                      SizedBox(width: spacing.xxs),
                       InkWell(
                         onTap: () => _removeTag(tag),
                         child: Icon(
-                          Icons.close_rounded,
+                          TFIcons.close,
                           size: 14,
-                          color: isDark ? Colors.grey[400] : Colors.grey[600],
+                          color: colors.textSecondary,
                         ),
                       ),
                     ],
@@ -1182,34 +707,26 @@ class _EditDialogState extends State<EditDialog> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   SizedBox(
-                    width: 100,
+                    width: 140,
                     child: TextField(
                       controller: _tagController,
-                      style: TextStyle(
-                        color: isDark ? Colors.white : const Color(0xFF1e293b),
-                        fontSize: 14,
-                      ),
+                      style: typography.bodyMedium.copyWith(color: colors.textPrimary),
                       decoration: InputDecoration(
                         hintText: 'Adicionar tag...',
-                        hintStyle: TextStyle(
-                          color: isDark ? Colors.grey[500] : Colors.grey[400],
-                          fontSize: 14,
-                        ),
+                        hintStyle: typography.bodySmall.copyWith(color: colors.textPlaceholder),
                         border: InputBorder.none,
-                        contentPadding: EdgeInsets.zero,
+                        contentPadding: EdgeInsets.symmetric(horizontal: spacing.xs),
                         isDense: true,
                       ),
                       onSubmitted: (_) => _addTag(),
                     ),
                   ),
-                  IconButton(
-                    icon: Icon(
-                      Icons.add_circle_rounded,
-                      color: isDark ? Colors.grey[400] : Colors.grey[500],
-                    ),
+                  TFIconButton(
+                    icon: TFIcons.add,
+                    tooltip: 'Adicionar tag',
+                    variant: TFIconButtonVariant.subtle,
+                    iconSize: 16,
                     onPressed: _addTag,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
                   ),
                 ],
               ),

@@ -33,20 +33,19 @@ class ConflictDetection {
     final tipo = task.tipo.trim().toUpperCase();
     if (tipo == 'ADMIN' || tipo == 'ADM' || tipo == 'REUNIAO') return true;
 
-    // No frontend, a filtragem de status foi desativada para teste (deixando apenas o backend)
-    // final cod = task.status.trim().toUpperCase();
-    // final nome = task.statusNome.trim().toUpperCase();
-    // if (cod.isEmpty && nome.isEmpty) return false;
-    // if (cod == 'CANC' || cod == 'RPGR' || cod == 'REPR' || cod == 'RPAR') {
-    //   return true;
-    // }
-    // if (cod == 'REPROGRAMADA' || cod == 'CANCELADA' || cod == 'CANCELADO') {
-    //   return true;
-    // }
-    // if (nome.contains('CANCELAD') || nome.contains('REPROGRAMAD')) return true;
-    // if (cod.contains('RPGR') || cod.contains('REPR') || cod.contains('CANC')) {
-    //   return true;
-    // }
+    final cod = task.status.trim().toUpperCase();
+    final nome = task.statusNome.trim().toUpperCase();
+    if (cod.isEmpty && nome.isEmpty) return false;
+    if (cod == 'CANC' || cod == 'RPGR' || cod == 'REPR' || cod == 'RPAR') {
+      return true;
+    }
+    if (cod == 'REPROGRAMADA' || cod == 'CANCELADA' || cod == 'CANCELADO') {
+      return true;
+    }
+    if (nome.contains('CANCELAD') || nome.contains('REPROGRAMAD')) return true;
+    if (cod.contains('RPGR') || cod.contains('REPR') || cod.contains('CANC')) {
+      return true;
+    }
     return false;
   }
 

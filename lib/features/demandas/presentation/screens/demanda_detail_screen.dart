@@ -2,11 +2,24 @@ import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:intl/intl.dart';
-import '../../data/models/demanda_model.dart';
+import '../../../../design_system/components/buttons/tf_button.dart';
+import '../../../../design_system/components/buttons/tf_icon_button.dart';
+import '../../../../design_system/components/cards/tf_card.dart';
+import '../../../../design_system/components/dialogs/tf_modal_dialog.dart';
+import '../../../../design_system/components/feedback/tf_empty_state.dart';
+import '../../../../design_system/components/feedback/tf_loading.dart';
+import '../../../../design_system/components/layout/tf_page_header.dart';
+import '../../../../design_system/components/status/tf_status_badge.dart';
+import '../../../../design_system/foundations/tf_breakpoints.dart';
+import '../../../../design_system/foundations/tf_icons.dart';
+import '../../../../design_system/foundations/tf_radius.dart';
+import '../../../../design_system/theme/taskflow_theme_extension.dart';
 import '../../data/models/demanda_anexo_model.dart';
 import '../../data/models/demanda_historico_model.dart';
+import '../../data/models/demanda_model.dart';
 import '../../data/services/demanda_service.dart';
 import '../widgets/demanda_prazo_helper.dart';
+import '../widgets/demanda_status_mapper.dart';
 import 'demanda_form_screen.dart';
 
 class DemandaDetailScreen extends StatefulWidget {
@@ -46,59 +59,34 @@ class _DemandaDetailScreenState extends State<DemandaDetailScreen> {
       final anexos = await _demandaService.listarAnexos(widget.demandaId);
       final hist = await _demandaService.listarHistorico(widget.demandaId);
 
-      setState(() {
-        _demanda = demanda;
-        _anexos = anexos;
-        _historico = hist;
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _demanda = demanda;
+          _anexos = anexos;
+          _historico = hist;
+          _isLoading = false;
+        });
+      }
     } catch (e) {
-      setState(() {
-        _erroMsg = 'Erro ao carregar detalhes da demanda: $e';
-        _isLoading = false;
-      });
-    }
-  }
-
-  Color _obterCorStatus(String status) {
-    switch (status) {
-      case 'Aberta':
-        return Colors.blue;
-      case 'Em análise':
-        return Colors.purple;
-      case 'Programada':
-        return Colors.cyan;
-      case 'Em execução':
-        return Colors.orange;
-      case 'Aguardando terceiros':
-      case 'Aguardando material':
-        return Colors.amber;
-      case 'Concluída':
-        return Colors.green;
-      case 'Cancelada':
-      case 'Suspensa':
-        return Colors.red;
-      default:
-        return Colors.grey;
+      if (mounted) {
+        setState(() {
+          _erroMsg = 'Erro ao carregar detalhes da demanda: $e';
+          _isLoading = false;
+        });
+      }
     }
   }
 
   Future<void> _concluirRapido() async {
     if (_demanda == null) return;
 
-    final confirmar = await showDialog<bool>(
+    final confirmar = await TFModalDialog.confirm(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Concluir demanda'),
-        content: const Text('Confirmar a conclusão desta demanda operacional?'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Concluir', style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
-          ),
-        ],
-      ),
+      title: 'Concluir demanda',
+      message: 'Confirmar a conclusão desta demanda operacional?',
+      confirmLabel: 'Concluir',
+      cancelLabel: 'Cancelar',
+      isDestructive: false,
     );
 
     if (confirmar == true) {
@@ -110,14 +98,18 @@ class _DemandaDetailScreenState extends State<DemandaDetailScreen> {
         );
         await _demandaService.atualizarDemanda(atualizada, versaoAnterior: _demanda);
         await _carregarDetalhes();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Demanda concluída com sucesso!')),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Demanda concluída com sucesso!')),
+          );
+        }
       } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erro ao concluir demanda: $e')),
-        );
-        setState(() => _isLoading = false);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Erro ao concluir demanda: $e')),
+          );
+          setState(() => _isLoading = false);
+        }
       }
     }
   }
@@ -125,19 +117,13 @@ class _DemandaDetailScreenState extends State<DemandaDetailScreen> {
   Future<void> _cancelarDemanda() async {
     if (_demanda == null) return;
 
-    final confirmar = await showDialog<bool>(
+    final confirmar = await TFModalDialog.confirm(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Cancelar demanda'),
-        content: const Text('Deseja realmente cancelar esta demanda operacional?'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Voltar')),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Cancelar Demanda', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
-          ),
-        ],
-      ),
+      title: 'Cancelar demanda',
+      message: 'Deseja realmente cancelar esta demanda operacional?',
+      confirmLabel: 'Cancelar Demanda',
+      cancelLabel: 'Voltar',
+      isDestructive: true,
     );
 
     if (confirmar == true) {
@@ -146,14 +132,18 @@ class _DemandaDetailScreenState extends State<DemandaDetailScreen> {
         final atualizada = _demanda!.copyWith(status: 'Cancelada');
         await _demandaService.atualizarDemanda(atualizada, versaoAnterior: _demanda);
         await _carregarDetalhes();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Demanda cancelada com sucesso!')),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Demanda cancelada com sucesso!')),
+          );
+        }
       } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erro ao cancelar demanda: $e')),
-        );
-        setState(() => _isLoading = false);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Erro ao cancelar demanda: $e')),
+          );
+          setState(() => _isLoading = false);
+        }
       }
     }
   }
@@ -183,33 +173,33 @@ class _DemandaDetailScreenState extends State<DemandaDetailScreen> {
         mimeType: file.extension,
       );
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Evidência anexada com sucesso!')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Evidência anexada com sucesso!')),
+        );
+      }
       await _carregarDetalhes();
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erro ao anexar arquivo: $e')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro ao anexar arquivo: $e')),
+        );
+      }
     } finally {
-      setState(() => _isUploading = false);
+      if (mounted) {
+        setState(() => _isUploading = false);
+      }
     }
   }
 
   Future<void> _excluirAnexo(DemandaAnexo anexo) async {
-    final confirmar = await showDialog<bool>(
+    final confirmar = await TFModalDialog.confirm(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Excluir anexo'),
-        content: Text('Excluir permanentemente "${anexo.fileName}"?'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Excluir', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
+      title: 'Excluir anexo',
+      message: 'Excluir permanentemente o anexo "${anexo.fileName}"?',
+      confirmLabel: 'Excluir',
+      cancelLabel: 'Cancelar',
+      isDestructive: true,
     );
 
     if (confirmar == true) {
@@ -217,14 +207,18 @@ class _DemandaDetailScreenState extends State<DemandaDetailScreen> {
       try {
         await _demandaService.excluirAnexo(anexo);
         await _carregarDetalhes();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Anexo removido!')),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Anexo removido com sucesso!')),
+          );
+        }
       } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Falha ao excluir anexo: $e')),
-        );
-        setState(() => _isLoading = false);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Falha ao excluir anexo: $e')),
+          );
+          setState(() => _isLoading = false);
+        }
       }
     }
   }
@@ -236,19 +230,25 @@ class _DemandaDetailScreenState extends State<DemandaDetailScreen> {
       if (await canLaunchUrl(uri)) {
         await launchUrl(uri, mode: LaunchMode.externalApplication);
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Não foi possível abrir a URL do arquivo')),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Não foi possível abrir a URL do arquivo')),
+          );
+        }
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erro ao abrir anexo: $e')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro ao abrir anexo: $e')),
+        );
+      }
     }
   }
 
   void _exibirImagemCheia(DemandaAnexo anexo) {
     if (anexo.fileUrl == null) return;
+    final colors = context.tfColors;
+
     showDialog(
       context: context,
       builder: (ctx) => Dialog(
@@ -257,14 +257,20 @@ class _DemandaDetailScreenState extends State<DemandaDetailScreen> {
           alignment: Alignment.center,
           children: [
             InteractiveViewer(
-              child: Image.network(anexo.fileUrl!, fit: BoxFit.contain),
+              child: ClipRRect(
+                borderRadius: TFRadius.borderRadiusMd,
+                child: Image.network(anexo.fileUrl!, fit: BoxFit.contain),
+              ),
             ),
             Positioned(
               top: 10,
               right: 10,
-              child: IconButton(
-                icon: const Icon(Icons.close, color: Colors.white, size: 30),
-                onPressed: () => Navigator.pop(ctx),
+              child: CircleAvatar(
+                backgroundColor: colors.surface.withValues(alpha: 0.85),
+                child: IconButton(
+                  icon: Icon(TFIcons.close, color: colors.textPrimary, size: 20),
+                  onPressed: () => Navigator.pop(ctx),
+                ),
               ),
             ),
           ],
@@ -275,144 +281,229 @@ class _DemandaDetailScreenState extends State<DemandaDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+    final typography = context.tfTypography;
+
     if (_isLoading) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return Scaffold(
+        backgroundColor: colors.background,
+        body: const Center(child: TFLoading(message: 'Carregando detalhes da demanda...')),
+      );
     }
 
     if (_erroMsg.isNotEmpty || _demanda == null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Detalhes da Demanda')),
-        body: Center(child: Text(_erroMsg.isNotEmpty ? _erroMsg : 'Demanda não encontrada.')),
+        backgroundColor: colors.background,
+        body: SafeArea(
+          child: Column(
+            children: [
+              TFPageHeader(
+                title: 'Detalhes da Demanda',
+                leading: TFIconButton(
+                  icon: Icons.arrow_back_rounded,
+                  tooltip: 'Voltar',
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ),
+              Expanded(
+                child: Center(
+                  child: TFEmptyState(
+                    title: 'Demanda não encontrada',
+                    description: _erroMsg.isNotEmpty ? _erroMsg : 'Não foi possível carregar os detalhes desta demanda.',
+                    icon: TFIcons.warning,
+                    action: TFButton(
+                      label: 'Voltar',
+                      leadingIcon: Icons.arrow_back_rounded,
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       );
     }
 
     final d = _demanda!;
     final situacao = DemandaPrazoHelper.obterSituacao(d.prazo, d.status);
-    final corPrazo = DemandaPrazoHelper.obterCorSituacao(situacao);
     final textoPrazo = DemandaPrazoHelper.obterTexto(situacao, d.prazo);
+    final severityPrazo = DemandaPrazoHelper.obterSeverity(situacao);
+    final severityStatus = DemandaStatusMapper.mapSeverity(d.status);
 
     final antesAnexos = _anexos.where((a) => a.tipo == 'evidencia_antes').toList();
     final depoisAnexos = _anexos.where((a) => a.tipo == 'evidencia_depois').toList();
     final geraisAnexos = _anexos.where((a) => a.tipo == 'anexo_geral').toList();
 
+    final isAtiva = d.status != 'Concluída' && d.status != 'Cancelada';
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Detalhes da Demanda'),
-        actions: [
-          IconButton(
-            tooltip: 'Editar Demanda',
-            icon: const Icon(Icons.edit),
-            onPressed: () async {
-              final result = await Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => DemandaFormScreen(demandaExistente: d),
-                ),
-              );
-              if (result == true) {
-                _carregarDetalhes();
-              }
-            },
-          ),
-          if (d.status != 'Concluída' && d.status != 'Cancelada') ...[
-            IconButton(
-              tooltip: 'Concluir Demanda',
-              icon: const Icon(Icons.check_circle_outline, color: Colors.green),
-              onPressed: _concluirRapido,
-            ),
-            IconButton(
-              tooltip: 'Cancelar Demanda',
-              icon: const Icon(Icons.cancel_outlined, color: Colors.red),
-              onPressed: _cancelarDemanda,
-            ),
-          ]
-        ],
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
+      backgroundColor: colors.background,
+      body: SafeArea(
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Status e Prazo superiores
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: _obterCorStatus(d.status).withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text(
-                    d.status.toUpperCase(),
-                    style: TextStyle(
-                      color: _obterCorStatus(d.status),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: corPrazo.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text(
-                    textoPrazo,
-                    style: TextStyle(
-                      color: corPrazo,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 20),
-
-            // Demanda Principal
-            Text(
-              d.demanda,
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 20),
-
-            // Detalhes em Grid
-            _buildGridDetalhes(d),
-            const SizedBox(height: 20),
-
-            // Observações adicionais
-            if (d.observacoes != null && d.observacoes!.isNotEmpty) ...[
-              const Text('Observações', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-              const SizedBox(height: 8),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade100,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(d.observacoes!),
+            // Page Header Oficial TFDS com Ações
+            TFPageHeader(
+              title: 'Detalhes da Demanda',
+              subtitle: 'Identificação #${d.id.length > 8 ? d.id.substring(0, 8) : d.id}',
+              leading: TFIconButton(
+                icon: Icons.arrow_back_rounded,
+                tooltip: 'Voltar',
+                onPressed: () => Navigator.pop(context, true),
               ),
-              const SizedBox(height: 24),
-            ],
+              primaryAction: TFButton(
+                label: 'Editar',
+                leadingIcon: TFIcons.edit,
+                variant: TFButtonVariant.secondary,
+                onPressed: () async {
+                  final result = await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => DemandaFormScreen(demandaExistente: d),
+                    ),
+                  );
+                  if (result == true) {
+                    _carregarDetalhes();
+                  }
+                },
+              ),
+              secondaryActions: isAtiva
+                  ? [
+                      TFButton(
+                        label: 'Concluir',
+                        leadingIcon: TFIcons.save,
+                        variant: TFButtonVariant.primary,
+                        onPressed: _concluirRapido,
+                      ),
+                      TFButton(
+                        label: 'Cancelar',
+                        leadingIcon: TFIcons.close,
+                        variant: TFButtonVariant.danger,
+                        onPressed: _cancelarDemanda,
+                      ),
+                    ]
+                  : null,
+            ),
 
-            // Seção de Evidências Antes e Depois
-            const Text('Evidências & Documentos', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-            const Divider(),
-            _buildGaleriaEvidencias('antes', 'Evidências ANTES', antesAnexos),
-            const SizedBox(height: 16),
-            _buildGaleriaEvidencias('depois', 'Evidências DEPOIS', depoisAnexos),
-            const SizedBox(height: 16),
-            _buildDocumentosGerais(geraisAnexos),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: EdgeInsets.all(spacing.md),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Header de Status e Prazo Badges
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        TFStatusBadge(
+                          label: d.status.toUpperCase(),
+                          severity: severityStatus,
+                        ),
+                        TFStatusBadge(
+                          label: textoPrazo,
+                          severity: severityPrazo,
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: spacing.md),
 
-            const SizedBox(height: 24),
-            
-            // Linha do tempo (Histórico)
-            const Text('Histórico / Acompanhamento', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-            const Divider(),
-            _buildLinhaDoTempo(),
+                    // Título e Descrição Principal da Demanda
+                    TFCard(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Descrição da Demanda',
+                            style: typography.caption.copyWith(color: colors.textSecondary),
+                          ),
+                          SizedBox(height: spacing.xs),
+                          Text(
+                            d.demanda,
+                            style: typography.bodyLarge.copyWith(
+                              fontWeight: FontWeight.bold,
+                              color: colors.textPrimary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    SizedBox(height: spacing.md),
+
+                    // Grid de Detalhes e Metadados
+                    _buildGridDetalhes(d),
+                    SizedBox(height: spacing.md),
+
+                    // Observações (se houver)
+                    if (d.observacoes != null && d.observacoes!.trim().isNotEmpty) ...[
+                      TFCard(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Observações',
+                              style: typography.sectionTitle.copyWith(color: colors.textPrimary),
+                            ),
+                            SizedBox(height: spacing.sm),
+                            Text(
+                              d.observacoes!,
+                              style: typography.bodyMedium.copyWith(color: colors.textPrimary),
+                            ),
+                          ],
+                        ),
+                      ),
+                      SizedBox(height: spacing.md),
+                    ],
+
+                    // Evidências e Documentos
+                    TFCard(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Evidências & Documentos',
+                            style: typography.sectionTitle.copyWith(color: colors.textPrimary),
+                          ),
+                          SizedBox(height: spacing.xxs),
+                          Text(
+                            'Galeria visual antes/depois e documentação anexada',
+                            style: typography.caption.copyWith(color: colors.textSecondary),
+                          ),
+                          SizedBox(height: spacing.md),
+                          _buildGaleriaEvidencias('antes', 'Evidências ANTES (Situação inicial)', antesAnexos),
+                          Divider(color: colors.borderDefault, height: spacing.lg),
+                          _buildGaleriaEvidencias('depois', 'Evidências DEPOIS (Pós-execução)', depoisAnexos),
+                          Divider(color: colors.borderDefault, height: spacing.lg),
+                          _buildDocumentosGerais(geraisAnexos),
+                        ],
+                      ),
+                    ),
+                    SizedBox(height: spacing.md),
+
+                    // Linha do tempo / Histórico
+                    TFCard(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Histórico & Acompanhamento',
+                            style: typography.sectionTitle.copyWith(color: colors.textPrimary),
+                          ),
+                          SizedBox(height: spacing.xxs),
+                          Text(
+                            'Trilha de auditoria e registros de alterações',
+                            style: typography.caption.copyWith(color: colors.textSecondary),
+                          ),
+                          SizedBox(height: spacing.md),
+                          _buildLinhaDoTempo(),
+                        ],
+                      ),
+                    ),
+                    SizedBox(height: spacing.xl),
+                  ],
+                ),
+              ),
+            ),
           ],
         ),
       ),
@@ -420,26 +511,29 @@ class _DemandaDetailScreenState extends State<DemandaDetailScreen> {
   }
 
   Widget _buildGridDetalhes(Demanda d) {
-    Widget itemDetalhe(String label, String valor) {
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+    final typography = context.tfTypography;
+
+    Widget itemDetalhe(String label, String valor, {Color? valorColor, bool isBold = false}) {
       return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8.0),
+        padding: EdgeInsets.symmetric(vertical: spacing.xs),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
               label,
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey.shade600,
-                fontWeight: FontWeight.bold,
+              style: typography.caption.copyWith(
+                color: colors.textSecondary,
+                fontWeight: FontWeight.w600,
               ),
             ),
-            const SizedBox(height: 4),
+            SizedBox(height: spacing.xxs),
             Text(
               valor,
-              style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
+              style: typography.bodyMedium.copyWith(
+                color: valorColor ?? colors.textPrimary,
+                fontWeight: isBold ? FontWeight.bold : FontWeight.w500,
               ),
             ),
           ],
@@ -449,25 +543,33 @@ class _DemandaDetailScreenState extends State<DemandaDetailScreen> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final isNarrow = constraints.maxWidth < 600;
+        final isNarrow = constraints.maxWidth < TFBreakpoints.sm;
+
         final col1 = Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             itemDetalhe('Origem', d.origem),
             itemDetalhe('Local', d.local),
-            itemDetalhe('Sala', d.sala?.isNotEmpty == true ? d.sala! : '-'),
+            itemDetalhe('Sala / Sublocal', d.sala?.isNotEmpty == true ? d.sala! : '-'),
             itemDetalhe('Responsável', d.responsavel),
           ],
         );
+
         final col2 = Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            itemDetalhe('Prioridade', d.prioridade),
+            itemDetalhe(
+              'Prioridade',
+              d.prioridade,
+              valorColor: d.prioridade == 'Crítica' ? colors.danger : null,
+              isBold: d.prioridade == 'Crítica',
+            ),
             itemDetalhe('Nota SAP', d.nota?.isNotEmpty == true ? d.nota! : '-'),
             itemDetalhe('Ordem SAP', d.ordem?.isNotEmpty == true ? d.ordem! : '-'),
             itemDetalhe('SI', d.si?.isNotEmpty == true ? d.si! : '-'),
           ],
         );
+
         final col3 = Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -478,73 +580,97 @@ class _DemandaDetailScreenState extends State<DemandaDetailScreen> {
           ],
         );
 
-        return Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(16.0),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: Colors.grey.shade300),
+        return TFCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Informações e Metadados',
+                style: typography.sectionTitle.copyWith(color: colors.textPrimary),
+              ),
+              SizedBox(height: spacing.md),
+              isNarrow
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [col1, col2, col3],
+                    )
+                  : Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(child: col1),
+                        SizedBox(width: spacing.md),
+                        Expanded(child: col2),
+                        SizedBox(width: spacing.md),
+                        Expanded(child: col3),
+                      ],
+                    ),
+            ],
           ),
-          child: isNarrow
-              ? Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [col1, col2, col3],
-                )
-              : Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(child: col1),
-                    const SizedBox(width: 16),
-                    Expanded(child: col2),
-                    const SizedBox(width: 16),
-                    Expanded(child: col3),
-                  ],
-                ),
         );
       },
     );
   }
 
   Widget _buildGaleriaEvidencias(String tipo, String titulo, List<DemandaAnexo> fotos) {
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+    final typography = context.tfTypography;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(titulo, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+            Text(
+              titulo,
+              style: typography.labelSmall.copyWith(
+                fontWeight: FontWeight.bold,
+                color: colors.textPrimary,
+              ),
+            ),
             if (_isUploading)
-              const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+              SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2, color: colors.primary),
+              )
             else
-              TextButton.icon(
-                icon: const Icon(Icons.add_a_photo, size: 16),
-                label: const Text('Adicionar foto', style: TextStyle(fontSize: 12)),
+              TFButton(
+                label: 'Adicionar foto',
+                leadingIcon: TFIcons.add,
+                variant: TFButtonVariant.secondary,
+                size: TFButtonSize.small,
                 onPressed: () => _uploadRapidoAnexo(tipo),
               ),
           ],
         ),
+        SizedBox(height: spacing.xs),
         if (fotos.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 8.0),
-            child: Text('Nenhuma evidência anexada.', style: TextStyle(fontSize: 12, color: Colors.grey)),
+          Padding(
+            padding: EdgeInsets.symmetric(vertical: spacing.xs),
+            child: Text(
+              'Nenhuma evidência anexada.',
+              style: typography.caption.copyWith(color: colors.textSecondary),
+            ),
           )
         else
           SizedBox(
-            height: 120,
-            child: ListView.builder(
+            height: 110,
+            child: ListView.separated(
               scrollDirection: Axis.horizontal,
               itemCount: fotos.length,
+              separatorBuilder: (_, __) => SizedBox(width: spacing.sm),
               itemBuilder: (context, index) {
                 final anexo = fotos[index];
                 final isImage = anexo.fileName.endsWith('.jpg') || anexo.fileName.endsWith('.png') || anexo.fileName.endsWith('.webp');
 
                 return Container(
-                  margin: const EdgeInsets.only(right: 12),
-                  width: 120,
+                  width: 110,
                   decoration: BoxDecoration(
-                    border: Border.all(color: Colors.grey.shade300),
-                    borderRadius: BorderRadius.circular(4),
+                    borderRadius: TFRadius.borderRadiusSm,
+                    border: Border.all(color: colors.borderDefault),
+                    color: colors.surfaceSecondary,
                   ),
                   child: Stack(
                     children: [
@@ -557,20 +683,21 @@ class _DemandaDetailScreenState extends State<DemandaDetailScreen> {
                           }
                         },
                         child: ClipRRect(
-                          borderRadius: BorderRadius.circular(3),
+                          borderRadius: TFRadius.borderRadiusSm,
                           child: isImage && anexo.fileUrl != null
-                              ? Image.network(anexo.fileUrl!, width: 120, height: 120, fit: BoxFit.cover)
-                              : const Center(child: Icon(Icons.insert_drive_file, size: 40, color: Colors.grey)),
+                              ? Image.network(anexo.fileUrl!, width: 110, height: 110, fit: BoxFit.cover)
+                              : Center(child: Icon(Icons.insert_drive_file_outlined, size: 36, color: colors.primary)),
                         ),
                       ),
                       Positioned(
-                        top: 2,
-                        right: 2,
+                        top: 4,
+                        right: 4,
                         child: CircleAvatar(
-                          radius: 14,
-                          backgroundColor: Colors.red.withOpacity(0.8),
+                          radius: 12,
+                          backgroundColor: colors.danger.withValues(alpha: 0.9),
                           child: IconButton(
-                            icon: const Icon(Icons.delete, size: 12, color: Colors.white),
+                            padding: EdgeInsets.zero,
+                            icon: const Icon(TFIcons.close, size: 12, color: Colors.white),
                             onPressed: () => _excluirAnexo(anexo),
                           ),
                         ),
@@ -586,49 +713,87 @@ class _DemandaDetailScreenState extends State<DemandaDetailScreen> {
   }
 
   Widget _buildDocumentosGerais(List<DemandaAnexo> documentos) {
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+    final typography = context.tfTypography;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            const Text('Documentos Gerais', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+            Text(
+              'Documentos e Anexos Gerais',
+              style: typography.labelSmall.copyWith(
+                fontWeight: FontWeight.bold,
+                color: colors.textPrimary,
+              ),
+            ),
             if (!_isUploading)
-              TextButton.icon(
-                icon: const Icon(Icons.attach_file, size: 16),
-                label: const Text('Anexar arquivo', style: TextStyle(fontSize: 12)),
+              TFButton(
+                label: 'Anexar arquivo',
+                leadingIcon: TFIcons.add,
+                variant: TFButtonVariant.secondary,
+                size: TFButtonSize.small,
                 onPressed: () => _uploadRapidoAnexo('geral'),
               ),
           ],
         ),
+        SizedBox(height: spacing.xs),
         if (documentos.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 8.0),
-            child: Text('Nenhum documento anexado.', style: TextStyle(fontSize: 12, color: Colors.grey)),
+          Padding(
+            padding: EdgeInsets.symmetric(vertical: spacing.xs),
+            child: Text(
+              'Nenhum documento anexado.',
+              style: typography.caption.copyWith(color: colors.textSecondary),
+            ),
           )
         else
-          ListView.builder(
+          ListView.separated(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
             itemCount: documentos.length,
+            separatorBuilder: (_, __) => SizedBox(height: spacing.xs),
             itemBuilder: (context, index) {
               final doc = documentos[index];
-              return ListTile(
-                leading: const Icon(Icons.insert_drive_file, color: Colors.blue),
-                title: Text(doc.fileName, style: const TextStyle(fontSize: 14)),
-                subtitle: Text(
-                  '${(doc.fileSize ?? 0) ~/ 1024} KB • ${doc.createdAt != null ? DateFormat('dd/MM/yyyy HH:mm').format(doc.createdAt!) : ''}',
-                  style: const TextStyle(fontSize: 11),
+              return Container(
+                padding: EdgeInsets.symmetric(horizontal: spacing.sm, vertical: spacing.xs),
+                decoration: BoxDecoration(
+                  borderRadius: TFRadius.borderRadiusSm,
+                  border: Border.all(color: colors.borderDefault),
+                  color: colors.surfaceSecondary,
                 ),
-                trailing: Wrap(
-                  spacing: 4,
+                child: Row(
                   children: [
-                    IconButton(
-                      icon: const Icon(Icons.open_in_new, size: 20, color: Colors.blue),
+                    Icon(Icons.insert_drive_file_outlined, color: colors.primary, size: 20),
+                    SizedBox(width: spacing.sm),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            doc.fileName,
+                            style: typography.bodySmall.copyWith(
+                              fontWeight: FontWeight.w600,
+                              color: colors.textPrimary,
+                            ),
+                          ),
+                          Text(
+                            '${(doc.fileSize ?? 0) ~/ 1024} KB • ${doc.createdAt != null ? DateFormat('dd/MM/yyyy HH:mm').format(doc.createdAt!) : ''}',
+                            style: typography.caption.copyWith(color: colors.textSecondary),
+                          ),
+                        ],
+                      ),
+                    ),
+                    TFIconButton(
+                      icon: Icons.open_in_new_rounded,
+                      tooltip: 'Abrir Arquivo',
                       onPressed: () => _abrirUrlAnexo(doc),
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.delete_outline, size: 20, color: Colors.red),
+                    TFIconButton(
+                      icon: TFIcons.delete,
+                      tooltip: 'Excluir Anexo',
                       onPressed: () => _excluirAnexo(doc),
                     ),
                   ],
@@ -641,10 +806,17 @@ class _DemandaDetailScreenState extends State<DemandaDetailScreen> {
   }
 
   Widget _buildLinhaDoTempo() {
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+    final typography = context.tfTypography;
+
     if (_historico.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 12.0),
-        child: Text('Nenhum registro de histórico.', style: TextStyle(color: Colors.grey, fontSize: 12)),
+      return Padding(
+        padding: EdgeInsets.symmetric(vertical: spacing.xs),
+        child: Text(
+          'Nenhum registro de histórico.',
+          style: typography.caption.copyWith(color: colors.textSecondary),
+        ),
       );
     }
 
@@ -663,38 +835,51 @@ class _DemandaDetailScreenState extends State<DemandaDetailScreen> {
           children: [
             Column(
               children: [
-                const Icon(Icons.circle, size: 12, color: Colors.blue),
+                Container(
+                  width: 10,
+                  height: 10,
+                  decoration: BoxDecoration(
+                    color: colors.primary,
+                    shape: BoxShape.circle,
+                  ),
+                ),
                 if (index != _historico.length - 1)
                   Container(
                     width: 2,
-                    height: 50,
-                    color: Colors.grey.shade300,
+                    height: 48,
+                    color: colors.borderDefault,
                   ),
               ],
             ),
-            const SizedBox(width: 12),
+            SizedBox(width: spacing.sm),
             Expanded(
               child: Padding(
-                padding: const EdgeInsets.only(bottom: 12.0),
+                padding: EdgeInsets.only(bottom: spacing.sm),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       dataStr,
-                      style: const TextStyle(fontSize: 11, color: Colors.grey, fontWeight: FontWeight.w500),
+                      style: typography.caption.copyWith(
+                        color: colors.textSecondary,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
-                    const SizedBox(height: 2),
+                    SizedBox(height: spacing.xxs),
                     Text(
                       h.observacao ?? 'Alteração realizada',
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                      style: typography.bodySmall.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: colors.textPrimary,
+                      ),
                     ),
                     if (h.campo != null) ...[
-                      const SizedBox(height: 2),
+                      SizedBox(height: spacing.xxs),
                       Text(
-                        'Modificado: ${h.campo} (${h.valorAnterior} ➔ ${h.valorNovo})',
-                        style: const TextStyle(fontSize: 12, color: Colors.black54),
+                        'Modificado: ${h.campo} (${h.valorAnterior ?? '-'} ➔ ${h.valorNovo ?? '-'})',
+                        style: typography.caption.copyWith(color: colors.textSecondary),
                       ),
-                    ]
+                    ],
                   ],
                 ),
               ),

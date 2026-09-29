@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
+import '../design_system/taskflow_design_system.dart';
 import '../models/empresa.dart';
 import '../models/regional.dart';
 import '../models/divisao.dart';
 import '../services/regional_service.dart';
 import '../services/divisao_service.dart';
-import 'form_dialog_helpers.dart';
 
 class EmpresaFormDialog extends StatefulWidget {
   final Empresa? empresa;
@@ -30,6 +30,7 @@ class _EmpresaFormDialogState extends State<EmpresaFormDialog> {
   String _selectedTipo = 'PROPRIA';
   bool _isLoadingRegionais = true;
   bool _isLoadingDivisoes = true;
+  bool _isSaving = false;
 
   @override
   void initState() {
@@ -87,7 +88,7 @@ class _EmpresaFormDialogState extends State<EmpresaFormDialog> {
     try {
       final divisoes = await _divisaoService.getAllDivisoes();
       final divisoesFiltradas = divisoes
-          .where((d) => d.regionalId == _selectedRegional!.id)
+          .where((d) => d.atuaNaRegional(_selectedRegional!.id))
           .toList();
 
       setState(() {
@@ -145,6 +146,8 @@ class _EmpresaFormDialogState extends State<EmpresaFormDialog> {
         return;
       }
 
+      setState(() => _isSaving = true);
+
       final empresa = Empresa(
         id: widget.empresa?.id ?? '',
         empresa: _empresaController.text.trim(),
@@ -164,179 +167,85 @@ class _EmpresaFormDialogState extends State<EmpresaFormDialog> {
   @override
   Widget build(BuildContext context) {
     final isEditing = widget.empresa != null;
-    final brightness = Theme.of(context).brightness;
-    final isDark = brightness == Brightness.dark;
+    final spacing = context.tfSpacing;
 
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.all(16),
-      elevation: 0,
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 512),
-        decoration: BoxDecoration(
-          color: isDark ? const Color(0xFF1e293b) : Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-            width: 1,
-          ),
-        ),
+    return TFFormDialog(
+      title: isEditing ? 'Editar Empresa' : 'Nova Empresa',
+      subtitle: 'Atualize as informações da empresa contratada ou própria.',
+      saveLabel: isEditing ? 'Salvar Alterações' : 'Criar Empresa',
+      isSaving: _isSaving,
+      onSave: _save,
+      onCancel: () => Navigator.of(context).pop(),
+      child: Form(
+        key: _formKey,
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
-            Padding(
-              padding: const EdgeInsets.fromLTRB(32, 32, 32, 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    isEditing ? 'Editar Empresa' : 'Nova Empresa',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w600,
-                      color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Atualize as informações da empresa.',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
-                    ),
-                  ),
-                ],
-              ),
+            TFTextField(
+              label: 'Nome da Empresa',
+              controller: _empresaController,
+              required: true,
+              hint: 'Informe a razão social ou nome fantasia',
+              validator: (value) {
+                if (value == null || value.trim().isEmpty) {
+                  return 'Campo obrigatório';
+                }
+                return null;
+              },
             ),
-
-            // Content
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                child: Form(
-                  key: _formKey,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      FloatingLabelTextField(
-                        label: 'Nome da Empresa *',
-                        controller: _empresaController,
-                        isDark: isDark,
-                        validator: (value) {
-                          if (value == null || value.trim().isEmpty) {
-                            return 'Campo obrigatório';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 24),
-                      FloatingLabelDropdown<Regional>(
-                        label: 'Regional *',
-                        value: _selectedRegional,
-                        items: _regionais,
-                        isLoading: _isLoadingRegionais,
-                        displayText: (regional) => _getRegionalDisplayText(regional),
-                        onChanged: _onRegionalChanged,
-                        isDark: isDark,
-                        validator: (value) {
-                          if (value == null) {
-                            return 'Selecione uma regional';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 24),
-                      FloatingLabelDropdown<Divisao>(
-                        label: 'Divisão *',
-                        value: _selectedDivisao,
-                        items: _divisoes,
-                        isLoading: _isLoadingDivisoes,
-                        displayText: (divisao) => divisao.divisao,
-                        onChanged: (divisao) {
-                          setState(() {
-                            _selectedDivisao = divisao;
-                          });
-                        },
-                        isDark: isDark,
-                        validator: (value) {
-                          if (value == null) {
-                            return 'Selecione uma divisão';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 24),
-                      FloatingLabelDropdown<String>(
-                        label: 'Tipo *',
-                        value: _selectedTipo,
-                        items: const ['PROPRIA', 'TERCEIRA'],
-                        isLoading: false,
-                        displayText: (tipo) => tipo == 'PROPRIA' ? 'Própria' : 'Terceira',
-                        onChanged: (tipo) {
-                          setState(() {
-                            _selectedTipo = tipo!;
-                          });
-                        },
-                        isDark: isDark,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+            SizedBox(height: spacing.md),
+            TFDropdown<Regional>(
+              label: 'Regional',
+              isRequired: true,
+              value: _selectedRegional,
+              items: _regionais,
+              isLoading: _isLoadingRegionais,
+              displayText: (regional) => _getRegionalDisplayText(regional),
+              onChanged: _onRegionalChanged,
+              validator: (value) {
+                if (value == null) {
+                  return 'Selecione uma regional';
+                }
+                return null;
+              },
             ),
-
-            // Footer com botões
-            Container(
-              padding: const EdgeInsets.all(32),
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF0f172a).withOpacity(0.5) : const Color(0xFFf8fafc),
-                border: Border(
-                  top: BorderSide(
-                    color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                    width: 1,
-                  ),
-                ),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
-                    ),
-                    child: Text(
-                      'Cancelar',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                        color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF475569),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  ElevatedButton(
-                    onPressed: _save,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF3b82f6),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 10),
-                      elevation: 2,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                    child: Text(
-                      isEditing ? 'Salvar Alterações' : 'Criar Empresa',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+            SizedBox(height: spacing.md),
+            TFDropdown<Divisao>(
+              label: 'Divisão',
+              isRequired: true,
+              value: _selectedDivisao,
+              items: _divisoes,
+              isLoading: _isLoadingDivisoes,
+              hint: _selectedRegional == null
+                  ? 'Selecione uma regional primeiro'
+                  : 'Selecione a divisão correspondente',
+              displayText: (divisao) => divisao.divisao,
+              onChanged: (divisao) {
+                setState(() {
+                  _selectedDivisao = divisao;
+                });
+              },
+              validator: (value) {
+                if (value == null) {
+                  return 'Selecione uma divisão';
+                }
+                return null;
+              },
+            ),
+            SizedBox(height: spacing.md),
+            TFDropdown<String>(
+              label: 'Tipo',
+              isRequired: true,
+              value: _selectedTipo,
+              items: const ['PROPRIA', 'TERCEIRA'],
+              displayText: (tipo) => tipo == 'PROPRIA' ? 'Própria' : 'Terceira',
+              onChanged: (tipo) {
+                if (tipo != null) {
+                  setState(() {
+                    _selectedTipo = tipo;
+                  });
+                }
+              },
             ),
           ],
         ),

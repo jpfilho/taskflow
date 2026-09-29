@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import '../../../../design_system/taskflow_design_system.dart';
 import '../../../../models/versao.dart';
 import '../../../../models/melhoria_bug.dart';
 import '../../../../services/melhorias_bugs_service.dart';
@@ -19,6 +20,18 @@ class _RoadmapBoardScreenState extends State<RoadmapBoardScreen> {
   List<Versao> _versoes = [];
   Map<String, List<MelhoriaBug>> _itensPorVersao = {};
   bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
 
   Future<void> _load() async {
     setState(() => _loading = true);
@@ -40,22 +53,13 @@ class _RoadmapBoardScreenState extends State<RoadmapBoardScreen> {
       if (mounted) {
         setState(() => _loading = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erro ao carregar: $e')),
+          SnackBar(
+            content: Text('Erro ao carregar roadmap: $e'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
         );
       }
     }
-  }
-
-  @override
-  void dispose() {
-    _scrollController.dispose();
-    super.dispose();
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
   }
 
   void _openVersaoForm([Versao? v]) async {
@@ -80,213 +84,218 @@ class _RoadmapBoardScreenState extends State<RoadmapBoardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final isMobile = TFBreakpoints.isMobile(context);
 
     return Scaffold(
-      backgroundColor: theme.colorScheme.surface,
-      appBar: AppBar(
-        title: const Text('Roadmap do Sistema'),
-        elevation: 0,
-        backgroundColor: Colors.transparent,
-      ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _versoes.isEmpty
-              ? Center(
+      backgroundColor: colors.background,
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: Row(
+              children: [
+                Expanded(
                   child: Column(
-                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(Icons.map_outlined, size: 64, color: theme.colorScheme.onSurface.withOpacity(0.2)),
-                      const SizedBox(height: 16),
                       Text(
-                        'Nenhuma versão no roadmap',
-                        style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
+                        'Roadmap de Lançamentos',
+                        style: typography.pageTitle.copyWith(
+                          color: colors.textPrimary,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
-                      const SizedBox(height: 24),
-                      FilledButton.icon(
-                        onPressed: () => _openVersaoForm(),
-                        icon: const Icon(Icons.add),
-                        label: const Text('Criar primeira versão'),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Acompanhe o cronograma de releases e entregas do TaskFlow.',
+                        style: typography.bodySmall.copyWith(
+                          color: colors.textSecondary,
+                        ),
                       ),
                     ],
                   ),
-                )
-              : RefreshIndicator(
-                  onRefresh: _load,
-                  child: ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                    itemCount: _versoes.length,
-                    itemBuilder: (context, index) {
-                      final v = _versoes[index];
-                      final itens = _itensPorVersao[v.id] ?? [];
-                      final total = itens.length;
-                      final concluidos = itens.where((i) => i.status == 'CONCLUIDO').length;
-                      final progresso = total > 0 ? (concluidos / total) : 0.0;
-                      final dataPrev = v.dataPrevistaLancamento != null
-                          ? DateFormat('dd MMM yyyy').format(v.dataPrevistaLancamento!)
-                          : 'A definir';
+                ),
+                if (!isMobile)
+                  TFButton(
+                    label: 'Nova Versão',
+                    leadingIcon: Icons.add_rounded,
+                    onPressed: () => _openVersaoForm(),
+                  ),
+              ],
+            ),
+          ),
 
-                      return Container(
-                        margin: const EdgeInsets.only(bottom: 16),
-                        decoration: BoxDecoration(
-                          color: theme.colorScheme.surface,
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: theme.dividerColor.withOpacity(0.1)),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.04),
-                              blurRadius: 12,
-                              offset: const Offset(0, 4),
-                            ),
-                          ],
+          // Conteúdo
+          Expanded(
+            child: _loading
+                ? const Center(child: TFLoading(message: 'Carregando roadmap do sistema...'))
+                : _versoes.isEmpty
+                    ? Center(
+                        child: TFEmptyState(
+                          icon: Icons.map_outlined,
+                          title: 'Nenhuma versão no roadmap',
+                          description: 'Cadastre a primeira versão para organizar o plano de releases do sistema.',
+                          action: TFButton(
+                            label: 'Criar Versão',
+                            leadingIcon: Icons.add_rounded,
+                            onPressed: () => _openVersaoForm(),
+                          ),
                         ),
-                        child: InkWell(
-                          onTap: () => _openVersaoDetail(v),
-                          borderRadius: BorderRadius.circular(20),
-                          child: Padding(
-                            padding: const EdgeInsets.all(20),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
+                      )
+                    : RefreshIndicator(
+                        onRefresh: _load,
+                        child: ListView.builder(
+                          controller: _scrollController,
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 80),
+                          itemCount: _versoes.length,
+                          itemBuilder: (context, index) {
+                            final v = _versoes[index];
+                            final itens = _itensPorVersao[v.id] ?? [];
+                            final total = itens.length;
+                            final concluidos = itens.where((i) => i.status == 'CONCLUIDO').length;
+                            final progresso = total > 0 ? (concluidos / total) : 0.0;
+                            final dataPrev = v.dataPrevistaLancamento != null
+                                ? DateFormat('dd/MM/yyyy').format(v.dataPrevistaLancamento!)
+                                : 'A definir';
+
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 12),
+                              child: TFCard(
+                                variant: TFCardVariant.interactive,
+                                onTap: () => _openVersaoDetail(v),
+                                padding: const EdgeInsets.all(20),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            v.nome,
-                                            style: theme.textTheme.titleLarge?.copyWith(
-                                              fontWeight: FontWeight.bold,
-                                              letterSpacing: -0.5,
-                                            ),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Row(
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
                                             children: [
-                                              Icon(Icons.event_outlined, size: 14, color: theme.colorScheme.primary),
-                                              const SizedBox(width: 4),
                                               Text(
-                                                dataPrev,
-                                                style: theme.textTheme.bodySmall?.copyWith(
-                                                  color: theme.colorScheme.primary,
-                                                  fontWeight: FontWeight.w600,
+                                                v.nome,
+                                                style: typography.sectionTitle.copyWith(
+                                                  fontWeight: FontWeight.bold,
+                                                  color: colors.textPrimary,
                                                 ),
+                                              ),
+                                              const SizedBox(height: 4),
+                                              Row(
+                                                children: [
+                                                  Icon(
+                                                    Icons.calendar_today_outlined,
+                                                    size: 14,
+                                                    color: colors.primary,
+                                                  ),
+                                                  const SizedBox(width: 4),
+                                                  Text(
+                                                    'Previsão: $dataPrev',
+                                                    style: typography.bodySmall.copyWith(
+                                                      color: colors.primary,
+                                                      fontWeight: FontWeight.w600,
+                                                    ),
+                                                  ),
+                                                ],
                                               ),
                                             ],
                                           ),
-                                        ],
-                                      ),
-                                    ),
-                                    IconButton(
-                                      icon: Icon(Icons.edit_outlined, size: 20, color: theme.colorScheme.onSurfaceVariant),
-                                      onPressed: () => _openVersaoForm(v),
-                                      visualDensity: VisualDensity.compact,
-                                    ),
-                                  ],
-                                ),
-                                if (v.descricao != null && v.descricao!.isNotEmpty) ...[
-                                  const SizedBox(height: 12),
-                                  Text(
-                                    v.descricao!,
-                                    style: theme.textTheme.bodyMedium?.copyWith(
-                                      color: theme.colorScheme.onSurfaceVariant,
-                                      height: 1.4,
-                                    ),
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ],
-                                const SizedBox(height: 24),
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Text(
-                                      'Progresso',
-                                      style: theme.textTheme.labelMedium?.copyWith(
-                                        fontWeight: FontWeight.bold,
-                                        color: theme.colorScheme.onSurface,
-                                      ),
-                                    ),
-                                    Text(
-                                      '${(progresso * 100).toInt()}%',
-                                      style: theme.textTheme.labelLarge?.copyWith(
-                                        fontWeight: FontWeight.bold,
-                                        color: theme.colorScheme.primary,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 8),
-                                Stack(
-                                  children: [
-                                    Container(
-                                      height: 10,
-                                      width: double.infinity,
-                                      decoration: BoxDecoration(
-                                        color: theme.colorScheme.primary.withOpacity(0.1),
-                                        borderRadius: BorderRadius.circular(5),
-                                      ),
-                                    ),
-                                    FractionallySizedBox(
-                                      widthFactor: progresso,
-                                      child: Container(
-                                        height: 10,
-                                        decoration: BoxDecoration(
-                                          gradient: LinearGradient(
-                                            colors: [
-                                              theme.colorScheme.primary,
-                                              theme.colorScheme.primary.withOpacity(0.7),
-                                            ],
+                                        ),
+                                        IconButton(
+                                          icon: Icon(
+                                            Icons.edit_outlined,
+                                            size: 20,
+                                            color: colors.textSecondary,
                                           ),
-                                          borderRadius: BorderRadius.circular(5),
-                                          boxShadow: [
-                                            BoxShadow(
-                                              color: theme.colorScheme.primary.withOpacity(0.3),
-                                              blurRadius: 4,
-                                              offset: const Offset(0, 2),
-                                            ),
-                                          ],
+                                          tooltip: 'Editar Versão',
+                                          onPressed: () => _openVersaoForm(v),
+                                        ),
+                                      ],
+                                    ),
+                                    if (v.descricao != null && v.descricao!.isNotEmpty) ...[
+                                      const SizedBox(height: 10),
+                                      Text(
+                                        v.descricao!,
+                                        style: typography.bodyMedium.copyWith(
+                                          color: colors.textSecondary,
+                                        ),
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
+                                    const SizedBox(height: 16),
+                                    Row(
+                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Text(
+                                          'Progresso de Conclusão',
+                                          style: typography.labelMedium.copyWith(
+                                            fontWeight: FontWeight.bold,
+                                            color: colors.textPrimary,
+                                          ),
+                                        ),
+                                        Text(
+                                          '${(progresso * 100).toInt()}%',
+                                          style: typography.labelLarge.copyWith(
+                                            fontWeight: FontWeight.bold,
+                                            color: colors.primary,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 8),
+                                    ClipRRect(
+                                      borderRadius: TFRadius.borderRadiusSm,
+                                      child: LinearProgressIndicator(
+                                        value: progresso,
+                                        minHeight: 8,
+                                        backgroundColor: colors.borderSubtle,
+                                        valueColor: AlwaysStoppedAnimation<Color>(
+                                          progresso == 1.0 ? colors.success : colors.primary,
                                         ),
                                       ),
                                     ),
+                                    const SizedBox(height: 14),
+                                    Row(
+                                      children: [
+                                        TFStatusBadge(
+                                          label: '$concluidos concluídos',
+                                          severity: TFStatusSeverity.success,
+                                          icon: Icons.check_circle_outline,
+                                          compact: true,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        TFStatusBadge(
+                                          label: '${total - concluidos} pendentes',
+                                          severity: TFStatusSeverity.warning,
+                                          icon: Icons.pending_actions_outlined,
+                                          compact: true,
+                                        ),
+                                      ],
+                                    ),
                                   ],
                                 ),
-                                const SizedBox(height: 16),
-                                Row(
-                                  children: [
-                                    _buildMiniStat(Icons.check_circle_outline, '$concluidos concluídos', Colors.green),
-                                    const SizedBox(width: 16),
-                                    _buildMiniStat(Icons.pending_actions, '${total - concluidos} pendentes', Colors.orange),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
+                              ),
+                            );
+                          },
                         ),
-                      );
-                    },
-                  ),
-                ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _openVersaoForm(),
-        label: const Text('Nova Versão'),
-        icon: const Icon(Icons.add),
+                      ),
+          ),
+        ],
       ),
-    );
-  }
-
-  Widget _buildMiniStat(IconData icon, String label, Color color) {
-    return Row(
-      children: [
-        Icon(icon, size: 14, color: color),
-        const SizedBox(width: 4),
-        Text(
-          label,
-          style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w600),
-        ),
-      ],
+      floatingActionButton: isMobile
+          ? FloatingActionButton.extended(
+              onPressed: () => _openVersaoForm(),
+              backgroundColor: colors.primary,
+              foregroundColor: colors.primaryForeground,
+              label: const Text('Nova Versão'),
+              icon: const Icon(Icons.add_rounded),
+            )
+          : null,
     );
   }
 }

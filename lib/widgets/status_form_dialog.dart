@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
+import '../design_system/taskflow_design_system.dart';
 import '../models/status.dart';
 import 'color_picker_dialog.dart';
-import 'form_dialog_helpers.dart';
 
 class StatusFormDialog extends StatefulWidget {
   final Status? status;
@@ -25,6 +25,7 @@ class _StatusFormDialogState extends State<StatusFormDialog> {
   Color _selectedColor = const Color(0xFF2196F3);
   Color _selectedSegmentBackgroundColor = Colors.grey;
   Color _selectedSegmentTextColor = Colors.white;
+  bool _isSaving = false;
 
   @override
   void initState() {
@@ -85,7 +86,7 @@ class _StatusFormDialogState extends State<StatusFormDialog> {
   }
 
   String _colorToHex(Color color) {
-    return '#${color.value.toRadixString(16).substring(2).toUpperCase()}';
+    return '#${color.toARGB32().toRadixString(16).substring(2).toUpperCase()}';
   }
 
   Future<void> _showColorPicker() async {
@@ -152,6 +153,7 @@ class _StatusFormDialogState extends State<StatusFormDialog> {
         return;
       }
 
+      setState(() => _isSaving = true);
       final corSegmentoValue = _corSegmentoController.text.trim();
       final corTextoSegmentoValue = _corTextoSegmentoController.text.trim();
 
@@ -173,177 +175,126 @@ class _StatusFormDialogState extends State<StatusFormDialog> {
   @override
   Widget build(BuildContext context) {
     final isEditing = widget.status != null;
-    final brightness = Theme.of(context).brightness;
-    final isDark = brightness == Brightness.dark;
+    final spacing = context.tfSpacing;
 
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.all(16),
-      elevation: 0,
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 512),
-        decoration: BoxDecoration(
-          color: isDark ? const Color(0xFF1e293b) : Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-            width: 1,
-          ),
-        ),
+    return TFFormDialog(
+      title: isEditing ? 'Editar Status' : 'Novo Status',
+      subtitle: 'Atualize as informações do status.',
+      saveLabel: isEditing ? 'Salvar Alterações' : 'Criar Status',
+      isSaving: _isSaving,
+      onSave: _save,
+      onCancel: () => Navigator.of(context).pop(),
+      child: Form(
+        key: _formKey,
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
-            Padding(
-              padding: const EdgeInsets.fromLTRB(32, 32, 32, 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    isEditing ? 'Editar Status' : 'Novo Status',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w600,
-                      color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Atualize as informações do status.',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
-                    ),
-                  ),
-                ],
-              ),
+            TFTextField(
+              label: 'Código do Status',
+              controller: _codigoController,
+              required: true,
+              hint: 'Ex: ABER, EXEC, CONC',
+              validator: (value) {
+                if (value == null || value.trim().isEmpty) {
+                  return 'Campo obrigatório';
+                }
+                if (value.trim().length > 4) {
+                  return 'Máximo 4 caracteres';
+                }
+                return null;
+              },
             ),
-
-            // Content
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                child: Form(
-                  key: _formKey,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      FloatingLabelTextField(
-                        label: 'Código do Status *',
-                        controller: _codigoController,
-                        isDark: isDark,
-                        textCapitalization: TextCapitalization.characters,
-                        validator: (value) {
-                          if (value == null || value.trim().isEmpty) {
-                            return 'Campo obrigatório';
-                          }
-                          if (value.trim().length > 4) {
-                            return 'Máximo 4 caracteres';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 24),
-                      FloatingLabelTextField(
-                        label: 'Status *',
-                        controller: _statusController,
-                        isDark: isDark,
-                        textCapitalization: TextCapitalization.words,
-                        validator: (value) {
-                          if (value == null || value.trim().isEmpty) {
-                            return 'Campo obrigatório';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 24),
-                      ColorPickerField(
-                        label: 'Cor *',
-                        color: _selectedColor,
-                        colorHex: _corController.text,
-                        isDark: isDark,
-                        onTap: _showColorPicker,
-                        icon: Icons.color_lens,
-                      ),
-                      const SizedBox(height: 24),
-                      ColorPickerField(
-                        label: 'Cor de Fundo do Segmento',
-                        color: _selectedSegmentBackgroundColor,
-                        colorHex: _corSegmentoController.text,
-                        isDark: isDark,
-                        onTap: _showSegmentBackgroundColorPicker,
-                        icon: Icons.color_lens,
-                      ),
-                      const SizedBox(height: 24),
-                      ColorPickerField(
-                        label: 'Cor do Texto do Segmento',
-                        color: _selectedSegmentTextColor,
-                        colorHex: _corTextoSegmentoController.text,
-                        isDark: isDark,
-                        onTap: _showSegmentTextColorPicker,
-                        icon: Icons.format_color_text,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+            SizedBox(height: spacing.md),
+            TFTextField(
+              label: 'Status',
+              controller: _statusController,
+              required: true,
+              hint: 'Informe o nome do status',
+              validator: (value) {
+                if (value == null || value.trim().isEmpty) {
+                  return 'Campo obrigatório';
+                }
+                return null;
+              },
             ),
-
-            // Footer com botões
-            Container(
-              padding: const EdgeInsets.all(32),
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF0f172a).withOpacity(0.5) : const Color(0xFFf8fafc),
-                border: Border(
-                  top: BorderSide(
-                    color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                    width: 1,
-                  ),
-                ),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
-                    ),
-                    child: Text(
-                      'Cancelar',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                        color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF475569),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  ElevatedButton(
-                    onPressed: _save,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF3b82f6),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 10),
-                      elevation: 2,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                    child: Text(
-                      isEditing ? 'Salvar Alterações' : 'Criar Status',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+            SizedBox(height: spacing.md),
+            _buildColorTile(
+              label: 'Cor Principal do Status *',
+              color: _selectedColor,
+              colorHex: _corController.text,
+              onTap: _showColorPicker,
+            ),
+            SizedBox(height: spacing.sm),
+            _buildColorTile(
+              label: 'Cor de Fundo do Segmento (Gantt)',
+              color: _selectedSegmentBackgroundColor,
+              colorHex: _corSegmentoController.text,
+              onTap: _showSegmentBackgroundColorPicker,
+            ),
+            SizedBox(height: spacing.sm),
+            _buildColorTile(
+              label: 'Cor do Texto do Segmento (Gantt)',
+              color: _selectedSegmentTextColor,
+              colorHex: _corTextoSegmentoController.text,
+              onTap: _showSegmentTextColorPicker,
             ),
           ],
         ),
       ),
     );
   }
+
+  Widget _buildColorTile({
+    required String label,
+    required Color color,
+    required String colorHex,
+    required VoidCallback onTap,
+  }) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final spacing = context.tfSpacing;
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(TFRadius.r8),
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: spacing.sm, vertical: spacing.xs),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(TFRadius.r8),
+          border: Border.all(color: colors.borderSubtle),
+          color: colors.surface,
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 24,
+              height: 24,
+              decoration: BoxDecoration(
+                color: color,
+                shape: BoxShape.circle,
+                border: Border.all(color: colors.borderSubtle),
+              ),
+            ),
+            SizedBox(width: spacing.sm),
+            Expanded(
+              child: Text(
+                label,
+                style: typography.bodyMedium.copyWith(color: colors.textPrimary),
+              ),
+            ),
+            Text(
+              colorHex,
+              style: typography.bodySmall.copyWith(
+                color: colors.textSecondary,
+                fontFamily: 'monospace',
+              ),
+            ),
+            SizedBox(width: spacing.xs),
+            Icon(Icons.colorize_rounded, size: 16, color: colors.textMuted),
+          ],
+        ),
+      ),
+    );
+  }
 }
+

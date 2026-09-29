@@ -4,6 +4,7 @@ class Frota {
   final String? marca;
   final String tipoVeiculo; // Ex: CARRO_LEVE, MUNCK, TRATOR, etc.
   final String placa;
+  final String propriedade; // Ex: PROPRIO, LOCADO, TERCEIRO
   final String? regionalId;
   final String? regional; // Nome da regional (carregado via join)
   final String? divisaoId;
@@ -16,12 +17,30 @@ class Frota {
   final DateTime? createdAt;
   final DateTime? updatedAt;
 
+  // Constantes de regime de propriedade
+  static const String PROPRIO = 'PROPRIO';
+  static const String LOCADO = 'LOCADO';
+  static const String TERCEIRO = 'TERCEIRO';
+
+  static String getPropriedadeLabel(String? propriedade) {
+    switch ((propriedade ?? '').toUpperCase().trim()) {
+      case LOCADO:
+        return 'Locado';
+      case TERCEIRO:
+        return 'Terceiro';
+      case PROPRIO:
+      default:
+        return 'Próprio';
+    }
+  }
+
   Frota({
     required this.id,
     required this.nome,
     this.marca,
     required this.tipoVeiculo,
     required this.placa,
+    this.propriedade = PROPRIO,
     this.regionalId,
     this.regional,
     this.divisaoId,
@@ -42,6 +61,7 @@ class Frota {
     String? marca,
     String? tipoVeiculo,
     String? placa,
+    String? propriedade,
     String? regionalId,
     String? regional,
     String? divisaoId,
@@ -60,6 +80,7 @@ class Frota {
       marca: marca ?? this.marca,
       tipoVeiculo: tipoVeiculo ?? this.tipoVeiculo,
       placa: placa ?? this.placa,
+      propriedade: propriedade ?? this.propriedade,
       regionalId: regionalId ?? this.regionalId,
       regional: regional ?? this.regional,
       divisaoId: divisaoId ?? this.divisaoId,
@@ -82,6 +103,7 @@ class Frota {
       'marca': marca,
       'tipo_veiculo': tipoVeiculo,
       'placa': placa,
+      'propriedade': propriedade.toUpperCase().trim(),
       'regional_id': regionalId,
       'divisao_id': divisaoId,
       'segmento_id': segmentoId,
@@ -124,12 +146,16 @@ class Frota {
       }
     }
 
+    final rawProp = (map['propriedade'] as String?)?.trim().toUpperCase();
+    final propFinal = (rawProp != null && rawProp.isNotEmpty) ? rawProp : PROPRIO;
+
     return Frota(
-      id: map['id'] as String,
-      nome: map['nome'] as String,
+      id: map['id'] as String? ?? '',
+      nome: map['nome'] as String? ?? '',
       marca: map['marca'] as String?,
       tipoVeiculo: map['tipo_veiculo'] as String? ?? 'CARRO_LEVE',
-      placa: map['placa'] as String,
+      placa: map['placa'] as String? ?? '',
+      propriedade: propFinal,
       regionalId: map['regional_id'] as String?,
       regional: regionalNome ?? map['regional'] as String?,
       divisaoId: map['divisao_id'] as String?,
@@ -150,6 +176,6 @@ class Frota {
 
   @override
   String toString() {
-    return 'Frota(id: $id, nome: $nome, tipoVeiculo: $tipoVeiculo, placa: $placa)';
+    return 'Frota(id: $id, nome: $nome, tipoVeiculo: $tipoVeiculo, placa: $placa, propriedade: $propriedade)';
   }
 }

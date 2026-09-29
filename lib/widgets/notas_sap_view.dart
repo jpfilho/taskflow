@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:async';
+import '../design_system/taskflow_design_system.dart';
+import '../utils/clipboard_helper.dart';
 import '../models/nota_sap.dart';
 import '../services/nota_sap_service.dart';
 import '../utils/responsive.dart';
@@ -194,25 +196,13 @@ class _NotasSAPViewState extends State<NotasSAPView> {
   }
 
   Future<void> _copiarNota(String notaNumero) async {
-    try {
-      await Clipboard.setData(ClipboardData(text: notaNumero));
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Nota copiada!'),
-          duration: Duration(seconds: 1),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Não foi possível copiar a nota: ${e.toString()}'),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 3),
-        ),
-      );
-    }
+    await ClipboardHelper.copyAndNotify(
+      context,
+      notaNumero,
+      successMessage: 'Nota copiada!',
+      errorMessage: 'Não foi possível copiar a nota.',
+      duration: const Duration(seconds: 1),
+    );
   }
 
   @override
@@ -416,6 +406,27 @@ class _NotasSAPViewState extends State<NotasSAPView> {
     }
   }
 
+  TFStatusSeverity _getTaskStatusSeverity(String? status) {
+    if (status == null) return TFStatusSeverity.neutral;
+    switch (status.toUpperCase()) {
+      case 'CONC':
+      case 'CONCLUÍDA':
+        return TFStatusSeverity.success;
+      case 'ANDA':
+      case 'EM ANDAMENTO':
+      case 'EXEC':
+        return TFStatusSeverity.warning;
+      case 'PROG':
+      case 'PROGRAMADA':
+        return TFStatusSeverity.info;
+      case 'CANC':
+      case 'CANCELADA':
+        return TFStatusSeverity.danger;
+      default:
+        return TFStatusSeverity.neutral;
+    }
+  }
+
 
   Future<void> _loadNotasProgramadas() async {
     try {
@@ -424,7 +435,8 @@ class _NotasSAPViewState extends State<NotasSAPView> {
       final info = <String, List<Map<String, dynamic>>>{};
       
       for (final item in programadas) {
-        final nota = item['nota'] as NotaSAP;
+        final nota = item['nota'] as NotaSAP?;
+        if (nota == null) continue;
         ids.add(nota.id);
         
         // Adicionar à lista de vinculações desta nota
@@ -433,12 +445,19 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         }
         info[nota.id]!.add(item);
       }
+      print('⏱ [NotasSAPView] _loadNotasProgramadas: ${programadas.length} vínculos recebidos | ${ids.length} notas distintas');
       
       // Ordenar cada lista por data de vinculação (mais recente primeiro)
       for (final notaId in info.keys) {
         info[notaId]!.sort((a, b) {
-          final dataA = a['vinculado_em'] as DateTime?;
-          final dataB = b['vinculado_em'] as DateTime?;
+          DateTime? parseDate(dynamic v) {
+            if (v == null) return null;
+            if (v is DateTime) return v;
+            if (v is String) return DateTime.tryParse(v);
+            return null;
+          }
+          final dataA = parseDate(a['vinculado_em']);
+          final dataB = parseDate(b['vinculado_em']);
           if (dataA == null && dataB == null) return 0;
           if (dataA == null) return 1;
           if (dataB == null) return -1;
@@ -589,6 +608,10 @@ class _NotasSAPViewState extends State<NotasSAPView> {
     });
 
     try {
+      // Garantir que as vinculações estejam carregadas para status e filtros de programação
+      if (_notasProgramadasIds.isEmpty) {
+        await _loadNotasProgramadas();
+      }
       final querySw = Stopwatch()..start();
       // Carregar TODAS as notas (sem paginação) para ordenar corretamente
       var todasNotas = await _service.getAllNotas(
@@ -941,35 +964,30 @@ class _NotasSAPViewState extends State<NotasSAPView> {
             ButtonSegment(value: 'programadas', label: Text('Programadas')),
             ButtonSegment(value: 'nao_programadas', label: Text('Não Programadas')),
           ];
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final spacing = context.tfSpacing;
+
     return Scaffold(
+      backgroundColor: colors.background,
       body: Column(
         children: [
           // Header com filtros principais (visualização controlada pelo footbar no mobile)
           Container(
-            padding: const EdgeInsets.all(16),
+            padding: EdgeInsets.all(isCompact ? spacing.sm : spacing.md),
             decoration: BoxDecoration(
-              color: Colors.white,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.grey.withOpacity(0.1),
-                  spreadRadius: 1,
-                  blurRadius: 3,
-                  offset: const Offset(0, 2),
-                ),
-              ],
+              color: colors.surface,
+              border: Border(bottom: BorderSide(color: colors.borderSubtle)),
             ),
             child: Wrap(
-              spacing: 12,
-              runSpacing: 12,
+              spacing: spacing.sm,
+              runSpacing: spacing.sm,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 if (!isCompact)
-                  const Text(
+                  Text(
                     'Notas SAP',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: typography.sectionTitle,
                   ),
                 SegmentedButton<String?>(
                   segments: tipoNotaSegments,
@@ -983,13 +1001,13 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                     _loadTodasNotasParaEstatisticas();
                   },
                   style: SegmentedButton.styleFrom(
-                    backgroundColor: Colors.grey[200],
-                    selectedBackgroundColor: Colors.blue[600],
+                    backgroundColor: colors.surfaceSecondary,
+                    selectedBackgroundColor: colors.primary,
                     selectedForegroundColor: Colors.white,
-                    foregroundColor: Colors.grey[700],
-                    side: BorderSide(color: Colors.grey[300]!, width: 1),
+                    foregroundColor: colors.textSecondary,
+                    side: BorderSide(color: colors.borderSubtle, width: 1),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(TFRadius.r8),
                     ),
                   ),
                 ),
@@ -1005,13 +1023,13 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                     _loadTodasNotasParaEstatisticas();
                   },
                   style: SegmentedButton.styleFrom(
-                    backgroundColor: Colors.grey[200],
-                    selectedBackgroundColor: Colors.blue[600],
+                    backgroundColor: colors.surfaceSecondary,
+                    selectedBackgroundColor: colors.primary,
                     selectedForegroundColor: Colors.white,
-                    foregroundColor: Colors.grey[700],
-                    side: BorderSide(color: Colors.grey[300]!, width: 1),
+                    foregroundColor: colors.textSecondary,
+                    side: BorderSide(color: colors.borderSubtle, width: 1),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(TFRadius.r8),
                     ),
                   ),
                 ),
@@ -1037,13 +1055,13 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                     },
                     showSelectedIcon: false,
                     style: SegmentedButton.styleFrom(
-                      backgroundColor: Colors.white,
-                      selectedBackgroundColor: Colors.blue[50],
-                      selectedForegroundColor: Colors.blue[700],
-                      foregroundColor: Colors.grey[700],
-                      side: BorderSide(color: Colors.grey[300]!, width: 1),
+                      backgroundColor: colors.surface,
+                      selectedBackgroundColor: colors.primary.withValues(alpha: 0.12),
+                      selectedForegroundColor: colors.primary,
+                      foregroundColor: colors.textSecondary,
+                      side: BorderSide(color: colors.borderSubtle, width: 1),
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(TFRadius.r8),
                       ),
                     ),
                   )
@@ -1052,23 +1070,24 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                       decoration: BoxDecoration(
-                        color: Colors.white,
-                        border: Border.all(color: Colors.grey[300]!),
-                        borderRadius: BorderRadius.circular(8),
+                        color: colors.surface,
+                        border: Border.all(color: colors.borderSubtle),
+                        borderRadius: BorderRadius.circular(TFRadius.r8),
                       ),
                       child: DropdownButton<String>(
                         value: _modoVisualizacao,
                         isDense: true,
                         icon: const Icon(Icons.arrow_drop_down),
+                        dropdownColor: colors.surface,
                         items: viewOptions.map((opt) {
                           return DropdownMenuItem<String>(
                             value: opt.$1,
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(opt.$2, size: 18, color: Colors.blue[700]),
+                                Icon(opt.$2, size: 18, color: colors.primary),
                                 const SizedBox(width: 8),
-                                Text(opt.$3),
+                                Text(opt.$3, style: typography.bodySmall),
                               ],
                             ),
                           );
@@ -1087,15 +1106,17 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                       ),
                     ),
                   ),
+                // Botão de Gantt desabilitado temporariamente
+                /*
                 if (_modoVisualizacao == 'tabela')
                   IconButton(
                     tooltip: _exibirGantt ? 'Ocultar Gantt' : 'Exibir Gantt',
-                    icon: Icon(_exibirGantt ? Icons.timeline : Icons.timeline_outlined, color: _exibirGantt ? Colors.blue[700] : Colors.grey[700]),
+                    icon: Icon(_exibirGantt ? Icons.timeline : Icons.timeline_outlined, color: _exibirGantt ? colors.primary : colors.textSecondary),
                     style: IconButton.styleFrom(
-                      backgroundColor: _exibirGantt ? Colors.blue[50] : Colors.white,
-                      side: BorderSide(color: Colors.grey[300]!, width: 1),
+                      backgroundColor: _exibirGantt ? colors.primary.withValues(alpha: 0.12) : colors.surface,
+                      side: BorderSide(color: colors.borderSubtle, width: 1),
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(TFRadius.r8),
                       ),
                     ),
                     onPressed: () {
@@ -1104,26 +1125,33 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                       });
                     },
                   ),
+                */
                 ElevatedButton.icon(
-                  onPressed: () {
+                  onPressed: () async {
                     setState(() {
                       _paginaAtual = 0;
                     });
-                    _loadNotas();
+                    await _loadNotasProgramadas();
+                    await _loadNotas();
                     _loadTodasNotasParaEstatisticas();
                   },
-                  icon: const Icon(Icons.refresh),
+                  icon: const Icon(Icons.refresh, size: 18),
                   label: isCompact ? const SizedBox.shrink() : const Text('Atualizar'),
                   style: ElevatedButton.styleFrom(
-                    minimumSize: Size(isCompact ? 44 : 0, 36),
+                    backgroundColor: colors.primary,
+                    foregroundColor: Colors.white,
+                    minimumSize: Size(isCompact ? 40 : 0, 36),
                     padding: EdgeInsets.symmetric(
-                      horizontal: isCompact ? 12 : 16,
-                      vertical: 12,
+                      horizontal: isCompact ? 10 : 16,
+                      vertical: 10,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(TFRadius.r8),
                     ),
                   ),
                 ),
                 OutlinedButton.icon(
-                  icon: const Icon(Icons.filter_list),
+                  icon: const Icon(Icons.filter_list, size: 18),
                   label: isCompact
                       ? const SizedBox.shrink()
                       : Row(
@@ -1135,22 +1163,27 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                               Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                                 decoration: BoxDecoration(
-                                  color: Colors.blue,
+                                  color: colors.primary,
                                   borderRadius: BorderRadius.circular(10),
                                 ),
                                 child: Text(
                                   '${_totalFiltrosAtivos()}',
-                                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                                  style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
                                 ),
                               ),
                             ],
                           ],
                         ),
                   style: OutlinedButton.styleFrom(
-                    minimumSize: Size(isCompact ? 44 : 0, 36),
+                    foregroundColor: colors.textPrimary,
+                    side: BorderSide(color: colors.borderDefault),
+                    minimumSize: Size(isCompact ? 40 : 0, 36),
                     padding: EdgeInsets.symmetric(
-                      horizontal: isCompact ? 12 : 16,
-                      vertical: 12,
+                      horizontal: isCompact ? 10 : 16,
+                      vertical: 10,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(TFRadius.r8),
                     ),
                   ),
                   onPressed: () {
@@ -1166,7 +1199,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                 if (!isCompact)
                   Text(
                     _filtrosExpandidos ? 'Ocultar' : 'Mostrar',
-                    style: TextStyle(color: Colors.grey[600]),
+                    style: typography.caption.copyWith(color: colors.textSecondary),
                   ),
               ],
             ),
@@ -1178,15 +1211,10 @@ class _NotasSAPViewState extends State<NotasSAPView> {
             secondChild: Container(
               padding: EdgeInsets.all(isMobile ? 8 : 16),
               decoration: BoxDecoration(
-                color: Colors.grey[100],
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.grey.withOpacity(0.1),
-                    spreadRadius: 1,
-                    blurRadius: 2,
-                    offset: const Offset(0, 1),
-                  ),
-                ],
+                color: colors.surfaceSecondary,
+                border: Border(
+                  bottom: BorderSide(color: colors.borderSubtle),
+                ),
               ),
               child: Wrap(
                 spacing: 16,
@@ -1362,8 +1390,12 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                       _loadNotas();
                       _loadTodasNotasParaEstatisticas();
                     },
-                    icon: const Icon(Icons.clear),
-                label: const Text('Limpar filtros'),
+                    icon: Icon(Icons.clear, size: 16, color: colors.textSecondary),
+                label: Text('Limpar filtros', style: typography.labelMedium.copyWith(color: colors.textPrimary)),
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: colors.borderSubtle),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(TFRadius.r8)),
+                ),
                   ),
               ],
             ),
@@ -1376,37 +1408,42 @@ class _NotasSAPViewState extends State<NotasSAPView> {
           if (_modoVisualizacao != 'dashboard' && !Responsive.isMobile(context))
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              color: Colors.blue[50],
+              decoration: BoxDecoration(
+                color: colors.surfaceSecondary,
+                border: Border(
+                  bottom: BorderSide(color: colors.borderSubtle),
+                ),
+              ),
               child: Row(
                 children: [
                   Row(
                       children: [
                         Text(
                           'Total: $_totalNotas notas (${_notas.length} nesta página)',
-                          style: const TextStyle(
+                          style: typography.bodyMedium.copyWith(
                             fontWeight: FontWeight.bold,
-                            color: Colors.blue,
+                            color: colors.primary,
                           ),
                         ),
                         if (_notasSelecionadas.isNotEmpty) ...[
                           const SizedBox(width: 16),
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                             decoration: BoxDecoration(
-                              color: Colors.blue[100],
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(color: Colors.blue[300]!),
+                              color: colors.primary.withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(TFRadius.r8),
+                              border: Border.all(color: colors.primary.withOpacity(0.3)),
                             ),
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(Icons.check_circle, size: 16, color: Colors.blue[700]),
+                                Icon(Icons.check_circle, size: 16, color: colors.primary),
                                 const SizedBox(width: 6),
                                 Text(
                                   '${_notasSelecionadas.length} selecionada${_notasSelecionadas.length > 1 ? 's' : ''}',
-                                  style: TextStyle(
+                                  style: typography.caption.copyWith(
                                     fontWeight: FontWeight.bold,
-                                    color: Colors.blue[700],
+                                    color: colors.primary,
                                   ),
                                 ),
                                 const SizedBox(width: 6),
@@ -1416,7 +1453,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                                       _notasSelecionadas.clear();
                                     });
                                   },
-                                  child: Icon(Icons.close, size: 16, color: Colors.blue[700]),
+                                  child: Icon(Icons.close, size: 16, color: colors.primary),
                                 ),
                               ],
                             ),
@@ -1427,9 +1464,9 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                   const Spacer(),
                   Text(
                     'Página ${_paginaAtual + 1} de ${(_totalNotas / _itensPorPagina).ceil()}',
-                    style: const TextStyle(
+                    style: typography.bodyMedium.copyWith(
                       fontWeight: FontWeight.bold,
-                      color: Colors.blue,
+                      color: colors.primary,
                     ),
                   ),
                 ],
@@ -1439,53 +1476,39 @@ class _NotasSAPViewState extends State<NotasSAPView> {
           // Lista de notas (Cards ou Tabela)
           Expanded(
             child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
+                ? const Center(child: TFLoading(message: 'Carregando notas SAP...'))
                 : _notas.isEmpty
                     ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.description_outlined, size: 64, color: Colors.grey),
-                            const SizedBox(height: 16),
-                            const Text(
-                              'Nenhuma nota encontrada',
-                              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.grey),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              _totalNotas == 0
-                                  ? 'Não há notas cadastradas ou você não tem permissão para visualizá-las.'
-                                  : 'Total de notas: $_totalNotas',
-                              style: const TextStyle(fontSize: 14, color: Colors.grey),
-                              textAlign: TextAlign.center,
-                            ),
-                            if (_filtroTipoNota != null ||
-                                _filtroLocais.isNotEmpty || _filtroTipos.isNotEmpty || _filtroNotas.isNotEmpty || _filtroPrioridades.isNotEmpty ||
-                                _filtroStatusUsuario.isNotEmpty || _filtroResponsaveis.isNotEmpty || _filtroGPMs.isNotEmpty) ...[
-                              const SizedBox(height: 16),
-                              ElevatedButton.icon(
-                                onPressed: () {
-                                  setState(() {
-                                    _filtroTipoNota = null;
-                                    _filtroProgramacao = null;
-                                    _filtroLocais.clear();
-                                    _filtroTipos.clear();
-                                    _filtroNotas.clear();
-                                    _filtroPrioridades.clear();
-                                    _filtroStatusUsuario.clear();
-                                    _filtroResponsaveis.clear();
-                                    _filtroGPMs.clear();
-                                    _paginaAtual = 0;
-                                  });
-                                  _loadNotas();
-                                  _loadTodasNotasParaEstatisticas();
-                                  // _loadFiltros() será chamado automaticamente no final de _loadNotas()
-                                },
-                                icon: const Icon(Icons.clear_all),
-                                label: const Text('Limpar Filtros'),
-                              ),
-                            ],
-                          ],
+                        child: TFEmptyState(
+                          icon: Icons.description_outlined,
+                          title: 'Nenhuma nota encontrada',
+                          description: _totalNotas == 0
+                              ? 'Não há notas cadastradas ou você não tem permissão para visualizá-las.'
+                              : 'Nenhuma nota corresponde aos filtros selecionados (Total: $_totalNotas notas).',
+                          action: (_filtroTipoNota != null ||
+                                  _filtroLocais.isNotEmpty || _filtroTipos.isNotEmpty || _filtroNotas.isNotEmpty || _filtroPrioridades.isNotEmpty ||
+                                  _filtroStatusUsuario.isNotEmpty || _filtroResponsaveis.isNotEmpty || _filtroGPMs.isNotEmpty)
+                              ? ElevatedButton.icon(
+                                  onPressed: () {
+                                    setState(() {
+                                      _filtroTipoNota = null;
+                                      _filtroProgramacao = null;
+                                      _filtroLocais.clear();
+                                      _filtroTipos.clear();
+                                      _filtroNotas.clear();
+                                      _filtroPrioridades.clear();
+                                      _filtroStatusUsuario.clear();
+                                      _filtroResponsaveis.clear();
+                                      _filtroGPMs.clear();
+                                      _paginaAtual = 0;
+                                    });
+                                    _loadNotas();
+                                    _loadTodasNotasParaEstatisticas();
+                                  },
+                                  icon: const Icon(Icons.clear_all),
+                                  label: const Text('Limpar Filtros'),
+                                )
+                              : null,
                         ),
                       )
                     : _modoVisualizacao == 'calendario'
@@ -1513,17 +1536,12 @@ class _NotasSAPViewState extends State<NotasSAPView> {
           // Paginação (não mostrar no dashboard)
           if (_modoVisualizacao != 'dashboard' && _totalNotas > _itensPorPagina)
             Container(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
-                color: Colors.white,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.grey.withOpacity(0.1),
-                    spreadRadius: 1,
-                    blurRadius: 2,
-                    offset: const Offset(0, -1),
-                  ),
-                ],
+                color: colors.surface,
+                border: Border(
+                  top: BorderSide(color: colors.borderSubtle),
+                ),
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -1542,9 +1560,15 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                             }
                           }
                         : null,
-                    icon: const Icon(Icons.chevron_left),
+                    icon: Icon(Icons.chevron_left, color: _paginaAtual > 0 ? colors.textPrimary : colors.textDisabled),
                   ),
-                  Text('Página ${_paginaAtual + 1} de ${(_totalNotas / _itensPorPagina).ceil()}'),
+                  Text(
+                    'Página ${_paginaAtual + 1} de ${(_totalNotas / _itensPorPagina).ceil()}',
+                    style: typography.bodyMedium.copyWith(
+                      color: colors.textPrimary,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
                   IconButton(
                     onPressed: (_paginaAtual + 1) * _itensPorPagina < _totalNotas
                         ? () {
@@ -1559,7 +1583,10 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                             }
                           }
                         : null,
-                    icon: const Icon(Icons.chevron_right),
+                    icon: Icon(
+                      Icons.chevron_right,
+                      color: (_paginaAtual + 1) * _itensPorPagina < _totalNotas ? colors.textPrimary : colors.textDisabled,
+                    ),
                   ),
                 ],
               ),
@@ -1570,6 +1597,9 @@ class _NotasSAPViewState extends State<NotasSAPView> {
   }
 
   Widget _buildNotaCard(NotaSAP nota, {bool isProgramada = false}) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
     final programadasList = isProgramada ? _notasProgramadasInfo[nota.id] : null;
     // Pegar a vinculação mais recente para exibir no card (primeira da lista ordenada)
     final programadaInfo = programadasList?.isNotEmpty == true ? programadasList!.first : null;
@@ -1579,10 +1609,14 @@ class _NotasSAPViewState extends State<NotasSAPView> {
     
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      elevation: 2,
+      elevation: 0,
       color: isProgramada && statusColor != null 
-          ? statusColor.withOpacity(0.1) 
-          : null,
+          ? statusColor.withOpacity(0.06) 
+          : colors.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(TFRadius.r8),
+        side: BorderSide(color: colors.borderSubtle),
+      ),
       child: ExpansionTile(
         leading: Stack(
           children: [
@@ -1590,7 +1624,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
               backgroundColor: _getStatusColor(nota.statusSistema),
               child: Text(
                 nota.tipo ?? '?',
-                style: const TextStyle(color: Colors.white, fontSize: 12),
+                style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
               ),
             ),
             if (isProgramada && statusColor != null)
@@ -1606,7 +1640,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                   child: const Icon(
                     Icons.check_circle,
                     color: Colors.white,
-                    size: 16,
+                    size: 14,
                   ),
                 ),
               ),
@@ -1617,60 +1651,30 @@ class _NotasSAPViewState extends State<NotasSAPView> {
             Expanded(
               child: Text(
                 'Nota: ${nota.nota}',
-                style: const TextStyle(fontWeight: FontWeight.bold),
+                style: typography.cardTitle.copyWith(color: colors.textPrimary),
               ),
             ),
             IconButton(
-              icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
+              icon: Icon(Icons.copy, size: 18, color: colors.primary),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
               onPressed: () => _copiarNota(nota.nota),
               tooltip: 'Copiar nota',
             ),
-            isProgramada && tarefaStatus != null && statusColor != null
-                ? Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: statusColor,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.task, color: Colors.white, size: 14),
-                        const SizedBox(width: 4),
-                        Text(
-                          tarefaStatus,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ],
-                    ),
+            const SizedBox(width: 8),
+            isProgramada && tarefaStatus != null
+                ? TFStatusBadge(
+                    label: tarefaStatus,
+                    severity: _getTaskStatusSeverity(tarefaStatus),
+                    customColor: statusColor,
+                    icon: Icons.task,
+                    compact: true,
                   )
-                : Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[200],
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.cancel_outlined, color: Colors.grey[600], size: 14),
-                        const SizedBox(width: 4),
-                        Text(
-                          'Não Programada',
-                          style: TextStyle(
-                            color: Colors.grey[700],
-                            fontSize: 10,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
+                : const TFStatusBadge(
+                    label: 'Não Programada',
+                    severity: TFStatusSeverity.neutral,
+                    icon: Icons.cancel_outlined,
+                    compact: true,
                   ),
           ],
         ),
@@ -1680,6 +1684,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
             if (nota.descricao != null)
               Text(
                 nota.descricao!,
+                style: typography.bodyMedium.copyWith(color: colors.textSecondary),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -1687,17 +1692,17 @@ class _NotasSAPViewState extends State<NotasSAPView> {
               const SizedBox(height: 4),
               InkWell(
                 onTap: () => _navegarParaTarefa(tarefa['id'] as String?),
-                borderRadius: BorderRadius.circular(4),
+                borderRadius: BorderRadius.circular(TFRadius.r4),
                 child: Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
                     color: statusColor != null 
-                        ? statusColor.withOpacity(0.15)
-                        : Colors.blue[50],
-                    borderRadius: BorderRadius.circular(4),
+                        ? statusColor.withOpacity(0.12)
+                        : colors.surfaceSecondary,
+                    borderRadius: BorderRadius.circular(TFRadius.r4),
                     border: Border.all(
-                      color: statusColor ?? Colors.blue[200]!,
-                      width: 1.5,
+                      color: statusColor ?? colors.borderSubtle,
+                      width: 1,
                     ),
                   ),
                   child: Row(
@@ -1705,8 +1710,8 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                         decoration: BoxDecoration(
-                          color: statusColor ?? Colors.blue,
-                          borderRadius: BorderRadius.circular(4),
+                          color: statusColor ?? colors.primary,
+                          borderRadius: BorderRadius.circular(TFRadius.r4),
                         ),
                         child: Text(
                           tarefaStatus ?? 'N/A',
@@ -1721,10 +1726,10 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                       Expanded(
                         child: Text(
                           'Tarefa: ${tarefa['tarefa'] ?? 'N/A'}',
-                          style: TextStyle(
+                          style: typography.bodyMedium.copyWith(
                             fontSize: 12,
                             fontWeight: FontWeight.w500,
-                            color: statusColor ?? Colors.blue[900],
+                            color: colors.textPrimary,
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -1733,7 +1738,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                       Icon(
                         Icons.arrow_forward_ios,
                         size: 14,
-                        color: statusColor ?? Colors.blue[700],
+                        color: colors.textSecondary,
                       ),
                     ],
                   ),
@@ -1746,7 +1751,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                 if (nota.criadoEm != null)
                   Text(
                     'Criado: ${_formatDate(nota.criadoEm!)}',
-                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                    style: typography.caption.copyWith(color: colors.textSecondary),
                   ),
                 if (nota.statusSistema != null) ...[
                   const SizedBox(width: 16),
@@ -1754,11 +1759,11 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                     decoration: BoxDecoration(
                       color: _getStatusColor(nota.statusSistema),
-                      borderRadius: BorderRadius.circular(4),
+                      borderRadius: BorderRadius.circular(TFRadius.r4),
                     ),
                     child: Text(
                       nota.statusSistema!,
-                      style: const TextStyle(color: Colors.white, fontSize: 10),
+                      style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
                     ),
                   ),
                 ],
@@ -1793,7 +1798,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                   const Divider(height: 32),
                   Text(
                     'Tarefas Vinculadas (${programadasList.length})',
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                    style: typography.sectionTitle.copyWith(color: colors.textPrimary),
                   ),
                   const SizedBox(height: 8),
                   // Mostrar todas as vinculações
@@ -1809,10 +1814,10 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                       margin: EdgeInsets.only(bottom: index < programadasList.length - 1 ? 16 : 0),
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: statusColorTarefa?.withOpacity(0.1) ?? Colors.grey[50],
-                        borderRadius: BorderRadius.circular(8),
+                        color: statusColorTarefa?.withOpacity(0.08) ?? colors.surfaceSecondary,
+                        borderRadius: BorderRadius.circular(TFRadius.r8),
                         border: Border.all(
-                          color: statusColorTarefa ?? Colors.grey[300]!,
+                          color: statusColorTarefa ?? colors.borderSubtle,
                           width: 1,
                         ),
                       ),
@@ -1824,8 +1829,8 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                               Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                 decoration: BoxDecoration(
-                                  color: statusColorTarefa ?? Colors.blue,
-                                  borderRadius: BorderRadius.circular(4),
+                                  color: statusColorTarefa ?? colors.primary,
+                                  borderRadius: BorderRadius.circular(TFRadius.r4),
                                 ),
                                 child: Text(
                                   statusTarefa ?? 'N/A',
@@ -1842,8 +1847,8 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                                 child: Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                   decoration: BoxDecoration(
-                                    color: statusColorTarefa ?? Colors.blue,
-                                    borderRadius: BorderRadius.circular(4),
+                                    color: statusColorTarefa ?? colors.primary,
+                                    borderRadius: BorderRadius.circular(TFRadius.r4),
                                   ),
                                   child: const Row(
                                     mainAxisSize: MainAxisSize.min,
@@ -1897,8 +1902,9 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                       icon: const Icon(Icons.add_task, size: 18),
                       label: const Text('Criar Tarefa'),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green,
-                        foregroundColor: Colors.white,
+                        backgroundColor: colors.success,
+                        foregroundColor: colors.surface,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(TFRadius.r8)),
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -1907,15 +1913,17 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                           ? null 
                           : () => _vincularNotasSelecionadas(nota),
                       icon: _notasVinculando.contains(nota.id)
-                          ? const SizedBox(
+                          ? SizedBox(
                               width: 18,
                               height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
+                              child: CircularProgressIndicator(strokeWidth: 2, color: colors.primary),
                             )
                           : const Icon(Icons.link, size: 18),
                       label: const Text('Vincular a Tarefa'),
                       style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.blue,
+                        foregroundColor: colors.primary,
+                        side: BorderSide(color: colors.borderSubtle),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(TFRadius.r8)),
                       ),
                     ),
                   ],
@@ -1962,10 +1970,13 @@ class _NotasSAPViewState extends State<NotasSAPView> {
       return const SizedBox.shrink();
     }
 
+    final colors = context.tfColors;
+
     return Container(
       decoration: BoxDecoration(
-        color: Colors.grey[200],
-        borderRadius: BorderRadius.circular(8),
+        color: colors.surfaceSecondary,
+        borderRadius: BorderRadius.circular(TFRadius.r8),
+        border: Border.all(color: colors.borderSubtle),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1999,6 +2010,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
     required String tooltip,
     required int contador,
   }) {
+    final colors = context.tfColors;
     final isSelected = _tipoFiltro == value;
     return Tooltip(
       message: tooltip,
@@ -2011,12 +2023,12 @@ class _NotasSAPViewState extends State<NotasSAPView> {
           // Recarregar notas com o novo filtro
           _loadNotas();
         },
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(TFRadius.r8),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
-            color: isSelected ? Colors.blue[600] : Colors.transparent,
-            borderRadius: BorderRadius.circular(8),
+            color: isSelected ? colors.primary : Colors.transparent,
+            borderRadius: BorderRadius.circular(TFRadius.r8),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -2025,7 +2037,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
               Icon(
                 icon,
                 size: 20,
-                color: isSelected ? Colors.white : Colors.grey[700],
+                color: isSelected ? colors.surface : colors.textSecondary,
               ),
               // Badge abaixo do ícone
               if (contador > 0)
@@ -2033,7 +2045,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                   margin: const EdgeInsets.only(top: 4),
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
-                    color: Colors.red,
+                    color: colors.danger,
                     borderRadius: BorderRadius.circular(12),
                   ),
                   constraints: const BoxConstraints(
@@ -2042,8 +2054,8 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                   ),
                   child: Text(
                     contador > 99 ? '99+' : contador.toString(),
-                    style: const TextStyle(
-                      color: Colors.white,
+                    style: TextStyle(
+                      color: colors.surface,
                       fontSize: 10,
                       fontWeight: FontWeight.bold,
                     ),
@@ -2058,71 +2070,6 @@ class _NotasSAPViewState extends State<NotasSAPView> {
       ),
     );
   }
-
-  Widget _buildViewButton(String label, IconData icon, String value, bool isSelected) {
-    return InkWell(
-      onTap: () {
-        setState(() {
-          _modoVisualizacao = value;
-          _visualizacaoTabela = value == 'tabela';
-        });
-        widget.onModoChange?.call(value);
-      },
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: BoxDecoration(
-          color: isSelected ? Colors.blue[600] : Colors.transparent,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              icon,
-              size: 16,
-              color: isSelected ? Colors.white : Colors.grey[700],
-            ),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                color: isSelected ? Colors.white : Colors.grey[700],
-                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                fontSize: 13,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // Footbar de visualização para mobile
-  Widget _buildMobileViewSwitcher() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.grey.withOpacity(0.12),
-            blurRadius: 6,
-            offset: const Offset(0, -2),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          // mobile view switcher removido (footbar global cuida no mobile)
-        ],
-      ),
-    );
-  }
-
-  // _buildMobileViewButton removido
-
-
 
   Color _getStatusColor(String? status) {
     if (status == null) return Colors.grey;
@@ -2175,6 +2122,9 @@ class _NotasSAPViewState extends State<NotasSAPView> {
     Function(Set<String>) onChanged, {
     String? searchHint,
   }) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
     // Função para calcular valores disponíveis dinamicamente a partir de _todasNotasOrdenadas
     List<String> calcularOpcoesDisponiveis(String campo) {
       if (_todasNotasOrdenadas.isEmpty) {
@@ -2249,11 +2199,23 @@ class _NotasSAPViewState extends State<NotasSAPView> {
       child: InputDecorator(
         decoration: InputDecoration(
           labelText: label,
-          border: const OutlineInputBorder(),
+          labelStyle: typography.caption.copyWith(color: colors.textSecondary),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(TFRadius.r8),
+            borderSide: BorderSide(color: colors.borderSubtle),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(TFRadius.r8),
+            borderSide: BorderSide(color: colors.borderSubtle),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(TFRadius.r8),
+            borderSide: BorderSide(color: colors.primary),
+          ),
           filled: true,
-          fillColor: Colors.white,
-          suffixIcon: const Icon(Icons.arrow_drop_down),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+          fillColor: colors.surface,
+          suffixIcon: Icon(Icons.arrow_drop_down, color: colors.textSecondary),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
         ),
         child: Text(
           selectedValues.isEmpty
@@ -2261,8 +2223,8 @@ class _NotasSAPViewState extends State<NotasSAPView> {
               : selectedValues.length == 1
                   ? selectedValues.first
                   : '${selectedValues.length} selecionado(s)',
-          style: TextStyle(
-            color: selectedValues.isEmpty ? Colors.grey[600] : Colors.black,
+          style: typography.bodyMedium.copyWith(
+            color: selectedValues.isEmpty ? colors.textSecondary : colors.textPrimary,
           ),
         ),
       ),
@@ -2313,17 +2275,25 @@ class _NotasSAPViewState extends State<NotasSAPView> {
   }
 
   void _mostrarTodasVinculacoes(NotaSAP nota, List<Map<String, dynamic>> vinculacoes) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
+        backgroundColor: colors.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(TFRadius.r12),
+          side: BorderSide(color: colors.borderSubtle),
+        ),
         title: Row(
           children: [
-            const Icon(Icons.task, color: Colors.blue),
+            Icon(Icons.task, color: colors.primary),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
                 'Tarefas Vinculadas à Nota ${nota.nota}',
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                style: typography.sectionTitle.copyWith(color: colors.textPrimary),
               ),
             ),
           ],
@@ -2346,11 +2316,11 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                   margin: EdgeInsets.only(bottom: index < vinculacoes.length - 1 ? 16 : 0),
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: statusColorTarefa?.withOpacity(0.1) ?? Colors.grey[50],
-                    borderRadius: BorderRadius.circular(8),
+                    color: statusColorTarefa?.withOpacity(0.08) ?? colors.surfaceSecondary,
+                    borderRadius: BorderRadius.circular(TFRadius.r8),
                     border: Border.all(
-                      color: statusColorTarefa ?? Colors.grey[300]!,
-                      width: 1.5,
+                      color: statusColorTarefa ?? colors.borderSubtle,
+                      width: 1,
                     ),
                   ),
                   child: Column(
@@ -2361,8 +2331,8 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                             decoration: BoxDecoration(
-                              color: statusColorTarefa ?? Colors.blue,
-                              borderRadius: BorderRadius.circular(4),
+                              color: statusColorTarefa ?? colors.primary,
+                              borderRadius: BorderRadius.circular(TFRadius.r4),
                             ),
                             child: Text(
                               statusTarefa ?? 'N/A',
@@ -2382,8 +2352,8 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                             child: Container(
                               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                               decoration: BoxDecoration(
-                                color: statusColorTarefa ?? Colors.blue,
-                                borderRadius: BorderRadius.circular(4),
+                                color: statusColorTarefa ?? colors.primary,
+                                borderRadius: BorderRadius.circular(TFRadius.r4),
                               ),
                               child: const Row(
                                 mainAxisSize: MainAxisSize.min,
@@ -2431,7 +2401,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Fechar'),
+            child: Text('Fechar', style: TextStyle(color: colors.primary)),
           ),
         ],
       ),
@@ -2547,6 +2517,9 @@ class _NotasSAPViewState extends State<NotasSAPView> {
   }
 
   Widget _buildTabelaView() {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: SingleChildScrollView(
@@ -2554,7 +2527,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         child: DataTable(
           sortColumnIndex: _sortColumnIndex,
           sortAscending: _ordenacaoAscendente,
-          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
+          headingRowColor: WidgetStateProperty.all(colors.surfaceSecondary),
           columns: [
             DataColumn( // 0. Checkbox "selecionar todos" — sem onSort
               label: Checkbox(
@@ -2570,73 +2543,73 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                 },
               ),
             ),
-            const DataColumn(label: Text('Ações')), // 1. Ações (não ordena)
+            DataColumn(label: Text('Ações', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary))), // 1. Ações (não ordena)
             DataColumn( // 2. Status tarefa
-              label: const Text('Status', style: TextStyle(fontWeight: FontWeight.bold)),
+              label: Text('Status', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary)),
               onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
             ),
-            const DataColumn(label: Text('Tarefa Vinculada', style: TextStyle(fontWeight: FontWeight.bold))), // 3. não ordena
+            DataColumn(label: Text('Tarefa Vinculada', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary))), // 3. não ordena
             DataColumn( // 4. Local
-              label: const Text('Local', style: TextStyle(fontWeight: FontWeight.bold)),
+              label: Text('Local', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary)),
               onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
             ),
             DataColumn( // 5. Sala
-              label: const Text('Sala', style: TextStyle(fontWeight: FontWeight.bold)),
+              label: Text('Sala', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary)),
               onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
             ),
             DataColumn( // 6. Descrição
-              label: const Text('Descrição', style: TextStyle(fontWeight: FontWeight.bold)),
+              label: Text('Descrição', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary)),
               onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
             ),
             DataColumn( // 7. Tipo
-              label: const Text('Tipo', style: TextStyle(fontWeight: FontWeight.bold)),
+              label: Text('Tipo', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary)),
               onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
             ),
             DataColumn( // 8. Prazo
-              label: const Text('Prazo', style: TextStyle(fontWeight: FontWeight.bold)),
+              label: Text('Prazo', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary)),
               onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
             ),
             DataColumn( // 9. Nota
-              label: const Text('Nota', style: TextStyle(fontWeight: FontWeight.bold)),
+              label: Text('Nota', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary)),
               onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
             ),
             DataColumn( // 10. Criado em
-              label: const Text('Criado em', style: TextStyle(fontWeight: FontWeight.bold)),
+              label: Text('Criado em', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary)),
               onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
             ),
             DataColumn( // 11. Prioridade
-              label: const Text('Prioridade', style: TextStyle(fontWeight: FontWeight.bold)),
+              label: Text('Prioridade', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary)),
               onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
             ),
             DataColumn( // 12. Status Usuário
-              label: const Text('Status Usuário', style: TextStyle(fontWeight: FontWeight.bold)),
+              label: Text('Status Usuário', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary)),
               onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
             ),
             DataColumn( // 13. Responsável
-              label: const Text('Responsável', style: TextStyle(fontWeight: FontWeight.bold)),
+              label: Text('Responsável', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary)),
               onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
             ),
             DataColumn( // 14. Local da Instalação
-              label: const Text('Local da Instalação', style: TextStyle(fontWeight: FontWeight.bold)),
+              label: Text('Local da Instalação', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary)),
               onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
             ),
             DataColumn( // 15. Ordem
-              label: const Text('Ordem', style: TextStyle(fontWeight: FontWeight.bold)),
+              label: Text('Ordem', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary)),
               onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
             ),
             DataColumn( // 16. Centro Trabalho
-              label: const Text('Centro Trabalho', style: TextStyle(fontWeight: FontWeight.bold)),
+              label: Text('Centro Trabalho', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary)),
               onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
             ),
             DataColumn( // 17. GPM
-              label: const Text('GPM', style: TextStyle(fontWeight: FontWeight.bold)),
+              label: Text('GPM', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary)),
               onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
             ),
             DataColumn( // 18. Status do Sistema
-              label: const Text('Status do Sistema', style: TextStyle(fontWeight: FontWeight.bold)),
+              label: Text('Status do Sistema', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary)),
               onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
             ),
-            const DataColumn(label: Text('Detalhes')), // 19. Detalhes (não ordena)
+            DataColumn(label: Text('Detalhes', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary))), // 19. Detalhes (não ordena)
           ],
           rows: _notas.map((nota) {
             final isProgramada = _notasProgramadasIds.contains(nota.id);
@@ -2652,7 +2625,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
             return DataRow(
               selected: isSelected,
               color: isProgramada && statusColor != null
-                  ? WidgetStateProperty.all(statusColor.withOpacity(0.1))
+                  ? WidgetStateProperty.all(statusColor.withOpacity(0.08))
                   : null,
               cells: [
                 // 0. CHECKBOX DE SELEÇÃO
@@ -2681,40 +2654,40 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                           color: Colors.transparent,
                           child: InkWell(
                             onTap: () => _mostrarDetalhesNota(nota),
-                            borderRadius: BorderRadius.circular(4),
+                            borderRadius: BorderRadius.circular(TFRadius.r4),
                             child: Container(
-                              padding: const EdgeInsets.all(8),
+                              padding: const EdgeInsets.all(6),
                               decoration: BoxDecoration(
-                                color: Colors.purple[50],
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(color: Colors.purple[300]!),
+                                color: colors.surfaceSecondary,
+                                borderRadius: BorderRadius.circular(TFRadius.r4),
+                                border: Border.all(color: colors.borderSubtle),
                               ),
-                              child: const Icon(Icons.visibility, size: 20, color: Colors.purple),
+                              child: Icon(Icons.visibility, size: 16, color: colors.primary),
                             ),
                           ),
                         ),
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 6),
                       Tooltip(
                         message: 'Criar Tarefa',
                         child: Material(
                           color: Colors.transparent,
                           child: InkWell(
                             onTap: _canEditTasks ? () => _criarTarefaDaNota(nota) : null,
-                            borderRadius: BorderRadius.circular(4),
+                            borderRadius: BorderRadius.circular(TFRadius.r4),
                             child: Container(
-                              padding: const EdgeInsets.all(8),
+                              padding: const EdgeInsets.all(6),
                               decoration: BoxDecoration(
-                                color: Colors.green[50],
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(color: Colors.green[300]!),
+                                color: colors.surfaceSecondary,
+                                borderRadius: BorderRadius.circular(TFRadius.r4),
+                                border: Border.all(color: colors.borderSubtle),
                               ),
-                              child: const Icon(Icons.add_task, size: 20, color: Colors.green),
+                              child: Icon(Icons.add_task, size: 16, color: colors.success),
                             ),
                           ),
                         ),
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 6),
                       Tooltip(
                         message: 'Vincular a Tarefa',
                         child: Material(
@@ -2723,27 +2696,21 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                             onTap: _notasVinculando.contains(nota.id)
                                 ? null
                                 : () => _vincularNotasSelecionadas(nota),
-                            borderRadius: BorderRadius.circular(4),
+                            borderRadius: BorderRadius.circular(TFRadius.r4),
                             child: Container(
-                              padding: const EdgeInsets.all(8),
+                              padding: const EdgeInsets.all(6),
                               decoration: BoxDecoration(
-                                color: _notasVinculando.contains(nota.id)
-                                    ? Colors.grey[200]
-                                    : Colors.blue[50],
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(
-                                  color: _notasVinculando.contains(nota.id)
-                                      ? Colors.grey[300]!
-                                      : Colors.blue[300]!,
-                                ),
+                                color: colors.surfaceSecondary,
+                                borderRadius: BorderRadius.circular(TFRadius.r4),
+                                border: Border.all(color: colors.borderSubtle),
                               ),
                               child: _notasVinculando.contains(nota.id)
-                                  ? const SizedBox(
-                                      width: 20,
-                                      height: 20,
-                                      child: CircularProgressIndicator(strokeWidth: 2),
+                                  ? SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(strokeWidth: 2, color: colors.primary),
                                     )
-                                  : const Icon(Icons.link, size: 20, color: Colors.blue),
+                                  : Icon(Icons.link, size: 16, color: colors.info),
                             ),
                           ),
                         ),
@@ -2753,68 +2720,42 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                 ),
                 // 2. STATUS
                 DataCell(
-                  isProgramada && tarefaStatus != null && statusColor != null
-                      ? Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: statusColor,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.task, color: Colors.white, size: 14),
+                  isProgramada && tarefaStatus != null
+                      ? Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            TFStatusBadge(
+                              label: tarefaStatus,
+                              severity: _getTaskStatusSeverity(tarefaStatus),
+                              customColor: statusColor,
+                              icon: Icons.task,
+                              compact: true,
+                            ),
+                            if (totalVinculacoes > 1) ...[
                               const SizedBox(width: 4),
-                              Text(
-                                tarefaStatus,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold,
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: (statusColor ?? colors.primary).withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(TFRadius.r4),
+                                ),
+                                child: Text(
+                                  '+${totalVinculacoes - 1}',
+                                  style: typography.caption.copyWith(
+                                    color: statusColor ?? colors.primary,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 9,
+                                  ),
                                 ),
                               ),
-                              if (totalVinculacoes > 1) ...[
-                                const SizedBox(width: 4),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.3),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Text(
-                                    '+${totalVinculacoes - 1}',
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 9,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                              ],
                             ],
-                          ),
+                          ],
                         )
-                      : Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: Colors.grey[200],
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.cancel_outlined, color: Colors.grey[600], size: 14),
-                              const SizedBox(width: 4),
-                              Text(
-                                'Não Programada',
-                                style: TextStyle(
-                                  color: Colors.grey[700],
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
-                          ),
+                      : const TFStatusBadge(
+                          label: 'Não Programada',
+                          severity: TFStatusSeverity.neutral,
+                          icon: Icons.cancel_outlined,
+                          compact: true,
                         ),
                 ),
                 // 3. TAREFA VINCULADA
@@ -2832,9 +2773,9 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                                 Flexible(
                                   child: Text(
                                     tarefa['tarefa']?.toString() ?? '-',
-                                    style: TextStyle(
+                                    style: typography.bodyMedium.copyWith(
                                       fontWeight: FontWeight.w500,
-                                      color: totalVinculacoes > 1 ? Colors.orange : Colors.blue,
+                                      color: totalVinculacoes > 1 ? colors.warning : colors.primary,
                                       decoration: TextDecoration.underline,
                                     ),
                                     maxLines: 1,
@@ -2846,15 +2787,15 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                                   Container(
                                     padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                                     decoration: BoxDecoration(
-                                      color: Colors.orange,
-                                      borderRadius: BorderRadius.circular(8),
+                                      color: colors.warning.withOpacity(0.2),
+                                      borderRadius: BorderRadius.circular(TFRadius.r4),
                                     ),
                                     child: Text(
                                       '$totalVinculacoes',
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 9,
+                                      style: typography.caption.copyWith(
+                                        color: colors.warning,
                                         fontWeight: FontWeight.bold,
+                                        fontSize: 9,
                                       ),
                                     ),
                                   ),
@@ -2863,13 +2804,13 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                                 Icon(
                                   totalVinculacoes > 1 ? Icons.list : Icons.open_in_new,
                                   size: 14,
-                                  color: totalVinculacoes > 1 ? Colors.orange : Colors.blue[700],
+                                  color: totalVinculacoes > 1 ? colors.warning : colors.primary,
                                 ),
                               ],
                             ),
                           ),
                         )
-                      : const Text('-', style: TextStyle(color: Colors.grey)),
+                      : Text('-', style: typography.bodyMedium.copyWith(color: colors.textDisabled)),
                 ),
                 // 4. LOCAL
                 DataCell(
@@ -2881,12 +2822,12 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                         decoration: BoxDecoration(
                           color: localColor,
-                          borderRadius: BorderRadius.circular(4),
+                          borderRadius: BorderRadius.circular(TFRadius.r4),
                           border: Border.all(
                             color: nota.local != null && nota.local!.isNotEmpty 
                                 ? localColor.withOpacity(0.8)
-                                : Colors.grey[300]!,
-                            width: 1.5,
+                                : colors.borderSubtle,
+                            width: 1,
                           ),
                         ),
                         child: Text(
@@ -2896,6 +2837,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                                 ? FontWeight.bold 
                                 : FontWeight.normal,
                             color: textColor,
+                            fontSize: 12,
                           ),
                         ),
                       );
@@ -2905,9 +2847,10 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                 // 5. SALA
                 DataCell(
                   SizedBox(
-                    width: 89, // redução adicional ~10%
+                    width: 89,
                     child: Text(
                       (nota.sala ?? '-').trim(),
+                      style: typography.bodyMedium,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -2916,9 +2859,10 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                 // 6. DESCRIÇÃO
                 DataCell(
                   SizedBox(
-                    width: 243, // redução adicional ~10%
+                    width: 243,
                     child: Text(
                       nota.descricao ?? '-',
+                      style: typography.bodyMedium,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -2929,10 +2873,14 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
-                      color: Colors.grey[300],
-                      borderRadius: BorderRadius.circular(4),
+                      color: colors.surfaceSecondary,
+                      borderRadius: BorderRadius.circular(TFRadius.r4),
+                      border: Border.all(color: colors.borderSubtle),
                     ),
-                    child: Text(nota.tipo ?? '-'),
+                    child: Text(
+                      nota.tipo ?? '-',
+                      style: typography.caption.copyWith(color: colors.textPrimary, fontWeight: FontWeight.w600),
+                    ),
                   ),
                 ),
                 // 8. PRAZO
@@ -2946,12 +2894,12 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                     children: [
                       Text(
                         nota.nota,
-                        style: const TextStyle(fontWeight: FontWeight.bold),
+                        style: typography.bodyMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary),
                       ),
                       const SizedBox(width: 8),
                       InkWell(
                         onTap: () => _copiarNota(nota.nota),
-                        child: const Icon(Icons.copy, size: 16, color: Colors.blue),
+                        child: Icon(Icons.copy, size: 16, color: colors.primary),
                       ),
                     ],
                   ),
@@ -2959,10 +2907,13 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                 ),
                 // 10. CRIADO EM
                 DataCell(
-                  Text(nota.criadoEm != null ? _formatDate(nota.criadoEm!) : '-'),
+                  Text(
+                    nota.criadoEm != null ? _formatDate(nota.criadoEm!) : '-',
+                    style: typography.bodyMedium,
+                  ),
                 ),
                 // 11. PRIORIDADE
-                DataCell(Text(nota.textPrioridade ?? '-')),
+                DataCell(Text(nota.textPrioridade ?? '-', style: typography.bodyMedium)),
                 // 12. STATUS USUÁRIO
                 DataCell(
                   Builder(
@@ -2977,13 +2928,14 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                         decoration: BoxDecoration(
                           color: statusColor,
-                          borderRadius: BorderRadius.circular(4),
+                          borderRadius: BorderRadius.circular(TFRadius.r4),
                         ),
                         child: Text(
                           nota.statusUsuario ?? '-',
                           style: TextStyle(
                             fontWeight: FontWeight.bold,
                             color: textColor,
+                            fontSize: 11,
                           ),
                         ),
                       );
@@ -2993,9 +2945,10 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                 // 13. RESPONSÁVEL
                 DataCell(
                   SizedBox(
-                    width: 162, // redução adicional ~10%
+                    width: 162,
                     child: Text(
                       nota.denominacaoExecutor ?? '-',
+                      style: typography.bodyMedium,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -3004,9 +2957,10 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                 // 14. LOCAL DA INSTALAÇÃO
                 DataCell(
                   SizedBox(
-                    width: 162, // redução adicional ~10%
+                    width: 162,
                     child: Text(
                       nota.localInstalacao ?? '-',
+                      style: typography.bodyMedium,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -3014,15 +2968,15 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                 ),
                 // 15. ORDEM
                 DataCell(
-                  Text(nota.ordem ?? '-'),
+                  Text(nota.ordem ?? '-', style: typography.bodyMedium),
                 ),
                 // 16. CENTRO TRABALHO
                 DataCell(
                   SizedBox(
-                    width: 122, // redução adicional ~10%
+                    width: 122,
                     child: Text(
                       (nota.centroTrabalhoResponsavel ?? '-').trim(),
-                      style: const TextStyle(fontWeight: FontWeight.w500),
+                      style: typography.bodyMedium.copyWith(fontWeight: FontWeight.w500),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -3031,16 +2985,17 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                 // 17. GPM
                 DataCell(
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6.5, vertical: 3.2), // redução adicional ~10%
+                    padding: const EdgeInsets.symmetric(horizontal: 6.5, vertical: 3.2),
                     decoration: BoxDecoration(
-                      color: Colors.blue[100],
-                      borderRadius: BorderRadius.circular(4),
+                      color: colors.primary.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(TFRadius.r4),
+                      border: Border.all(color: colors.primary.withOpacity(0.25)),
                     ),
                     child: Text(
                       nota.gpm ?? '-',
-                      style: const TextStyle(
+                      style: typography.caption.copyWith(
                         fontWeight: FontWeight.bold,
-                        color: Colors.blue,
+                        color: colors.primary,
                       ),
                     ),
                   ),
@@ -3050,8 +3005,8 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
-                      color: _getStatusColor(nota.statusSistema).withOpacity(0.2),
-                      borderRadius: BorderRadius.circular(4),
+                      color: _getStatusColor(nota.statusSistema).withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(TFRadius.r4),
                       border: Border.all(
                         color: _getStatusColor(nota.statusSistema),
                         width: 1,
@@ -3062,6 +3017,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
                         color: _getStatusColor(nota.statusSistema),
+                        fontSize: 11,
                       ),
                     ),
                   ),
@@ -3069,9 +3025,10 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                 // 19. DETALHES
                 DataCell(
                   SizedBox(
-                    width: 162, // redução adicional ~10%
+                    width: 162,
                     child: Text(
                       nota.detalhes ?? '-',
+                      style: typography.bodyMedium,
                       maxLines: 3,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -3087,96 +3044,63 @@ class _NotasSAPViewState extends State<NotasSAPView> {
 
   // Construir badge de prazo
   Widget _buildPrazoBadge(NotaSAP nota) {
+    final colors = context.tfColors;
+
     if (nota.dataVencimento == null || nota.diasRestantes == null) {
-      return const Text('-', style: TextStyle(color: Colors.grey));
+      return Text('-', style: TextStyle(color: colors.textDisabled));
     }
 
     final diasRestantes = nota.diasRestantes!;
     final dataVencimento = nota.dataVencimento!;
     
-    // Determinar cor baseado nos dias restantes
-    Color badgeColor;
-    Color textColor;
-    
+    // Determinar severidade sem alterar cálculo de prazo
+    final TFStatusSeverity severity;
     if (diasRestantes <= 0) {
-      // Preto: já passou da data ou vence hoje
-      badgeColor = Colors.black;
-      textColor = Colors.white;
+      severity = TFStatusSeverity.danger;
     } else if (diasRestantes <= 30) {
-      // Vermelho: vence em até 30 dias
-      badgeColor = Colors.red;
-      textColor = Colors.white;
+      severity = TFStatusSeverity.danger;
     } else if (diasRestantes <= 90) {
-      // Amarelo: vence em até 90 dias
-      badgeColor = Colors.yellow[700] ?? Colors.amber;
-      textColor = Colors.black;
+      severity = TFStatusSeverity.warning;
     } else {
-      // Azul: mais de 90 dias
-      badgeColor = Colors.blue;
-      textColor = Colors.white;
+      severity = TFStatusSeverity.info;
     }
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: badgeColor,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            Icons.calendar_today,
-            size: 14,
-            color: textColor,
-          ),
-          const SizedBox(width: 4),
-          Text(
-            _formatDate(dataVencimento),
-            style: TextStyle(
-              color: textColor,
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(width: 6),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              diasRestantes < 0
-                  ? '$diasRestantes dias' // Mostrar valor negativo quando vencido
-                  : diasRestantes == 0
-                      ? 'Vence hoje'
-                      : diasRestantes == 1
-                          ? '1 dia'
-                          : '$diasRestantes dias',
-              style: const TextStyle(
-                color: Colors.black,
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-        ],
-      ),
+    final label = diasRestantes < 0
+        ? '${_formatDate(dataVencimento)} ($diasRestantes d)'
+        : diasRestantes == 0
+            ? '${_formatDate(dataVencimento)} (Hoje)'
+            : '${_formatDate(dataVencimento)} ($diasRestantes d)';
+
+    return TFStatusBadge(
+      label: label,
+      severity: severity,
+      icon: Icons.calendar_today,
+      compact: true,
     );
   }
 
   void _mostrarDetalhesNota(NotaSAP nota) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
+        backgroundColor: colors.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(TFRadius.r12),
+          side: BorderSide(color: colors.borderSubtle),
+        ),
         title: Row(
           children: [
             Expanded(
-              child: Text('Detalhes da Nota SAP: ${nota.nota}'),
+              child: Text(
+                'Detalhes da Nota SAP: ${nota.nota}',
+                style: typography.sectionTitle.copyWith(color: colors.textPrimary),
+              ),
             ),
             IconButton(
-              icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
+              icon: Icon(Icons.copy, size: 18, color: colors.primary),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
               onPressed: () => _copiarNota(nota.nota),
@@ -3226,7 +3150,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Fechar'),
+            child: Text('Fechar', style: TextStyle(color: colors.primary)),
           ),
         ],
       ),

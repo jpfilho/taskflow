@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import '../../../../design_system/taskflow_design_system.dart';
 import '../../../../models/versao.dart';
 
 class VersaoFormDialog extends StatefulWidget {
@@ -17,10 +18,12 @@ class VersaoFormDialog extends StatefulWidget {
 }
 
 class _VersaoFormDialogState extends State<VersaoFormDialog> {
+  final _formKey = GlobalKey<FormState>();
   late TextEditingController _nomeController;
   late TextEditingController _descricaoController;
   DateTime? _dataPrevista;
   DateTime? _dataLancamento;
+  bool _isSaving = false;
 
   @override
   void initState() {
@@ -47,16 +50,31 @@ class _VersaoFormDialogState extends State<VersaoFormDialog> {
       );
       return;
     }
-    final v = (widget.initial ?? Versao(id: '', nome: nome)).copyWith(
-      nome: nome,
-      descricao: _descricaoController.text.trim().isEmpty
-          ? null
-          : _descricaoController.text.trim(),
-      dataPrevistaLancamento: _dataPrevista,
-      dataLancamento: _dataLancamento,
-    );
-    await widget.onSave(v);
-    if (mounted) Navigator.of(context).pop(v);
+
+    setState(() => _isSaving = true);
+
+    try {
+      final v = (widget.initial ?? Versao(id: '', nome: nome)).copyWith(
+        nome: nome,
+        descricao: _descricaoController.text.trim().isEmpty
+            ? null
+            : _descricaoController.text.trim(),
+        dataPrevistaLancamento: _dataPrevista,
+        dataLancamento: _dataLancamento,
+      );
+
+      await widget.onSave(v);
+      if (mounted) {
+        Navigator.of(context).pop(v);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isSaving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro ao salvar versão: $e')),
+        );
+      }
+    }
   }
 
   Future<void> _pickDate(bool isLancamento) async {
@@ -80,69 +98,82 @@ class _VersaoFormDialogState extends State<VersaoFormDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(widget.initial != null ? 'Editar versão' : 'Nova versão'),
-      content: SingleChildScrollView(
+    final isEdit = widget.initial != null;
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
+    return TFFormDialog(
+      title: isEdit ? 'Editar Versão' : 'Nova Versão',
+      subtitle: 'Defina os parâmetros do release no roadmap do sistema.',
+      maxWidth: 480,
+      isSaving: _isSaving,
+      onCancel: () => Navigator.of(context).pop(),
+      onSave: _submit,
+      child: Form(
+        key: _formKey,
         child: Column(
-          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            TextField(
+            TFTextField(
               controller: _nomeController,
-              decoration: const InputDecoration(
-                labelText: 'Nome (ex: v1.2.0)',
-                border: OutlineInputBorder(),
-              ),
+              label: 'Nome da Versão',
+              hint: 'Ex: v1.3.0 ou Release Q4',
+              required: true,
             ),
-            const SizedBox(height: 12),
-            TextField(
+            const SizedBox(height: 16),
+            TFTextField(
               controller: _descricaoController,
-              decoration: const InputDecoration(
-                labelText: 'Descrição (opcional)',
-                border: OutlineInputBorder(),
-              ),
-              maxLines: 2,
+              label: 'Descrição / Escopo',
+              hint: 'Descreva os principais objetivos desta versão...',
+              maxLines: 3,
             ),
-            const SizedBox(height: 12),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Data prevista lançamento'),
-              subtitle: Text(
-                _dataPrevista != null
-                    ? DateFormat('dd/MM/yyyy').format(_dataPrevista!)
-                    : 'Não definida',
-              ),
-              trailing: IconButton(
-                icon: const Icon(Icons.calendar_today),
-                onPressed: () => _pickDate(false),
+            const SizedBox(height: 16),
+            InkWell(
+              onTap: () => _pickDate(false),
+              borderRadius: TFRadius.borderRadiusMd,
+              child: InputDecorator(
+                decoration: InputDecoration(
+                  labelText: 'Data Prevista de Lançamento',
+                  border: OutlineInputBorder(
+                    borderRadius: TFRadius.borderRadiusMd,
+                  ),
+                  suffixIcon: Icon(Icons.calendar_today_outlined, color: colors.textSecondary),
+                ),
+                child: Text(
+                  _dataPrevista != null
+                      ? DateFormat('dd/MM/yyyy').format(_dataPrevista!)
+                      : 'Não definida',
+                  style: typography.bodyMedium.copyWith(
+                    color: _dataPrevista != null ? colors.textPrimary : colors.textMuted,
+                  ),
+                ),
               ),
             ),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Data lançamento'),
-              subtitle: Text(
-                _dataLancamento != null
-                    ? DateFormat('dd/MM/yyyy').format(_dataLancamento!)
-                    : 'Não definida',
-              ),
-              trailing: IconButton(
-                icon: const Icon(Icons.calendar_today),
-                onPressed: () => _pickDate(true),
+            const SizedBox(height: 16),
+            InkWell(
+              onTap: () => _pickDate(true),
+              borderRadius: TFRadius.borderRadiusMd,
+              child: InputDecorator(
+                decoration: InputDecoration(
+                  labelText: 'Data Efetiva de Lançamento',
+                  border: OutlineInputBorder(
+                    borderRadius: TFRadius.borderRadiusMd,
+                  ),
+                  suffixIcon: Icon(Icons.event_available_outlined, color: colors.textSecondary),
+                ),
+                child: Text(
+                  _dataLancamento != null
+                      ? DateFormat('dd/MM/yyyy').format(_dataLancamento!)
+                      : 'Não definida',
+                  style: typography.bodyMedium.copyWith(
+                    color: _dataLancamento != null ? colors.textPrimary : colors.textMuted,
+                  ),
+                ),
               ),
             ),
           ],
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancelar'),
-        ),
-        FilledButton(
-          onPressed: _submit,
-          child: const Text('Salvar'),
-        ),
-      ],
     );
   }
 }

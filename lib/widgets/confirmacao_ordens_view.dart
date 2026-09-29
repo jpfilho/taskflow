@@ -5,6 +5,7 @@ import '../models/confirmacao.dart';
 import '../models/confirmacao_sap.dart';
 import '../services/confirmacao_service.dart';
 import '../utils/responsive.dart';
+import '../design_system/taskflow_design_system.dart';
 import 'confirmacao_form_dialog.dart';
 import 'confirmacao_sap_view.dart';
 
@@ -147,21 +148,26 @@ class _ConfirmacaoOrdensViewState extends State<ConfirmacaoOrdensView> {
   @override
   Widget build(BuildContext context) {
     final isMobile = Responsive.isMobile(context);
+    final colors = context.tfColors;
 
     return DefaultTabController(
       length: 2,
       child: Scaffold(
+        backgroundColor: colors.background,
         body: Column(
           children: [
             _buildHeader(isMobile),
-            const TabBar(
-              tabs: [
-                Tab(text: 'Confirmações'),
-                Tab(text: 'SAP (Tabela)'),
-              ],
-              labelColor: Colors.blue,
-              unselectedLabelColor: Colors.grey,
-              indicatorColor: Colors.blue,
+            Container(
+              color: colors.surface,
+              child: TabBar(
+                tabs: const [
+                  Tab(text: 'Confirmações'),
+                  Tab(text: 'SAP (Tabela)'),
+                ],
+                labelColor: colors.primary,
+                unselectedLabelColor: colors.textSecondary,
+                indicatorColor: colors.primary,
+              ),
             ),
             Expanded(
               child: TabBarView(
@@ -171,7 +177,7 @@ class _ConfirmacaoOrdensViewState extends State<ConfirmacaoOrdensView> {
                     children: [
                       Expanded(
                         child: _isLoading
-                            ? const Center(child: CircularProgressIndicator())
+                            ? const Center(child: TFLoading(message: 'Carregando confirmações...'))
                             : _totalCount == 0
                             ? _buildEmptyState()
                             : isMobile
@@ -194,6 +200,8 @@ class _ConfirmacaoOrdensViewState extends State<ConfirmacaoOrdensView> {
         ),
         floatingActionButton: FloatingActionButton.extended(
           onPressed: () => _showFormDialog(sapData: _selectedSapRow),
+          backgroundColor: colors.primary,
+          foregroundColor: colors.primaryForeground,
           icon: const Icon(Icons.add),
           label: const Text('Nova Confirmação'),
         ),
@@ -202,32 +210,35 @@ class _ConfirmacaoOrdensViewState extends State<ConfirmacaoOrdensView> {
   }
 
   Widget _buildHeader(bool isMobile) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.grey.withOpacity(0.1),
-            blurRadius: 4,
-            offset: const Offset(0, 2),
-          ),
-        ],
+        color: colors.surface,
+        border: Border(
+          bottom: BorderSide(color: colors.borderSubtle),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.fact_check, size: 28, color: Colors.blue),
+              Icon(Icons.fact_check, size: 28, color: colors.primary),
               const SizedBox(width: 12),
-              const Text(
-                'Confirmação de Ordens',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              Expanded(
+                child: Text(
+                  'Confirmação de Ordens (IW41)',
+                  style: typography.pageTitle.copyWith(
+                    color: colors.textPrimary,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-              const Spacer(),
               IconButton(
-                icon: const Icon(Icons.refresh),
+                icon: Icon(Icons.refresh, color: colors.textSecondary),
                 onPressed: _loadData,
                 tooltip: 'Atualizar',
               ),
@@ -236,12 +247,14 @@ class _ConfirmacaoOrdensViewState extends State<ConfirmacaoOrdensView> {
           const SizedBox(height: 12),
           TextField(
             controller: _searchController,
+            style: typography.bodyMedium.copyWith(color: colors.textPrimary),
             decoration: InputDecoration(
               hintText: 'Buscar por ordem, matrícula ou nome',
-              prefixIcon: const Icon(Icons.search),
+              hintStyle: typography.bodyMedium.copyWith(color: colors.textMuted),
+              prefixIcon: Icon(Icons.search, color: colors.textSecondary),
               suffixIcon: _searchController.text.isNotEmpty
                   ? IconButton(
-                      icon: const Icon(Icons.clear),
+                      icon: Icon(Icons.clear, color: colors.textSecondary),
                       onPressed: () {
                         _searchController.clear();
                         _currentPage = 0;
@@ -249,12 +262,23 @@ class _ConfirmacaoOrdensViewState extends State<ConfirmacaoOrdensView> {
                       },
                     )
                   : null,
+              filled: true,
+              fillColor: colors.surfaceSecondary,
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(8),
+                borderSide: BorderSide(color: colors.borderSubtle),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: BorderSide(color: colors.borderSubtle),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: BorderSide(color: colors.borderFocus, width: 1.5),
               ),
               isDense: true,
               contentPadding: const EdgeInsets.symmetric(
-                vertical: 8,
+                vertical: 10,
                 horizontal: 12,
               ),
             ),
@@ -271,29 +295,18 @@ class _ConfirmacaoOrdensViewState extends State<ConfirmacaoOrdensView> {
     );
   }
 
-  // filters removed — not needed on this screen
-
-  // searchable select removed — filters not needed here
-
-  // Removido _buildActiveFiltersChips
-
   Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.inbox, size: 64, color: Colors.grey[400]),
-          const SizedBox(height: 16),
-          Text(
-            'Nenhuma confirmação encontrada',
-            style: TextStyle(fontSize: 18, color: Colors.grey[600]),
-          ),
-        ],
-      ),
+    return const TFEmptyState(
+      icon: Icons.inbox,
+      title: 'Nenhuma confirmação encontrada',
+      description: 'Não há confirmações cadastradas ou correspondentes aos filtros aplicados.',
     );
   }
 
   Widget _buildMobileList() {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
     return RefreshIndicator(
       onRefresh: _loadData,
       child: ListView.builder(
@@ -301,113 +314,79 @@ class _ConfirmacaoOrdensViewState extends State<ConfirmacaoOrdensView> {
         itemCount: _confirmacoes.length,
         itemBuilder: (context, index) {
           final conf = _confirmacoes[index];
-          return Card(
-            margin: const EdgeInsets.only(bottom: 12),
-            child: InkWell(
+          final isConfirmed = conf.confirmacaoFinal == 'S' || conf.confirmacaoFinal == 'SIM';
+
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: TFCard(
               onTap: () => _showFormDialog(confirmacao: conf),
-              borderRadius: BorderRadius.circular(12),
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            'Ordem: ${conf.ordem ?? "-"}',
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                        PopupMenuButton<String>(
-                          itemBuilder: (context) => [
-                            PopupMenuItem<String>(
-                              value: 'edit',
-                              child: Row(
-                                children: const [
-                                  Icon(Icons.edit, size: 18),
-                                  SizedBox(width: 8),
-                                  Text('Editar'),
-                                ],
-                              ),
-                            ),
-                            PopupMenuItem<String>(
-                              value: 'delete',
-                              child: Row(
-                                children: const [
-                                  Icon(
-                                    Icons.delete,
-                                    size: 18,
-                                    color: Colors.red,
-                                  ),
-                                  SizedBox(width: 8),
-                                  Text(
-                                    'Excluir',
-                                    style: TextStyle(color: Colors.red),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                          onSelected: (value) {
-                            if (value == 'edit') {
-                              _showFormDialog(confirmacao: conf);
-                            } else if (value == 'delete') {
-                              _deleteConfirmacao(conf);
-                            }
-                          },
-                        ),
-                      ],
-                    ),
-                    const Divider(height: 16),
-                    _buildInfoRow(
-                      'Operação',
-                      '${conf.operacao2 ?? "-"} / ${conf.subOper ?? "-"}',
-                    ),
-                    _buildInfoRow('Centro Trabalho', conf.centroDeTrabalho),
-                    _buildInfoRow('Nome', conf.nomes),
-                    _buildInfoRow('Matrícula', conf.nPessoal),
-                    _buildInfoRow(
-                      'Trabalho Real',
-                      '${conf.formatTrabReal()} ${conf.unid ?? ""}',
-                    ),
-                    _buildInfoRow(
-                      'Início',
-                      '${conf.formatDate(conf.datInicioExec)} ${conf.formatTime(conf.horaInicio)}',
-                    ),
-                    _buildInfoRow(
-                      'Fim',
-                      '${conf.formatDate(conf.datFimExec)} ${conf.formatTime(conf.horaFim)}',
-                    ),
-                    _buildInfoRow(
-                      'Data Lançamento',
-                      conf.formatDate(conf.dataLancamento),
-                    ),
-                    _buildInfoRow('Status', conf.status),
-                    if (conf.confirmacaoFinal != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: Tooltip(
-                          message:
-                              (conf.confirmacaoFinal == 'S' ||
-                                  conf.confirmacaoFinal == 'SIM')
-                              ? 'Confirmado'
-                              : 'Não confirmado',
-                          child: Chip(
-                            label: Text(conf.confirmacaoFinal!),
-                            backgroundColor:
-                                (conf.confirmacaoFinal == 'S' ||
-                                    conf.confirmacaoFinal == 'SIM')
-                                ? Colors.green.shade100
-                                : Colors.orange.shade100,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Ordem: ${conf.ordem ?? "-"}',
+                          style: typography.cardTitle.copyWith(
+                            color: colors.textPrimary,
                           ),
                         ),
                       ),
-                  ],
-                ),
+                      PopupMenuButton<String>(
+                        icon: Icon(Icons.more_vert, color: colors.textSecondary),
+                        itemBuilder: (context) => [
+                          PopupMenuItem<String>(
+                            value: 'edit',
+                            child: Row(
+                              children: [
+                                Icon(Icons.edit, size: 18, color: colors.primary),
+                                const SizedBox(width: 8),
+                                const Text('Editar'),
+                              ],
+                            ),
+                          ),
+                          PopupMenuItem<String>(
+                            value: 'delete',
+                            child: Row(
+                              children: [
+                                Icon(Icons.delete, size: 18, color: colors.danger),
+                                const SizedBox(width: 8),
+                                Text('Excluir', style: TextStyle(color: colors.danger)),
+                              ],
+                            ),
+                          ),
+                        ],
+                        onSelected: (value) {
+                          if (value == 'edit') {
+                            _showFormDialog(confirmacao: conf);
+                          } else if (value == 'delete') {
+                            _deleteConfirmacao(conf);
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                  Divider(height: 16, color: colors.borderSubtle),
+                  _buildInfoRow('Operação', '${conf.operacao2 ?? "-"} / ${conf.subOper ?? "-"}'),
+                  _buildInfoRow('Centro Trabalho', conf.centroDeTrabalho),
+                  _buildInfoRow('Nome', conf.nomes),
+                  _buildInfoRow('Matrícula', conf.nPessoal),
+                  _buildInfoRow('Trabalho Real', '${conf.formatTrabReal()} ${conf.unid ?? ""}'),
+                  _buildInfoRow('Início', '${conf.formatDate(conf.datInicioExec)} ${conf.formatTime(conf.horaInicio)}'),
+                  _buildInfoRow('Fim', '${conf.formatDate(conf.datFimExec)} ${conf.formatTime(conf.horaFim)}'),
+                  _buildInfoRow('Data Lançamento', conf.formatDate(conf.dataLancamento)),
+                  _buildInfoRow('Status', conf.status),
+                  if (conf.confirmacaoFinal != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: TFStatusBadge(
+                        label: isConfirmed ? 'CONFIRMADO (${conf.confirmacaoFinal})' : 'NÃO CONFIRMADO (${conf.confirmacaoFinal})',
+                        severity: isConfirmed ? TFStatusSeverity.success : TFStatusSeverity.warning,
+                        compact: true,
+                      ),
+                    ),
+                ],
               ),
             ),
           );
@@ -418,6 +397,9 @@ class _ConfirmacaoOrdensViewState extends State<ConfirmacaoOrdensView> {
 
   Widget _buildInfoRow(String label, String? value) {
     if (value == null || value == '-') return const SizedBox.shrink();
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
       child: Row(
@@ -427,166 +409,214 @@ class _ConfirmacaoOrdensViewState extends State<ConfirmacaoOrdensView> {
             width: 120,
             child: Text(
               '$label:',
-              style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+              style: typography.bodySmall.copyWith(color: colors.textSecondary),
             ),
           ),
-          Expanded(child: Text(value, style: const TextStyle(fontSize: 13))),
+          Expanded(
+            child: Text(
+              value,
+              style: typography.bodySmall.copyWith(color: colors.textPrimary),
+            ),
+          ),
         ],
       ),
     );
   }
 
   Widget _buildDesktopTable() {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
+    return Container(
+      color: colors.surface,
       child: SingleChildScrollView(
-        child: DataTable(
-          horizontalMargin: 12,
-          columnSpacing: 24,
-          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
-          columns: const [
-            DataColumn(
-              label: Text(
-                'Ações',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-            DataColumn(
-              label: Text(
-                'Ordem',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-            DataColumn(
-              label: Text(
-                'Operação',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-            DataColumn(
-              label: Text(
-                'Centro Trabalho',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-            DataColumn(
-              label: Text(
-                'Nome',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-            DataColumn(
-              label: Text(
-                'Matrícula',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-            DataColumn(
-              label: Text(
-                'Trab. Real',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-            DataColumn(
-              label: Text(
-                'Início',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-            DataColumn(
-              label: Text('Fim', style: TextStyle(fontWeight: FontWeight.bold)),
-            ),
-            DataColumn(
-              label: Text(
-                'Data Lanç.',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-            DataColumn(
-              label: Text(
-                'Status',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-            DataColumn(
-              label: Text(
-                'Confirmação',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
-          rows: _confirmacoes.map((conf) {
-            return DataRow(
-              cells: [
-                DataCell(
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        icon: const Icon(
-                          Icons.edit,
-                          size: 18,
-                          color: Colors.blue,
-                        ),
-                        onPressed: () => _showFormDialog(confirmacao: conf),
-                        tooltip: 'Editar',
-                      ),
-                      _deletingIds.contains(conf.id)
-                          ? const SizedBox(
-                              width: 24,
-                              height: 24,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : IconButton(
-                              icon: const Icon(
-                                Icons.delete,
-                                size: 18,
-                                color: Colors.red,
-                              ),
-                              onPressed: () => _deleteConfirmacao(conf),
-                              tooltip: 'Excluir',
-                            ),
-                    ],
+        scrollDirection: Axis.horizontal,
+        child: SingleChildScrollView(
+          child: DataTable(
+            horizontalMargin: 12,
+            columnSpacing: 24,
+            headingRowColor: WidgetStateProperty.all(colors.surfaceSecondary),
+            columns: [
+              DataColumn(
+                label: Text(
+                  'Ações',
+                  style: typography.labelMedium.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: colors.textPrimary,
                   ),
                 ),
-                DataCell(Text(conf.ordem ?? '-')),
-                DataCell(
-                  Text('${conf.operacao2 ?? "-"} / ${conf.subOper ?? "-"}'),
-                ),
-                DataCell(Text(conf.centroDeTrabalho ?? '-')),
-                DataCell(Text(conf.nomes ?? '-')),
-                DataCell(Text(conf.nPessoal ?? '-')),
-                DataCell(Text('${conf.formatTrabReal()} ${conf.unid ?? ""}')),
-                DataCell(
-                  Text(
-                    '${conf.formatDate(conf.datInicioExec)} ${conf.formatTime(conf.horaInicio)}',
+              ),
+              DataColumn(
+                label: Text(
+                  'Ordem',
+                  style: typography.labelMedium.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: colors.textPrimary,
                   ),
                 ),
-                DataCell(
-                  Text(
-                    '${conf.formatDate(conf.datFimExec)} ${conf.formatTime(conf.horaFim)}',
+              ),
+              DataColumn(
+                label: Text(
+                  'Operação',
+                  style: typography.labelMedium.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: colors.textPrimary,
                   ),
                 ),
-                DataCell(Text(conf.formatDate(conf.dataLancamento))),
-                DataCell(Text(conf.status ?? '-')),
-                DataCell(
-                  conf.confirmacaoFinal != null
-                      ? Chip(
-                          label: Text(
-                            conf.confirmacaoFinal!,
-                            style: const TextStyle(fontSize: 11),
+              ),
+              DataColumn(
+                label: Text(
+                  'Centro Trabalho',
+                  style: typography.labelMedium.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: colors.textPrimary,
+                  ),
+                ),
+              ),
+              DataColumn(
+                label: Text(
+                  'Nome',
+                  style: typography.labelMedium.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: colors.textPrimary,
+                  ),
+                ),
+              ),
+              DataColumn(
+                label: Text(
+                  'Matrícula',
+                  style: typography.labelMedium.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: colors.textPrimary,
+                  ),
+                ),
+              ),
+              DataColumn(
+                label: Text(
+                  'Trab. Real',
+                  style: typography.labelMedium.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: colors.textPrimary,
+                  ),
+                ),
+              ),
+              DataColumn(
+                label: Text(
+                  'Início',
+                  style: typography.labelMedium.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: colors.textPrimary,
+                  ),
+                ),
+              ),
+              DataColumn(
+                label: Text(
+                  'Fim',
+                  style: typography.labelMedium.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: colors.textPrimary,
+                  ),
+                ),
+              ),
+              DataColumn(
+                label: Text(
+                  'Data Lanç.',
+                  style: typography.labelMedium.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: colors.textPrimary,
+                  ),
+                ),
+              ),
+              DataColumn(
+                label: Text(
+                  'Status',
+                  style: typography.labelMedium.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: colors.textPrimary,
+                  ),
+                ),
+              ),
+              DataColumn(
+                label: Text(
+                  'Confirmação',
+                  style: typography.labelMedium.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: colors.textPrimary,
+                  ),
+                ),
+              ),
+            ],
+            rows: _confirmacoes.map((conf) {
+              final isConfirmed = conf.confirmacaoFinal == 'S' || conf.confirmacaoFinal == 'SIM';
+
+              return DataRow(
+                cells: [
+                  DataCell(
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: Icon(
+                            Icons.edit,
+                            size: 18,
+                            color: colors.primary,
                           ),
-                          backgroundColor:
-                              conf.confirmacaoFinal == 'S' ||
-                                  conf.confirmacaoFinal == 'SIM'
-                              ? Colors.green.shade100
-                              : Colors.orange.shade100,
-                        )
-                      : const Text('-'),
-                ),
-              ],
-            );
-          }).toList(),
+                          onPressed: () => _showFormDialog(confirmacao: conf),
+                          tooltip: 'Editar',
+                        ),
+                        _deletingIds.contains(conf.id)
+                            ? const SizedBox(
+                                width: 24,
+                                height: 24,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : IconButton(
+                                icon: Icon(
+                                  Icons.delete,
+                                  size: 18,
+                                  color: colors.danger,
+                                ),
+                                onPressed: () => _deleteConfirmacao(conf),
+                                tooltip: 'Excluir',
+                              ),
+                      ],
+                    ),
+                  ),
+                  DataCell(Text(conf.ordem ?? '-', style: typography.bodySmall.copyWith(color: colors.textPrimary))),
+                  DataCell(
+                    Text('${conf.operacao2 ?? "-"} / ${conf.subOper ?? "-"}', style: typography.bodySmall.copyWith(color: colors.textPrimary)),
+                  ),
+                  DataCell(Text(conf.centroDeTrabalho ?? '-', style: typography.bodySmall.copyWith(color: colors.textPrimary))),
+                  DataCell(Text(conf.nomes ?? '-', style: typography.bodySmall.copyWith(color: colors.textPrimary))),
+                  DataCell(Text(conf.nPessoal ?? '-', style: typography.bodySmall.copyWith(color: colors.textPrimary))),
+                  DataCell(Text('${conf.formatTrabReal()} ${conf.unid ?? ""}', style: typography.bodySmall.copyWith(color: colors.textPrimary))),
+                  DataCell(
+                    Text(
+                      '${conf.formatDate(conf.datInicioExec)} ${conf.formatTime(conf.horaInicio)}',
+                      style: typography.bodySmall.copyWith(color: colors.textPrimary),
+                    ),
+                  ),
+                  DataCell(
+                    Text(
+                      '${conf.formatDate(conf.datFimExec)} ${conf.formatTime(conf.horaFim)}',
+                      style: typography.bodySmall.copyWith(color: colors.textPrimary),
+                    ),
+                  ),
+                  DataCell(Text(conf.formatDate(conf.dataLancamento), style: typography.bodySmall.copyWith(color: colors.textPrimary))),
+                  DataCell(Text(conf.status ?? '-', style: typography.bodySmall.copyWith(color: colors.textPrimary))),
+                  DataCell(
+                    conf.confirmacaoFinal != null
+                        ? TFStatusBadge(
+                            label: conf.confirmacaoFinal!,
+                            severity: isConfirmed ? TFStatusSeverity.success : TFStatusSeverity.warning,
+                            compact: true,
+                          )
+                        : Text('-', style: typography.bodySmall.copyWith(color: colors.textSecondary)),
+                  ),
+                ],
+              );
+            }).toList(),
+          ),
         ),
       ),
     );
@@ -594,12 +624,14 @@ class _ConfirmacaoOrdensViewState extends State<ConfirmacaoOrdensView> {
 
   Widget _buildPagination() {
     final totalPages = (_totalCount / _pageSize).ceil();
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
 
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.grey[50],
-        border: Border(top: BorderSide(color: Colors.grey[300]!)),
+        color: colors.surface,
+        border: Border(top: BorderSide(color: colors.borderSubtle)),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -611,10 +643,13 @@ class _ConfirmacaoOrdensViewState extends State<ConfirmacaoOrdensView> {
                     _loadData();
                   }
                 : null,
-            icon: const Icon(Icons.chevron_left),
+            icon: Icon(Icons.chevron_left, color: _currentPage > 0 ? colors.textPrimary : colors.textDisabled),
           ),
           const SizedBox(width: 16),
-          Text('Página ${_currentPage + 1} de $totalPages'),
+          Text(
+            'Página ${_currentPage + 1} de $totalPages',
+            style: typography.bodyMedium.copyWith(color: colors.textSecondary),
+          ),
           const SizedBox(width: 16),
           IconButton(
             onPressed: _currentPage < totalPages - 1
@@ -623,12 +658,10 @@ class _ConfirmacaoOrdensViewState extends State<ConfirmacaoOrdensView> {
                     _loadData();
                   }
                 : null,
-            icon: const Icon(Icons.chevron_right),
+            icon: Icon(Icons.chevron_right, color: _currentPage < totalPages - 1 ? colors.textPrimary : colors.textDisabled),
           ),
         ],
       ),
     );
   }
-
-  // Removido _buildFiltersSheet
 }

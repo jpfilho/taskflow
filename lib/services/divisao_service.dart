@@ -1,7 +1,6 @@
 import '../models/divisao.dart';
 import '../config/supabase_config.dart';
 import '../services/regional_service.dart';
-import '../services/segmento_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'chat_service.dart';
 
@@ -12,7 +11,6 @@ class DivisaoService {
 
   final SupabaseClient _supabase = SupabaseConfig.client;
   final RegionalService _regionalService = RegionalService();
-  final SegmentoService _segmentoService = SegmentoService();
   final ChatService _chatService = ChatService();
 
   // Converter Map do Supabase para Divisao
@@ -21,6 +19,7 @@ class DivisaoService {
   }
 
   // Converter Divisao para Map (para Supabase)
+  // Mantém dual-write com regional_id legado para garantir compatibilidade
   Map<String, dynamic> _divisaoToMap(Divisao divisao) {
     return {
       'divisao': divisao.divisao,
@@ -28,15 +27,14 @@ class DivisaoService {
     };
   }
 
-  // Buscar todas as divisões
+  // Buscar todas as divisões com suas regionais (N:N) e segmentos (N:N)
   Future<List<Divisao>> getAllDivisoes() async {
     try {
-      // Buscar divisões com regionais e relacionamentos many-to-many com segmentos
+      // 1. Buscar todas as divisões com relacionamentos N:N de segmentos
       final response = await _supabase
           .from('divisoes')
           .select('''
             *,
-            regionais!inner(id, regional, divisao, empresa),
             divisoes_segmentos!left(
               segmentos!inner(id, segmento)
             )
@@ -44,20 +42,21 @@ class DivisaoService {
           .order('divisao', ascending: true)
           .timeout(
             const Duration(seconds: 30),
-            onTimeout: () {
-              return <Map<String, dynamic>>[];
-            },
+            onTimeout: () => <Map<String, dynamic>>[],
           );
 
       if (response.isEmpty) return [];
 
       final divisoesList = response as List;
-      return divisoesList
+      final divisoes = divisoesList
           .map((map) => _divisaoFromMap(map as Map<String, dynamic>))
           .toList();
+
+      // 2. Enriquecer em lote com divisoes_regionais (N:N)
+      return await _enrichDivisoesWithRegionais(divisoes);
     } catch (e) {
       print('Erro ao buscar divisões: $e');
-      // Tentar buscar sem join se falhar
+      // Fallback simples sem joins
       try {
         final response = await _supabase
             .from('divisoes')
@@ -75,37 +74,62 @@ class DivisaoService {
             .map((map) => _divisaoFromMap(map as Map<String, dynamic>))
             .toList();
 
-        // Carregar nomes das regionais e segmentos
-        final divisoesCompleta = <Divisao>[];
-        for (var divisao in divisoes) {
-          var divisaoAtualizada = divisao;
-          
-          // Carregar regional
-          final regional = await _regionalService.getRegionalById(divisao.regionalId);
-          if (regional != null) {
-            divisaoAtualizada = divisaoAtualizada.copyWith(regional: regional.regional);
-          }
-          
-          // Carregar segmentos (múltiplos)
-          if (divisao.segmentoIds.isNotEmpty) {
-            final segmentosNomes = <String>[];
-            for (var segmentoId in divisao.segmentoIds) {
-              final segmento = await _segmentoService.getSegmentoById(segmentoId);
-              if (segmento != null) {
-                segmentosNomes.add(segmento.segmento);
-              }
-            }
-            divisaoAtualizada = divisaoAtualizada.copyWith(segmentos: segmentosNomes);
-          }
-          
-          divisoesCompleta.add(divisaoAtualizada);
-        }
-
-        return divisoesCompleta;
+        return await _enrichDivisoesWithRegionais(divisoes);
       } catch (e2) {
-        print('Erro ao buscar divisões (fallback): $e2');
+        print('Erro ao buscar divisões (fallback total): $e2');
         return [];
       }
+    }
+  }
+
+  // Enriquecer lista de divisões com vínculos de divisoes_regionais em lote
+  Future<List<Divisao>> _enrichDivisoesWithRegionais(List<Divisao> divisoes) async {
+    if (divisoes.isEmpty) return divisoes;
+
+    try {
+      // Buscar mapa de todas as regionais cadastradas para lookup rápido e seguro
+      Map<String, String> regMapById = {};
+      try {
+        final allRegionais = await _regionalService.getAllRegionais();
+        regMapById = {for (var r in allRegionais) r.id: r.regional};
+      } catch (_) {}
+
+      // Buscar todos os vínculos de divisoes_regionais
+      final relRows = await _supabase
+          .from('divisoes_regionais')
+          .select('divisao_id, regional_id')
+          .timeout(const Duration(seconds: 15), onTimeout: () => <Map<String, dynamic>>[]);
+
+      final Map<String, List<String>> regIdsByDiv = {};
+      final Map<String, List<String>> regNomesByDiv = {};
+
+      for (var row in (relRows as List)) {
+        final divId = row['divisao_id'] as String?;
+        final regId = row['regional_id'] as String?;
+        if (divId == null || regId == null) continue;
+
+        final regNome = regMapById[regId] ?? '';
+
+        regIdsByDiv.putIfAbsent(divId, () => []).add(regId);
+        if (regNome.isNotEmpty) {
+          regNomesByDiv.putIfAbsent(divId, () => []).add(regNome);
+        }
+      }
+
+      return divisoes.map((d) {
+        // Se houver vínculos em divisoes_regionais, usa eles; senão, fallback para regional_id legado
+        final rIds = regIdsByDiv[d.id] ?? (d.regionalIds.isNotEmpty ? d.regionalIds : (d.regionalId.isNotEmpty ? [d.regionalId] : []));
+        final rNomes = regNomesByDiv[d.id] ?? (d.regionais.isNotEmpty ? d.regionais : (d.regional.isNotEmpty ? [d.regional] : (d.regionalId.isNotEmpty && regMapById.containsKey(d.regionalId) ? [regMapById[d.regionalId]!] : [])));
+
+        return d.copyWith(
+          regionalIds: rIds,
+          regionais: rNomes,
+          regional: rNomes.isNotEmpty ? rNomes.first : d.regional,
+        );
+      }).toList();
+    } catch (e) {
+      print('⚠️ Aviso ao enriquecer divisões com divisoes_regionais: $e');
+      return divisoes;
     }
   }
 
@@ -116,7 +140,6 @@ class DivisaoService {
           .from('divisoes')
           .select('''
             *,
-            regionais!inner(id, regional, divisao, empresa),
             divisoes_segmentos!left(
               segmentos!inner(id, segmento)
             )
@@ -125,39 +148,28 @@ class DivisaoService {
           .single()
           .timeout(
             const Duration(seconds: 10),
-            onTimeout: () {
-              return <String, dynamic>{};
-            },
+            onTimeout: () => <String, dynamic>{},
           );
 
-      if (response.isEmpty) {
-        print('⚠️ Resposta vazia ao buscar divisão por ID');
-        return null;
-      }
+      if (response.isEmpty) return null;
 
-      print('📥 Dados brutos da divisão: $response');
-      final divisao = _divisaoFromMap(response);
-      print('📋 Divisão carregada: ${divisao.divisao}');
-      print('📋 Segmentos IDs: ${divisao.segmentoIds}');
-      print('📋 Segmentos nomes: ${divisao.segmentos}');
-      return divisao;
+      final div = _divisaoFromMap(response);
+      final enriched = await _enrichDivisoesWithRegionais([div]);
+      return enriched.isNotEmpty ? enriched.first : div;
     } catch (e) {
       print('❌ Erro ao buscar divisão por ID: $e');
-      print('❌ Stack trace: ${StackTrace.current}');
       return null;
     }
   }
 
-  // Verificar se já existe uma divisão com o mesmo nome na mesma regional
-  Future<bool> existeDivisao(String nome, String regionalId) async {
+  // Verificar se já existe uma divisão com o mesmo nome
+  Future<bool> existeDivisao(String nome, [String? regionalId]) async {
     try {
-      final response = await _supabase
-          .from('divisoes')
-          .select('id')
-          .eq('divisao', nome)
-          .eq('regional_id', regionalId)
-          .maybeSingle();
-      
+      var query = _supabase.from('divisoes').select('id').eq('divisao', nome);
+      if (regionalId != null && regionalId.isNotEmpty) {
+        query = query.eq('regional_id', regionalId);
+      }
+      final response = await query.maybeSingle();
       return response != null;
     } catch (e) {
       print('Erro ao verificar se divisão existe: $e');
@@ -165,129 +177,67 @@ class DivisaoService {
     }
   }
 
-  // Cadastrar Chat IDs do Telegram para comunidades de uma divisão (um por segmento)
-  // IMPORTANTE: Se chatId estiver vazio, REMOVE o registro existente
+  // Cadastrar Chat IDs do Telegram para comunidades da divisão (para cada regional e segmento vinculados)
   Future<void> cadastrarTelegramChatIdsParaDivisao(
     String divisaoId,
     String divisaoNome,
+    List<String> regionalIds,
+    List<String> regionaisNomes,
     List<String> segmentoIds,
     List<String> segmentosNomes,
-    Map<String, String>? telegramChatIds, // Map<segmentoId, chatId>
+    Map<String, String>? telegramChatIds,
   ) async {
     try {
       print('🔍 DEBUG: Processando Chat IDs do Telegram para divisão $divisaoNome');
+      print('   Total de regionais: ${regionalIds.length}');
       print('   Total de segmentos: ${segmentoIds.length}');
-      print('   Chat IDs fornecidos: ${telegramChatIds?.length ?? 0}');
-      
-      // Para cada segmento, processar (cadastrar ou remover)
-      for (int i = 0; i < segmentoIds.length; i++) {
-        final segmentoId = segmentoIds[i];
-        final segmentoNome = segmentosNomes[i];
-        
-        // Obter regional da divisão
-        final divisaoCompleta = await getDivisaoById(divisaoId);
-        if (divisaoCompleta == null) {
-          print('⚠️ DEBUG: Divisão não encontrada: $divisaoId');
-          continue;
-        }
-        
-        // Criar ou obter comunidade primeiro (sempre, para poder remover se necessário)
-        final comunidade = await _chatService.criarOuObterComunidade(
-          divisaoCompleta.regionalId,
-          divisaoCompleta.regional,
-          divisaoId,
-          divisaoNome,
-          segmentoId,
-          segmentoNome,
-        );
-        
-        // Verificar se há Chat ID fornecido para este segmento
-        final chatId = telegramChatIds?[segmentoId];
-        
-        // Se não há Chat ID fornecido OU está vazio, REMOVER o registro existente
-        if (chatId == null || chatId.trim().isEmpty) {
-          print('🔍 DEBUG: Chat ID vazio para segmento $segmentoNome - removendo registro existente');
+
+      for (int r = 0; r < regionalIds.length; r++) {
+        final regionalId = regionalIds[r];
+        final regionalNome = r < regionaisNomes.length ? regionaisNomes[r] : 'Regional';
+
+        for (int s = 0; s < segmentoIds.length; s++) {
+          final segmentoId = segmentoIds[s];
+          final segmentoNome = s < segmentosNomes.length ? segmentosNomes[s] : 'Segmento';
+
           try {
-            await _supabase
-                .from('telegram_communities')
-                .delete()
-                .eq('community_id', comunidade.id.toString());
-            print('✅ DEBUG: Chat ID removido para comunidade ${comunidade.divisaoNome} - ${comunidade.segmentoNome}');
-          } catch (e) {
-            print('⚠️ DEBUG: Erro ao remover Chat ID (pode não existir): $e');
-          }
-          continue;
-        }
-        
-        // Se há Chat ID, cadastrar/atualizar
-        try {
-          final chatIdInt = int.parse(chatId.trim());
-          print('🔍 DEBUG: Tentando salvar Chat ID $chatIdInt para comunidade ${comunidade.id}');
-          print('   Comunidade ID: ${comunidade.id}');
-          print('   Comunidade: ${comunidade.divisaoNome} - ${comunidade.segmentoNome}');
-          
-          // Verificar autenticação no Supabase
-          final currentUser = _supabase.auth.currentUser;
-          print('🔍 DEBUG: Usuário Supabase Auth: ${currentUser?.id ?? "NÃO AUTENTICADO"}');
-          print('🔍 DEBUG: Email: ${currentUser?.email ?? "N/A"}');
-          
-          // Tentar upsert
-          print('🔍 DEBUG: Executando upsert...');
-          final result = await _supabase
-              .from('telegram_communities')
-              .upsert({
-                'community_id': comunidade.id,
-                'telegram_chat_id': chatIdInt,
-              }, onConflict: 'community_id')
-              .select();
-          
-          print('✅ DEBUG: Upsert executado! Resultado: $result');
-          
-          // Aguardar um pouco para garantir que foi commitado
-          await Future.delayed(const Duration(milliseconds: 100));
-          
-          // Verificar se realmente foi salvo
-          print('🔍 DEBUG: Verificando se foi salvo...');
-          final verificado = await _supabase
-              .from('telegram_communities')
-              .select('telegram_chat_id, community_id')
-              .eq('community_id', comunidade.id.toString())
-              .maybeSingle();
-          
-          if (verificado != null) {
-            print('✅ DEBUG: Verificação OK - Chat ID no banco: ${verificado['telegram_chat_id']}');
-            print('✅ DEBUG: Chat ID cadastrado para comunidade ${comunidade.divisaoNome} - ${comunidade.segmentoNome}: $chatId');
-          } else {
-            print('⚠️ DEBUG: AVISO - Chat ID não encontrado após salvar!');
-            print('   Tentando buscar novamente...');
-            
-            // Tentar buscar novamente após um delay maior
-            await Future.delayed(const Duration(milliseconds: 500));
-            final verificado2 = await _supabase
-                .from('telegram_communities')
-                .select('telegram_chat_id')
-                .eq('community_id', comunidade.id.toString())
-                .maybeSingle();
-            
-            if (verificado2 != null) {
-              print('✅ DEBUG: Encontrado na segunda tentativa: ${verificado2['telegram_chat_id']}');
-            } else {
-              print('❌ DEBUG: ERRO - Chat ID ainda não encontrado após múltiplas tentativas!');
+            final comunidade = await _chatService.criarOuObterComunidade(
+              regionalId,
+              regionalNome,
+              divisaoId,
+              divisaoNome,
+              segmentoId,
+              segmentoNome,
+            );
+
+            final chatId = telegramChatIds?[segmentoId] ?? telegramChatIds?['${regionalId}_$segmentoId'];
+
+            if (chatId == null || chatId.trim().isEmpty) {
+              try {
+                await _supabase
+                    .from('telegram_communities')
+                    .delete()
+                    .eq('community_id', comunidade.id.toString());
+              } catch (_) {}
+              continue;
             }
+
+            final chatIdInt = int.tryParse(chatId.trim());
+            if (chatIdInt != null) {
+              await _supabase
+                  .from('telegram_communities')
+                  .upsert({
+                    'community_id': comunidade.id,
+                    'telegram_chat_id': chatIdInt,
+                  }, onConflict: 'community_id');
+            }
+          } catch (eComm) {
+            print('⚠️ Erro ao processar comunidade para $regionalNome - $segmentoNome: $eComm');
           }
-        } catch (e, stackTrace) {
-          print('❌ DEBUG: Erro ao cadastrar Chat ID para comunidade ${comunidade.divisaoNome} - ${comunidade.segmentoNome}');
-          print('❌ DEBUG: Erro: $e');
-          print('❌ DEBUG: Tipo do erro: ${e.runtimeType}');
-          print('❌ DEBUG: Stack trace: $stackTrace');
-          
-          // Re-lançar o erro para que seja visível
-          rethrow;
         }
       }
     } catch (e) {
       print('❌ Erro ao cadastrar Chat IDs do Telegram: $e');
-      // Não re-lançar erro, pois a divisão já foi criada
     }
   }
 
@@ -296,195 +246,186 @@ class DivisaoService {
     try {
       print('🔍 DEBUG: Criando divisão');
       print('   Nome: ${divisao.divisao}');
-      print('   Regional ID: ${divisao.regionalId}');
+      print('   Regionais IDs: ${divisao.regionalIds}');
       print('   Segmentos IDs: ${divisao.segmentoIds}');
-      
-      // Verificar se já existe uma divisão com o mesmo nome na mesma regional
-      final existe = await existeDivisao(divisao.divisao, divisao.regionalId);
-      if (existe) {
-        throw Exception('Já existe uma divisão com o nome "${divisao.divisao}" nesta regional. Os nomes de divisões devem ser únicos dentro de cada regional.');
-      }
 
       final divisaoMap = _divisaoToMap(divisao);
-      divisaoMap.remove('id'); // Remover ID para gerar UUID no Supabase
-      print('🔍 DEBUG: Map para inserção: $divisaoMap');
+      divisaoMap.remove('id');
 
-      // Criar a divisão primeiro
-      print('🔍 DEBUG: Inserindo divisão na tabela divisoes...');
-      print('🔍 DEBUG: Dados a serem inseridos: $divisaoMap');
-      
-      String divisaoId;
-      try {
-        final response = await _supabase
-            .from('divisoes')
-            .insert(divisaoMap)
-            .select('id')
-            .single();
+      // 1. Inserir divisão na tabela divisoes
+      final response = await _supabase
+          .from('divisoes')
+          .insert(divisaoMap)
+          .select('id')
+          .single();
 
-        divisaoId = response['id'] as String;
-        print('✅ DEBUG: Divisão criada com ID: $divisaoId');
-      } catch (insertError) {
-        print('❌ DEBUG: Erro ao inserir divisão: $insertError');
-        print('❌ DEBUG: Tipo do erro: ${insertError.runtimeType}');
-        print('❌ DEBUG: Stack trace: ${StackTrace.current}');
-        
-        // Verificar se é erro de NOT NULL
-        final errorString = insertError.toString();
-        if (errorString.contains('null value') || 
-            errorString.contains('NOT NULL') || 
-            errorString.contains('violates not-null constraint')) {
-          throw Exception('ERRO: A tabela divisoes ainda tem a coluna segmento_id como obrigatória (NOT NULL).\n\nExecute o script SQL "corrigir_estrutura_divisoes_completo.sql" no Supabase Dashboard para corrigir isso.');
-        }
-        
-        // Verificar se é erro de constraint UNIQUE
-        if (errorString.contains('unique') || errorString.contains('duplicate')) {
-          throw Exception('Já existe uma divisão com o nome "${divisao.divisao}" nesta regional.');
-        }
-        
-        // Re-lançar o erro original com mais contexto
-        throw Exception('Erro ao criar divisão: ${errorString.replaceFirst('PostgrestException: ', '')}');
-      }
+      final divisaoId = response['id'] as String;
+      print('✅ DEBUG: Divisão criada com ID: $divisaoId');
 
-      // Salvar relacionamentos com segmentos na tabela divisoes_segmentos
-      if (divisao.segmentoIds.isNotEmpty) {
-        print('🔍 DEBUG: Inserindo ${divisao.segmentoIds.length} relacionamentos com segmentos...');
-        final relacionamentos = divisao.segmentoIds.map((segmentoId) => {
+      // 2. Salvar relacionamentos N:N com regionais na tabela divisoes_regionais
+      if (divisao.regionalIds.isNotEmpty) {
+        final relRegionais = divisao.regionalIds.map((regId) => {
           'divisao_id': divisaoId,
-          'segmento_id': segmentoId,
+          'regional_id': regId,
         }).toList();
-        print('🔍 DEBUG: Relacionamentos: $relacionamentos');
 
         try {
-          await _supabase
-              .from('divisoes_segmentos')
-              .insert(relacionamentos);
-          print('✅ DEBUG: Relacionamentos inseridos com sucesso');
-        } catch (segmentosError) {
-          print('❌ DEBUG: Erro ao inserir relacionamentos com segmentos: $segmentosError');
-          // Não re-lançar o erro aqui, pois a divisão já foi criada
-          // Apenas logar o erro
+          await _supabase.from('divisoes_regionais').insert(relRegionais);
+          print('✅ DEBUG: Relacionamentos divisoes_regionais inseridos com sucesso');
+        } catch (eReg) {
+          print('⚠️ Erro ao inserir divisoes_regionais: $eReg');
         }
-      } else {
-        print('⚠️ DEBUG: Nenhum segmento selecionado');
       }
 
-      // Buscar a divisão criada com todos os relacionamentos
-      print('🔍 DEBUG: Buscando divisão criada...');
+      // 3. Salvar relacionamentos N:N com segmentos na tabela divisoes_segmentos
+      if (divisao.segmentoIds.isNotEmpty) {
+        final relSegmentos = divisao.segmentoIds.map((segId) => {
+          'divisao_id': divisaoId,
+          'segmento_id': segId,
+        }).toList();
+
+        try {
+          await _supabase.from('divisoes_segmentos').insert(relSegmentos);
+          print('✅ DEBUG: Relacionamentos divisoes_segmentos inseridos com sucesso');
+        } catch (eSeg) {
+          print('⚠️ Erro ao inserir divisoes_segmentos: $eSeg');
+        }
+      }
+
+      // 4. Buscar a divisão criada com todos os relacionamentos
       final divisaoCriada = await getDivisaoById(divisaoId);
-      print('✅ DEBUG: Divisão criada e carregada: ${divisaoCriada?.divisao}');
-      
-      // Se Chat IDs do Telegram foram fornecidos, cadastrar para as comunidades
+
+      // 5. Cadastrar Chat IDs do Telegram se fornecidos
       if (telegramChatIds != null && telegramChatIds.isNotEmpty && divisaoCriada != null) {
         await cadastrarTelegramChatIdsParaDivisao(
           divisaoId,
           divisaoCriada.divisao,
+          divisaoCriada.regionalIds,
+          divisaoCriada.regionais,
           divisaoCriada.segmentoIds,
           divisaoCriada.segmentos,
           telegramChatIds,
         );
       }
-      
-      return divisaoCriada;
+
+      return divisaoCriada ?? divisao.copyWith(id: divisaoId);
     } catch (e, stackTrace) {
       print('❌ Erro ao criar divisão: $e');
       print('❌ Stack trace: $stackTrace');
-      rethrow; // Re-lançar o erro para que o UI possa tratá-lo
+      rethrow;
     }
   }
 
-  // Atualizar divisão
+  // Atualizar divisão com sincronização Delta para divisoes_regionais e divisoes_segmentos
   Future<Divisao?> updateDivisao(String id, Divisao divisao, {Map<String, String>? telegramChatIds}) async {
     try {
-      print('🔍 DEBUG: Atualizando divisão');
-      print('   ID: $id');
-      print('   Nome: ${divisao.divisao}');
-      print('   Regional ID: ${divisao.regionalId}');
-      print('   Segmentos IDs: ${divisao.segmentoIds}');
-      
-      // Verificar se já existe outra divisão com o mesmo nome na mesma regional (excluindo a atual)
-      final responseExistente = await _supabase
-          .from('divisoes')
-          .select('id')
-          .eq('divisao', divisao.divisao)
-          .eq('regional_id', divisao.regionalId)
-          .neq('id', id)
-          .maybeSingle();
-      
-      if (responseExistente != null) {
-        throw Exception('Já existe outra divisão com o nome "${divisao.divisao}" nesta regional. Os nomes de divisões devem ser únicos dentro de cada regional.');
-      }
+      print('🔍 DEBUG: Atualizando divisão ID: $id');
+      print('   Novas Regionais IDs: ${divisao.regionalIds}');
+      print('   Novos Segmentos IDs: ${divisao.segmentoIds}');
 
       final divisaoMap = _divisaoToMap(divisao);
-      print('🔍 DEBUG: Map para atualização: $divisaoMap');
 
-      // Atualizar dados da divisão
-      print('🔍 DEBUG: Atualizando divisão na tabela divisoes...');
+      // 1. Atualizar registro principal em divisoes
       await _supabase
           .from('divisoes')
           .update(divisaoMap)
           .eq('id', id);
-      print('✅ DEBUG: Divisão atualizada');
 
-      // Remover relacionamentos antigos
-      print('🔍 DEBUG: Removendo relacionamentos antigos...');
-      await _supabase
-          .from('divisoes_segmentos')
-          .delete()
-          .eq('divisao_id', id);
-      print('✅ DEBUG: Relacionamentos antigos removidos');
+      // 2. Atualizar relacionamentos com regionais (Delta / Sync)
+      try {
+        final existingRegRows = await _supabase
+            .from('divisoes_regionais')
+            .select('regional_id')
+            .eq('divisao_id', id);
 
-      // Criar novos relacionamentos com segmentos
-      if (divisao.segmentoIds.isNotEmpty) {
-        print('🔍 DEBUG: Inserindo ${divisao.segmentoIds.length} novos relacionamentos com segmentos...');
-        final relacionamentos = divisao.segmentoIds.map((segmentoId) => {
-          'divisao_id': id,
-          'segmento_id': segmentoId,
-        }).toList();
-        print('🔍 DEBUG: Relacionamentos: $relacionamentos');
+        final existingRegIds = (existingRegRows as List)
+            .map((r) => r['regional_id'] as String)
+            .toSet();
+        final newRegIds = divisao.regionalIds.toSet();
 
-        await _supabase
-            .from('divisoes_segmentos')
-            .insert(relacionamentos);
-        print('✅ DEBUG: Novos relacionamentos inseridos');
-      } else {
-        print('⚠️ DEBUG: Nenhum segmento selecionado');
-      }
+        final toInsertReg = newRegIds.difference(existingRegIds);
+        final toDeleteReg = existingRegIds.difference(newRegIds);
 
-      // Buscar a divisão atualizada com todos os relacionamentos
-      print('🔍 DEBUG: Buscando divisão atualizada...');
-      final divisaoAtualizada = await getDivisaoById(id);
-      print('✅ DEBUG: Divisão atualizada e carregada: ${divisaoAtualizada?.divisao}');
-      
-      // Sempre processar Chat IDs (mesmo se vazio, para remover registros)
-      print('🔍 DEBUG: Verificando Chat IDs para processamento...');
-      print('   telegramChatIds: ${telegramChatIds != null ? "não null" : "null"}');
-      print('   divisaoAtualizada: ${divisaoAtualizada != null ? "não null" : "null"}');
-      
-      if (divisaoAtualizada != null) {
-        print('✅ DEBUG: Chamando cadastrarTelegramChatIdsParaDivisao...');
-        try {
-          await cadastrarTelegramChatIdsParaDivisao(
-            id,
-            divisaoAtualizada.divisao,
-            divisaoAtualizada.segmentoIds,
-            divisaoAtualizada.segmentos,
-            telegramChatIds, // Pode ser null ou vazio - isso é OK, vai remover registros
-          );
-          print('✅ DEBUG: cadastrarTelegramChatIdsParaDivisao concluído');
-        } catch (e, stackTrace) {
-          print('❌ DEBUG: Erro em cadastrarTelegramChatIdsParaDivisao: $e');
-          print('❌ DEBUG: Stack trace: $stackTrace');
-          // Não re-lançar, apenas logar
+        if (toDeleteReg.isNotEmpty) {
+          for (var regId in toDeleteReg) {
+            await _supabase
+                .from('divisoes_regionais')
+                .delete()
+                .eq('divisao_id', id)
+                .eq('regional_id', regId);
+          }
         }
-      } else {
-        print('⚠️ DEBUG: Divisão não encontrada, pulando processamento de Chat IDs');
+
+        if (toInsertReg.isNotEmpty) {
+          final insertRows = toInsertReg.map((regId) => {
+            'divisao_id': id,
+            'regional_id': regId,
+          }).toList();
+          await _supabase.from('divisoes_regionais').insert(insertRows);
+          print('✅ DEBUG: Inseridas ${insertRows.length} novas regionais em divisoes_regionais');
+        }
+      } catch (eRegDelta) {
+        print('❌ Erro ao sincronizar delta divisoes_regionais: $eRegDelta');
       }
-      
-      return divisaoAtualizada;
+
+      // 3. Atualizar relacionamentos com segmentos (Delta / Sync)
+      try {
+        final existingSegRows = await _supabase
+            .from('divisoes_segmentos')
+            .select('segmento_id')
+            .eq('divisao_id', id);
+
+        final existingSegIds = (existingSegRows as List)
+            .map((r) => r['segmento_id'] as String)
+            .toSet();
+        final newSegIds = divisao.segmentoIds.toSet();
+
+        final toInsertSeg = newSegIds.difference(existingSegIds);
+        final toDeleteSeg = existingSegIds.difference(newSegIds);
+
+        if (toDeleteSeg.isNotEmpty) {
+          for (var segId in toDeleteSeg) {
+            await _supabase
+                .from('divisoes_segmentos')
+                .delete()
+                .eq('divisao_id', id)
+                .eq('segmento_id', segId);
+          }
+        }
+
+        if (toInsertSeg.isNotEmpty) {
+          final insertRows = toInsertSeg.map((segId) => {
+            'divisao_id': id,
+            'segmento_id': segId,
+          }).toList();
+          await _supabase.from('divisoes_segmentos').insert(insertRows);
+          print('✅ DEBUG: Inseridos ${insertRows.length} novos segmentos em divisoes_segmentos');
+        }
+      } catch (eSegDelta) {
+        print('❌ Erro ao sincronizar delta divisoes_segmentos: $eSegDelta');
+      }
+
+      // 4. Buscar a divisão atualizada
+      final divisaoAtualizada = await getDivisaoById(id);
+
+      // 5. Atualizar Chat IDs do Telegram
+      if (divisaoAtualizada != null) {
+        await cadastrarTelegramChatIdsParaDivisao(
+          id,
+          divisaoAtualizada.divisao,
+          divisaoAtualizada.regionalIds,
+          divisaoAtualizada.regionais,
+          divisaoAtualizada.segmentoIds,
+          divisaoAtualizada.segmentos,
+          telegramChatIds,
+        );
+      }
+
+      return divisaoAtualizada ?? divisao;
     } catch (e, stackTrace) {
       print('❌ Erro ao atualizar divisão: $e');
       print('❌ Stack trace: $stackTrace');
-      rethrow; // Re-lançar o erro para que o UI possa tratá-lo
+      rethrow;
     }
   }
 
@@ -499,89 +440,37 @@ class DivisaoService {
     }
   }
 
-  // Buscar divisões por filtros
+  // Filtrar divisões
   Future<List<Divisao>> filterDivisoes({
     String? divisao,
     String? regionalId,
     String? segmento,
   }) async {
-    try {
-      var query = _supabase.from('divisoes').select('''
-        *,
-        regionais!inner(regional, divisao, empresa),
-        divisoes_segmentos(
-          segmentos(segmento)
-        )
-      ''');
-
-      if (divisao != null && divisao.isNotEmpty) {
-        query = query.ilike('divisao', '%$divisao%');
+    final all = await getAllDivisoes();
+    return all.where((d) {
+      if (divisao != null && divisao.isNotEmpty && !d.divisao.toLowerCase().contains(divisao.toLowerCase())) {
+        return false;
       }
-      if (regionalId != null && regionalId.isNotEmpty) {
-        query = query.eq('regional_id', regionalId);
+      if (regionalId != null && regionalId.isNotEmpty && !d.atuaNaRegional(regionalId)) {
+        return false;
       }
-      if (segmento != null && segmento.isNotEmpty) {
-        query = query.ilike('segmento', '%$segmento%');
+      if (segmento != null && segmento.isNotEmpty && !d.segmentos.any((s) => s.toLowerCase().contains(segmento.toLowerCase()))) {
+        return false;
       }
-
-      final response = await query
-          .order('divisao', ascending: true)
-          .timeout(
-            const Duration(seconds: 30),
-            onTimeout: () {
-              return <Map<String, dynamic>>[];
-            },
-          );
-
-      if (response.isEmpty) return [];
-
-      final divisoesList = response as List;
-      return divisoesList
-          .map((map) => _divisaoFromMap(map as Map<String, dynamic>))
-          .toList();
-    } catch (e) {
-      print('Erro ao filtrar divisões: $e');
-      return [];
-    }
+      return true;
+    }).toList();
   }
 
-  // Buscar divisões por texto (busca em todos os campos)
+  // Buscar divisões por texto (em memória nos dados carregados para máxima segurança)
   Future<List<Divisao>> searchDivisoes(String query) async {
-    if (query.isEmpty) {
-      return getAllDivisoes();
-    }
-
-    try {
-      final response = await _supabase
-          .from('divisoes')
-          .select('''
-            *,
-            regionais!inner(regional, divisao, empresa),
-            divisoes_segmentos(
-              segmentos(segmento)
-            )
-          ''')
-          .or(
-            'divisao.ilike.%$query%',
-          )
-          .order('divisao', ascending: true)
-          .timeout(
-            const Duration(seconds: 30),
-            onTimeout: () {
-              return <Map<String, dynamic>>[];
-            },
-          );
-
-      if (response.isEmpty) return [];
-
-      final divisoesList = response as List;
-      return divisoesList
-          .map((map) => _divisaoFromMap(map as Map<String, dynamic>))
-          .toList();
-    } catch (e) {
-      print('Erro ao buscar divisões: $e');
-      return [];
-    }
+    final all = await getAllDivisoes();
+    if (query.trim().isEmpty) return all;
+    final term = query.trim().toLowerCase();
+    return all.where((d) {
+      return d.divisao.toLowerCase().contains(term) ||
+          d.regionais.any((r) => r.toLowerCase().contains(term)) ||
+          d.regional.toLowerCase().contains(term) ||
+          d.segmentos.any((s) => s.toLowerCase().contains(term));
+    }).toList();
   }
 }
-

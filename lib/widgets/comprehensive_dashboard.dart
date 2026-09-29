@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
+import '../design_system/taskflow_design_system.dart';
 import '../models/task.dart';
 import '../services/task_service.dart';
 import '../services/nota_sap_service.dart';
 import '../services/ordem_service.dart';
 import '../services/at_service.dart';
 import '../services/si_service.dart';
-import '../utils/responsive.dart';
 
 class ComprehensiveDashboard extends StatefulWidget {
   final TaskService taskService;
@@ -51,6 +51,7 @@ class _ComprehensiveDashboardState extends State<ComprehensiveDashboard> {
         _loadSIsStats(),
       ]);
 
+      if (!mounted) return;
       setState(() {
         _stats = {
           'tarefas': results[0],
@@ -62,20 +63,19 @@ class _ComprehensiveDashboardState extends State<ComprehensiveDashboard> {
         _isLoading = false;
       });
     } catch (e) {
-      print('Erro ao carregar estatísticas: $e');
-      setState(() {
-        _isLoading = false;
-      });
+      debugPrint('Erro ao carregar estatísticas: $e');
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 
   Future<Map<String, dynamic>> _loadTaskStats() async {
-    // IMPORTANTE: Sempre usar filteredTasks quando disponível para evitar crash
-    // Se não houver filteredTasks, usar lista vazia em vez de buscar todas as tarefas
     final tasks = widget.filteredTasks ?? [];
     
     if (tasks.isEmpty && widget.filteredTasks == null) {
-      // Retornar estatísticas vazias se não houver tarefas filtradas
       return {
         'total': 0,
         'emAndamento': 0,
@@ -138,7 +138,7 @@ class _ComprehensiveDashboardState extends State<ComprehensiveDashboard> {
     int concluidas = 0;
     int vencidas = 0;
     int semPrazo = 0;
-    int emRisco = 0; // Entre 0 e 30 dias
+    int emRisco = 0;
 
     final porStatus = <String, int>{};
     final porPrioridade = <String, int>{};
@@ -246,80 +246,61 @@ class _ComprehensiveDashboardState extends State<ComprehensiveDashboard> {
 
   @override
   Widget build(BuildContext context) {
-    final isMobile = Responsive.isMobile(context);
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
 
     if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
+      return const Center(
+        child: TFLoading(message: 'Carregando estatísticas consolidadas...'),
+      );
     }
 
-    return RefreshIndicator(
-      onRefresh: _loadAllStats,
-      child: SingleChildScrollView(
-        padding: EdgeInsets.all(isMobile ? 12 : 20),
+    return Scaffold(
+      backgroundColor: colors.background,
+      body: SafeArea(
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _buildHeader(isMobile),
-            const SizedBox(height: 24),
-            _buildOverviewCards(isMobile),
-            const SizedBox(height: 24),
-            _buildTarefasSection(isMobile),
-            const SizedBox(height: 24),
-            _buildNotasSection(isMobile),
-            const SizedBox(height: 24),
-            _buildSAPSection(isMobile),
+            TFPageHeader(
+              title: 'Dashboard Geral',
+              subtitle: 'Visão geral e consolidação operacional de atividades e integrações SAP.',
+              secondaryActions: [
+                TFIconButton(
+                  icon: TFIcons.refresh,
+                  tooltip: 'Atualizar Dados',
+                  onPressed: _loadAllStats,
+                ),
+              ],
+            ),
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: _loadAllStats,
+                child: SingleChildScrollView(
+                  padding: EdgeInsets.all(spacing.md),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _buildOverviewCards(context),
+                      SizedBox(height: spacing.md),
+                      _buildTarefasSection(context),
+                      SizedBox(height: spacing.md),
+                      _buildNotasSection(context),
+                      SizedBox(height: spacing.md),
+                      _buildSAPSection(context),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildHeader(bool isMobile) {
-    return Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [Colors.blue[700]!, Colors.blue[500]!],
-            ),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: const Icon(Icons.dashboard, color: Colors.white, size: 32),
-        ),
-        const SizedBox(width: 16),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Dashboard Geral',
-                style: TextStyle(
-                  fontSize: isMobile ? 24 : 32,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.grey[800],
-                ),
-              ),
-              Text(
-                'Visão geral de todas as atividades',
-                style: TextStyle(
-                  fontSize: isMobile ? 14 : 16,
-                  color: Colors.grey[600],
-                ),
-              ),
-            ],
-          ),
-        ),
-        IconButton(
-          icon: const Icon(Icons.refresh),
-          onPressed: _loadAllStats,
-          tooltip: 'Atualizar',
-        ),
-      ],
-    );
-  }
+  Widget _buildOverviewCards(BuildContext context) {
+    final spacing = context.tfSpacing;
+    final colors = context.tfColors;
 
-  Widget _buildOverviewCards(bool isMobile) {
     final tarefas = _stats['tarefas'] as Map<String, dynamic>? ?? {};
     final notas = _stats['notas'] as Map<String, dynamic>? ?? {};
     final ordens = _stats['ordens'] as Map<String, dynamic>? ?? {};
@@ -332,269 +313,300 @@ class _ComprehensiveDashboardState extends State<ComprehensiveDashboard> {
         (ats['total'] as int? ?? 0) +
         (sis['total'] as int? ?? 0);
 
-    return GridView.count(
-      crossAxisCount: isMobile ? 2 : 5,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      mainAxisSpacing: 12,
-      crossAxisSpacing: 12,
-      childAspectRatio: isMobile ? 1.1 : 1.2,
-      children: [
-        _buildOverviewCard(
-          'Total Geral',
-          totalGeral.toString(),
-          Icons.apps,
-          Colors.blue,
-          isMobile,
-        ),
-        _buildOverviewCard(
-          'Tarefas',
-          (tarefas['total'] as int? ?? 0).toString(),
-          Icons.assignment,
-          Colors.orange,
-          isMobile,
-        ),
-        _buildOverviewCard(
-          'Notas SAP',
-          (notas['total'] as int? ?? 0).toString(),
-          Icons.description,
-          Colors.blue,
-          isMobile,
-        ),
-        _buildOverviewCard(
-          'Ordens',
-          (ordens['total'] as int? ?? 0).toString(),
-          Icons.receipt_long,
-          Colors.purple,
-          isMobile,
-        ),
-        _buildOverviewCard(
-          'ATs + SIs',
-          ((ats['total'] as int? ?? 0) + (sis['total'] as int? ?? 0)).toString(),
-          Icons.work,
-          Colors.teal,
-          isMobile,
-        ),
-      ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isDesktop = constraints.maxWidth >= TFBreakpoints.md;
+        final isTablet = constraints.maxWidth >= TFBreakpoints.sm && !isDesktop;
+        final crossAxisCount = isDesktop ? 5 : (isTablet ? 3 : 2);
+
+        return GridView.count(
+          crossAxisCount: crossAxisCount,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          mainAxisSpacing: spacing.sm,
+          crossAxisSpacing: spacing.sm,
+          childAspectRatio: isDesktop ? 1.6 : (isTablet ? 1.4 : 1.2),
+          children: [
+            _buildOverviewCard(
+              context,
+              'Total Geral',
+              totalGeral.toString(),
+              Icons.apps_rounded,
+              colors.primary,
+            ),
+            _buildOverviewCard(
+              context,
+              'Tarefas',
+              (tarefas['total'] as int? ?? 0).toString(),
+              Icons.assignment_rounded,
+              colors.warning,
+            ),
+            _buildOverviewCard(
+              context,
+              'Notas SAP',
+              (notas['total'] as int? ?? 0).toString(),
+              Icons.description_rounded,
+              colors.info,
+            ),
+            _buildOverviewCard(
+              context,
+              'Ordens',
+              (ordens['total'] as int? ?? 0).toString(),
+              Icons.receipt_long_rounded,
+              colors.info,
+            ),
+            _buildOverviewCard(
+              context,
+              'ATs + SIs',
+              ((ats['total'] as int? ?? 0) + (sis['total'] as int? ?? 0)).toString(),
+              Icons.engineering_rounded,
+              colors.success,
+            ),
+          ],
+        );
+      },
     );
   }
 
   Widget _buildOverviewCard(
+    BuildContext context,
     String title,
     String value,
     IconData icon,
     Color color,
-    bool isMobile,
   ) {
-    return Card(
-      elevation: 4,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12),
-          gradient: LinearGradient(
-            colors: [color.withOpacity(0.1), color.withOpacity(0.05)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-        ),
-        child: Padding(
-          padding: EdgeInsets.all(isMobile ? 12 : 16),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final spacing = context.tfSpacing;
+
+    return TFCard(
+      padding: EdgeInsets.all(spacing.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Icon(icon, color: color, size: isMobile ? 28 : 36),
-              const SizedBox(height: 8),
-              Text(
-                value,
-                style: TextStyle(
-                  fontSize: isMobile ? 24 : 32,
-                  fontWeight: FontWeight.bold,
-                  color: color,
-                ),
-              ),
-              const SizedBox(height: 4),
               Text(
                 title,
-                style: TextStyle(
-                  fontSize: isMobile ? 11 : 13,
-                  color: Colors.grey[700],
-                  fontWeight: FontWeight.w500,
+                style: typography.bodySmall.copyWith(
+                  color: colors.textSecondary,
+                  fontWeight: FontWeight.w600,
                 ),
-                textAlign: TextAlign.center,
-                maxLines: 2,
+                maxLines: 1,
                 overflow: TextOverflow.ellipsis,
+              ),
+              Container(
+                padding: EdgeInsets.all(spacing.xs),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: TFRadius.borderRadiusSm,
+                ),
+                child: Icon(icon, color: color, size: 18),
               ),
             ],
           ),
-        ),
+          Text(
+            value,
+            style: typography.sectionTitle.copyWith(
+              color: colors.textPrimary,
+              fontWeight: FontWeight.bold,
+              fontSize: 26,
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildTarefasSection(bool isMobile) {
+  Widget _buildTarefasSection(BuildContext context) {
+    final colors = context.tfColors;
     final tarefas = _stats['tarefas'] as Map<String, dynamic>? ?? {};
+
     return _buildSectionCard(
-      'Tarefas',
-      Icons.assignment,
-      Colors.orange,
+      context,
+      'Tarefas Operacionais',
+      Icons.assignment_outlined,
+      colors.warning,
       [
-        _buildStatRow('Total', (tarefas['total'] as int? ?? 0).toString(), Colors.blue),
-        _buildStatRow('Em Andamento', (tarefas['emAndamento'] as int? ?? 0).toString(), Colors.orange),
-        _buildStatRow('Concluídas', (tarefas['concluidas'] as int? ?? 0).toString(), Colors.green),
-        _buildStatRow('Programadas', (tarefas['programadas'] as int? ?? 0).toString(), Colors.purple),
+        _buildStatRow(context, 'Total', (tarefas['total'] as int? ?? 0).toString(), colors.info),
+        _buildStatRow(context, 'Em Andamento', (tarefas['emAndamento'] as int? ?? 0).toString(), colors.warning),
+        _buildStatRow(context, 'Concluídas', (tarefas['concluidas'] as int? ?? 0).toString(), colors.success),
+        _buildStatRow(context, 'Programadas', (tarefas['programadas'] as int? ?? 0).toString(), colors.primary),
         if ((tarefas['vencidas'] as int? ?? 0) > 0)
-          _buildStatRow('Vencidas', (tarefas['vencidas'] as int? ?? 0).toString(), Colors.red),
+          _buildStatRow(context, 'Vencidas', (tarefas['vencidas'] as int? ?? 0).toString(), colors.danger),
       ],
-      _buildDistributionChart(tarefas['porStatus'] as Map<String, int>? ?? {}, isMobile),
-      isMobile,
+      _buildDistributionChart(context, tarefas['porStatus'] as Map<String, int>? ?? {}),
     );
   }
 
-  Widget _buildNotasSection(bool isMobile) {
+  Widget _buildNotasSection(BuildContext context) {
+    final colors = context.tfColors;
     final notas = _stats['notas'] as Map<String, dynamic>? ?? {};
+
     return _buildSectionCard(
+      context,
       'Notas SAP',
-      Icons.description,
-      Colors.blue,
+      Icons.description_outlined,
+      colors.info,
       [
-        _buildStatRow('Total', (notas['total'] as int? ?? 0).toString(), Colors.blue),
-        _buildStatRow('Abertas', (notas['abertas'] as int? ?? 0).toString(), Colors.orange),
-        _buildStatRow('Concluídas', (notas['concluidas'] as int? ?? 0).toString(), Colors.green),
-        _buildStatRow('Vencidas', (notas['vencidas'] as int? ?? 0).toString(), Colors.red),
-        _buildStatRow('Em Risco', (notas['emRisco'] as int? ?? 0).toString(), Colors.yellow[700]!),
-        _buildStatRow('Sem Prazo', (notas['semPrazo'] as int? ?? 0).toString(), Colors.grey),
+        _buildStatRow(context, 'Total', (notas['total'] as int? ?? 0).toString(), colors.info),
+        _buildStatRow(context, 'Abertas', (notas['abertas'] as int? ?? 0).toString(), colors.warning),
+        _buildStatRow(context, 'Concluídas', (notas['concluidas'] as int? ?? 0).toString(), colors.success),
+        _buildStatRow(context, 'Vencidas', (notas['vencidas'] as int? ?? 0).toString(), colors.danger),
+        _buildStatRow(context, 'Em Risco', (notas['emRisco'] as int? ?? 0).toString(), colors.warning),
+        _buildStatRow(context, 'Sem Prazo', (notas['semPrazo'] as int? ?? 0).toString(), colors.textSecondary),
       ],
-      _buildDistributionChart(notas['porPrioridade'] as Map<String, int>? ?? {}, isMobile),
-      isMobile,
+      _buildDistributionChart(context, notas['porPrioridade'] as Map<String, int>? ?? {}),
     );
   }
 
-  Widget _buildSAPSection(bool isMobile) {
+  Widget _buildSAPSection(BuildContext context) {
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+
     final ordens = _stats['ordens'] as Map<String, dynamic>? ?? {};
     final ats = _stats['ats'] as Map<String, dynamic>? ?? {};
     final sis = _stats['sis'] as Map<String, dynamic>? ?? {};
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isMobile = constraints.maxWidth < TFBreakpoints.sm;
+
+        if (isMobile) {
+          return Column(
+            children: [
+              _buildMiniCard(context, 'Ordens SAP', (ordens['total'] as int? ?? 0).toString(), Icons.receipt_long_outlined, colors.info),
+              SizedBox(height: spacing.sm),
+              _buildMiniCard(context, 'Autorizações de Trabalho (ATs)', (ats['total'] as int? ?? 0).toString(), Icons.engineering_outlined, colors.primary),
+              SizedBox(height: spacing.sm),
+              _buildMiniCard(context, 'Solicitações de Intervenção (SIs)', (sis['total'] as int? ?? 0).toString(), Icons.info_outline, colors.success),
+            ],
+          );
+        }
+
+        return Row(
           children: [
             Expanded(
-              child: _buildMiniCard(
-                'Ordens',
-                (ordens['total'] as int? ?? 0).toString(),
-                Icons.receipt_long,
-                Colors.purple,
-                isMobile,
-              ),
+              child: _buildMiniCard(context, 'Ordens SAP', (ordens['total'] as int? ?? 0).toString(), Icons.receipt_long_outlined, colors.info),
             ),
-            const SizedBox(width: 12),
+            SizedBox(width: spacing.sm),
             Expanded(
-              child: _buildMiniCard(
-                'ATs',
-                (ats['total'] as int? ?? 0).toString(),
-                Icons.assignment,
-                Colors.indigo,
-                isMobile,
-              ),
+              child: _buildMiniCard(context, 'Autorizações de Trabalho (ATs)', (ats['total'] as int? ?? 0).toString(), Icons.engineering_outlined, colors.primary),
             ),
-            const SizedBox(width: 12),
+            SizedBox(width: spacing.sm),
             Expanded(
-              child: _buildMiniCard(
-                'SIs',
-                (sis['total'] as int? ?? 0).toString(),
-                Icons.info,
-                Colors.teal,
-                isMobile,
-              ),
+              child: _buildMiniCard(context, 'Solicitações de Intervenção (SIs)', (sis['total'] as int? ?? 0).toString(), Icons.info_outline, colors.success),
             ),
           ],
-        ),
-      ],
+        );
+      },
     );
   }
 
   Widget _buildSectionCard(
+    BuildContext context,
     String title,
     IconData icon,
     Color color,
     List<Widget> stats,
     Widget? chart,
-    bool isMobile,
   ) {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: EdgeInsets.all(isMobile ? 12 : 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: color.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Icon(icon, color: color, size: 24),
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final spacing = context.tfSpacing;
+
+    return TFCard(
+      padding: EdgeInsets.all(spacing.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: EdgeInsets.all(spacing.xs),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: TFRadius.borderRadiusSm,
                 ),
-                const SizedBox(width: 12),
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: isMobile ? 18 : 22,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.grey[800],
-                  ),
+                child: Icon(icon, color: color, size: 20),
+              ),
+              SizedBox(width: spacing.sm),
+              Text(
+                title,
+                style: typography.sectionTitle.copyWith(
+                  color: colors.textPrimary,
+                  fontWeight: FontWeight.bold,
                 ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            if (isMobile)
-              Column(children: stats)
-            else
-              Row(
+              ),
+            ],
+          ),
+          SizedBox(height: spacing.md),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final isMobile = constraints.maxWidth < TFBreakpoints.sm;
+
+              if (isMobile) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ...stats,
+                    if (chart != null) ...[
+                      SizedBox(height: spacing.md),
+                      chart,
+                    ],
+                  ],
+                );
+              }
+
+              return Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(flex: 2, child: Column(children: stats)),
+                  Expanded(
+                    flex: 2,
+                    child: Column(children: stats),
+                  ),
                   if (chart != null) ...[
-                    const SizedBox(width: 16),
-                    Expanded(flex: 3, child: chart),
+                    SizedBox(width: spacing.lg),
+                    Expanded(
+                      flex: 3,
+                      child: chart,
+                    ),
                   ],
                 ],
-              ),
-          ],
-        ),
+              );
+            },
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildStatRow(String label, String value, Color color) {
+  Widget _buildStatRow(BuildContext context, String label, String value, Color color) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final spacing = context.tfSpacing;
+
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      padding: EdgeInsets.symmetric(vertical: spacing.xs),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text(
             label,
-            style: const TextStyle(
-              fontSize: 14,
-              color: Colors.grey,
-            ),
+            style: typography.bodyMedium.copyWith(color: colors.textSecondary),
           ),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            padding: EdgeInsets.symmetric(horizontal: spacing.sm, vertical: 3),
             decoration: BoxDecoration(
-              color: color.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(8),
+              color: color.withValues(alpha: 0.12),
+              borderRadius: TFRadius.borderRadiusSm,
+              border: Border.all(color: color.withValues(alpha: 0.2)),
             ),
             child: Text(
               value,
-              style: TextStyle(
-                fontSize: 16,
+              style: typography.bodySmall.copyWith(
                 fontWeight: FontWeight.bold,
                 color: color,
               ),
@@ -605,12 +617,16 @@ class _ComprehensiveDashboardState extends State<ComprehensiveDashboard> {
     );
   }
 
-  Widget _buildDistributionChart(Map<String, int> distribution, bool isMobile) {
+  Widget _buildDistributionChart(BuildContext context, Map<String, int> distribution) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final spacing = context.tfSpacing;
+
     if (distribution.isEmpty) {
       return Center(
         child: Text(
-          'Sem dados',
-          style: TextStyle(color: Colors.grey[400]),
+          'Sem dados cadastrados',
+          style: typography.caption.copyWith(color: colors.textSecondary),
         ),
       );
     }
@@ -620,8 +636,10 @@ class _ComprehensiveDashboardState extends State<ComprehensiveDashboard> {
     return Column(
       children: distribution.entries.take(5).map((entry) {
         final percentage = total > 0 ? (entry.value / total * 100) : 0.0;
+        final barColor = _getColorForStatus(context, entry.key);
+
         return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 6),
+          padding: EdgeInsets.symmetric(vertical: spacing.xxs),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -631,27 +649,28 @@ class _ComprehensiveDashboardState extends State<ComprehensiveDashboard> {
                   Expanded(
                     child: Text(
                       entry.key,
-                      style: const TextStyle(fontSize: 12),
+                      style: typography.bodySmall.copyWith(color: colors.textPrimary),
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
                   Text(
                     '${entry.value} (${percentage.toStringAsFixed(1)}%)',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
+                    style: typography.caption.copyWith(
+                      color: colors.textSecondary,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 4),
-              LinearProgressIndicator(
-                value: percentage / 100,
-                backgroundColor: Colors.grey[200],
-                valueColor: AlwaysStoppedAnimation<Color>(
-                  _getColorForStatus(entry.key),
+              SizedBox(height: spacing.xxs),
+              ClipRRect(
+                borderRadius: TFRadius.borderRadiusFull,
+                child: LinearProgressIndicator(
+                  value: percentage / 100,
+                  backgroundColor: colors.surfaceSecondary,
+                  valueColor: AlwaysStoppedAnimation<Color>(barColor),
+                  minHeight: 6,
                 ),
-                minHeight: 8,
               ),
             ],
           ),
@@ -661,54 +680,68 @@ class _ComprehensiveDashboardState extends State<ComprehensiveDashboard> {
   }
 
   Widget _buildMiniCard(
+    BuildContext context,
     String title,
     String value,
     IconData icon,
     Color color,
-    bool isMobile,
   ) {
-    return Card(
-      elevation: 2,
-      child: Padding(
-        padding: EdgeInsets.all(isMobile ? 12 : 16),
-        child: Column(
-          children: [
-            Icon(icon, color: color, size: isMobile ? 24 : 32),
-            const SizedBox(height: 8),
-            Text(
-              value,
-              style: TextStyle(
-                fontSize: isMobile ? 20 : 28,
-                fontWeight: FontWeight.bold,
-                color: color,
-              ),
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final spacing = context.tfSpacing;
+
+    return TFCard(
+      padding: EdgeInsets.all(spacing.md),
+      child: Row(
+        children: [
+          Container(
+            padding: EdgeInsets.all(spacing.sm),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.12),
+              borderRadius: TFRadius.borderRadiusMd,
             ),
-            const SizedBox(height: 4),
-            Text(
-              title,
-              style: TextStyle(
-                fontSize: isMobile ? 11 : 13,
-                color: Colors.grey[600],
-              ),
-              textAlign: TextAlign.center,
+            child: Icon(icon, color: color, size: 24),
+          ),
+          SizedBox(width: spacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  value,
+                  style: typography.sectionTitle.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: colors.textPrimary,
+                  ),
+                ),
+                Text(
+                  title,
+                  style: typography.caption.copyWith(color: colors.textSecondary),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
-  Color _getColorForStatus(String status) {
+  Color _getColorForStatus(BuildContext context, String status) {
+    final colors = context.tfColors;
     final upperStatus = status.toUpperCase();
-    if (upperStatus.contains('CONCLU') || upperStatus.contains('FINALIZ')) {
-      return Colors.green;
-    } else if (upperStatus.contains('ANDAMENTO') || upperStatus.contains('EXEC')) {
-      return Colors.orange;
-    } else if (upperStatus.contains('PROG') || upperStatus.contains('PLAN')) {
-      return Colors.blue;
-    } else if (upperStatus.contains('VENCI') || upperStatus.contains('ATRAS')) {
-      return Colors.red;
+
+    if (upperStatus.contains('CONCLU') || upperStatus.contains('FINALIZ') || upperStatus.contains('MSEN')) {
+      return colors.success;
+    } else if (upperStatus.contains('ANDAMENTO') || upperStatus.contains('EXEC') || upperStatus.contains('RISCO')) {
+      return colors.warning;
+    } else if (upperStatus.contains('PROG') || upperStatus.contains('PLAN') || upperStatus.contains('ALTA')) {
+      return colors.primary;
+    } else if (upperStatus.contains('VENCI') || upperStatus.contains('ATRAS') || upperStatus.contains('MUITO')) {
+      return colors.danger;
     }
-    return Colors.grey;
+    return colors.textSecondary;
   }
 }
+

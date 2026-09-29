@@ -11,7 +11,7 @@ class LocalDatabaseService {
 
   static Database? _database;
   static const String _databaseName = 'taskflow_local.db';
-  static const int _databaseVersion = 8;
+  static const int _databaseVersion = 10;
 
   Future<Database> get database async {
     if (_database != null) return _database!;
@@ -221,6 +221,19 @@ class LocalDatabaseService {
       )
     ''');
 
+    // Tabela de relacionamentos divisões-regionais local (N:N)
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS divisoes_regionais_local (
+        divisao_id TEXT NOT NULL,
+        regional_id TEXT NOT NULL,
+        created_at TEXT,
+        sync_status TEXT DEFAULT 'synced',
+        PRIMARY KEY (divisao_id, regional_id),
+        FOREIGN KEY (divisao_id) REFERENCES divisoes_local(id) ON DELETE CASCADE,
+        FOREIGN KEY (regional_id) REFERENCES regionais_local(id) ON DELETE CASCADE
+      )
+    ''');
+
     // Tabela de segmentos local
     await db.execute('''
       CREATE TABLE segmentos_local (
@@ -350,6 +363,8 @@ class LocalDatabaseService {
         versao_id TEXT,
         prioridade TEXT,
         created_by TEXT,
+        feedback TEXT,
+        prazo INTEGER,
         created_at INTEGER,
         updated_at INTEGER,
         concluido_em INTEGER,
@@ -666,6 +681,8 @@ class LocalDatabaseService {
             versao_id TEXT,
             prioridade TEXT,
             created_by TEXT,
+            feedback TEXT,
+            prazo INTEGER,
             created_at INTEGER,
             updated_at INTEGER,
             concluido_em INTEGER,
@@ -694,6 +711,7 @@ class LocalDatabaseService {
           )
         ''');
       } catch (_) {}
+    }
     if (oldVersion < 8) {
       // Módulo de Projetos
       try {
@@ -905,6 +923,27 @@ class LocalDatabaseService {
             FOREIGN KEY (projeto_id) REFERENCES projetos_local(id) ON DELETE CASCADE
           )
         ''');
+      } catch (_) {}
+      try {
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS divisoes_regionais_local (
+            divisao_id TEXT NOT NULL,
+            regional_id TEXT NOT NULL,
+            created_at TEXT,
+            sync_status TEXT DEFAULT 'synced',
+            PRIMARY KEY (divisao_id, regional_id),
+            FOREIGN KEY (divisao_id) REFERENCES divisoes_local(id) ON DELETE CASCADE,
+            FOREIGN KEY (regional_id) REFERENCES regionais_local(id) ON DELETE CASCADE
+          )
+        ''');
+      } catch (_) {}
+    }
+    if (oldVersion < 10) {
+      try {
+        await db.execute('ALTER TABLE melhorias_bugs_local ADD COLUMN feedback TEXT');
+      } catch (_) {}
+      try {
+        await db.execute('ALTER TABLE melhorias_bugs_local ADD COLUMN prazo INTEGER');
       } catch (_) {}
     }
   }

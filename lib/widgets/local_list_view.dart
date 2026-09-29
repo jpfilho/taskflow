@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
+import '../design_system/taskflow_design_system.dart';
 import '../models/local.dart';
 import '../services/local_service.dart';
 import 'local_form_dialog.dart';
-import 'multi_select_filter_dialog.dart';
-import '../utils/responsive.dart';
 
 class LocalListView extends StatefulWidget {
   const LocalListView({super.key});
@@ -17,39 +16,67 @@ class _LocalListViewState extends State<LocalListView> {
   List<Local> _locais = [];
   List<Local> _filteredLocais = [];
   bool _isLoading = true;
+  bool _isTableView = true;
   final TextEditingController _searchController = TextEditingController();
-  final TextEditingController _descricaoFilterController = TextEditingController();
-  final TextEditingController _sapFilterController = TextEditingController();
-  
-  final Set<String> _selectedLocalFilters = {};
-  final Set<String> _selectedRegionalFilters = {};
-  final Set<String> _selectedDivisaoFilters = {};
-  final Set<String> _selectedSegmentoFilters = {};
 
-  bool _isTableView = false; // false = lista (cards), true = tabela
+  // Filtros multiescolha por coluna
+  Set<String> _selectedRegionais = {};
+  Set<String> _selectedDivisoes = {};
+  Set<String> _selectedSegmentos = {};
+
+  bool get _hasActiveFilters =>
+      _selectedRegionais.isNotEmpty ||
+      _selectedDivisoes.isNotEmpty ||
+      _selectedSegmentos.isNotEmpty ||
+      _searchController.text.trim().isNotEmpty;
+
+  void _clearAllFilters() {
+    setState(() {
+      _selectedRegionais.clear();
+      _selectedDivisoes.clear();
+      _selectedSegmentos.clear();
+      _searchController.clear();
+      _applyFilters();
+    });
+  }
+
+  List<String> _getUniqueRegionais() {
+    return _locais
+        .map((l) => l.regional.trim())
+        .where((r) => r.isNotEmpty && r != '-')
+        .toSet()
+        .toList()
+      ..sort();
+  }
+
+  List<String> _getUniqueDivisoes() {
+    return _locais
+        .map((l) => l.divisao.trim())
+        .where((d) => d.isNotEmpty && d != '-')
+        .toSet()
+        .toList()
+      ..sort();
+  }
+
+  List<String> _getUniqueSegmentos() {
+    return _locais
+        .map((l) => l.segmento.trim())
+        .where((s) => s.isNotEmpty && s != '-')
+        .toSet()
+        .toList()
+      ..sort();
+  }
 
   @override
   void initState() {
     super.initState();
     _loadLocais();
     _searchController.addListener(_applyFilters);
-    _descricaoFilterController.addListener(_applyFilters);
-    _sapFilterController.addListener(_applyFilters);
-    // No desktop, tabela é o padrão
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && Responsive.isDesktop(context)) {
-        setState(() {
-          _isTableView = true;
-        });
-      }
-    });
   }
 
   @override
   void dispose() {
     _searchController.dispose();
-    _descricaoFilterController.dispose();
-    _sapFilterController.dispose();
     super.dispose();
   }
 
@@ -81,41 +108,74 @@ class _LocalListViewState extends State<LocalListView> {
     }
   }
 
+  static String _normalize(String text) {
+    var result = text.toLowerCase().trim();
+    const withDiacritics = 'áàâãäéèêëíìîïóòôõöúùûüçñýÿ';
+    const withoutDiacritics = 'aaaaaeeeeiiiiooooouuuucnyy';
+    for (int i = 0; i < withDiacritics.length; i++) {
+      result = result.replaceAll(withDiacritics[i], withoutDiacritics[i]);
+    }
+    return result;
+  }
+
+  bool _matchesLocal(Local l, String rawQuery) {
+    final regionalStr = l.regional.trim();
+    final divisaoStr = l.divisao.trim();
+    final segmentoStr = l.segmento.trim();
+
+    // Filtros multiescolha
+    if (_selectedRegionais.isNotEmpty && !_selectedRegionais.contains(regionalStr)) {
+      return false;
+    }
+    if (_selectedDivisoes.isNotEmpty && !_selectedDivisoes.contains(divisaoStr)) {
+      return false;
+    }
+    if (_selectedSegmentos.isNotEmpty && !_selectedSegmentos.contains(segmentoStr)) {
+      return false;
+    }
+
+    final query = _normalize(rawQuery);
+    if (query.isEmpty) return true;
+
+    final tokens = query.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
+    if (tokens.isEmpty) return true;
+
+    final parts = <String>[
+      l.local,
+      l.descricao ?? '',
+      l.localInstalacaoSap ?? '',
+      l.regional,
+      l.divisao,
+      l.segmento,
+      l.associacoesDescricao,
+      if (l.paraTodaRegional) 'toda regional',
+      if (l.paraTodaDivisao) 'toda divisao toda divisão',
+      l.local.replaceAll(RegExp(r'[^a-zA-Z0-9]'), ''),
+      if (l.localInstalacaoSap != null)
+        l.localInstalacaoSap!.replaceAll(RegExp(r'[^a-zA-Z0-9]'), ''),
+    ];
+
+    final fullSearchableText = _normalize(parts.join(' '));
+
+    return tokens.every((token) {
+      final cleanToken = token.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '');
+      return fullSearchableText.contains(token) ||
+          (cleanToken.isNotEmpty && fullSearchableText.contains(cleanToken));
+    });
+  }
+
   void _applyFilters() {
-    final query = _searchController.text.toLowerCase().trim();
-    final descQ = _descricaoFilterController.text.toLowerCase().trim();
-    final sapQ = _sapFilterController.text.toLowerCase().trim();
+    final query = _searchController.text;
 
     setState(() {
-      _filteredLocais = _locais.where((l) {
-        // Global search
-        bool matchesGlobal = query.isEmpty ||
-            l.local.toLowerCase().contains(query) ||
-            (l.descricao?.toLowerCase().contains(query) ?? false) ||
-            l.regional.toLowerCase().contains(query) ||
-            l.divisao.toLowerCase().contains(query) ||
-            l.segmento.toLowerCase().contains(query);
-
-        if (!matchesGlobal) return false;
-
-        // Column filters (Text)
-        if (descQ.isNotEmpty && !(l.descricao?.toLowerCase().contains(descQ) ?? false)) return false;
-        if (sapQ.isNotEmpty && !(l.localInstalacaoSap?.toLowerCase().contains(sapQ) ?? false)) return false;
-
-        // Multi-select filters
-        if (_selectedLocalFilters.isNotEmpty && !_selectedLocalFilters.contains(l.local)) return false;
-        if (_selectedRegionalFilters.isNotEmpty && !_selectedRegionalFilters.contains(l.regional)) return false;
-        if (_selectedDivisaoFilters.isNotEmpty && !_selectedDivisaoFilters.contains(l.divisao)) return false;
-        if (_selectedSegmentoFilters.isNotEmpty && !_selectedSegmentoFilters.contains(l.segmento)) return false;
-
-        return true;
-      }).toList();
+      _filteredLocais = _locais.where((l) => _matchesLocal(l, query)).toList();
     });
   }
 
   Future<void> _createLocal() async {
     final result = await showDialog<Local>(
       context: context,
+      barrierDismissible: true,
       builder: (context) => const LocalFormDialog(),
     );
 
@@ -135,7 +195,7 @@ class _LocalListViewState extends State<LocalListView> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Erro ao criar local'),
+              content: Text('Erro ao criar local.'),
               backgroundColor: Colors.red,
             ),
           );
@@ -145,7 +205,6 @@ class _LocalListViewState extends State<LocalListView> {
   }
 
   Future<void> _duplicateLocal(Local local) async {
-    // Criar cópia com nome modificado
     final duplicated = local.copyWith(
       id: '',
       local: '${local.local} (Cópia)',
@@ -153,6 +212,7 @@ class _LocalListViewState extends State<LocalListView> {
 
     final result = await showDialog<Local>(
       context: context,
+      barrierDismissible: true,
       builder: (context) => LocalFormDialog(local: duplicated),
     );
 
@@ -172,7 +232,7 @@ class _LocalListViewState extends State<LocalListView> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Erro ao duplicar local'),
+              content: Text('Erro ao duplicar local.'),
               backgroundColor: Colors.red,
             ),
           );
@@ -184,6 +244,7 @@ class _LocalListViewState extends State<LocalListView> {
   Future<void> _editLocal(Local local) async {
     final result = await showDialog<Local>(
       context: context,
+      barrierDismissible: true,
       builder: (context) => LocalFormDialog(local: local),
     );
 
@@ -203,7 +264,7 @@ class _LocalListViewState extends State<LocalListView> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Erro ao atualizar local'),
+              content: Text('Erro ao atualizar local.'),
               backgroundColor: Colors.red,
             ),
           );
@@ -213,27 +274,14 @@ class _LocalListViewState extends State<LocalListView> {
   }
 
   Future<void> _deleteLocal(Local local) async {
-    final confirm = await showDialog<bool>(
+    final confirm = await TFModalDialog.confirm(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Confirmar Exclusão'),
-        content: Text(
-          'Deseja realmente excluir o local:\n\n'
-          'Local: ${local.local}\n'
+      title: 'Confirmar exclusão',
+      message: 'Deseja realmente excluir o local "${local.local}"?\n\n'
           'Associações: ${local.associacoesDescricao}',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Excluir'),
-          ),
-        ],
-      ),
+      confirmLabel: 'Excluir',
+      cancelLabel: 'Cancelar',
+      isDestructive: true,
     );
 
     if (confirm == true) {
@@ -252,7 +300,7 @@ class _LocalListViewState extends State<LocalListView> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Erro ao excluir local'),
+              content: Text('Erro ao excluir local.'),
               backgroundColor: Colors.red,
             ),
           );
@@ -263,391 +311,326 @@ class _LocalListViewState extends State<LocalListView> {
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = TFBreakpoints.isMobile(context);
+    final spacing = context.tfSpacing;
+    final colors = context.tfColors;
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Cadastro de Locais'),
-        actions: [
-          // Toggle de visualização
-          IconButton(
-            icon: Icon(_isTableView ? Icons.view_list : Icons.table_chart),
-            onPressed: () {
-              setState(() {
-                _isTableView = !_isTableView;
-              });
-            },
-            tooltip: _isTableView ? 'Visualização em Lista' : 'Visualização em Tabela',
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadLocais,
-            tooltip: 'Atualizar',
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          // Barra de busca e botão criar
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _searchController,
-                    decoration: InputDecoration(
-                      hintText: 'Buscar por local ou descrição...',
-                      prefixIcon: const Icon(Icons.search),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      filled: true,
-                      fillColor: Colors.grey[100],
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                ElevatedButton.icon(
+      backgroundColor: colors.background,
+      body: SafeArea(
+        child: Padding(
+          padding: EdgeInsets.all(isMobile ? spacing.sm : spacing.base),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TFPageHeader(
+                title: 'Cadastro de Locais',
+                subtitle: 'Locais físicos, subestações e instalações operacionais integradas',
+                onBack: () => Navigator.of(context).pop(),
+                primaryAction: TFButton(
+                  label: 'Novo Local',
+                  leadingIcon: TFIcons.add,
                   onPressed: _createLocal,
-                  icon: const Icon(Icons.add),
-                  label: const Text('Novo Local'),
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 12,
+                ),
+                secondaryActions: [
+                  TFIconButton(
+                    icon: _isTableView ? Icons.view_list_rounded : Icons.table_chart_rounded,
+                    tooltip: _isTableView ? 'Visualizar em Lista' : 'Visualizar em Tabela',
+                    variant: TFIconButtonVariant.subtle,
+                    onPressed: () {
+                      setState(() {
+                        _isTableView = !_isTableView;
+                      });
+                    },
+                  ),
+                  TFIconButton(
+                    icon: TFIcons.refresh,
+                    tooltip: 'Recarregar locais',
+                    variant: TFIconButtonVariant.subtle,
+                    onPressed: _loadLocais,
+                  ),
+                ],
+              ),
+              SizedBox(height: spacing.sm),
+              Row(
+                children: [
+                  Expanded(
+                    child: TFTextField(
+                      controller: _searchController,
+                      hint: 'Buscar por local, descrição, SAP ou regional...',
+                      prefixIcon: Icon(TFIcons.search, size: 18, color: colors.textSecondary),
+                      onChanged: (_) => _applyFilters(),
                     ),
                   ),
+                  if (_hasActiveFilters) ...[
+                    SizedBox(width: spacing.sm),
+                    TFButton(
+                      label: 'Limpar Filtros',
+                      variant: TFButtonVariant.secondary,
+                      leadingIcon: Icons.filter_alt_off,
+                      onPressed: _clearAllFilters,
+                    ),
+                  ],
+                ],
+              ),
+              SizedBox(height: spacing.sm),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 170,
+                      child: TFMultiSelectFilterField(
+                        label: 'Regional',
+                        selectedValues: _selectedRegionais,
+                        options: _getUniqueRegionais(),
+                        isCompact: true,
+                        onChanged: (values) {
+                          setState(() {
+                            _selectedRegionais = values;
+                            _applyFilters();
+                          });
+                        },
+                      ),
+                    ),
+                    SizedBox(width: spacing.sm),
+                    SizedBox(
+                      width: 170,
+                      child: TFMultiSelectFilterField(
+                        label: 'Divisão',
+                        selectedValues: _selectedDivisoes,
+                        options: _getUniqueDivisoes(),
+                        isCompact: true,
+                        onChanged: (values) {
+                          setState(() {
+                            _selectedDivisoes = values;
+                            _applyFilters();
+                          });
+                        },
+                      ),
+                    ),
+                    SizedBox(width: spacing.sm),
+                    SizedBox(
+                      width: 170,
+                      child: TFMultiSelectFilterField(
+                        label: 'Segmento',
+                        selectedValues: _selectedSegmentos,
+                        options: _getUniqueSegmentos(),
+                        isCompact: true,
+                        onChanged: (values) {
+                          setState(() {
+                            _selectedSegmentos = values;
+                            _applyFilters();
+                          });
+                        },
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-          ),
-          // Lista ou Tabela de locais
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _filteredLocais.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.place,
-                              size: 64,
-                              color: Colors.grey[400],
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              _locais.isEmpty
-                                  ? 'Nenhum local cadastrado'
-                                  : 'Nenhum local encontrado',
-                              style: TextStyle(
-                                fontSize: 16,
-                                color: Colors.grey[600],
-                              ),
-                            ),
-                            if (_locais.isEmpty) ...[
-                              const SizedBox(height: 8),
-                              ElevatedButton.icon(
-                                onPressed: _createLocal,
-                                icon: const Icon(Icons.add),
-                                label: const Text('Criar Primeiro Local'),
-                              ),
-                            ],
-                          ],
-                        ),
+              ),
+              SizedBox(height: spacing.base),
+              Expanded(
+                child: _isLoading
+                    ? const TFLoading(
+                        mode: TFLoadingMode.section,
+                        message: 'Carregando locais...',
                       )
-                    : _isTableView
-                        ? _buildTableView()
-                        : _buildListView(),
+                    : _filteredLocais.isEmpty
+                        ? TFEmptyState(
+                            icon: TFIcons.search,
+                            title: _locais.isEmpty
+                                ? 'Nenhum local cadastrado'
+                                : 'Nenhum local encontrado',
+                            description: _locais.isEmpty
+                                ? 'Cadastre o primeiro local para associar às tarefas operacionais.'
+                                : 'Tente buscar por outro termo ou limpe o campo de busca.',
+                            action: _locais.isEmpty
+                                ? TFButton(
+                                    label: 'Cadastrar Primeiro Local',
+                                    leadingIcon: TFIcons.add,
+                                    onPressed: _createLocal,
+                                  )
+                                : TFButton(
+                                    label: 'Limpar Busca',
+                                    variant: TFButtonVariant.secondary,
+                                    onPressed: () => _searchController.clear(),
+                                  ),
+                          )
+                        : (isMobile || !_isTableView)
+                            ? _buildMobileList()
+                            : _buildDesktopTable(),
+              ),
+            ],
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildListView() {
-    return ListView.builder(
-                        itemCount: _filteredLocais.length,
-                        itemBuilder: (context, index) {
-                          final local = _filteredLocais[index];
-                          return Card(
-                            margin: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 8,
-                            ),
-                            child: ListTile(
-                              leading: CircleAvatar(
-                                backgroundColor: Colors.teal[100],
-                                child: Icon(
-                                  Icons.place,
-                                  color: Colors.teal[700],
-                                ),
-                              ),
-                              title: Text(
-                                local.local,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              subtitle: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  if (local.descricao != null && local.descricao!.isNotEmpty)
-                                    Padding(
-                                      padding: const EdgeInsets.only(top: 4),
-                                      child: Text(
-                                        local.descricao!,
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.grey[600],
-                                        ),
-                                      ),
-                                    ),
-                                  const SizedBox(height: 4),
-                                  Row(
-                                    children: [
-                                      Icon(
-                                        Icons.info_outline,
-                                        size: 14,
-                                        color: Colors.grey[600],
-                                      ),
-                                      const SizedBox(width: 4),
-                                      Expanded(
-                                        child: Text(
-                                          local.associacoesDescricao,
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            color: Colors.grey[700],
-                                            fontStyle: FontStyle.italic,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                              trailing: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  IconButton(
-                                    icon: const Icon(Icons.edit),
-                                    color: Colors.blue,
-                                    onPressed: () => _editLocal(local),
-                                    tooltip: 'Editar',
-                                  ),
-                                  IconButton(
-                                    icon: const Icon(Icons.copy),
-                                    color: Colors.orange,
-                                    onPressed: () => _duplicateLocal(local),
-                                    tooltip: 'Duplicar',
-                                  ),
-                                  IconButton(
-                                    icon: const Icon(Icons.delete),
-                                    color: Colors.red,
-                                    onPressed: () => _deleteLocal(local),
-                                    tooltip: 'Excluir',
-                                  ),
-                                ],
-                              ),
-                            ),
-                          );
-        },
-      );
-  }
-
-  Widget _buildTableView() {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: SingleChildScrollView(
-        child: DataTable(
-          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
-          headingRowHeight: 80, // Aumentado para acomodar os campos de busca
-          columns: [
-            DataColumn(
-              label: _buildSelectableHeader('Local', _selectedLocalFilters, _locais.map((l) => l.local).toSet().toList()..sort()),
-            ),
-            DataColumn(
-              label: _buildSortableHeader('Descrição', _descricaoFilterController),
-            ),
-            DataColumn(
-              label: _buildSortableHeader('Local Instalação SAP', _sapFilterController),
-            ),
-            DataColumn(
-              label: _buildSelectableHeader('Regional', _selectedRegionalFilters, _locais.map((l) => l.regional).where((s) => s.isNotEmpty).toSet().toList()..sort()),
-            ),
-            DataColumn(
-              label: _buildSelectableHeader('Divisão', _selectedDivisaoFilters, _locais.map((l) => l.divisao).where((s) => s.isNotEmpty).toSet().toList()..sort()),
-            ),
-            DataColumn(
-              label: _buildSelectableHeader('Segmento', _selectedSegmentoFilters, _locais.map((l) => l.segmento).where((s) => s.isNotEmpty).toSet().toList()..sort()),
-            ),
-            const DataColumn(label: Text('Ações', style: TextStyle(fontWeight: FontWeight.bold))),
-          ],
-          rows: _filteredLocais.map((local) {
-            return DataRow(
-              cells: [
-                DataCell(
-                  Text(
-                    local.local,
-                    style: const TextStyle(fontWeight: FontWeight.w500),
-                  ),
-                ),
-                DataCell(
-                  Text(
-                    local.descricao != null && local.descricao!.isNotEmpty
-                        ? local.descricao!
-                        : '-',
-                  ),
-                ),
-                DataCell(
-                  Text(
-                    local.localInstalacaoSap != null && local.localInstalacaoSap!.isNotEmpty
-                        ? local.localInstalacaoSap!
-                        : '-',
-                  ),
-                ),
-                DataCell(Text(local.regional.isNotEmpty ? local.regional : '-')),
-                DataCell(Text(local.divisao.isNotEmpty ? local.divisao : '-')),
-                DataCell(Text(local.segmento.isNotEmpty ? local.segmento : '-')),
-                DataCell(
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.edit, size: 20, color: Colors.blue),
-                        onPressed: () => _editLocal(local),
-                        tooltip: 'Editar',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.copy, size: 20, color: Colors.orange),
-                        onPressed: () => _duplicateLocal(local),
-                        tooltip: 'Duplicar',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.delete, size: 20, color: Colors.red),
-                        onPressed: () => _deleteLocal(local),
-                        tooltip: 'Excluir',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            );
-          }).toList(),
         ),
       ),
     );
   }
 
-  Widget _buildSortableHeader(String label, TextEditingController controller) {
-    return Container(
-      width: 150,
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Text(label, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-          const SizedBox(height: 4),
-          SizedBox(
-            height: 30,
-            child: TextField(
-              controller: controller,
-              style: const TextStyle(fontSize: 12),
-              decoration: InputDecoration(
-                hintText: 'Filtrar...',
-                hintStyle: TextStyle(color: Colors.grey[400], fontSize: 11),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                filled: true,
-                fillColor: Colors.white,
-              ),
+  Widget _buildDesktopTable() {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
+    return TFDataTable<Local>(
+      items: _filteredLocais,
+      zebra: true,
+      columns: [
+        TFDataColumn<Local>.text(
+          id: 'local',
+          title: 'Local',
+          cellBuilder: (context, local) => Text(
+            local.local,
+            style: typography.bodyMedium.copyWith(
+              color: colors.textPrimary,
+              fontWeight: FontWeight.w600,
             ),
           ),
-        ],
-      ),
+        ),
+        TFDataColumn<Local>.text(
+          id: 'descricao',
+          title: 'Descrição',
+          cellBuilder: (context, local) => Text(
+            local.descricao != null && local.descricao!.isNotEmpty
+                ? local.descricao!
+                : '-',
+            style: typography.bodySmall.copyWith(color: colors.textSecondary),
+          ),
+        ),
+        TFDataColumn<Local>.text(
+          id: 'sap',
+          title: 'Instalação SAP',
+          width: 140,
+          cellBuilder: (context, local) => Text(
+            local.localInstalacaoSap != null && local.localInstalacaoSap!.isNotEmpty
+                ? local.localInstalacaoSap!
+                : '-',
+            style: typography.bodySmall.copyWith(
+              color: colors.textSecondary,
+              fontFamily: 'monospace',
+            ),
+          ),
+        ),
+        TFDataColumn<Local>(
+          id: 'associacoes',
+          label: const Text('Associações'),
+          cellBuilder: (context, local) => Text(
+            local.associacoesDescricao,
+            style: typography.bodySmall.copyWith(
+              color: colors.textSecondary,
+              fontStyle: FontStyle.italic,
+            ),
+          ),
+        ),
+        TFDataColumn<Local>(
+          id: 'acoes',
+          label: const Text('Ações'),
+          width: 160,
+          alignment: Alignment.centerRight,
+          cellBuilder: (context, local) => Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TFIconButton(
+                icon: TFIcons.edit,
+                tooltip: 'Editar local',
+                variant: TFIconButtonVariant.standard,
+                onPressed: () => _editLocal(local),
+              ),
+              TFIconButton(
+                icon: Icons.copy_rounded,
+                tooltip: 'Duplicar local',
+                variant: TFIconButtonVariant.subtle,
+                onPressed: () => _duplicateLocal(local),
+              ),
+              TFIconButton(
+                icon: TFIcons.delete,
+                tooltip: 'Excluir local',
+                variant: TFIconButtonVariant.danger,
+                onPressed: () => _deleteLocal(local),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
-  Widget _buildSelectableHeader(String label, Set<String> selectedValues, List<String> options) {
-    final hasFilter = selectedValues.isNotEmpty;
-    
-    return Container(
-      width: 150,
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Text(label, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-          const SizedBox(height: 4),
-          InkWell(
-            onTap: () async {
-              final result = await showDialog<Set<String>>(
-                context: context,
-                builder: (context) => MultiSelectFilterDialog(
-                  title: 'Filtrar $label',
-                  options: options,
-                  selectedValues: selectedValues,
-                  onSelectionChanged: (values) {},
-                  searchHint: 'Pesquisar $label...',
-                ),
-              );
-              if (result != null) {
-                setState(() {
-                  selectedValues.clear();
-                  selectedValues.addAll(result);
-                  _applyFilters();
-                });
-              }
-            },
-            child: Container(
-              height: 30,
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              decoration: BoxDecoration(
-                color: hasFilter ? Colors.blue[50] : Colors.white,
-                border: Border.all(
-                  color: hasFilter ? Colors.blue : Colors.grey[300]!,
-                ),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Row(
+  Widget _buildMobileList() {
+    final spacing = context.tfSpacing;
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
+    return ListView.separated(
+      itemCount: _filteredLocais.length,
+      separatorBuilder: (_, __) => SizedBox(height: spacing.sm),
+      itemBuilder: (context, index) {
+        final local = _filteredLocais[index];
+        return TFCard(
+          variant: TFCardVariant.defaultCard,
+          padding: EdgeInsets.symmetric(horizontal: spacing.base, vertical: spacing.sm),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Expanded(
                     child: Text(
-                      hasFilter ? '${selectedValues.length} selecionados' : 'Todos',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: hasFilter ? Colors.blue[700] : Colors.grey[600],
-                      ),
-                      overflow: TextOverflow.ellipsis,
+                      local.local,
+                      style: typography.cardTitle.copyWith(color: colors.textPrimary),
                     ),
                   ),
-                  Icon(
-                    Icons.filter_list,
-                    size: 14,
-                    color: hasFilter ? Colors.blue : Colors.grey[400],
+                  if (local.localInstalacaoSap != null && local.localInstalacaoSap!.isNotEmpty)
+                    TFStatusBadge(
+                      label: local.localInstalacaoSap!,
+                      severity: TFStatusSeverity.info,
+                      compact: true,
+                    ),
+                ],
+              ),
+              if (local.descricao != null && local.descricao!.isNotEmpty) ...[
+                SizedBox(height: spacing.xs),
+                Text(
+                  local.descricao!,
+                  style: typography.bodySmall.copyWith(color: colors.textSecondary),
+                ),
+              ],
+              SizedBox(height: spacing.xs),
+              Text(
+                local.associacoesDescricao,
+                style: typography.bodySmall.copyWith(
+                  color: colors.textMuted,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+              SizedBox(height: spacing.sm),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TFButton(
+                    label: 'Editar',
+                    leadingIcon: TFIcons.edit,
+                    variant: TFButtonVariant.secondary,
+                    onPressed: () => _editLocal(local),
+                  ),
+                  SizedBox(width: spacing.xs),
+                  TFIconButton(
+                    icon: Icons.copy_rounded,
+                    tooltip: 'Duplicar',
+                    variant: TFIconButtonVariant.subtle,
+                    onPressed: () => _duplicateLocal(local),
+                  ),
+                  TFIconButton(
+                    icon: TFIcons.delete,
+                    tooltip: 'Excluir',
+                    variant: TFIconButtonVariant.danger,
+                    onPressed: () => _deleteLocal(local),
                   ),
                 ],
               ),
-            ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
-
-
-
-
-
-
-

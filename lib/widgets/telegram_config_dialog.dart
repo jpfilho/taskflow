@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import '../services/telegram_service.dart';
+import '../design_system/taskflow_design_system.dart';
+import '../utils/clipboard_helper.dart';
 
 class TelegramConfigDialog extends StatefulWidget {
   final String grupoId;
@@ -18,12 +19,12 @@ class TelegramConfigDialog extends StatefulWidget {
 
 class _TelegramConfigDialogState extends State<TelegramConfigDialog> {
   final TelegramService _telegramService = TelegramService();
-  
+
   bool _isLoading = true;
   bool _isLinked = false;
   TelegramIdentity? _identity;
   List<TelegramSubscription> _subscriptions = [];
-  
+
   // Form fields
   final _chatIdController = TextEditingController();
   final _topicIdController = TextEditingController();
@@ -54,90 +55,89 @@ class _TelegramConfigDialogState extends State<TelegramConfigDialog> {
         subscriptions = await _telegramService.getSubscriptions('TASK', widget.grupoId);
       }
 
-      setState(() {
-        _isLinked = isLinked;
-        _identity = identity;
-        _subscriptions = subscriptions;
-        _isLoading = false;
-      });
-    } catch (e) {
-      print('Erro ao carregar dados Telegram: $e');
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() {
+          _isLinked = isLinked;
+          _identity = identity;
+          _subscriptions = subscriptions;
+          _isLoading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
   Future<void> _vincularConta() async {
     final linkUrl = _telegramService.generateLinkUrl();
-    
+
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Vincular Telegram'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Para vincular sua conta Telegram ao TaskFlow:\n\n'
-              '1. Abra o link abaixo no Telegram\n'
-              '2. Inicie o bot\n'
-              '3. Siga as instruções',
-              style: TextStyle(fontSize: 14),
-            ),
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.grey[100],
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.grey[300]!),
+      builder: (context) {
+        final colors = context.tfColors;
+        final typography = context.tfTypography;
+
+        return TFModalDialog(
+          title: 'Vincular Telegram',
+          subtitle: 'Conecte sua conta do Telegram ao TaskFlow',
+          icon: Icons.telegram,
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Para vincular sua conta Telegram ao TaskFlow:\n\n'
+                '1. Abra o link abaixo no Telegram\n'
+                '2. Inicie o bot oficial\n'
+                '3. Siga as instruções na conversa',
+                style: typography.bodyMedium.copyWith(color: colors.textSecondary),
               ),
-              child: SelectableText(
-                linkUrl,
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontFamily: 'monospace',
+              const SizedBox(height: 16),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: colors.surfaceSecondary,
+                  borderRadius: BorderRadius.circular(TFRadius.r12),
+                  border: Border.all(color: colors.borderSubtle),
+                ),
+                child: SelectableText(
+                  linkUrl,
+                  style: typography.caption.copyWith(
+                    fontFamily: 'monospace',
+                    color: colors.textPrimary,
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(height: 12),
-            ElevatedButton.icon(
-              onPressed: () async {
-                try {
-                  await Clipboard.setData(ClipboardData(text: linkUrl));
-                  if (!context.mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Link copiado!')),
-                  );
-                } catch (e) {
-                  if (!context.mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Não foi possível copiar: $e'), backgroundColor: Colors.red),
-                  );
-                }
-              },
-              icon: const Icon(Icons.copy),
-              label: const Text('Copiar Link'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF075E54),
-                foregroundColor: Colors.white,
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Fechar'),
+            ],
           ),
-        ],
-      ),
+          primaryAction: TFButton(
+            label: 'Copiar Link',
+            leadingIcon: Icons.copy,
+            onPressed: () async {
+              await ClipboardHelper.copyAndNotify(
+                context,
+                linkUrl,
+                successMessage: 'Link copiado!',
+                errorMessage: 'Não foi possível copiar o link.',
+              );
+            },
+          ),
+          secondaryAction: TFButton(
+            label: 'Fechar',
+            variant: TFButtonVariant.secondary,
+            onPressed: () => Navigator.pop(context),
+          ),
+        );
+      },
     );
   }
 
   Future<void> _criarSubscription() async {
     final chatId = int.tryParse(_chatIdController.text.trim());
-    
+
     if (chatId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -169,8 +169,8 @@ class _TelegramConfigDialogState extends State<TelegramConfigDialog> {
             backgroundColor: Colors.green,
           ),
         );
-        Navigator.pop(context); // Fechar dialog de criação
-        _loadData(); // Recarregar dados
+        Navigator.pop(context);
+        _loadData();
       }
     } catch (e) {
       if (mounted) {
@@ -187,20 +187,19 @@ class _TelegramConfigDialogState extends State<TelegramConfigDialog> {
   Future<void> _removerSubscription(String subscriptionId) async {
     final confirmar = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Remover espelhamento'),
+      builder: (context) => TFModalDialog(
+        title: 'Remover espelhamento',
         content: const Text('Tem certeza que deseja desativar o espelhamento para o Telegram?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Remover'),
-          ),
-        ],
+        primaryAction: TFButton(
+          label: 'Remover',
+          variant: TFButtonVariant.danger,
+          onPressed: () => Navigator.pop(context, true),
+        ),
+        secondaryAction: TFButton(
+          label: 'Cancelar',
+          variant: TFButtonVariant.secondary,
+          onPressed: () => Navigator.pop(context, false),
+        ),
       ),
     );
 
@@ -232,224 +231,183 @@ class _TelegramConfigDialogState extends State<TelegramConfigDialog> {
   void _mostrarFormCriarSubscription() {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Ativar espelhamento Telegram'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Configure o espelhamento das mensagens para o Telegram:',
-                style: TextStyle(fontSize: 14),
-              ),
-              const SizedBox(height: 16),
-              
-              // Modo
-              const Text('Modo:', style: TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 8),
-              DropdownButtonFormField<String>(
-                initialValue: _selectedMode,
-                decoration: const InputDecoration(
-                  border: OutlineInputBorder(),
-                  isDense: true,
+      builder: (context) {
+        return TFModalDialog(
+          title: 'Ativar espelhamento Telegram',
+          subtitle: 'Configure a integração de mensagens com o canal/grupo',
+          content: StatefulBuilder(
+            builder: (context, setDialogState) {
+              return SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    TFDropdown<String>(
+                      label: 'Modo de Espelhamento',
+                      value: _selectedMode,
+                      items: const ['group_topic', 'group_plain', 'dm'],
+                      displayText: _getModeLabel,
+                      onChanged: (value) {
+                        setDialogState(() {
+                          _selectedMode = value ?? 'group_topic';
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    TFTextField(
+                      label: 'Chat ID do Telegram',
+                      controller: _chatIdController,
+                      hint: 'Ex: -1001234567890',
+                      keyboardType: TextInputType.number,
+                      helperText: 'Para obter o Chat ID, adicione @userinfobot ao grupo',
+                    ),
+                    if (_selectedMode == 'group_topic') ...[
+                      const SizedBox(height: 16),
+                      TFTextField(
+                        label: 'Topic ID (opcional)',
+                        controller: _topicIdController,
+                        hint: 'Ex: 123',
+                        keyboardType: TextInputType.number,
+                      ),
+                    ],
+                  ],
                 ),
-                items: const [
-                  DropdownMenuItem(
-                    value: 'group_topic',
-                    child: Text('Grupo com tópicos'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'group_plain',
-                    child: Text('Grupo simples'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'dm',
-                    child: Text('Mensagem direta (DM)'),
-                  ),
-                ],
-                onChanged: (value) {
-                  setState(() {
-                    _selectedMode = value ?? 'group_topic';
-                  });
-                },
-              ),
-              const SizedBox(height: 16),
-              
-              // Chat ID
-              const Text('Chat ID do Telegram:', style: TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _chatIdController,
-                decoration: const InputDecoration(
-                  hintText: 'Ex: -1001234567890',
-                  border: OutlineInputBorder(),
-                  isDense: true,
-                ),
-                keyboardType: TextInputType.number,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Para obter o Chat ID, adicione @userinfobot ao grupo',
-                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-              ),
-              
-              // Topic ID (se mode = group_topic)
-              if (_selectedMode == 'group_topic') ...[
-                const SizedBox(height: 16),
-                const Text('Topic ID (opcional):', style: TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _topicIdController,
-                  decoration: const InputDecoration(
-                    hintText: 'Ex: 123',
-                    border: OutlineInputBorder(),
-                    isDense: true,
-                  ),
-                  keyboardType: TextInputType.number,
-                ),
-              ],
-            ],
+              );
+            },
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancelar'),
-          ),
-          ElevatedButton(
+          primaryAction: TFButton(
+            label: 'Ativar',
+            variant: TFButtonVariant.primary,
             onPressed: _criarSubscription,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF075E54),
-              foregroundColor: Colors.white,
-            ),
-            child: const Text('Ativar'),
           ),
-        ],
-      ),
+          secondaryAction: TFButton(
+            label: 'Cancelar',
+            variant: TFButtonVariant.secondary,
+            onPressed: () => Navigator.pop(context),
+          ),
+        );
+      },
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
     return Dialog(
+      backgroundColor: colors.surface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(TFRadius.r16)),
       child: Container(
-        constraints: const BoxConstraints(maxWidth: 500, maxHeight: 600),
-        padding: const EdgeInsets.all(20),
+        constraints: const BoxConstraints(maxWidth: 540, maxHeight: 620),
+        padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                const Icon(Icons.telegram, color: Color(0xFF0088CC), size: 32),
+                Icon(Icons.telegram, color: colors.info, size: 32),
                 const SizedBox(width: 12),
-                const Expanded(
+                Expanded(
                   child: Text(
-                    'Telegram',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                    'Configuração Telegram',
+                    style: typography.pageTitle.copyWith(color: colors.textPrimary),
                   ),
                 ),
-                IconButton(
-                  icon: const Icon(Icons.close),
+                TFIconButton(
+                  icon: Icons.close,
+                  tooltip: 'Fechar',
                   onPressed: () => Navigator.pop(context),
                 ),
               ],
             ),
-            const Divider(height: 24),
-            
+            Divider(height: 32, color: colors.borderSubtle),
             if (_isLoading)
-              const Center(child: CircularProgressIndicator())
+              const Center(child: TFLoading(message: 'Carregando dados do Telegram...'))
             else ...[
               // Status da vinculação
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: _isLinked ? Colors.green[50] : Colors.orange[50],
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: _isLinked ? Colors.green[200]! : Colors.orange[200]!,
+              TFCard(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      Icon(
+                        _isLinked ? Icons.check_circle : Icons.warning_amber_rounded,
+                        color: _isLinked ? colors.success : colors.warning,
+                        size: 28,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _isLinked ? 'Conta vinculada' : 'Conta não vinculada',
+                              style: typography.cardTitle.copyWith(
+                                color: colors.textPrimary,
+                              ),
+                            ),
+                            if (_isLinked && _identity != null) ...[
+                              const SizedBox(height: 2),
+                              Text(
+                                '@${_identity!.telegramUsername ?? _identity!.telegramFirstName}',
+                                style: typography.caption.copyWith(color: colors.textSecondary),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      if (!_isLinked)
+                        TFButton(
+                          label: 'Vincular',
+                          size: TFButtonSize.small,
+                          onPressed: _vincularConta,
+                        ),
+                    ],
                   ),
                 ),
-                child: Row(
-                  children: [
-                    Icon(
-                      _isLinked ? Icons.check_circle : Icons.warning,
-                      color: _isLinked ? Colors.green : Colors.orange,
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            _isLinked ? 'Conta vinculada' : 'Conta não vinculada',
-                            style: const TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          if (_isLinked && _identity != null)
-                            Text(
-                              '@${_identity!.telegramUsername ?? _identity!.telegramFirstName}',
-                              style: TextStyle(fontSize: 12, color: Colors.grey[700]),
-                            ),
-                        ],
-                      ),
-                    ),
-                    if (!_isLinked)
-                      ElevatedButton(
-                        onPressed: _vincularConta,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF0088CC),
-                          foregroundColor: Colors.white,
-                        ),
-                        child: const Text('Vincular'),
-                      ),
-                  ],
-                ),
               ),
-              
               const SizedBox(height: 24),
-              
               // Subscriptions
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text(
-                    'Espelhamento ativo:',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  Text(
+                    'Espelhamentos Ativos',
+                    style: typography.sectionTitle.copyWith(
+                      color: colors.textPrimary,
+                    ),
                   ),
                   if (_isLinked)
-                    IconButton(
-                      icon: const Icon(Icons.add_circle, color: Color(0xFF075E54)),
+                    TFButton(
+                      label: 'Novo',
+                      leadingIcon: Icons.add,
+                      size: TFButtonSize.small,
+                      variant: TFButtonVariant.secondary,
                       onPressed: _mostrarFormCriarSubscription,
-                      tooltip: 'Adicionar espelhamento',
                     ),
                 ],
               ),
               const SizedBox(height: 12),
-              
               Expanded(
                 child: _subscriptions.isEmpty
                     ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.sync_disabled, size: 48, color: Colors.grey[400]),
-                            const SizedBox(height: 12),
-                            Text(
-                              _isLinked
-                                  ? 'Nenhum espelhamento ativo'
-                                  : 'Vincule sua conta para ativar',
-                              style: TextStyle(color: Colors.grey[600]),
-                            ),
-                          ],
+                        child: TFEmptyState(
+                          icon: Icons.sync_disabled,
+                          title: _isLinked ? 'Nenhum espelhamento ativo' : 'Vincule sua conta',
+                          description: _isLinked
+                              ? 'Adicione um grupo ou tópico para receber notificações.'
+                              : 'Vincule sua conta Telegram para gerenciar espelhamentos.',
                         ),
                       )
-                    : ListView.builder(
+                    : ListView.separated(
                         shrinkWrap: true,
                         itemCount: _subscriptions.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 8),
                         itemBuilder: (context, index) {
                           final sub = _subscriptions[index];
-                          return Card(
+                          return TFCard(
                             child: ListTile(
                               leading: Icon(
                                 sub.mode == 'dm'
@@ -457,15 +415,19 @@ class _TelegramConfigDialogState extends State<TelegramConfigDialog> {
                                     : sub.mode == 'group_topic'
                                         ? Icons.forum
                                         : Icons.group,
-                                color: const Color(0xFF0088CC),
+                                color: colors.info,
                               ),
-                              title: Text(_getModeLabel(sub.mode)),
+                              title: Text(
+                                _getModeLabel(sub.mode),
+                                style: typography.labelLarge.copyWith(color: colors.textPrimary),
+                              ),
                               subtitle: Text(
                                 'Chat: ${sub.telegramChatId}${sub.telegramTopicId != null ? ' • Tópico: ${sub.telegramTopicId}' : ''}',
-                                style: const TextStyle(fontSize: 12),
+                                style: typography.caption.copyWith(color: colors.textSecondary),
                               ),
-                              trailing: IconButton(
-                                icon: const Icon(Icons.delete, color: Colors.red),
+                              trailing: TFIconButton(
+                                icon: Icons.delete_outline,
+                                tooltip: 'Remover espelhamento',
                                 onPressed: () => _removerSubscription(sub.id),
                               ),
                             ),

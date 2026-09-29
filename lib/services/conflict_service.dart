@@ -29,6 +29,25 @@ class ConflictService {
   DateTime? _lastFleetAvailabilityCheck;
   static const _availabilityTtl = Duration(minutes: 5);
 
+  // Cache de resultados de consultas de conflito
+  final Map<String, Map<String, ConflictInfo>> _conflictRangeCache = {};
+  final Map<String, Map<String, List<ExecutionEventFromBackend>>> _executionEventsCache = {};
+  final Map<String, Map<String, ConflictInfo>> _fleetConflictRangeCache = {};
+  final Map<String, Map<String, List<FleetExecutionEventFromBackend>>> _fleetExecutionEventsCache = {};
+  DateTime? _lastDataCacheTime;
+  static const _dataCacheTtl = Duration(minutes: 5);
+
+  void invalidateCache() {
+    _conflictRangeCache.clear();
+    _executionEventsCache.clear();
+    _fleetConflictRangeCache.clear();
+    _fleetExecutionEventsCache.clear();
+    _lastDataCacheTime = null;
+    _isBackendAvailableCache = null;
+    _lastAvailabilityCheck = null;
+    _isFleetBackendAvailableCache = null;
+    _lastFleetAvailabilityCheck = null;
+  }
 
   /// Normaliza chave do executor para comparação (id ou nome).
   static String normalizeExecutorKey(String s) {
@@ -49,12 +68,19 @@ class ConflictService {
     DateTime endDate, {
     List<String>? executorIds,
   }) async {
+    final start = '${startDate.year}-${startDate.month.toString().padLeft(2, '0')}-${startDate.day.toString().padLeft(2, '0')}';
+    final end = '${endDate.year}-${endDate.month.toString().padLeft(2, '0')}-${endDate.day.toString().padLeft(2, '0')}';
+    final cacheKey = '$start--$end--${executorIds?.join(",") ?? "all"}';
+
+    if (_lastDataCacheTime != null &&
+        DateTime.now().difference(_lastDataCacheTime!) < _dataCacheTtl &&
+        _conflictRangeCache.containsKey(cacheKey)) {
+      return Map<String, ConflictInfo>.from(_conflictRangeCache[cacheKey]!);
+    }
+
     PerformanceMonitor.start('ConflictService.getConflictsForRange');
     final result = <String, ConflictInfo>{};
     try {
-      final start = '${startDate.year}-${startDate.month.toString().padLeft(2, '0')}-${startDate.day.toString().padLeft(2, '0')}';
-      final end = '${endDate.year}-${endDate.month.toString().padLeft(2, '0')}-${endDate.day.toString().padLeft(2, '0')}';
-
       List rawRows = [];
       if (executorIds != null && executorIds.length > 100) {
         final chunks = <List<String>>[];
@@ -106,6 +132,8 @@ class ConflictService {
         final dayKey = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
         result['${executorId.toLowerCase()}_$dayKey'] = ConflictInfo(hasConflict: hasConflict, descriptions: []);
       }
+      _conflictRangeCache[cacheKey] = Map.from(result);
+      _lastDataCacheTime = DateTime.now();
       PerformanceMonitor.stop('ConflictService.getConflictsForRange');
     } catch (e) {
       print('⚠️ [getConflictsForRange] Erro: $e');
@@ -121,12 +149,19 @@ class ConflictService {
     DateTime endDate, {
     List<String>? executorIds,
   }) async {
+    final start = '${startDate.year}-${startDate.month.toString().padLeft(2, '0')}-${startDate.day.toString().padLeft(2, '0')}';
+    final end = '${endDate.year}-${endDate.month.toString().padLeft(2, '0')}-${endDate.day.toString().padLeft(2, '0')}';
+    final cacheKey = '$start--$end--${executorIds?.join(",") ?? "all"}';
+
+    if (_lastDataCacheTime != null &&
+        DateTime.now().difference(_lastDataCacheTime!) < _dataCacheTtl &&
+        _executionEventsCache.containsKey(cacheKey)) {
+      return Map<String, List<ExecutionEventFromBackend>>.from(_executionEventsCache[cacheKey]!);
+    }
+
     PerformanceMonitor.start('ConflictService.getExecutionEventsForRange');
     final result = <String, List<ExecutionEventFromBackend>>{};
     try {
-      final start = '${startDate.year}-${startDate.month.toString().padLeft(2, '0')}-${startDate.day.toString().padLeft(2, '0')}';
-      final end = '${endDate.year}-${endDate.month.toString().padLeft(2, '0')}-${endDate.day.toString().padLeft(2, '0')}';
-      
       List rawRows = [];
       if (executorIds != null && executorIds.length > 100) {
         final chunks = <List<String>>[];
@@ -144,7 +179,7 @@ class ConflictService {
           return await query;
         }).toList();
 
-        final responses = await Future.wait(futures);
+        final responses = await Future.wait(futures).timeout(const Duration(seconds: 4), onTimeout: () => []);
         rawRows = responses.expand((r) => r as List).toList();
       } else {
         var query = _supabase
@@ -157,7 +192,7 @@ class ConflictService {
           query = query.inFilter('executor_id', executorIds);
         }
         
-        final res = await query;
+        final res = await query.timeout(const Duration(seconds: 4), onTimeout: () => []);
         rawRows = res as List;
       }
 
@@ -183,6 +218,8 @@ class ConflictService {
         final dayKey = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
         result.putIfAbsent(dayKey, () => []).add(event);
       }
+      _executionEventsCache[cacheKey] = Map.from(result);
+      _lastDataCacheTime = DateTime.now();
       PerformanceMonitor.stop('ConflictService.getExecutionEventsForRange');
     } catch (e) {
       PerformanceMonitor.stop('ConflictService.getExecutionEventsForRange');
@@ -234,11 +271,19 @@ class ConflictService {
     DateTime endDate, {
     List<String>? frotaIds,
   }) async {
+    final start = '${startDate.year}-${startDate.month.toString().padLeft(2, '0')}-${startDate.day.toString().padLeft(2, '0')}';
+    final end = '${endDate.year}-${endDate.month.toString().padLeft(2, '0')}-${endDate.day.toString().padLeft(2, '0')}';
+    final cacheKey = '$start--$end--${frotaIds?.join(",") ?? "all"}';
+
+    if (_lastDataCacheTime != null &&
+        DateTime.now().difference(_lastDataCacheTime!) < _dataCacheTtl &&
+        _fleetConflictRangeCache.containsKey(cacheKey)) {
+      return Map<String, ConflictInfo>.from(_fleetConflictRangeCache[cacheKey]!);
+    }
+
     PerformanceMonitor.start('ConflictService.getFleetConflictsForRange');
     final result = <String, ConflictInfo>{};
     try {
-      final start = '${startDate.year}-${startDate.month.toString().padLeft(2, '0')}-${startDate.day.toString().padLeft(2, '0')}';
-      final end = '${endDate.year}-${endDate.month.toString().padLeft(2, '0')}-${endDate.day.toString().padLeft(2, '0')}';
       var query = _supabase
           .from('v_conflict_por_dia_frota')
           .select('frota_id, day, has_conflict')
@@ -270,6 +315,8 @@ class ConflictService {
         final dayKey = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
         result['${frotaId}_$dayKey'] = ConflictInfo(hasConflict: hasConflict, descriptions: []);
       }
+      _fleetConflictRangeCache[cacheKey] = Map.from(result);
+      _lastDataCacheTime = DateTime.now();
       PerformanceMonitor.stop('ConflictService.getFleetConflictsForRange');
     } catch (e) {
       PerformanceMonitor.stop('ConflictService.getFleetConflictsForRange');
@@ -284,10 +331,18 @@ class ConflictService {
     DateTime endDate, {
     List<String>? frotaIds,
   }) async {
+    final start = '${startDate.year}-${startDate.month.toString().padLeft(2, '0')}-${startDate.day.toString().padLeft(2, '0')}';
+    final end = '${endDate.year}-${endDate.month.toString().padLeft(2, '0')}-${endDate.day.toString().padLeft(2, '0')}';
+    final cacheKey = '$start--$end--${frotaIds?.join(",") ?? "all"}';
+
+    if (_lastDataCacheTime != null &&
+        DateTime.now().difference(_lastDataCacheTime!) < _dataCacheTtl &&
+        _fleetExecutionEventsCache.containsKey(cacheKey)) {
+      return Map<String, List<FleetExecutionEventFromBackend>>.from(_fleetExecutionEventsCache[cacheKey]!);
+    }
+
     final result = <String, List<FleetExecutionEventFromBackend>>{};
     try {
-      final start = '${startDate.year}-${startDate.month.toString().padLeft(2, '0')}-${startDate.day.toString().padLeft(2, '0')}';
-      final end = '${endDate.year}-${endDate.month.toString().padLeft(2, '0')}-${endDate.day.toString().padLeft(2, '0')}';
       var query = _supabase
           .from('v_conflict_execution_events_frota')
           .select('frota_id, frota_nome, day, location_key, task_id, description')
@@ -321,6 +376,8 @@ class ConflictService {
         final dayKey = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
         result.putIfAbsent(dayKey, () => []).add(event);
       }
+      _fleetExecutionEventsCache[cacheKey] = Map.from(result);
+      _lastDataCacheTime = DateTime.now();
     } catch (_) {}
     return result;
   }

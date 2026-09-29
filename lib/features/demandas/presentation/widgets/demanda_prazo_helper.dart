@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../../design_system/components/status/tf_status_badge.dart';
 
 enum SituacaoPrazo {
   atrasada,
@@ -44,6 +45,20 @@ class DemandaPrazoHelper {
         return Colors.green;
       case SituacaoPrazo.concluidaOuCancelada:
         return Colors.grey;
+    }
+  }
+
+  static TFStatusSeverity obterSeverity(SituacaoPrazo situacao) {
+    switch (situacao) {
+      case SituacaoPrazo.atrasada:
+        return TFStatusSeverity.danger;
+      case SituacaoPrazo.venceHoje:
+      case SituacaoPrazo.venceEmAte7Dias:
+        return TFStatusSeverity.warning;
+      case SituacaoPrazo.noPrazo:
+        return TFStatusSeverity.success;
+      case SituacaoPrazo.concluidaOuCancelada:
+        return TFStatusSeverity.neutral;
     }
   }
 

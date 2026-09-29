@@ -6,12 +6,18 @@ class TaskSelectionDialog extends StatefulWidget {
   final List<Task> tasks;
   final String title;
   final String? notaSapNumero; // Número da nota SAP para contexto
+  final String? siSolicitacao; // Número da solicitação da SI para contexto
+  final String? localPadrao; // Local pré-definido para filtro
+  final List<String>? locaisPadrao; // Lista de locais pré-definidos para filtro
 
   const TaskSelectionDialog({
     super.key,
     required this.tasks,
     this.title = 'Selecionar Tarefa',
     this.notaSapNumero,
+    this.siSolicitacao,
+    this.localPadrao,
+    this.locaisPadrao,
   });
 
   @override
@@ -31,11 +37,61 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
   int _currentPage = 0;
   final ScrollController _scrollController = ScrollController();
 
+  int? _sortColumnIndex = 7; // Coluna INÍCIO
+  bool _sortAscending = false; // Decrescente por padrão: das mais recentes para as passadas
+
   @override
   void initState() {
     super.initState();
-    _filteredTasks = widget.tasks;
-    _loadMoreItems();
+    // Pré-filtrar locais se fornecido
+    final locaisAlvo = <String>{};
+    if (widget.locaisPadrao != null && widget.locaisPadrao!.isNotEmpty) {
+      for (final l in widget.locaisPadrao!) {
+        if (l.trim().isNotEmpty) locaisAlvo.add(l.trim());
+      }
+    } else if (widget.localPadrao != null && widget.localPadrao!.trim().isNotEmpty) {
+      for (final part in widget.localPadrao!.split(',')) {
+        final p = part.trim();
+        if (p.isNotEmpty) locaisAlvo.add(p);
+      }
+    }
+
+    if (locaisAlvo.isNotEmpty) {
+      final uniqueLocais = _getUniqueLocais();
+      for (final alvo in locaisAlvo) {
+        final alvoLower = alvo.toLowerCase();
+        // 1. Match exato ou substring direta
+        final matches = uniqueLocais.where((ul) {
+          final ulLower = ul.toLowerCase();
+          return ulLower == alvoLower || ulLower.contains(alvoLower) || alvoLower.contains(ulLower);
+        }).toList();
+
+        if (matches.isNotEmpty) {
+          _filterLocal.addAll(matches);
+        } else {
+          // 2. Se o alvo for um código técnico SAP (ex: H-S-STSD-RB5T01...), verificar se algum local existente nas tarefas
+          // é substring ou tem prefixo 'S' (ex: STSD x TSD)
+          final partialMatches = uniqueLocais.where((ul) {
+            final ulLower = ul.toLowerCase();
+            if (ulLower.length >= 2 && alvoLower.contains(ulLower)) {
+              return true;
+            }
+            if (ulLower.length >= 2 && alvoLower.contains('s$ulLower')) {
+              return true;
+            }
+            return false;
+          }).toList();
+
+          if (partialMatches.isNotEmpty) {
+            _filterLocal.addAll(partialMatches);
+          } else {
+            _filterLocal.add(alvo);
+          }
+        }
+      }
+    }
+
+    _applyFiltersWithoutSetState();
     _scrollController.addListener(_onScroll);
     // No desktop, tabela é o padrão
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -44,6 +100,64 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
           _viewMode = 'table';
         });
       }
+    });
+  }
+
+  void _sortTasks() {
+    _filteredTasks.sort((a, b) {
+      int cmp = 0;
+      switch (_sortColumnIndex) {
+        case 1: // STATUS
+          cmp = a.status.compareTo(b.status);
+          break;
+        case 2: // LOCAL
+          final locA = a.locais.join(', ');
+          final locB = b.locais.join(', ');
+          cmp = locA.compareTo(locB);
+          break;
+        case 3: // TAREFA
+          cmp = a.tarefa.toLowerCase().compareTo(b.tarefa.toLowerCase());
+          break;
+        case 4: // REGIONAL
+          cmp = a.regional.compareTo(b.regional);
+          break;
+        case 5: // DIVISÃO
+          cmp = a.divisao.compareTo(b.divisao);
+          break;
+        case 6: // TIPO
+          cmp = a.tipo.compareTo(b.tipo);
+          break;
+        case 7: // INÍCIO
+          cmp = a.dataInicio.compareTo(b.dataInicio);
+          break;
+        case 8: // FIM
+          cmp = a.dataFim.compareTo(b.dataFim);
+          break;
+        case 9: // EXECUTORES
+          final exA = a.executores.join(', ');
+          final exB = b.executores.join(', ');
+          cmp = exA.compareTo(exB);
+          break;
+        default:
+          cmp = a.dataInicio.compareTo(b.dataInicio);
+          break;
+      }
+      if (cmp == 0) {
+        // Desempate padrão por data de início decrescente (mais recente primeiro)
+        cmp = b.dataInicio.compareTo(a.dataInicio);
+      }
+      return _sortAscending ? cmp : -cmp;
+    });
+  }
+
+  void _onSort(int columnIndex, bool ascending) {
+    setState(() {
+      _sortColumnIndex = columnIndex;
+      _sortAscending = ascending;
+      _sortTasks();
+      _currentPage = 0;
+      _displayedTasks = [];
+      _loadMoreItems();
     });
   }
 
@@ -59,56 +173,65 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
     }
   }
 
-  void _loadMoreItems() {
+  void _loadMoreItemsWithoutSetState() {
     final startIndex = _currentPage * _itemsPerPage;
     final endIndex = (startIndex + _itemsPerPage).clamp(0, _filteredTasks.length);
     
     if (startIndex < _filteredTasks.length) {
-      setState(() {
-        _displayedTasks = _filteredTasks.sublist(0, endIndex);
-        _currentPage++;
-      });
+      _displayedTasks = _filteredTasks.sublist(0, endIndex);
+      _currentPage++;
     }
+  }
+
+  void _loadMoreItems() {
+    setState(() {
+      _loadMoreItemsWithoutSetState();
+    });
+  }
+
+  void _applyFiltersWithoutSetState() {
+    _filteredTasks = widget.tasks.where((task) {
+      // Filtro de pesquisa
+      if (_searchQuery.isNotEmpty) {
+        final query = _searchQuery.toLowerCase();
+        final matchesSearch = 
+            task.tarefa.toLowerCase().contains(query) ||
+            (task.ordem != null && task.ordem!.toLowerCase().contains(query)) ||
+            task.regional.toLowerCase().contains(query) ||
+            task.divisao.toLowerCase().contains(query) ||
+            task.tipo.toLowerCase().contains(query) ||
+            task.executores.any((e) => e.toLowerCase().contains(query)) ||
+            task.locais.any((l) => l.toLowerCase().contains(query));
+        
+        if (!matchesSearch) return false;
+      }
+
+      // Filtro de status (multiseleção)
+      if (_filterStatus.isNotEmpty && !_filterStatus.contains(task.status)) {
+        return false;
+      }
+
+      // Filtro de local (multiseleção)
+      if (_filterLocal.isNotEmpty && !task.locais.any((l) => _filterLocal.contains(l))) {
+        return false;
+      }
+
+      // Filtro de tipo (multiseleção)
+      if (_filterTipo.isNotEmpty && !_filterTipo.contains(task.tipo)) {
+        return false;
+      }
+
+      return true;
+    }).toList();
+    _sortTasks();
+    _currentPage = 0;
+    _displayedTasks = [];
+    _loadMoreItemsWithoutSetState();
   }
 
   void _applyFilters() {
     setState(() {
-      _filteredTasks = widget.tasks.where((task) {
-        // Filtro de pesquisa
-        if (_searchQuery.isNotEmpty) {
-          final query = _searchQuery.toLowerCase();
-          final matchesSearch = 
-              task.tarefa.toLowerCase().contains(query) ||
-              (task.ordem != null && task.ordem!.toLowerCase().contains(query)) ||
-              task.regional.toLowerCase().contains(query) ||
-              task.divisao.toLowerCase().contains(query) ||
-              task.tipo.toLowerCase().contains(query) ||
-              task.executores.any((e) => e.toLowerCase().contains(query)) ||
-              task.locais.any((l) => l.toLowerCase().contains(query));
-          
-          if (!matchesSearch) return false;
-        }
-
-        // Filtro de status (multiseleção)
-        if (_filterStatus.isNotEmpty && !_filterStatus.contains(task.status)) {
-          return false;
-        }
-
-        // Filtro de local (multiseleção)
-        if (_filterLocal.isNotEmpty && !task.locais.any((l) => _filterLocal.contains(l))) {
-          return false;
-        }
-
-        // Filtro de tipo (multiseleção)
-        if (_filterTipo.isNotEmpty && !_filterTipo.contains(task.tipo)) {
-          return false;
-        }
-
-        return true;
-      }).toList();
-      _currentPage = 0;
-      _displayedTasks = [];
-      _loadMoreItems();
+      _applyFiltersWithoutSetState();
     });
   }
 
@@ -225,6 +348,7 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     TextField(
+                      autofocus: true,
                       decoration: const InputDecoration(
                         hintText: 'Pesquisar...',
                         prefixIcon: Icon(Icons.search),
@@ -280,21 +404,19 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
   @override
   Widget build(BuildContext context) {
     final isMobile = Responsive.isMobile(context);
-    final isDesktop = Responsive.isDesktop(context);
+    final screenWidth = MediaQuery.of(context).size.width;
+    final screenHeight = MediaQuery.of(context).size.height;
 
     return Dialog(
-      insetPadding: const EdgeInsets.all(16),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: SizedBox(
         width: isMobile 
             ? double.infinity 
-            : isDesktop 
-                ? 1200  // Largura reduzida para ficar apenas da largura da tabela
-                : 900,  // Tablet: tamanho médio
+            : (screenWidth * 0.95).clamp(900.0, 1400.0),
         height: isMobile 
             ? double.infinity 
-            : isDesktop 
-                ? 850   // Desktop: mais alto
-                : 700,  // Tablet: altura padrão
+            : (screenHeight * 0.90).clamp(600.0, 850.0),
         child: Column(
           children: [
             // Header
@@ -337,6 +459,16 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
                               fontWeight: FontWeight.w500,
                             ),
                           ),
+                        ] else if (widget.siSolicitacao != null) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'SI: ${widget.siSolicitacao}${widget.localPadrao != null && widget.localPadrao!.isNotEmpty ? ' • Local: ${widget.localPadrao}' : ''}',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.grey[600],
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
                         ],
                       ],
                     ),
@@ -363,6 +495,7 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
                 children: [
                   // Campo de pesquisa
                   TextField(
+                    autofocus: true,
                     decoration: InputDecoration(
                       hintText: 'Pesquisar tarefa, ordem, local, tipo, executor...',
                       prefixIcon: const Icon(Icons.search),
@@ -821,43 +954,60 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
     return SingleChildScrollView(
       controller: _scrollController,
       child: DataTable(
-          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
-          columns: [
-            const DataColumn(
-              label: SizedBox.shrink(),
-            ),
-            const DataColumn(
-              label: Text('STATUS', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-            ),
-            const DataColumn(
-              label: Text('LOCAL', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-            ),
-            const DataColumn(
-              label: Text('TAREFA', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-            ),
-            const DataColumn(
-              label: Text('REGIONAL', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-            ),
-            const DataColumn(
-              label: Text('DIVISÃO', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-            ),
-            const DataColumn(
-              label: Text('TIPO', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-            ),
-            const DataColumn(
-              label: Text('INÍCIO', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-            ),
-            const DataColumn(
-              label: Text('FIM', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-            ),
-            const DataColumn(
-              label: Text('EXECUTORES', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-            ),
-          ],
-          rows: [
-            ..._displayedTasks.map((task) {
+        sortColumnIndex: _sortColumnIndex,
+        sortAscending: _sortAscending,
+        columnSpacing: 14,
+        horizontalMargin: 12,
+        headingRowHeight: 38,
+        dataRowMinHeight: 32,
+        dataRowMaxHeight: 42,
+        headingRowColor: WidgetStateProperty.all(const Color(0xFFF1F5F9)),
+        columns: [
+          const DataColumn(
+            label: SizedBox(width: 24),
+          ),
+          DataColumn(
+            label: const Text('STATUS', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+            onSort: (col, asc) => _onSort(col, asc),
+          ),
+          DataColumn(
+            label: const Text('LOCAL', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+            onSort: (col, asc) => _onSort(col, asc),
+          ),
+          DataColumn(
+            label: const Text('TAREFA', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+            onSort: (col, asc) => _onSort(col, asc),
+          ),
+          DataColumn(
+            label: const Text('REGIONAL', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+            onSort: (col, asc) => _onSort(col, asc),
+          ),
+          DataColumn(
+            label: const Text('DIVISÃO', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+            onSort: (col, asc) => _onSort(col, asc),
+          ),
+          DataColumn(
+            label: const Text('TIPO', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+            onSort: (col, asc) => _onSort(col, asc),
+          ),
+          DataColumn(
+            label: const Text('INÍCIO', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+            onSort: (col, asc) => _onSort(col, asc),
+          ),
+          DataColumn(
+            label: const Text('FIM', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+            onSort: (col, asc) => _onSort(col, asc),
+          ),
+          DataColumn(
+            label: const Text('EXECUTORES', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+            onSort: (col, asc) => _onSort(col, asc),
+          ),
+        ],
+        rows: [
+          ..._displayedTasks.map((task) {
+            final isSelected = _selectedTask == task;
             return DataRow(
-              selected: _selectedTask == task,
+              selected: isSelected,
               cells: [
                 DataCell(
                   Radio<Task>(
@@ -868,13 +1018,14 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
                         _selectedTask = value;
                       });
                     },
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
                 ),
                 DataCell(
                   Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 8,
-                      vertical: 4,
+                      vertical: 3,
                     ),
                     decoration: BoxDecoration(
                       color: _getStatusColor(task.status),
@@ -884,91 +1035,123 @@ class _TaskSelectionDialogState extends State<TaskSelectionDialog> {
                       task.status,
                       style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 11,
+                        fontSize: 10,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
                   ),
+                  onTap: () => setState(() => _selectedTask = task),
+                  onDoubleTap: () => Navigator.of(context).pop(task),
                 ),
                 DataCell(
-                  SizedBox(
-                    width: 120,
-                    child: Text(
-                      task.locais.isNotEmpty ? task.locais.join(', ') : '-',
-                      style: const TextStyle(fontSize: 12),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 95),
+                    child: Tooltip(
+                      message: task.locais.isNotEmpty ? task.locais.join(', ') : '-',
+                      child: Text(
+                        task.locais.isNotEmpty ? task.locais.join(', ') : '-',
+                        style: const TextStyle(fontSize: 12),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   ),
+                  onTap: () => setState(() => _selectedTask = task),
+                  onDoubleTap: () => Navigator.of(context).pop(task),
                 ),
                 DataCell(
-                  SizedBox(
-                    width: 250,
-                    child: Text(
-                      task.tarefa,
-                      style: const TextStyle(fontSize: 12),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 240),
+                    child: Tooltip(
+                      message: task.tarefa,
+                      child: Text(
+                        task.tarefa,
+                        style: const TextStyle(fontSize: 12),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   ),
+                  onTap: () => setState(() => _selectedTask = task),
+                  onDoubleTap: () => Navigator.of(context).pop(task),
                 ),
                 DataCell(
                   Text(
                     task.regional,
                     style: const TextStyle(fontSize: 12),
                   ),
+                  onTap: () => setState(() => _selectedTask = task),
+                  onDoubleTap: () => Navigator.of(context).pop(task),
                 ),
                 DataCell(
                   Text(
                     task.divisao,
                     style: const TextStyle(fontSize: 12),
                   ),
+                  onTap: () => setState(() => _selectedTask = task),
+                  onDoubleTap: () => Navigator.of(context).pop(task),
                 ),
                 DataCell(
                   Text(
                     task.tipo,
                     style: const TextStyle(fontSize: 12),
                   ),
+                  onTap: () => setState(() => _selectedTask = task),
+                  onDoubleTap: () => Navigator.of(context).pop(task),
                 ),
                 DataCell(
                   Text(
                     _formatDate(task.dataInicio),
-                    style: const TextStyle(fontSize: 12),
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
                   ),
+                  onTap: () => setState(() => _selectedTask = task),
+                  onDoubleTap: () => Navigator.of(context).pop(task),
                 ),
                 DataCell(
                   Text(
                     _formatDate(task.dataFim),
                     style: const TextStyle(fontSize: 12),
                   ),
+                  onTap: () => setState(() => _selectedTask = task),
+                  onDoubleTap: () => Navigator.of(context).pop(task),
                 ),
                 DataCell(
-                  SizedBox(
-                    width: 150,
-                    child: Text(
-                      task.executores.join(', '),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 130),
+                    child: Tooltip(
+                      message: task.executores.join(', '),
+                      child: Text(
+                        task.executores.isNotEmpty ? task.executores.join(', ') : '-',
+                        style: const TextStyle(fontSize: 12),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   ),
+                  onTap: () => setState(() => _selectedTask = task),
+                  onDoubleTap: () => Navigator.of(context).pop(task),
                 ),
               ],
             );
-            }),
-            if (_displayedTasks.length < _filteredTasks.length)
-              DataRow(
-                cells: List.generate(10, (_) => const DataCell(
-                  Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(16.0),
-                      child: CircularProgressIndicator(),
+          }),
+          if (_displayedTasks.length < _filteredTasks.length)
+            DataRow(
+              cells: List.generate(10, (_) => const DataCell(
+                Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(12.0),
+                    child: SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
                     ),
                   ),
-                )),
-              ),
-          ],
-        ),
-      );
+                ),
+              )),
+            ),
+        ],
+      ),
+    );
   }
 
   Widget _buildInfoChip(IconData icon, String label) {

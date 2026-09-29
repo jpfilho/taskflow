@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../utils/clipboard_helper.dart';
 import '../models/task.dart';
 import '../models/status.dart';
 import '../models/anexo.dart';
@@ -82,6 +83,10 @@ class _TaskCardsViewState extends State<TaskCardsView> {
   // Alertas geoespaciais por tarefa (id -> mapa de tipo+janela)
   // Controllers para campos de comentário (taskId -> TextEditingController)
   final Map<String, TextEditingController> _commentControllers = {};
+  // Controller e estado para busca rápida no Feed
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+  int _displayedCount = 15;
   // Lista ordenada de tarefas
   List<Task> _sortedTasks = [];
   // Tipos de atividade
@@ -288,11 +293,25 @@ class _TaskCardsViewState extends State<TaskCardsView> {
     }
 
     // Filtrar apenas tarefas que possuem mídias ou mensagens (para o painel Feed)
-    final filteredTasks = widget.tasks.where((t) {
+    var filteredTasks = widget.tasks.where((t) {
       final hasAnexos = (_anexosPorTarefa[t.id] ?? []).isNotEmpty || (_imagensPorTarefa[t.id] ?? []).isNotEmpty;
       final hasMessages = _ultimaMensagemPorTarefa[t.id] != null || (_mensagensPorTarefa[t.id] ?? []).isNotEmpty;
       return hasAnexos || hasMessages;
     }).toList();
+
+    // Filtro de busca textual no Feed
+    if (_searchQuery.trim().isNotEmpty) {
+      final q = _searchQuery.toLowerCase().trim();
+      filteredTasks = filteredTasks.where((t) {
+        final matchTarefa = t.tarefa.toLowerCase().contains(q);
+        final matchCoord = t.coordenador.toLowerCase().contains(q);
+        final matchExec = t.executores.any((e) => e.toLowerCase().contains(q)) || t.executor.toLowerCase().contains(q);
+        final matchLocal = t.locais.any((l) => l.toLowerCase().contains(q));
+        final matchObs = t.observacoes?.toLowerCase().contains(q) ?? false;
+        final matchTipo = t.tipo.toLowerCase().contains(q);
+        return matchTarefa || matchCoord || matchExec || matchLocal || matchObs || matchTipo;
+      }).toList();
+    }
 
     _sortedTasks = List<Task>.from(filteredTasks);
     _sortedTasks.sort((a, b) {
@@ -440,6 +459,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
       controller.dispose();
     }
     _commentControllers.clear();
+    _searchController.dispose();
     // Cancelar todas as subscriptions de streams
     for (var subscription in _mensagensSubscriptions.values) {
       subscription.cancel();
@@ -751,30 +771,108 @@ class _TaskCardsViewState extends State<TaskCardsView> {
     }
   }
 
+  Widget _buildFeedHeader(bool isMobile) {
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: isMobile ? 12 : 16,
+        vertical: 10,
+      ),
+      margin: EdgeInsets.only(
+        bottom: isMobile ? 8 : 12,
+      ),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.grey[200]!),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.02),
+            blurRadius: 3,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _searchController,
+                  onChanged: (val) {
+                    setState(() {
+                      _searchQuery = val;
+                      _displayedCount = 15;
+                      _applySorting();
+                    });
+                  },
+                  decoration: InputDecoration(
+                    hintText: 'Filtrar no Feed (atividade, executor, observações...)',
+                    hintStyle: TextStyle(fontSize: 13, color: Colors.grey[500]),
+                    prefixIcon: const Icon(Icons.search, size: 20, color: Colors.blueGrey),
+                    suffixIcon: _searchQuery.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear, size: 18),
+                            onPressed: () {
+                              _searchController.clear();
+                              setState(() {
+                                _searchQuery = '';
+                                _displayedCount = 15;
+                                _applySorting();
+                              });
+                            },
+                          )
+                        : null,
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    filled: true,
+                    fillColor: Colors.grey[100],
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(20),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Feed Operacional • ${_sortedTasks.length} ${_sortedTasks.length == 1 ? "atividade" : "atividades"}',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.grey[600],
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                if (_sortedTasks.length > _displayedCount)
+                  Text(
+                    'Exibindo ${_displayedCount.clamp(0, _sortedTasks.length)} de ${_sortedTasks.length}',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.blue[700],
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoadingBaseData) {
       return const Center(
         child: CircularProgressIndicator(),
-      );
-    }
-    
-    if (_sortedTasks.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.dynamic_feed, size: 64, color: Colors.grey[400]),
-            const SizedBox(height: 16),
-            Text(
-              'Nenhuma atividade com interações no Feed.',
-              style: TextStyle(
-                fontSize: 16,
-                color: Colors.grey[600],
-              ),
-            ),
-          ],
-        ),
       );
     }
 
@@ -791,39 +889,107 @@ class _TaskCardsViewState extends State<TaskCardsView> {
       maxWidth = 500;
     }
 
+    final visibleTasks = _sortedTasks.take(_displayedCount).toList();
+    final hasMore = _sortedTasks.length > _displayedCount;
+
+    if (_sortedTasks.isEmpty) {
+      return Container(
+        color: Colors.grey[50],
+        padding: const EdgeInsets.all(16),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: maxWidth),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _buildFeedHeader(isMobile),
+                const SizedBox(height: 32),
+                Icon(Icons.dynamic_feed, size: 64, color: Colors.grey[400]),
+                const SizedBox(height: 16),
+                Text(
+                  _searchQuery.isNotEmpty
+                      ? 'Nenhuma atividade encontrada para "$_searchQuery".'
+                      : 'Nenhuma atividade com interações no Feed.',
+                  style: TextStyle(
+                    fontSize: 16,
+                    color: Colors.grey[600],
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    Widget buildListView() {
+      final totalItemCount = 1 + visibleTasks.length + (hasMore ? 1 : 0);
+
+      return ListView.builder(
+        padding: EdgeInsets.symmetric(
+          horizontal: isMobile ? 0 : 16,
+          vertical: isMobile ? 8 : 16,
+        ),
+        itemCount: totalItemCount,
+        cacheExtent: 600,
+        itemBuilder: (context, index) {
+          // Item 0: Barra de filtros rápidos do feed
+          if (index == 0) {
+            return Padding(
+              padding: EdgeInsets.symmetric(horizontal: isMobile ? 8 : 0),
+              child: _buildFeedHeader(isMobile),
+            );
+          }
+
+          // Último item: Botão carregar mais
+          if (hasMore && index == totalItemCount - 1) {
+            final restantes = _sortedTasks.length - _displayedCount;
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 20),
+              child: Center(
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.expand_more, size: 20),
+                  label: Text(
+                    'Carregar mais atividades ($restantes restantes)',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      _displayedCount += 15;
+                    });
+                  },
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF075E54),
+                    side: const BorderSide(color: Color(0xFF075E54), width: 1.2),
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(24),
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }
+
+          // Cards de atividades
+          final task = visibleTasks[index - 1];
+          return Padding(
+            padding: EdgeInsets.only(bottom: isMobile ? 12 : 16),
+            child: _buildTaskCard(task, isMobile),
+          );
+        },
+      );
+    }
+
     return Container(
       color: Colors.grey[50],
       child: isMobile
-          ? ListView.builder(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              itemCount: _sortedTasks.length,
-              cacheExtent: 500,
-              itemBuilder: (context, index) {
-                final task = _sortedTasks[index];
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: _buildTaskCard(task, isMobile),
-                );
-              },
-            )
+          ? buildListView()
           : Center(
               child: ConstrainedBox(
                 constraints: BoxConstraints(maxWidth: maxWidth),
-                child: ListView.builder(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 16,
-                  ),
-                  itemCount: _sortedTasks.length,
-                  cacheExtent: 500,
-                  itemBuilder: (context, index) {
-                    final task = _sortedTasks[index];
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 16),
-                      child: _buildTaskCard(task, isMobile),
-                    );
-                  },
-                ),
+                child: buildListView(),
               ),
             ),
     );
@@ -1828,24 +1994,15 @@ class _TaskCardsViewState extends State<TaskCardsView> {
                   );
                 }),
                 _buildShareOption(Icons.link, 'Copiar Link', () async {
-                  try {
-                    await Clipboard.setData(
-                      ClipboardData(text: 'Tarefa: ${task.tarefa}'),
-                    );
-                    if (!context.mounted) return;
-                    Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Link copiado!')),
-                    );
-                  } catch (e) {
-                    if (!context.mounted) return;
-                    Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('Não foi possível copiar: $e'),
-                        backgroundColor: Colors.red,
-                      ),
-                    );
+                  final navigator = Navigator.of(context);
+                  await ClipboardHelper.copyAndNotify(
+                    context,
+                    'Tarefa: ${task.tarefa}',
+                    successMessage: 'Link copiado!',
+                    errorMessage: 'Não foi possível copiar.',
+                  );
+                  if (context.mounted) {
+                    navigator.pop();
                   }
                 }),
                 _buildShareOption(Icons.more_horiz, 'Mais', () {
@@ -1864,25 +2021,13 @@ class _TaskCardsViewState extends State<TaskCardsView> {
     String texto,
     String mensagemSucesso,
   ) async {
-    try {
-      await Clipboard.setData(ClipboardData(text: texto));
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(mensagemSucesso),
-          duration: const Duration(seconds: 1),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Não foi possível copiar: $e'),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 3),
-        ),
-      );
-    }
+    await ClipboardHelper.copyAndNotify(
+      context,
+      texto,
+      successMessage: mensagemSucesso,
+      errorMessage: 'Não foi possível copiar o texto.',
+      duration: const Duration(seconds: 1),
+    );
   }
 
   Widget _buildShareOption(IconData icon, String label, VoidCallback onTap) {
@@ -2262,7 +2407,40 @@ class _TaskCardsViewState extends State<TaskCardsView> {
     );
   }
 
+  Color _getStatusUsuarioColor(String? statusUsuario) {
+    if (statusUsuario == null || statusUsuario.isEmpty) return Colors.grey;
+    final status = statusUsuario.toUpperCase();
+    if (status.contains('CONC')) return Colors.green;
+    if (status.contains('CADU') || status.contains('CAIM')) return Colors.grey;
+    if (status.contains('REGI')) return Colors.orange;
+    if (status.contains('EMAM')) return Colors.yellow[700] ?? Colors.amber;
+    if (status.contains('ANLS')) return Colors.blue;
+    return Colors.grey;
+  }
+
+  Color _getStatusUsuarioTextColor(String? statusUsuario) {
+    if (statusUsuario == null || statusUsuario.isEmpty) return Colors.white;
+    final status = statusUsuario.toUpperCase();
+    if (status.contains('EMAM')) return Colors.black;
+    return Colors.white;
+  }
+
+  Color _getStatusSistemaColor(String? statusSistema) {
+    if (statusSistema == null || statusSistema.isEmpty) return Colors.grey;
+    final status = statusSistema.toUpperCase();
+    if (status.contains('MSPR')) return Colors.orange;
+    if (status.contains('MSPN')) return Colors.blue;
+    if (status.contains('MECE') || status.contains('CONC')) return Colors.green;
+    return const Color(0xFF1E3A5F);
+  }
+
   Widget _buildNotaSAPCard(NotaSAP nota, int index) {
+    final statusSis = nota.statusSistema?.trim();
+    final statusUsu = nota.statusUsuario?.trim();
+    final sala = nota.sala?.trim();
+    final descricao = nota.descricao?.trim();
+    final local = nota.localInstalacao?.trim();
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
@@ -2270,7 +2448,7 @@ class _TaskCardsViewState extends State<TaskCardsView> {
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.08),
+            color: Colors.black.withOpacity(0.06),
             blurRadius: 8,
             offset: const Offset(0, 2),
           ),
@@ -2278,42 +2456,166 @@ class _TaskCardsViewState extends State<TaskCardsView> {
         border: Border.all(color: Colors.blue.withOpacity(0.2)),
       ),
       child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        childrenPadding: EdgeInsets.zero,
         leading: Container(
-          padding: const EdgeInsets.all(8),
+          width: 36,
+          height: 36,
+          alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: Colors.blue.withOpacity(0.1),
+            color: const Color(0xFF1E3A5F).withOpacity(0.08),
             borderRadius: BorderRadius.circular(8),
           ),
-          child: const Icon(Icons.description, color: Colors.blue, size: 20),
+          child: const Icon(Icons.description_outlined, color: Color(0xFF1E3A5F), size: 20),
         ),
-        title: Row(
-          children: [
-            Expanded(
-              child: Text(
-                'Nota: ${nota.nota}',
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
+        title: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Row(
+            children: [
+              Expanded(
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      'Nota: ${nota.nota}',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                        color: Color(0xFF1E3A5F),
+                      ),
+                    ),
+                    if (nota.tipo != null && nota.tipo!.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.grey[200],
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          nota.tipo!,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.grey[800],
+                          ),
+                        ),
+                      ),
+                    if (statusSis != null && statusSis.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: _getStatusSistemaColor(statusSis).withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: _getStatusSistemaColor(statusSis).withOpacity(0.4),
+                          ),
+                        ),
+                        child: Text(
+                          statusSis,
+                          style: TextStyle(
+                            color: _getStatusSistemaColor(statusSis),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    if (statusUsu != null && statusUsu.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: _getStatusUsuarioColor(statusUsu),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          statusUsu,
+                          style: TextStyle(
+                            color: _getStatusUsuarioTextColor(statusUsu),
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    if (sala != null && sala.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.indigo.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.indigo.withOpacity(0.25)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.meeting_room_outlined, size: 13, color: Colors.indigo),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Sala: $sala',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.indigo,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (descricao != null && descricao.isNotEmpty)
+                      Text(
+                        descricao,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey[850],
+                        ),
+                      ),
+                    if (local != null && local.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.grey[100],
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.grey[300]!),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.location_on_outlined, size: 13, color: Colors.grey[700]),
+                            const SizedBox(width: 4),
+                            Text(
+                              local,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                                color: Colors.grey[700],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
                 ),
               ),
-            ),
-            IconButton(
-              icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(),
-              onPressed: () =>
-                  _copiarParaAreaTransferencia(nota.nota, 'Nota copiada!'),
-              tooltip: 'Copiar nota',
-            ),
-          ],
+              IconButton(
+                icon: const Icon(Icons.copy_rounded, size: 18, color: Colors.blue),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                onPressed: () =>
+                    _copiarParaAreaTransferencia(nota.nota, 'Nota copiada!'),
+                tooltip: 'Copiar nota',
+              ),
+            ],
+          ),
         ),
-        subtitle: nota.tipo != null ? Text('Tipo: ${nota.tipo}') : null,
         children: [
           Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                const Divider(height: 1),
+                const SizedBox(height: 12),
                 _buildInfoRowModern('Tipo', nota.tipo),
                 _buildInfoRowModern('Status Sistema', nota.statusSistema),
                 _buildInfoRowModern('Status Usuário', nota.statusUsuario),
@@ -2432,6 +2734,18 @@ class _TaskCardsViewState extends State<TaskCardsView> {
   }
 
   Widget _buildOrdemCard(Ordem ordem, int index) {
+    final statusSis = ordem.statusSistema?.trim();
+    final statusUsu = ordem.statusUsuario?.trim();
+    final sala = ordem.sala?.trim();
+    final descricao = (ordem.textoBreve?.trim().isNotEmpty == true)
+        ? ordem.textoBreve!.trim()
+        : ordem.denominacaoObjeto?.trim();
+    final local = (ordem.localInstalacao?.trim().isNotEmpty == true)
+        ? ordem.localInstalacao!.trim()
+        : (ordem.denominacaoLocalInstalacao?.trim().isNotEmpty == true
+            ? ordem.denominacaoLocalInstalacao!.trim()
+            : ordem.local?.trim());
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
@@ -2439,70 +2753,188 @@ class _TaskCardsViewState extends State<TaskCardsView> {
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.08),
+            color: Colors.black.withOpacity(0.06),
             blurRadius: 8,
             offset: const Offset(0, 2),
           ),
         ],
-        border: Border.all(color: Colors.orange.withOpacity(0.2)),
+        border: Border.all(color: Colors.orange.withOpacity(0.25)),
       ),
       child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        childrenPadding: EdgeInsets.zero,
         leading: Container(
-          padding: const EdgeInsets.all(8),
+          width: 36,
+          height: 36,
+          alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: Colors.orange.withOpacity(0.1),
+            color: Colors.orange.withOpacity(0.12),
             borderRadius: BorderRadius.circular(8),
           ),
-          child: const Icon(Icons.receipt_long, color: Colors.orange, size: 20),
+          child: const Icon(Icons.receipt_long_outlined, color: Colors.orange, size: 20),
         ),
-        title: Row(
-          children: [
-            Expanded(
-              child: Text(
-                'Ordem: ${ordem.ordem}',
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
+        title: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Row(
+            children: [
+              Expanded(
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      'Ordem: ${ordem.ordem}',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                        color: Color(0xFFE65100),
+                      ),
+                    ),
+                    if (ordem.tipo != null && ordem.tipo!.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.grey[200],
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          ordem.tipo!,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.grey[800],
+                          ),
+                        ),
+                      ),
+                    if (statusSis != null && statusSis.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: _getStatusSistemaColor(statusSis).withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: _getStatusSistemaColor(statusSis).withOpacity(0.4),
+                          ),
+                        ),
+                        child: Text(
+                          statusSis,
+                          style: TextStyle(
+                            color: _getStatusSistemaColor(statusSis),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    if (statusUsu != null && statusUsu.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: _getStatusUsuarioColor(statusUsu),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          statusUsu,
+                          style: TextStyle(
+                            color: _getStatusUsuarioTextColor(statusUsu),
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    if (sala != null && sala.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.indigo.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.indigo.withOpacity(0.25)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.meeting_room_outlined, size: 13, color: Colors.indigo),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Sala: $sala',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.indigo,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (descricao != null && descricao.isNotEmpty)
+                      Text(
+                        descricao,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey[850],
+                        ),
+                      ),
+                    if (local != null && local.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.grey[100],
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.grey[300]!),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.location_on_outlined, size: 13, color: Colors.grey[700]),
+                            const SizedBox(width: 4),
+                            Text(
+                              local,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                                color: Colors.grey[700],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
                 ),
               ),
-            ),
-            IconButton(
-              icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(),
-              onPressed: () =>
-                  _copiarParaAreaTransferencia(ordem.ordem, 'Ordem copiada!'),
-              tooltip: 'Copiar ordem',
-            ),
-          ],
+              IconButton(
+                icon: const Icon(Icons.copy_rounded, size: 18, color: Colors.blue),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                onPressed: () => _copiarParaAreaTransferencia(ordem.ordem, 'Ordem copiada!'),
+                tooltip: 'Copiar ordem',
+              ),
+            ],
+          ),
         ),
-        subtitle: ordem.tipo != null ? Text('Tipo: ${ordem.tipo}') : null,
         children: [
           Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                const Divider(height: 1),
+                const SizedBox(height: 12),
                 _buildInfoRowModern('Tipo', ordem.tipo),
                 _buildInfoRowModern('Status Sistema', ordem.statusSistema),
                 _buildInfoRowModern('Status Usuário', ordem.statusUsuario),
                 _buildInfoRowModern('Texto Breve', ordem.textoBreve),
-                _buildInfoRowModern(
-                  'Denominação Local',
-                  ordem.denominacaoLocalInstalacao,
-                ),
-                _buildInfoRowModern(
-                  'Denominação Objeto',
-                  ordem.denominacaoObjeto,
-                ),
+                _buildInfoRowModern('Denominação Local', ordem.denominacaoLocalInstalacao),
+                _buildInfoRowModern('Denominação Objeto', ordem.denominacaoObjeto),
                 _buildInfoRowModern('Local Instalação', ordem.localInstalacao),
+                _buildInfoRowModern('Sala', ordem.sala),
+                _buildInfoRowModern('Local', ordem.local),
+                if (ordem.tolerancia != null)
+                  _buildInfoRowModern('Tolerância', _formatDate(ordem.tolerancia!)),
                 _buildInfoRowModern('Código SI', ordem.codigoSI),
                 _buildInfoRowModern('GPM', ordem.gpm),
                 if (ordem.inicioBase != null)
-                  _buildInfoRowModern(
-                    'Início Base',
-                    _formatDate(ordem.inicioBase!),
-                  ),
+                  _buildInfoRowModern('Início Base', _formatDate(ordem.inicioBase!)),
                 if (ordem.fimBase != null)
                   _buildInfoRowModern('Fim Base', _formatDate(ordem.fimBase!)),
               ],

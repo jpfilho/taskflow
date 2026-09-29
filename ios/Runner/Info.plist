@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Task Flow</string>
+	<string>TaskFlow2026</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -15,17 +15,85 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Task Flow</string>
+	<string>TaskFlow2026</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(FLUTTER_BUILD_NAME)</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.taskflow.app</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.taskflow.app</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>msauth</string>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Este app pode usar Bluetooth para conectar a dispositivos externos e melhorar a experiência do usuário.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Este app pode usar Bluetooth para conectar a dispositivos externos e melhorar a experiência do usuário.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Este app pode acessar seu calendário para sincronizar eventos e tarefas.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Este app precisa acessar a câmera para tirar fotos e gravar vídeos para anexar nas tarefas e no chat.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Este app pode acessar seus contatos para facilitar o compartilhamento e comunicação.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Este app usa Face ID para autenticação rápida e segura.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Este app precisa acessar sua localização para registrar a posição geográfica das tarefas e facilitar o gerenciamento de atividades em campo.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>Este app precisa acessar sua localização em segundo plano para registrar a posição geográfica das tarefas e facilitar o gerenciamento de atividades em campo.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Este app precisa acessar sua localização para registrar a posição geográfica das tarefas e facilitar o gerenciamento de atividades em campo.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Este app precisa acessar o microfone para gravar áudios para anexar nas tarefas e no chat.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>Este app pode usar sensores de movimento para melhorar a experiência do usuário.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Este app precisa salvar imagens na sua biblioteca de fotos.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Este app precisa acessar sua biblioteca de fotos para anexar imagens e vídeos nas tarefas e no chat.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>Este app pode acessar seus lembretes para sincronizar tarefas e atividades.</string>
+	<key>NSUserTrackingUsageDescription</key>
+	<string>Este app pode usar dados de rastreamento para personalizar sua experiência e melhorar os serviços oferecidos.</string>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneClassName</key>
+					<string>UIWindowScene</string>
+					<key>UISceneConfigurationName</key>
+					<string>flutter</string>
+					<key>UISceneDelegateClassName</key>
+					<string>FlutterSceneDelegate</string>
+					<key>UISceneStoryboardFile</key>
+					<string>Main</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
@@ -44,53 +112,6 @@
 		<string>UIInterfaceOrientationPortraitUpsideDown</string>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
-	</array>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Este app precisa acessar sua biblioteca de fotos para anexar imagens e vídeos nas tarefas e no chat.</string>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Este app precisa salvar imagens na sua biblioteca de fotos.</string>
-	<key>NSCameraUsageDescription</key>
-	<string>Este app precisa acessar a câmera para tirar fotos e gravar vídeos para anexar nas tarefas e no chat.</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>Este app precisa acessar o microfone para gravar áudios para anexar nas tarefas e no chat.</string>
-	<key>NSFaceIDUsageDescription</key>
-	<string>Este app usa Face ID para autenticação rápida e segura.</string>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Este app precisa acessar sua localização para registrar a posição geográfica das tarefas e facilitar o gerenciamento de atividades em campo.</string>
-	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Este app precisa acessar sua localização para registrar a posição geográfica das tarefas e facilitar o gerenciamento de atividades em campo.</string>
-	<key>NSLocationAlwaysUsageDescription</key>
-	<string>Este app precisa acessar sua localização em segundo plano para registrar a posição geográfica das tarefas e facilitar o gerenciamento de atividades em campo.</string>
-	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Este app pode usar Bluetooth para conectar a dispositivos externos e melhorar a experiência do usuário.</string>
-	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>Este app pode usar Bluetooth para conectar a dispositivos externos e melhorar a experiência do usuário.</string>
-	<key>NSCalendarsUsageDescription</key>
-	<string>Este app pode acessar seu calendário para sincronizar eventos e tarefas.</string>
-	<key>NSRemindersUsageDescription</key>
-	<string>Este app pode acessar seus lembretes para sincronizar tarefas e atividades.</string>
-	<key>NSContactsUsageDescription</key>
-	<string>Este app pode acessar seus contatos para facilitar o compartilhamento e comunicação.</string>
-	<key>NSMotionUsageDescription</key>
-	<string>Este app pode usar sensores de movimento para melhorar a experiência do usuário.</string>
-	<key>NSUserTrackingUsageDescription</key>
-	<string>Este app pode usar dados de rastreamento para personalizar sua experiência e melhorar os serviços oferecidos.</string>
-	<key>CFBundleURLTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleTypeRole</key>
-			<string>Editor</string>
-			<key>CFBundleURLName</key>
-			<string>com.taskflow.app</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>com.taskflow.app</string>
-			</array>
-		</dict>
-	</array>
-	<key>LSApplicationQueriesSchemes</key>
-	<array>
-		<string>msauth</string>
 	</array>
 </dict>
 </plist>

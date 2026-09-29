@@ -232,39 +232,35 @@ class AnexoService {
     }
   }
 
-  // Contar anexos de múltiplas tarefas (otimizado)
+  // Contar anexos de múltiplas tarefas (otimizado com chunking)
   Future<Map<String, int>> contarAnexosPorTarefas(List<String> taskIds) async {
     try {
       if (taskIds.isEmpty) return {};
 
-      // Usar VIEW otimizada do Supabase para buscar todas as contagens de uma vez
-      // Usar .or() para múltiplos valores (já funciona no código)
-      dynamic query = _supabase
-          .from('contagens_anexos_tarefas')
-          .select('task_id, quantidade');
-      
-      if (taskIds.length == 1) {
-        query = query.eq('task_id', taskIds[0]);
-      } else {
-        final orConditions = taskIds.map((id) => 'task_id.eq.$id').join(',');
-        query = query.or(orConditions);
+      final chunks = <List<String>>[];
+      for (var i = 0; i < taskIds.length; i += 80) {
+        chunks.add(taskIds.sublist(i, i + 80 > taskIds.length ? taskIds.length : i + 80));
       }
-      
-      // silencioso
-      final response = await query;
-      // silencioso
 
       final contagens = <String, int>{};
-      for (var item in response) {
-        final taskId = item['task_id'] as String;
-        final quantidade = item['quantidade'] as int;
-        // debug silenciado
-        if (quantidade > 0) {
-          contagens[taskId] = quantidade;
-        }
-      }
+      final futures = chunks.map((chunk) async {
+        try {
+          final response = await _supabase
+              .from('contagens_anexos_tarefas')
+              .select('task_id, quantidade')
+              .inFilter('task_id', chunk);
 
-      // silencioso
+          for (var item in response) {
+            final taskId = item['task_id']?.toString() ?? '';
+            final quantidade = item['quantidade'] as int? ?? 0;
+            if (taskId.isNotEmpty && quantidade > 0) {
+              contagens[taskId] = quantidade;
+            }
+          }
+        } catch (_) {}
+      });
+
+      await Future.wait(futures);
       return contagens;
     } catch (e, stackTrace) {
       debugPrint('❌ Erro ao contar anexos das tarefas: $e');

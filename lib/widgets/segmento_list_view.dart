@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../design_system/taskflow_design_system.dart';
 import '../models/segmento.dart';
 import '../services/segmento_service.dart';
 import 'segmento_form_dialog.dart';
@@ -15,9 +16,8 @@ class _SegmentoListViewState extends State<SegmentoListView> {
   List<Segmento> _segmentos = [];
   List<Segmento> _filteredSegmentos = [];
   bool _isLoading = true;
+  bool _isTableView = true;
   final TextEditingController _searchController = TextEditingController();
-  int _currentPage = 1;
-  final int _itemsPerPage = 10;
 
   @override
   void initState() {
@@ -39,22 +39,24 @@ class _SegmentoListViewState extends State<SegmentoListView> {
 
     try {
       final segmentos = await _segmentoService.getAllSegmentos();
-      setState(() {
-        _segmentos = segmentos;
-        _filteredSegmentos = segmentos;
-        _isLoading = false;
-        _currentPage = 1;
-      });
-    } catch (e) {
-      print('Erro ao carregar segmentos: $e');
-      setState(() {
-        _isLoading = false;
-      });
       if (mounted) {
+        setState(() {
+          _segmentos = segmentos;
+          _filteredSegmentos = segmentos;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Erro ao carregar segmentos: $e');
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+        final colors = context.tfColors;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Erro ao carregar segmentos: $e'),
-            backgroundColor: Colors.red,
+            backgroundColor: colors.danger,
           ),
         );
       }
@@ -66,7 +68,6 @@ class _SegmentoListViewState extends State<SegmentoListView> {
     if (query.isEmpty) {
       setState(() {
         _filteredSegmentos = _segmentos;
-        _currentPage = 1;
       });
     } else {
       _searchSegmentos(query);
@@ -76,33 +77,19 @@ class _SegmentoListViewState extends State<SegmentoListView> {
   Future<void> _searchSegmentos(String query) async {
     try {
       final results = await _segmentoService.searchSegmentos(query);
-      setState(() {
-        _filteredSegmentos = results;
-        _currentPage = 1;
-      });
+      if (mounted) {
+        setState(() {
+          _filteredSegmentos = results;
+        });
+      }
     } catch (e) {
-      print('Erro ao buscar segmentos: $e');
+      debugPrint('Erro ao buscar segmentos: $e');
     }
   }
-
-  List<Segmento> get _paginatedSegmentos {
-    final startIndex = (_currentPage - 1) * _itemsPerPage;
-    final endIndex = startIndex + _itemsPerPage;
-    return _filteredSegmentos.length > startIndex
-        ? _filteredSegmentos.sublist(
-            startIndex,
-            endIndex > _filteredSegmentos.length ? _filteredSegmentos.length : endIndex,
-          )
-        : [];
-  }
-
-  int get _totalPages => (_filteredSegmentos.length / _itemsPerPage).ceil();
 
   Future<void> _createSegmento() async {
     final result = await showDialog<Segmento>(
       context: context,
-      barrierDismissible: true,
-      barrierColor: Colors.black54,
       builder: (context) => const SegmentoFormDialog(),
     );
 
@@ -111,19 +98,21 @@ class _SegmentoListViewState extends State<SegmentoListView> {
       if (created != null) {
         await _loadSegmentos();
         if (mounted) {
+          final colors = context.tfColors;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Segmento criado com sucesso!'),
-              backgroundColor: Colors.green,
+            SnackBar(
+              content: const Text('Segmento criado com sucesso!'),
+              backgroundColor: colors.success,
             ),
           );
         }
       } else {
         if (mounted) {
+          final colors = context.tfColors;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Erro ao criar segmento'),
-              backgroundColor: Colors.red,
+            SnackBar(
+              content: const Text('Erro ao criar segmento'),
+              backgroundColor: colors.danger,
             ),
           );
         }
@@ -134,8 +123,6 @@ class _SegmentoListViewState extends State<SegmentoListView> {
   Future<void> _editSegmento(Segmento segmento) async {
     final result = await showDialog<Segmento>(
       context: context,
-      barrierDismissible: true,
-      barrierColor: Colors.black54,
       builder: (context) => SegmentoFormDialog(segmento: segmento),
     );
 
@@ -144,19 +131,21 @@ class _SegmentoListViewState extends State<SegmentoListView> {
       if (updated != null) {
         await _loadSegmentos();
         if (mounted) {
+          final colors = context.tfColors;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Segmento atualizado com sucesso!'),
-              backgroundColor: Colors.green,
+            SnackBar(
+              content: const Text('Segmento atualizado com sucesso!'),
+              backgroundColor: colors.success,
             ),
           );
         }
       } else {
         if (mounted) {
+          final colors = context.tfColors;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Erro ao atualizar segmento'),
-              backgroundColor: Colors.red,
+            SnackBar(
+              content: const Text('Erro ao atualizar segmento'),
+              backgroundColor: colors.danger,
             ),
           );
         }
@@ -172,8 +161,6 @@ class _SegmentoListViewState extends State<SegmentoListView> {
 
     final result = await showDialog<Segmento>(
       context: context,
-      barrierDismissible: true,
-      barrierColor: Colors.black54,
       builder: (context) => SegmentoFormDialog(segmento: duplicated),
     );
 
@@ -182,19 +169,21 @@ class _SegmentoListViewState extends State<SegmentoListView> {
       if (created != null) {
         await _loadSegmentos();
         if (mounted) {
+          final colors = context.tfColors;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Segmento duplicado com sucesso!'),
-              backgroundColor: Colors.green,
+            SnackBar(
+              content: const Text('Segmento duplicado com sucesso!'),
+              backgroundColor: colors.success,
             ),
           );
         }
       } else {
         if (mounted) {
+          final colors = context.tfColors;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Erro ao duplicar segmento'),
-              backgroundColor: Colors.red,
+            SnackBar(
+              content: const Text('Erro ao duplicar segmento'),
+              backgroundColor: colors.danger,
             ),
           );
         }
@@ -203,26 +192,13 @@ class _SegmentoListViewState extends State<SegmentoListView> {
   }
 
   Future<void> _deleteSegmento(Segmento segmento) async {
-    final confirm = await showDialog<bool>(
+    final confirm = await TFModalDialog.confirm(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Confirmar Exclusão'),
-        content: Text(
-          'Deseja realmente excluir o segmento:\n\n'
-          'Segmento: ${segmento.segmento}',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Excluir'),
-          ),
-        ],
-      ),
+      title: 'Confirmar Exclusão',
+      message: 'Deseja realmente excluir o segmento "${segmento.segmento}"?\nEsta ação não poderá ser desfeita.',
+      confirmLabel: 'Excluir',
+      cancelLabel: 'Cancelar',
+      isDestructive: true,
     );
 
     if (confirm == true) {
@@ -230,19 +206,21 @@ class _SegmentoListViewState extends State<SegmentoListView> {
       if (deleted) {
         await _loadSegmentos();
         if (mounted) {
+          final colors = context.tfColors;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Segmento excluído com sucesso!'),
-              backgroundColor: Colors.green,
+            SnackBar(
+              content: const Text('Segmento excluído com sucesso!'),
+              backgroundColor: colors.success,
             ),
           );
         }
       } else {
         if (mounted) {
+          final colors = context.tfColors;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Erro ao excluir segmento'),
-              backgroundColor: Colors.red,
+            SnackBar(
+              content: const Text('Erro ao excluir segmento'),
+              backgroundColor: colors.danger,
             ),
           );
         }
@@ -252,441 +230,326 @@ class _SegmentoListViewState extends State<SegmentoListView> {
 
   @override
   Widget build(BuildContext context) {
-    final brightness = Theme.of(context).brightness;
-    final isDark = brightness == Brightness.dark;
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+    final isDesktop = TFBreakpoints.isDesktop(context);
 
     return Scaffold(
-      backgroundColor: isDark ? const Color(0xFF0f172a) : const Color(0xFFf1f5f9),
+      backgroundColor: colors.background,
       body: SafeArea(
-        child: Column(
-          children: [
-            // Header moderno
-            Container(
-              padding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF1e293b) : Colors.white,
-                border: Border(
-                  bottom: BorderSide(
-                    color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                    width: 1,
-                  ),
+        child: Padding(
+          padding: EdgeInsets.all(spacing.lg),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // 1. Header Oficial do TFDS
+              TFPageHeader(
+                title: 'Cadastro de Segmentos',
+                subtitle: 'Categorias e especialidades de atuação operacional',
+                onBack: () => Navigator.of(context).maybePop(),
+                primaryAction: TFButton(
+                  label: 'Novo Segmento',
+                  leadingIcon: TFIcons.add,
+                  variant: TFButtonVariant.primary,
+                  onPressed: _createSegmento,
                 ),
-              ),
-              child: Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.arrow_back),
-                    onPressed: () => Navigator.of(context).pop(),
-                    color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Cadastro de Segmentos',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w600,
-                        color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                      ),
-                    ),
-                  ),
-                  ElevatedButton.icon(
-                    onPressed: _createSegmento,
-                    icon: const Icon(Icons.add, size: 20),
-                    label: const Text('Novo Segmento'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF3b82f6),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      elevation: 0,
-                    ),
+                secondaryActions: [
+                  TFButton(
+                    label: 'Atualizar',
+                    leadingIcon: TFIcons.refresh,
+                    variant: TFButtonVariant.secondary,
+                    onPressed: _loadSegmentos,
                   ),
                 ],
               ),
-            ),
 
-            // Barra de busca
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF1e293b) : Colors.white,
-                border: Border(
-                  bottom: BorderSide(
-                    color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
+              SizedBox(height: spacing.md),
+
+              // 2. Barra de Busca e Alternância Tabela/Card
+              Row(
+                children: [
+                  Expanded(
+                    child: TFTextField(
+                      controller: _searchController,
+                      hint: 'Pesquisar segmentos por nome ou descrição...',
+                      prefixIcon: const Icon(TFIcons.search),
+                      suffixIcon: _searchController.text.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(TFIcons.close, size: 16),
+                              onPressed: () {
+                                _searchController.clear();
+                              },
+                            )
+                          : null,
+                    ),
+                  ),
+                  SizedBox(width: spacing.sm),
+                  TFIconButton(
+                    icon: _isTableView ? Icons.view_list_rounded : Icons.table_chart_rounded,
+                    tooltip: _isTableView ? 'Visualizar em Cards' : 'Visualizar em Tabela',
+                    variant: TFIconButtonVariant.subtle,
+                    onPressed: () {
+                      setState(() {
+                        _isTableView = !_isTableView;
+                      });
+                    },
+                  ),
+                ],
+              ),
+
+              SizedBox(height: spacing.md),
+
+              // 3. Conteúdo Principal
+              Expanded(
+                child: _isLoading
+                    ? const Center(
+                        child: TFLoading(
+                          mode: TFLoadingMode.section,
+                          message: 'Carregando segmentos...',
+                        ),
+                      )
+                    : _filteredSegmentos.isEmpty
+                        ? Center(
+                            child: TFEmptyState(
+                              icon: Icons.category_outlined,
+                              title: _segmentos.isEmpty
+                                  ? 'Nenhum segmento cadastrado'
+                                  : 'Nenhum segmento encontrado',
+                              description: _segmentos.isEmpty
+                                  ? 'Comece cadastrando o primeiro segmento da empresa.'
+                                  : 'Não existem segmentos compatíveis com os filtros atuais.',
+                              action: _segmentos.isEmpty
+                                  ? TFButton(
+                                      label: 'Cadastrar Primeiro Segmento',
+                                      leadingIcon: TFIcons.add,
+                                      variant: TFButtonVariant.primary,
+                                      onPressed: _createSegmento,
+                                    )
+                                  : TFButton(
+                                      label: 'Limpar Busca',
+                                      leadingIcon: TFIcons.clear,
+                                      variant: TFButtonVariant.secondary,
+                                      onPressed: () => _searchController.clear(),
+                                    ),
+                            ),
+                          )
+                        : _isTableView || isDesktop
+                            ? _buildTableView()
+                            : _buildListView(),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTableView() {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final spacing = context.tfSpacing;
+
+    return TFDataTable<Segmento>(
+      items: _filteredSegmentos,
+      zebra: true,
+      columns: [
+        TFDataColumn<Segmento>.text(
+          id: 'segmento',
+          title: 'Segmento',
+          cellBuilder: (context, item) => Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 12,
+                height: 12,
+                decoration: BoxDecoration(
+                  color: item.backgroundColor,
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: colors.borderSubtle,
                     width: 1,
                   ),
                 ),
               ),
-              child: TextField(
-                controller: _searchController,
-                decoration: InputDecoration(
-                  hintText: 'Buscar por segmento ou descrição...',
-                  prefixIcon: Icon(
-                    Icons.search,
-                    color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
-                  ),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: BorderSide(
-                      color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-                    ),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: BorderSide(
-                      color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-                    ),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: const BorderSide(
-                      color: Color(0xFF3b82f6),
-                      width: 2,
-                    ),
-                  ),
-                  filled: true,
-                  fillColor: isDark ? const Color(0xFF0f172a) : const Color(0xFFf8fafc),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                ),
-                style: TextStyle(
-                  color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
+              SizedBox(width: spacing.xs),
+              Text(
+                item.segmento,
+                style: typography.bodyMedium.copyWith(
+                  color: colors.textPrimary,
+                  fontWeight: FontWeight.w500,
                 ),
               ),
+            ],
+          ),
+        ),
+        TFDataColumn<Segmento>.text(
+          id: 'descricao',
+          title: 'Descrição',
+          cellBuilder: (context, item) => Text(
+            item.descricao != null && item.descricao!.isNotEmpty
+                ? item.descricao!
+                : 'Sem descrição',
+            style: typography.bodySmall.copyWith(
+              color: item.descricao != null && item.descricao!.isNotEmpty
+                  ? colors.textSecondary
+                  : colors.textMuted,
+              fontStyle: item.descricao != null && item.descricao!.isNotEmpty
+                  ? FontStyle.normal
+                  : FontStyle.italic,
             ),
+          ),
+        ),
+        TFDataColumn<Segmento>.text(
+          id: 'cor',
+          title: 'Identificador Visual',
+          width: 160,
+          cellBuilder: (context, item) => Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: spacing.xs, vertical: 2),
+                decoration: BoxDecoration(
+                  color: item.backgroundColor,
+                  borderRadius: TFRadius.borderRadiusSm,
+                ),
+                child: Text(
+                  item.cor != null && item.cor!.isNotEmpty ? item.cor! : '#PADRÃO',
+                  style: typography.micro.copyWith(
+                    color: item.textColor,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        TFDataColumn<Segmento>(
+          id: 'acoes',
+          label: const Text('Ações'),
+          width: 160,
+          alignment: Alignment.centerRight,
+          cellBuilder: (context, item) => Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TFIconButton(
+                icon: TFIcons.edit,
+                tooltip: 'Editar "${item.segmento}"',
+                variant: TFIconButtonVariant.standard,
+                iconSize: 18,
+                onPressed: () => _editSegmento(item),
+              ),
+              TFIconButton(
+                icon: Icons.copy_rounded,
+                tooltip: 'Duplicar "${item.segmento}"',
+                variant: TFIconButtonVariant.subtle,
+                iconSize: 18,
+                onPressed: () => _duplicateSegmento(item),
+              ),
+              TFIconButton(
+                icon: TFIcons.delete,
+                tooltip: 'Excluir "${item.segmento}"',
+                variant: TFIconButtonVariant.danger,
+                iconSize: 18,
+                onPressed: () => _deleteSegmento(item),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
 
-            // Tabela
-            Expanded(
-              child: _isLoading
-                  ? Center(
-                      child: CircularProgressIndicator(
-                        color: const Color(0xFF3b82f6),
-                      ),
-                    )
-                  : _filteredSegmentos.isEmpty
-                      ? Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.category,
-                                size: 64,
-                                color: isDark ? const Color(0xFF475569) : const Color(0xFF94a3b8),
-                              ),
-                              const SizedBox(height: 16),
-                              Text(
-                                _segmentos.isEmpty
-                                    ? 'Nenhum segmento cadastrado'
-                                    : 'Nenhum segmento encontrado',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
-                                ),
-                              ),
-                              if (_segmentos.isEmpty) ...[
-                                const SizedBox(height: 16),
-                                ElevatedButton.icon(
-                                  onPressed: _createSegmento,
-                                  icon: const Icon(Icons.add),
-                                  label: const Text('Criar Primeiro Segmento'),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: const Color(0xFF3b82f6),
-                                    foregroundColor: Colors.white,
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                        )
-                      : Container(
-                          margin: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: isDark ? const Color(0xFF1e293b) : Colors.white,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                              width: 1,
+  Widget _buildListView() {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final spacing = context.tfSpacing;
+
+    return ListView.builder(
+      itemCount: _filteredSegmentos.length,
+      itemBuilder: (context, index) {
+        final item = _filteredSegmentos[index];
+        return Padding(
+          padding: EdgeInsets.only(bottom: spacing.sm),
+          child: TFCard(
+            variant: TFCardVariant.defaultCard,
+            padding: EdgeInsets.symmetric(horizontal: spacing.base, vertical: spacing.sm),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            width: 10,
+                            height: 10,
+                            decoration: BoxDecoration(
+                              color: item.backgroundColor,
+                              shape: BoxShape.circle,
+                              border: Border.all(color: colors.borderSubtle),
                             ),
                           ),
-                          child: Column(
-                            children: [
-                              // Cabeçalho da tabela
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                decoration: BoxDecoration(
-                                  color: isDark ? const Color(0xFF0f172a) : const Color(0xFFf8fafc),
-                                  borderRadius: const BorderRadius.only(
-                                    topLeft: Radius.circular(12),
-                                    topRight: Radius.circular(12),
-                                  ),
-                                  border: Border(
-                                    bottom: BorderSide(
-                                      color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                                      width: 1,
-                                    ),
-                                  ),
-                                ),
-                                child: Row(
-                                  children: [
-                                    Expanded(
-                                      flex: 2,
-                                      child: Text(
-                                        'Segmento',
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600,
-                                          color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                                        ),
-                                      ),
-                                    ),
-                                    Expanded(
-                                      flex: 3,
-                                      child: Text(
-                                        'Descrição',
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600,
-                                          color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                                        ),
-                                      ),
-                                    ),
-                                    Expanded(
-                                      flex: 1,
-                                      child: Text(
-                                        'Cor',
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600,
-                                          color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                                        ),
-                                      ),
-                                    ),
-                                    SizedBox(
-                                      width: 120,
-                                      child: Text(
-                                        'Ações',
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600,
-                                          color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-
-                              // Corpo da tabela
-                              Expanded(
-                                child: ListView.separated(
-                                  itemCount: _paginatedSegmentos.length,
-                                  separatorBuilder: (context, index) => Divider(
-                                    height: 1,
-                                    thickness: 1,
-                                    color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                                  ),
-                                  itemBuilder: (context, index) {
-                                    final segmento = _paginatedSegmentos[index];
-                                    return InkWell(
-                                      onTap: () => _editSegmento(segmento),
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                                        child: Row(
-                                          children: [
-                                            Expanded(
-                                              flex: 2,
-                                              child: Row(
-                                                children: [
-                                                  Container(
-                                                    width: 12,
-                                                    height: 12,
-                                                    decoration: BoxDecoration(
-                                                      color: segmento.backgroundColor,
-                                                      shape: BoxShape.circle,
-                                                      border: Border.all(
-                                                        color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-                                                        width: 1,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                  const SizedBox(width: 8),
-                                                  Expanded(
-                                                    child: Text(
-                                                      segmento.segmento,
-                                                      style: TextStyle(
-                                                        fontSize: 14,
-                                                        fontWeight: FontWeight.w500,
-                                                        color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                            Expanded(
-                                              flex: 3,
-                                              child: Text(
-                                                segmento.descricao != null && segmento.descricao!.isNotEmpty
-                                                    ? segmento.descricao!
-                                                    : 'Sem descrição',
-                                                style: TextStyle(
-                                                  fontSize: 14,
-                                                  color: isDark ? const Color(0xFFcbd5e1) : const Color(0xFF475569),
-                                                  fontStyle: segmento.descricao != null && segmento.descricao!.isNotEmpty
-                                                      ? FontStyle.normal
-                                                      : FontStyle.italic,
-                                                ),
-                                                maxLines: 2,
-                                                overflow: TextOverflow.ellipsis,
-                                              ),
-                                            ),
-                                            Expanded(
-                                              flex: 1,
-                                              child: Row(
-                                                mainAxisSize: MainAxisSize.min,
-                                                children: [
-                                                  Container(
-                                                    width: 24,
-                                                    height: 24,
-                                                    decoration: BoxDecoration(
-                                                      color: segmento.backgroundColor,
-                                                      shape: BoxShape.circle,
-                                                      border: Border.all(
-                                                        color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-                                                        width: 1,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                            SizedBox(
-                                              width: 120,
-                                              child: Row(
-                                                mainAxisAlignment: MainAxisAlignment.end,
-                                                children: [
-                                                  IconButton(
-                                                    icon: const Icon(Icons.edit, size: 20),
-                                                    color: const Color(0xFF3b82f6),
-                                                    onPressed: () => _editSegmento(segmento),
-                                                    tooltip: 'Editar',
-                                                  ),
-                                                  IconButton(
-                                                    icon: const Icon(Icons.copy, size: 20),
-                                                    color: const Color(0xFFf59e0b),
-                                                    onPressed: () => _duplicateSegmento(segmento),
-                                                    tooltip: 'Duplicar',
-                                                  ),
-                                                  IconButton(
-                                                    icon: const Icon(Icons.delete, size: 20),
-                                                    color: const Color(0xFFef4444),
-                                                    onPressed: () => _deleteSegmento(segmento),
-                                                    tooltip: 'Excluir',
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                ),
-                              ),
-
-                              // Rodapé com paginação
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                decoration: BoxDecoration(
-                                  color: isDark ? const Color(0xFF0f172a) : const Color(0xFFf8fafc),
-                                  borderRadius: const BorderRadius.only(
-                                    bottomLeft: Radius.circular(12),
-                                    bottomRight: Radius.circular(12),
-                                  ),
-                                  border: Border(
-                                    top: BorderSide(
-                                      color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                                      width: 1,
-                                    ),
-                                  ),
-                                ),
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Text(
-                                      'Mostrando ${_paginatedSegmentos.length} de ${_filteredSegmentos.length} segmentos',
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
-                                      ),
-                                    ),
-                                    Row(
-                                      children: [
-                                        TextButton(
-                                          onPressed: _currentPage > 1
-                                              ? () {
-                                                  setState(() {
-                                                    _currentPage--;
-                                                  });
-                                                }
-                                              : null,
-                                          style: TextButton.styleFrom(
-                                            foregroundColor: _currentPage > 1
-                                                ? (isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b))
-                                                : (isDark ? const Color(0xFF475569) : const Color(0xFF94a3b8)),
-                                          ),
-                                          child: const Text('Anterior'),
-                                        ),
-                                        Container(
-                                          margin: const EdgeInsets.symmetric(horizontal: 8),
-                                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                          decoration: BoxDecoration(
-                                            color: const Color(0xFF3b82f6),
-                                            borderRadius: BorderRadius.circular(6),
-                                          ),
-                                          child: Text(
-                                            '$_currentPage',
-                                            style: const TextStyle(
-                                              color: Colors.white,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
-                                        ),
-                                        TextButton(
-                                          onPressed: _currentPage < _totalPages
-                                              ? () {
-                                                  setState(() {
-                                                    _currentPage++;
-                                                  });
-                                                }
-                                              : null,
-                                          style: TextButton.styleFrom(
-                                            foregroundColor: _currentPage < _totalPages
-                                                ? (isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b))
-                                                : (isDark ? const Color(0xFF475569) : const Color(0xFF94a3b8)),
-                                          ),
-                                          child: const Text('Próximo'),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
+                          SizedBox(width: spacing.xs),
+                          Expanded(
+                            child: Text(
+                              item.segmento,
+                              style: typography.cardTitle.copyWith(color: colors.textPrimary),
+                            ),
                           ),
+                          if (item.cor != null && item.cor!.isNotEmpty)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                              decoration: BoxDecoration(
+                                color: item.backgroundColor,
+                                borderRadius: TFRadius.borderRadiusSm,
+                              ),
+                              child: Text(
+                                item.cor!,
+                                style: typography.micro.copyWith(color: item.textColor, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                        ],
+                      ),
+                      if (item.descricao != null && item.descricao!.isNotEmpty) ...[
+                        SizedBox(height: spacing.xxs),
+                        Text(
+                          item.descricao!,
+                          style: typography.bodySmall.copyWith(color: colors.textSecondary),
                         ),
+                      ],
+                    ],
+                  ),
+                ),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TFIconButton(
+                      icon: TFIcons.edit,
+                      tooltip: 'Editar "${item.segmento}"',
+                      variant: TFIconButtonVariant.standard,
+                      onPressed: () => _editSegmento(item),
+                    ),
+                    TFIconButton(
+                      icon: Icons.copy_rounded,
+                      tooltip: 'Duplicar "${item.segmento}"',
+                      variant: TFIconButtonVariant.subtle,
+                      onPressed: () => _duplicateSegmento(item),
+                    ),
+                    TFIconButton(
+                      icon: TFIcons.delete,
+                      tooltip: 'Excluir "${item.segmento}"',
+                      variant: TFIconButtonVariant.danger,
+                      onPressed: () => _deleteSegmento(item),
+                    ),
+                  ],
+                ),
+              ],
             ),
-          ],
-        ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _loadSegmentos,
-        backgroundColor: const Color(0xFF3b82f6),
-        tooltip: 'Atualizar',
-        child: const Icon(Icons.refresh, color: Colors.white),
-      ),
+          ),
+        );
+      },
     );
   }
 }

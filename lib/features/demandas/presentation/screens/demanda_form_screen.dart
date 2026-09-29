@@ -1,14 +1,25 @@
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
-import '../../data/models/demanda_model.dart';
-import '../../data/models/demanda_anexo_model.dart';
-import '../../data/services/demanda_service.dart';
-import '../../../../services/local_service.dart';
-import '../../../../services/executor_service.dart';
-import '../../../../models/local.dart';
+import '../../../../design_system/components/buttons/tf_button.dart';
+import '../../../../design_system/components/buttons/tf_icon_button.dart';
+import '../../../../design_system/components/cards/tf_card.dart';
+import '../../../../design_system/components/dialogs/tf_modal_dialog.dart';
+import '../../../../design_system/components/feedback/tf_loading.dart';
+import '../../../../design_system/components/inputs/tf_dropdown.dart';
+import '../../../../design_system/components/inputs/tf_text_field.dart';
+import '../../../../design_system/components/layout/tf_page_header.dart';
+import '../../../../design_system/foundations/tf_breakpoints.dart';
+import '../../../../design_system/foundations/tf_icons.dart';
+import '../../../../design_system/foundations/tf_radius.dart';
+import '../../../../design_system/theme/taskflow_theme_extension.dart';
 import '../../../../models/executor.dart';
+import '../../../../models/local.dart';
+import '../../../../services/executor_service.dart';
+import '../../../../services/local_service.dart';
+import '../../data/models/demanda_anexo_model.dart';
+import '../../data/models/demanda_model.dart';
+import '../../data/services/demanda_service.dart';
 
 class DemandaFormScreen extends StatefulWidget {
   final Demanda? demandaExistente;
@@ -26,25 +37,24 @@ class _DemandaFormScreenState extends State<DemandaFormScreen> {
 
   final _formKey = GlobalKey<FormState>();
 
-  // Controladores e variáveis de estado dos campos
+  // Controladores e estado dos campos
   String? _origem;
   String? _local;
-  final TextEditingController _salaController = TextEditingController();
-  final TextEditingController _demandaController = TextEditingController();
-  final TextEditingController _notaController = TextEditingController();
-  final TextEditingController _ordemController = TextEditingController();
-  final TextEditingController _siController = TextEditingController();
-  final TextEditingController _atController = TextEditingController();
+  late final TextEditingController _salaController;
+  late final TextEditingController _demandaController;
+  late final TextEditingController _notaController;
+  late final TextEditingController _ordemController;
+  late final TextEditingController _siController;
+  late final TextEditingController _atController;
   String? _responsavel;
   DateTime? _prazo;
   String _status = 'Aberta';
   String _prioridade = 'Normal';
-  final TextEditingController _observacoesController = TextEditingController();
+  late final TextEditingController _observacoesController;
 
   bool _isSaving = false;
-  bool _isLoadingDropdowns = true;
 
-  // Listas locais e executores cadastrados no sistema
+  // Listas de dados auxiliares do sistema
   List<Local> _locaisDoSistema = [];
   List<Executor> _executoresDoSistema = [];
 
@@ -53,7 +63,7 @@ class _DemandaFormScreenState extends State<DemandaFormScreen> {
   final List<PlatformFile> _novosAnexosDepois = [];
   final List<PlatformFile> _novosAnexosGerais = [];
 
-  // Anexos existentes (apenas em modo de edição)
+  // Anexos existentes (em modo de edição)
   List<DemandaAnexo> _anexosExistentes = [];
 
   final List<String> _origens = [
@@ -77,7 +87,7 @@ class _DemandaFormScreenState extends State<DemandaFormScreen> {
     'Aguardando material',
     'Concluída',
     'Cancelada',
-    'Suspensa'
+    'Suspensa',
   ];
 
   final List<String> _prioridadesOpcoes = [
@@ -90,56 +100,61 @@ class _DemandaFormScreenState extends State<DemandaFormScreen> {
   @override
   void initState() {
     super.initState();
+    final d = widget.demandaExistente;
+    _origem = d?.origem;
+    _local = d?.local;
+    _salaController = TextEditingController(text: d?.sala ?? '');
+    _demandaController = TextEditingController(text: d?.demanda ?? '');
+    _notaController = TextEditingController(text: d?.nota ?? '');
+    _ordemController = TextEditingController(text: d?.ordem ?? '');
+    _siController = TextEditingController(text: d?.si ?? '');
+    _atController = TextEditingController(text: d?.at ?? '');
+    _responsavel = d?.responsavel;
+    _prazo = d?.prazo;
+    _status = d?.status ?? 'Aberta';
+    _prioridade = d?.prioridade ?? 'Normal';
+    _observacoesController = TextEditingController(text: d?.observacoes ?? '');
+
     _carregarDropdownsEPrefills();
+  }
+
+  @override
+  void dispose() {
+    _salaController.dispose();
+    _demandaController.dispose();
+    _notaController.dispose();
+    _ordemController.dispose();
+    _siController.dispose();
+    _atController.dispose();
+    _observacoesController.dispose();
+    super.dispose();
   }
 
   Future<void> _carregarDropdownsEPrefills() async {
     try {
-      final locais = await _localService.getAllLocais();
-      final executores = await _executorService.getAllExecutores();
+      final results = await Future.wait([
+        _localService.getAllLocais(),
+        _executorService.getAllExecutores(),
+      ]);
 
-      setState(() {
-        _locaisDoSistema = locais;
-        _executoresDoSistema = executores;
-        _isLoadingDropdowns = false;
-      });
-
-      if (widget.demandaExistente != null) {
-        final d = widget.demandaExistente!;
-        _origem = d.origem;
-        // Tenta achar o local nas opções carregadas, senão insere
-        if (locais.any((l) => l.local == d.local)) {
-          _local = d.local;
-        } else {
-          _local = d.local;
-        }
-        _salaController.text = d.sala ?? '';
-        _demandaController.text = d.demanda;
-        _notaController.text = d.nota ?? '';
-        _ordemController.text = d.ordem ?? '';
-        _siController.text = d.si ?? '';
-        _atController.text = d.at ?? '';
-        // Tenta achar o executor por nome
-        if (executores.any((e) => e.nome == d.responsavel)) {
-          _responsavel = d.responsavel;
-        } else {
-          _responsavel = d.responsavel;
-        }
-        _prazo = d.prazo;
-        _status = d.status;
-        _prioridade = d.prioridade;
-        _observacoesController.text = d.observacoes ?? '';
-
-        // Carregar anexos existentes
-        final anexos = await _demandaService.listarAnexos(d.id);
+      if (mounted) {
         setState(() {
-          _anexosExistentes = anexos;
+          _locaisDoSistema = results[0] as List<Local>;
+          _executoresDoSistema = results[1] as List<Executor>;
         });
       }
-    } catch (e) {
-      print('Erro ao carregar dados dos dropdowns: $e');
-      setState(() => _isLoadingDropdowns = false);
-    }
+
+      if (widget.demandaExistente != null) {
+        try {
+          final anexos = await _demandaService.listarAnexos(widget.demandaExistente!.id);
+          if (mounted) {
+            setState(() {
+              _anexosExistentes = anexos;
+            });
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
   }
 
   Future<void> _selecionarArquivos(String tipo) async {
@@ -161,9 +176,11 @@ class _DemandaFormScreenState extends State<DemandaFormScreen> {
         });
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erro ao selecionar arquivos: $e')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro ao selecionar arquivos: $e')),
+        );
+      }
     }
   }
 
@@ -180,19 +197,13 @@ class _DemandaFormScreenState extends State<DemandaFormScreen> {
   }
 
   Future<void> _excluirAnexoExistente(DemandaAnexo anexo) async {
-    final confirmar = await showDialog<bool>(
+    final confirmar = await TFModalDialog.confirm(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Excluir evidência/anexo'),
-        content: Text('Deseja realmente excluir "${anexo.fileName}"?'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Excluir', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
+      title: 'Excluir evidência/anexo',
+      message: 'Deseja realmente excluir permanentemente "${anexo.fileName}"?',
+      confirmLabel: 'Excluir',
+      cancelLabel: 'Cancelar',
+      isDestructive: true,
     );
 
     if (confirmar == true) {
@@ -200,18 +211,24 @@ class _DemandaFormScreenState extends State<DemandaFormScreen> {
       try {
         await _demandaService.excluirAnexo(anexo);
         final anexos = await _demandaService.listarAnexos(widget.demandaExistente!.id);
-        setState(() {
-          _anexosExistentes = anexos;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Anexo excluído com sucesso!')),
-        );
+        if (mounted) {
+          setState(() {
+            _anexosExistentes = anexos;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Anexo excluído com sucesso!')),
+          );
+        }
       } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Falha ao excluir anexo: $e')),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Falha ao excluir anexo: $e')),
+          );
+        }
       } finally {
-        setState(() => _isSaving = false);
+        if (mounted) {
+          setState(() => _isSaving = false);
+        }
       }
     }
   }
@@ -252,19 +269,24 @@ class _DemandaFormScreenState extends State<DemandaFormScreen> {
         demandaSalva = await _demandaService.atualizarDemanda(d, versaoAnterior: widget.demandaExistente);
       }
 
-      // Upload dos novos anexos
       await _uploadNovosAnexos(demandaSalva.id);
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Demanda salva com sucesso!')),
-      );
-      Navigator.pop(context, true);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Demanda salva com sucesso!')),
+        );
+        Navigator.pop(context, true);
+      }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erro ao salvar demanda: $e')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro ao salvar demanda: $e')),
+        );
+      }
     } finally {
-      setState(() => _isSaving = false);
+      if (mounted) {
+        setState(() => _isSaving = false);
+      }
     }
   }
 
@@ -290,220 +312,379 @@ class _DemandaFormScreenState extends State<DemandaFormScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoadingDropdowns) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+    final typography = context.tfTypography;
+    final isDesktop = TFBreakpoints.isDesktop(context);
+
+    // Lista de locais
+    final List<String> localOptions = _locaisDoSistema.isNotEmpty
+        ? _locaisDoSistema.map((l) => l.local).toList()
+        : [_local ?? 'Principal'];
+    if (_local != null && !localOptions.contains(_local)) {
+      localOptions.insert(0, _local!);
+    }
+
+    // Lista de executores
+    final List<String> executorOptions = _executoresDoSistema.isNotEmpty
+        ? _executoresDoSistema.map((e) => e.nome).toList()
+        : [_responsavel ?? 'Geral'];
+    if (_responsavel != null && !executorOptions.contains(_responsavel)) {
+      executorOptions.insert(0, _responsavel!);
     }
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.demandaExistente == null ? 'Nova Demanda' : 'Editar Demanda'),
-      ),
-      body: _isSaving
-          ? const Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  CircularProgressIndicator(),
-                  SizedBox(height: 16),
-                  Text('Salvando demanda e enviando evidências...', style: TextStyle(fontWeight: FontWeight.bold)),
-                ],
+      backgroundColor: colors.background,
+      body: SafeArea(
+        child: Column(
+          children: [
+            // Page Header Oficial TFDS
+            TFPageHeader(
+              title: widget.demandaExistente == null ? 'Nova Demanda' : 'Editar Demanda',
+              subtitle: 'Preencha as informações da demanda e evidências operacionais.',
+              leading: TFIconButton(
+                icon: Icons.arrow_back_rounded,
+                tooltip: 'Voltar',
+                onPressed: () => Navigator.pop(context),
               ),
-            )
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(16.0),
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Grid de Campos Básicos
-                    Wrap(
-                      spacing: 16,
-                      runSpacing: 16,
-                      children: [
-                        // Origem (Dropdown)
-                        SizedBox(
-                          width: 250,
-                          child: DropdownButtonFormField<String>(
-                            value: _origem,
-                            decoration: const InputDecoration(labelText: 'Origem *', border: OutlineInputBorder()),
-                            items: _origens.map((o) => DropdownMenuItem(value: o, child: Text(o))).toList(),
-                            validator: (val) => val == null ? 'Campo obrigatório' : null,
-                            onChanged: (val) => setState(() => _origem = val),
-                          ),
-                        ),
-                        // Local (Dropdown com base nos locais existentes ou campo livre como fallback)
-                        SizedBox(
-                          width: 250,
-                          child: DropdownButtonFormField<String>(
-                            value: _local,
-                            decoration: const InputDecoration(labelText: 'Local *', border: OutlineInputBorder()),
-                            items: _locaisDoSistema.isEmpty
-                                ? [DropdownMenuItem(value: _local ?? 'Principal', child: Text(_local ?? 'Principal'))]
-                                : _locaisDoSistema.map((l) => DropdownMenuItem(value: l.local, child: Text(l.local))).toList(),
-                            validator: (val) => val == null ? 'Campo obrigatório' : null,
-                            onChanged: (val) => setState(() => _local = val),
-                          ),
-                        ),
-                        // Sala
-                        SizedBox(
-                          width: 200,
-                          child: TextFormField(
-                            controller: _salaController,
-                            decoration: const InputDecoration(labelText: 'Sala', border: OutlineInputBorder()),
-                          ),
-                        ),
-                        // Responsável (Dropdown com base nos executores existentes)
-                        SizedBox(
-                          width: 250,
-                          child: DropdownButtonFormField<String>(
-                            value: _responsavel,
-                            decoration: const InputDecoration(labelText: 'Responsável *', border: OutlineInputBorder()),
-                            items: _executoresDoSistema.isEmpty
-                                ? [DropdownMenuItem(value: _responsavel ?? 'Geral', child: Text(_responsavel ?? 'Geral'))]
-                                : _executoresDoSistema.map((e) => DropdownMenuItem(value: e.nome, child: Text(e.nome))).toList(),
-                            validator: (val) => val == null ? 'Campo obrigatório' : null,
-                            onChanged: (val) => setState(() => _responsavel = val),
-                          ),
-                        ),
-                        // Prazo (DatePicker)
-                        SizedBox(
-                          width: 200,
-                          child: InkWell(
-                            onTap: () async {
-                              final picked = await showDatePicker(
-                                context: context,
-                                initialDate: _prazo ?? DateTime.now(),
-                                firstDate: DateTime.now().subtract(const Duration(days: 365)),
-                                lastDate: DateTime.now().add(const Duration(days: 365 * 5)),
-                              );
-                              if (picked != null) {
-                                setState(() => _prazo = picked);
-                              }
-                            },
-                            child: InputDecorator(
-                              decoration: const InputDecoration(labelText: 'Prazo *', border: OutlineInputBorder()),
-                              child: Text(
-                                _prazo == null
-                                    ? 'Selecionar data'
-                                    : "${_prazo!.day.toString().padLeft(2, '0')}/${_prazo!.month.toString().padLeft(2, '0')}/${_prazo!.year}",
-                              ),
-                            ),
-                          ),
-                        ),
-                        // Status
-                        SizedBox(
-                          width: 200,
-                          child: DropdownButtonFormField<String>(
-                            value: _status,
-                            decoration: const InputDecoration(labelText: 'Status *', border: OutlineInputBorder()),
-                            items: _statusOpcoes.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
-                            onChanged: (val) => setState(() => _status = val ?? 'Aberta'),
-                          ),
-                        ),
-                        // Prioridade
-                        SizedBox(
-                          width: 150,
-                          child: DropdownButtonFormField<String>(
-                            value: _prioridade,
-                            decoration: const InputDecoration(labelText: 'Prioridade *', border: OutlineInputBorder()),
-                            items: _prioridadesOpcoes.map((p) => DropdownMenuItem(value: p, child: Text(p))).toList(),
-                            onChanged: (val) => setState(() => _prioridade = val ?? 'Normal'),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    // Demanda (Descrição principal)
-                    TextFormField(
-                      controller: _demandaController,
-                      maxLines: 4,
-                      decoration: const InputDecoration(
-                        labelText: 'Demanda (Descrição da Atividade) *',
-                        border: OutlineInputBorder(),
-                        hintText: 'Descreva os detalhes e o que precisa ser feito...',
-                      ),
-                      validator: (val) => val == null || val.trim().isEmpty ? 'Campo obrigatório' : null,
-                    ),
-                    const SizedBox(height: 16),
-                    // Dados SAP Associados
-                    const Text('Associações SAP (Opcional)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 16,
-                      runSpacing: 16,
-                      children: [
-                        SizedBox(
-                          width: 150,
-                          child: TextFormField(
-                            controller: _notaController,
-                            decoration: const InputDecoration(labelText: 'Nota SAP', border: OutlineInputBorder()),
-                          ),
-                        ),
-                        SizedBox(
-                          width: 150,
-                          child: TextFormField(
-                            controller: _ordemController,
-                            decoration: const InputDecoration(labelText: 'Ordem SAP', border: OutlineInputBorder()),
-                          ),
-                        ),
-                        SizedBox(
-                          width: 150,
-                          child: TextFormField(
-                            controller: _siController,
-                            decoration: const InputDecoration(labelText: 'SI', border: OutlineInputBorder(), hintText: '00000000/00A'),
-                            inputFormatters: [_SIMaskTextInputFormatter()],
-                          ),
-                        ),
-                        SizedBox(
-                          width: 150,
-                          child: TextFormField(
-                            controller: _atController,
-                            decoration: const InputDecoration(labelText: 'AT', border: OutlineInputBorder()),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    // Observações
-                    TextFormField(
-                      controller: _observacoesController,
-                      maxLines: 3,
-                      decoration: const InputDecoration(labelText: 'Observações / Comentários adicionais', border: OutlineInputBorder()),
-                    ),
-                    const SizedBox(height: 24),
-                    
-                    // Upload e Gestão de Evidências (Antes, Depois, Geral)
-                    const Text('Evidências & Anexos', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-                    const Divider(),
-                    _buildSecaoAnexos('antes', 'Evidências ANTES (Fotos da situação inicial)', _novosAnexosAntes),
-                    const SizedBox(height: 16),
-                    _buildSecaoAnexos('depois', 'Evidências DEPOIS (Fotos após a execução)', _novosAnexosDepois),
-                    const SizedBox(height: 16),
-                    _buildSecaoAnexos('geral', 'Documentos / Anexos Gerais', _novosAnexosGerais),
-                    
-                    const SizedBox(height: 32),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 50,
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Theme.of(context).primaryColor,
-                          foregroundColor: Colors.white,
-                        ),
-                        onPressed: _salvar,
-                        child: const Text('SALVAR DEMANDA', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                      ),
-                    ),
-                  ],
-                ),
+              primaryAction: TFButton(
+                label: 'Salvar Demanda',
+                leadingIcon: TFIcons.save,
+                loading: _isSaving,
+                onPressed: _salvar,
               ),
             ),
+
+            Expanded(
+              child: _isSaving
+                  ? const Center(
+                      child: TFLoading(message: 'Salvando demanda e enviando evidências...'),
+                    )
+                  : SingleChildScrollView(
+                      padding: EdgeInsets.all(spacing.md),
+                      child: Form(
+                        key: _formKey,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // 1. Bloco de Dados Principais
+                            TFCard(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Dados da Demanda',
+                                    style: typography.sectionTitle.copyWith(color: colors.textPrimary),
+                                  ),
+                                  SizedBox(height: spacing.xxs),
+                                  Text(
+                                    'Identificação, localidade, responsabilidade e prazos',
+                                    style: typography.caption.copyWith(color: colors.textSecondary),
+                                  ),
+                                  SizedBox(height: spacing.md),
+                                  Wrap(
+                                    spacing: spacing.md,
+                                    runSpacing: spacing.md,
+                                    children: [
+                                      // Origem
+                                      SizedBox(
+                                        width: isDesktop ? 260 : double.infinity,
+                                        child: TFDropdown<String>(
+                                          label: 'Origem',
+                                          isRequired: true,
+                                          items: _origens,
+                                          value: _origem,
+                                          displayText: (val) => val,
+                                          hint: 'Selecione a origem',
+                                          onChanged: (val) => setState(() => _origem = val),
+                                          validator: (val) => val == null ? 'Campo obrigatório' : null,
+                                        ),
+                                      ),
+
+                                      // Local
+                                      SizedBox(
+                                        width: isDesktop ? 260 : double.infinity,
+                                        child: TFDropdown<String>(
+                                          label: 'Local',
+                                          isRequired: true,
+                                          items: localOptions,
+                                          value: _local,
+                                          displayText: (val) => val,
+                                          hint: 'Selecione o local',
+                                          onChanged: (val) => setState(() => _local = val),
+                                          validator: (val) => val == null ? 'Campo obrigatório' : null,
+                                        ),
+                                      ),
+
+                                      // Sala
+                                      SizedBox(
+                                        width: isDesktop ? 180 : double.infinity,
+                                        child: TFTextField(
+                                          label: 'Sala / Sublocal',
+                                          controller: _salaController,
+                                          hint: 'Ex: Sala 04',
+                                        ),
+                                      ),
+
+                                      // Responsável
+                                      SizedBox(
+                                        width: isDesktop ? 260 : double.infinity,
+                                        child: TFDropdown<String>(
+                                          label: 'Responsável',
+                                          isRequired: true,
+                                          items: executorOptions,
+                                          value: _responsavel,
+                                          displayText: (val) => val,
+                                          hint: 'Selecione o responsável',
+                                          onChanged: (val) => setState(() => _responsavel = val),
+                                          validator: (val) => val == null ? 'Campo obrigatório' : null,
+                                        ),
+                                      ),
+
+                                      // Prazo (Date Selector integrado)
+                                      SizedBox(
+                                        width: isDesktop ? 200 : double.infinity,
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              'Prazo Limite *',
+                                              style: typography.labelSmall.copyWith(
+                                                color: colors.textPrimary,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                            SizedBox(height: spacing.xs),
+                                            InkWell(
+                                              onTap: () async {
+                                                final picked = await showDatePicker(
+                                                  context: context,
+                                                  initialDate: _prazo ?? DateTime.now(),
+                                                  firstDate: DateTime.now().subtract(const Duration(days: 365)),
+                                                  lastDate: DateTime.now().add(const Duration(days: 365 * 5)),
+                                                );
+                                                if (picked != null) {
+                                                  setState(() => _prazo = picked);
+                                                }
+                                              },
+                                              borderRadius: TFRadius.borderRadiusSm,
+                                              child: Container(
+                                                padding: EdgeInsets.symmetric(
+                                                  horizontal: spacing.md,
+                                                  vertical: spacing.sm + 2,
+                                                ),
+                                                decoration: BoxDecoration(
+                                                  color: colors.surface,
+                                                  borderRadius: TFRadius.borderRadiusSm,
+                                                  border: Border.all(
+                                                    color: _prazo == null && _isSaving
+                                                        ? colors.danger
+                                                        : colors.borderDefault,
+                                                  ),
+                                                ),
+                                                child: Row(
+                                                  children: [
+                                                    Icon(TFIcons.calendar, size: 16, color: colors.textSecondary),
+                                                    SizedBox(width: spacing.xs),
+                                                    Expanded(
+                                                      child: Text(
+                                                        _prazo == null
+                                                            ? 'Selecionar data'
+                                                            : "${_prazo!.day.toString().padLeft(2, '0')}/${_prazo!.month.toString().padLeft(2, '0')}/${_prazo!.year}",
+                                                        style: typography.bodyMedium.copyWith(
+                                                          color: _prazo == null ? colors.textDisabled : colors.textPrimary,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+
+                                      // Status
+                                      SizedBox(
+                                        width: isDesktop ? 200 : double.infinity,
+                                        child: TFDropdown<String>(
+                                          label: 'Status',
+                                          isRequired: true,
+                                          items: _statusOpcoes,
+                                          value: _status,
+                                          displayText: (val) => val,
+                                          onChanged: (val) => setState(() => _status = val ?? 'Aberta'),
+                                        ),
+                                      ),
+
+                                      // Prioridade
+                                      SizedBox(
+                                        width: isDesktop ? 180 : double.infinity,
+                                        child: TFDropdown<String>(
+                                          label: 'Prioridade',
+                                          isRequired: true,
+                                          items: _prioridadesOpcoes,
+                                          value: _prioridade,
+                                          displayText: (val) => val,
+                                          onChanged: (val) => setState(() => _prioridade = val ?? 'Normal'),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+
+                                  SizedBox(height: spacing.md),
+
+                                  // Descrição da Demanda
+                                  TFTextField(
+                                    label: 'Demanda (Descrição da Atividade)',
+                                    required: true,
+                                    controller: _demandaController,
+                                    hint: 'Descreva detalhadamente o escopo e o que precisa ser executado...',
+                                    maxLines: 4,
+                                    validator: (val) => val == null || val.trim().isEmpty ? 'Campo obrigatório' : null,
+                                  ),
+                                ],
+                              ),
+                            ),
+
+                            SizedBox(height: spacing.md),
+
+                            // 2. Bloco de Integração SAP
+                            TFCard(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Associações SAP (Opcional)',
+                                    style: typography.sectionTitle.copyWith(color: colors.textPrimary),
+                                  ),
+                                  SizedBox(height: spacing.xxs),
+                                  Text(
+                                    'Vínculo com notas, ordens, solicitações e autorizações',
+                                    style: typography.caption.copyWith(color: colors.textSecondary),
+                                  ),
+                                  SizedBox(height: spacing.md),
+                                  Wrap(
+                                    spacing: spacing.md,
+                                    runSpacing: spacing.md,
+                                    children: [
+                                      SizedBox(
+                                        width: isDesktop ? 180 : double.infinity,
+                                        child: TFTextField(
+                                          label: 'Nota SAP',
+                                          controller: _notaController,
+                                          hint: 'Ex: 100234567',
+                                        ),
+                                      ),
+                                      SizedBox(
+                                        width: isDesktop ? 180 : double.infinity,
+                                        child: TFTextField(
+                                          label: 'Ordem SAP',
+                                          controller: _ordemController,
+                                          hint: 'Ex: 400123456',
+                                        ),
+                                      ),
+                                      SizedBox(
+                                        width: isDesktop ? 180 : double.infinity,
+                                        child: TFTextField(
+                                          label: 'SI',
+                                          controller: _siController,
+                                          hint: '00000000/00A',
+                                          inputFormatters: [_SIMaskTextInputFormatter()],
+                                        ),
+                                      ),
+                                      SizedBox(
+                                        width: isDesktop ? 180 : double.infinity,
+                                        child: TFTextField(
+                                          label: 'AT',
+                                          controller: _atController,
+                                          hint: 'Ex: AT-01',
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+
+                            SizedBox(height: spacing.md),
+
+                            // 3. Observações
+                            TFCard(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Observações Adicionais',
+                                    style: typography.sectionTitle.copyWith(color: colors.textPrimary),
+                                  ),
+                                  SizedBox(height: spacing.sm),
+                                  TFTextField(
+                                    controller: _observacoesController,
+                                    hint: 'Comentários adicionais, orientações técnicas ou notas gerais...',
+                                    maxLines: 3,
+                                  ),
+                                ],
+                              ),
+                            ),
+
+                            SizedBox(height: spacing.md),
+
+                            // 4. Evidências & Anexos
+                            TFCard(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Evidências & Anexos',
+                                    style: typography.sectionTitle.copyWith(color: colors.textPrimary),
+                                  ),
+                                  SizedBox(height: spacing.xxs),
+                                  Text(
+                                    'Fotos antes/depois da execução e arquivos técnicos de suporte',
+                                    style: typography.caption.copyWith(color: colors.textSecondary),
+                                  ),
+                                  SizedBox(height: spacing.md),
+                                  _buildSecaoAnexos('antes', 'Evidências ANTES (Situação inicial)', _novosAnexosAntes),
+                                  Divider(color: colors.borderDefault, height: spacing.lg),
+                                  _buildSecaoAnexos('depois', 'Evidências DEPOIS (Pós-execução)', _novosAnexosDepois),
+                                  Divider(color: colors.borderDefault, height: spacing.lg),
+                                  _buildSecaoAnexos('geral', 'Documentos / Anexos Gerais', _novosAnexosGerais),
+                                ],
+                              ),
+                            ),
+
+                            SizedBox(height: spacing.xl),
+
+                            // Botão Salvar inferior
+                            TFButton(
+                              label: 'SALVAR DEMANDA',
+                              leadingIcon: TFIcons.save,
+                              size: TFButtonSize.large,
+                              loading: _isSaving,
+                              fullWidth: true,
+                              onPressed: _salvar,
+                            ),
+                            SizedBox(height: spacing.lg),
+                          ],
+                        ),
+                      ),
+                    ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
   Widget _buildSecaoAnexos(String tipo, String titulo, List<PlatformFile> novosAnexos) {
-    final existentes = _anexosExistentes.where((a) => a.tipo == (tipo == 'antes' ? 'evidencia_antes' : tipo == 'depois' ? 'evidencia_depois' : 'anexo_geral')).toList();
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+    final typography = context.tfTypography;
+
+    final existentes = _anexosExistentes
+        .where((a) => a.tipo == (tipo == 'antes' ? 'evidencia_antes' : tipo == 'depois' ? 'evidencia_depois' : 'anexo_geral'))
+        .toList();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -511,42 +692,81 @@ class _DemandaFormScreenState extends State<DemandaFormScreen> {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(titulo, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
-            TextButton.icon(
-              icon: const Icon(Icons.add_a_photo),
-              label: const Text('Anexar'),
+            Text(
+              titulo,
+              style: typography.labelSmall.copyWith(
+                fontWeight: FontWeight.bold,
+                color: colors.textPrimary,
+              ),
+            ),
+            TFButton(
+              label: 'Anexar',
+              leadingIcon: TFIcons.add,
+              variant: TFButtonVariant.secondary,
+              size: TFButtonSize.small,
               onPressed: () => _selecionarArquivos(tipo),
             ),
           ],
         ),
+
         if (existentes.isNotEmpty) ...[
-          const SizedBox(height: 4),
-          const Text('Existentes:', style: TextStyle(fontSize: 11, color: Colors.grey)),
+          SizedBox(height: spacing.xs),
+          Text(
+            'Arquivos salvos:',
+            style: typography.caption.copyWith(color: colors.textSecondary),
+          ),
+          SizedBox(height: spacing.xxs),
           Wrap(
-            spacing: 8,
+            spacing: spacing.xs,
+            runSpacing: spacing.xs,
             children: existentes.map((anexo) {
               final isImage = anexo.fileName.endsWith('.jpg') || anexo.fileName.endsWith('.png') || anexo.fileName.endsWith('.webp');
               return Chip(
+                backgroundColor: colors.surfaceSecondary,
+                side: BorderSide(color: colors.borderDefault),
                 avatar: isImage && anexo.fileUrl != null
-                    ? Image.network(anexo.fileUrl!, width: 24, height: 24, fit: BoxFit.cover)
-                    : const Icon(Icons.insert_drive_file),
-                label: Text(anexo.fileName, style: const TextStyle(fontSize: 11)),
+                    ? ClipRRect(
+                        borderRadius: TFRadius.borderRadiusXs,
+                        child: Image.network(anexo.fileUrl!, width: 20, height: 20, fit: BoxFit.cover),
+                      )
+                    : Icon(Icons.insert_drive_file_outlined, size: 16, color: colors.primary),
+                label: Text(
+                  anexo.fileName,
+                  style: typography.caption.copyWith(color: colors.textPrimary),
+                ),
+                deleteIcon: const Icon(TFIcons.close, size: 14),
                 onDeleted: () => _excluirAnexoExistente(anexo),
               );
             }).toList(),
           ),
         ],
+
         if (novosAnexos.isNotEmpty) ...[
-          const SizedBox(height: 4),
-          const Text('Novos selecionados (serão enviados ao salvar):', style: TextStyle(fontSize: 11, color: Colors.blue)),
+          SizedBox(height: spacing.xs),
+          Text(
+            'Novos selecionados (serão enviados ao salvar):',
+            style: typography.caption.copyWith(color: colors.info, fontWeight: FontWeight.w600),
+          ),
+          SizedBox(height: spacing.xxs),
           Wrap(
-            spacing: 8,
+            spacing: spacing.xs,
+            runSpacing: spacing.xs,
             children: novosAnexos.map((file) {
+              final isImage = file.name.endsWith('.jpg') || file.name.endsWith('.png') || file.name.endsWith('.webp');
               return Chip(
-                avatar: file.bytes != null && (file.name.endsWith('.jpg') || file.name.endsWith('.png') || file.name.endsWith('.webp'))
-                    ? Image.memory(file.bytes!, width: 24, height: 24, fit: BoxFit.cover)
-                    : const Icon(Icons.insert_drive_file),
-                label: Text(file.name, style: const TextStyle(fontSize: 11)),
+                backgroundColor: colors.infoBackground,
+                side: BorderSide(color: colors.info.withValues(alpha: 0.4)),
+                avatar: file.bytes != null && isImage
+                    ? ClipRRect(
+                        borderRadius: TFRadius.borderRadiusXs,
+                        child: Image.memory(file.bytes!, width: 20, height: 20, fit: BoxFit.cover),
+                      )
+                    : Icon(Icons.insert_drive_file_outlined, size: 16, color: colors.info),
+                label: Text(
+                  file.name,
+                  style: typography.caption.copyWith(color: colors.textPrimary),
+                ),
+                deleteIcon: const Icon(TFIcons.close, size: 14),
                 onDeleted: () => _removerNovoAnexo(file, tipo),
               );
             }).toList(),
@@ -561,40 +781,33 @@ class _SIMaskTextInputFormatter extends TextInputFormatter {
   @override
   TextEditingValue formatEditUpdate(
       TextEditingValue oldValue, TextEditingValue newValue) {
-    // Permite apagar livremente
     if (newValue.text.length < oldValue.text.length) {
       return newValue;
     }
 
     String text = newValue.text.toUpperCase();
     String newText = '';
-
-    // Remove qualquer coisa que não seja número ou letra
     text = text.replaceAll(RegExp(r'[^0-9A-Z]'), '');
 
     int index = 0;
     for (int i = 0; i < text.length; i++) {
       if (index < 8) {
-        // Primeiros 8 caracteres devem ser números
         if (RegExp(r'[0-9]').hasMatch(text[i])) {
           newText += text[i];
           index++;
         }
       } else if (index == 8) {
         newText += '/';
-        // 9º caractere (após a barra) deve ser número
         if (RegExp(r'[0-9]').hasMatch(text[i])) {
           newText += text[i];
           index++;
         }
       } else if (index == 9) {
-        // 10º caractere deve ser número
         if (RegExp(r'[0-9]').hasMatch(text[i])) {
           newText += text[i];
           index++;
         }
       } else if (index == 10) {
-        // 11º caractere deve ser letra
         if (RegExp(r'[A-Z]').hasMatch(text[i])) {
           newText += text[i];
           index++;

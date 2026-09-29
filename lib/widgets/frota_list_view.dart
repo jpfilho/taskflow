@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../design_system/taskflow_design_system.dart';
 import '../models/frota.dart';
 import '../models/regional.dart';
 import '../models/divisao.dart';
@@ -8,8 +9,6 @@ import '../services/regional_service.dart';
 import '../services/divisao_service.dart';
 import '../services/segmento_service.dart';
 import 'frota_form_dialog.dart';
-import 'multi_select_filter_dialog.dart';
-import '../utils/responsive.dart';
 
 class FrotaListView extends StatefulWidget {
   const FrotaListView({super.key});
@@ -28,77 +27,133 @@ class _FrotaListViewState extends State<FrotaListView> {
   List<Frota> _filteredFrotas = [];
   bool _isLoading = true;
   final TextEditingController _searchController = TextEditingController();
-  bool _isTableView = false; // false = lista (cards), true = tabela
-  final ScrollController _horizontalTableScrollController = ScrollController();
+  int _currentPage = 1;
+  final int _itemsPerPage = 10;
 
-  // Filtros (multiseleção com pesquisa)
   List<Regional> _regionais = [];
   List<Divisao> _divisoes = [];
   List<Segmento> _segmentos = [];
-  List<String> _regionaisTotais = [];
-  List<String> _divisoesTotais = [];
-  List<String> _segmentosTotais = [];
-  List<String> _tiposTotais = [];
-  Set<String> _selectedRegional = {};
-  Set<String> _selectedDivisao = {};
-  Set<String> _selectedSegmento = {};
-  Set<String> _selectedTipo = {};
-  bool _isLoadingFilterOptions = true;
 
-  static const List<Map<String, String>> _tiposVeiculos = [
-    {'value': 'CARRO_LEVE', 'label': 'Carro Leve'},
-    {'value': 'MUNCK', 'label': 'Munck'},
-    {'value': 'TRATOR', 'label': 'Trator'},
-    {'value': 'CAMINHAO', 'label': 'Caminhão'},
-    {'value': 'PICKUP', 'label': 'Pickup'},
-    {'value': 'VAN', 'label': 'Van'},
-    {'value': 'MOTO', 'label': 'Moto'},
-    {'value': 'ONIBUS', 'label': 'Ônibus'},
-    {'value': 'OUTRO', 'label': 'Outro'},
-  ];
+  // Filtros multiescolha por coluna
+  Set<String> _selectedTipos = {};
+  Set<String> _selectedMarcas = {};
+  Set<String> _selectedPropriedades = {};
+  Set<String> _selectedRegionais = {};
+  Set<String> _selectedDivisoes = {};
+  Set<String> _selectedSegmentos = {};
+
+  bool get _hasActiveFilters =>
+      _selectedTipos.isNotEmpty ||
+      _selectedMarcas.isNotEmpty ||
+      _selectedPropriedades.isNotEmpty ||
+      _selectedRegionais.isNotEmpty ||
+      _selectedDivisoes.isNotEmpty ||
+      _selectedSegmentos.isNotEmpty ||
+      _searchController.text.trim().isNotEmpty;
+
+  void _clearAllFilters() {
+    setState(() {
+      _selectedTipos.clear();
+      _selectedMarcas.clear();
+      _selectedPropriedades.clear();
+      _selectedRegionais.clear();
+      _selectedDivisoes.clear();
+      _selectedSegmentos.clear();
+      _searchController.clear();
+      _currentPage = 1;
+      _filteredFrotas = _applyFilter(_frotas);
+    });
+  }
+
+  List<String> _getUniquePropriedades() {
+    return _frotas
+        .where((f) => f.ativo)
+        .map((f) => Frota.getPropriedadeLabel(f.propriedade))
+        .where((p) => p.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+  }
+
+  List<String> _getUniqueTipos() {
+    return _frotas
+        .where((f) => f.ativo)
+        .map((f) => _getTipoVeiculoLabel(f.tipoVeiculo))
+        .where((t) => t.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+  }
+
+  List<String> _getUniqueMarcas() {
+    return _frotas
+        .where((f) => f.ativo && f.marca != null && f.marca!.trim().isNotEmpty)
+        .map((f) => f.marca!.trim())
+        .toSet()
+        .toList()
+      ..sort();
+  }
+
+  List<String> _getUniqueRegionais() {
+    return _frotas
+        .where((f) => f.ativo)
+        .map((f) => _getRegionalNome(f.regionalId))
+        .where((r) => r.isNotEmpty && r != '-')
+        .toSet()
+        .toList()
+      ..sort();
+  }
+
+  List<String> _getUniqueDivisoes() {
+    return _frotas
+        .where((f) => f.ativo)
+        .map((f) => _getDivisaoNome(f.divisaoId))
+        .where((d) => d.isNotEmpty && d != '-')
+        .toSet()
+        .toList()
+      ..sort();
+  }
+
+  List<String> _getUniqueSegmentos() {
+    return _frotas
+        .where((f) => f.ativo)
+        .map((f) => _getSegmentoNome(f.segmentoId))
+        .where((s) => s.isNotEmpty && s != '-')
+        .toSet()
+        .toList()
+      ..sort();
+  }
 
   @override
   void initState() {
     super.initState();
-    _tiposTotais = _tiposVeiculos.map((e) => e['label']!).toList();
     _loadFrotas();
-    _loadFilterOptions();
+    _loadDependencies();
     _searchController.addListener(_onSearchChanged);
-    // No desktop, tabela é o padrão
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && Responsive.isDesktop(context)) {
-        setState(() {
-          _isTableView = true;
-        });
-      }
-    });
   }
 
   @override
   void dispose() {
     _searchController.dispose();
-    _horizontalTableScrollController.dispose();
     super.dispose();
   }
 
   Future<void> _loadFrotas() async {
-    setState(() {
-      _isLoading = true;
-    });
+    setState(() => _isLoading = true);
 
     try {
       final frotas = await _frotaService.getAllFrotas();
-      setState(() {
-        _frotas = frotas;
-        _filteredFrotas = _applyAllFilters();
-        _isLoading = false;
-      });
-    } catch (e) {
-      print('Erro ao carregar frota: $e');
-      setState(() {
-        _isLoading = false;
-      });
       if (mounted) {
+        setState(() {
+          _frotas = frotas;
+          _filteredFrotas = _applyFilter(frotas);
+          _isLoading = false;
+          _currentPage = 1;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Erro ao carregar frota: $e'),
@@ -109,81 +164,101 @@ class _FrotaListViewState extends State<FrotaListView> {
     }
   }
 
-  Future<void> _loadFilterOptions() async {
-    _tiposTotais = _tiposVeiculos.map((t) => t['label']!).toList();
+  Future<void> _loadDependencies() async {
     try {
       final results = await Future.wait([
         _regionalService.getAllRegionais(),
         _divisaoService.getAllDivisoes(),
         _segmentoService.getAllSegmentos(),
       ]);
-      if (!mounted) return;
-      setState(() {
-        _regionais = results[0] as List<Regional>;
-        _divisoes = results[1] as List<Divisao>;
-        _segmentos = results[2] as List<Segmento>;
-        _regionaisTotais = _regionais.map((r) => r.regional).toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-        _divisoesTotais = _divisoes.map((d) => d.divisao).toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-        _segmentosTotais = _segmentos.map((s) => s.segmento).toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-        _isLoadingFilterOptions = false;
-        _filteredFrotas = _applyAllFilters();
-      });
-    } catch (e) {
       if (mounted) {
         setState(() {
-          _isLoadingFilterOptions = false;
-          _filteredFrotas = _applyAllFilters();
+          _regionais = results[0] as List<Regional>;
+          _divisoes = results[1] as List<Divisao>;
+          _segmentos = results[2] as List<Segmento>;
         });
       }
-    }
+    } catch (_) {}
   }
 
-  List<Frota> _applyAllFilters() {
-    List<Frota> result = _frotas;
-
-    if (_selectedRegional.isNotEmpty) {
-      final regionalIds = _regionais.where((r) => _selectedRegional.contains(r.regional)).map((r) => r.id).toSet();
-      result = result.where((e) => e.regionalId != null && regionalIds.contains(e.regionalId)).toList();
-    }
-    if (_selectedDivisao.isNotEmpty) {
-      final divisaoIds = _divisoes.where((d) => _selectedDivisao.contains(d.divisao)).map((d) => d.id).toSet();
-      result = result.where((e) => e.divisaoId != null && divisaoIds.contains(e.divisaoId)).toList();
-    }
-    if (_selectedSegmento.isNotEmpty) {
-      final segmentoIds = _segmentos.where((s) => _selectedSegmento.contains(s.segmento)).map((s) => s.id).toSet();
-      result = result.where((e) => e.segmentoId != null && segmentoIds.contains(e.segmentoId)).toList();
-    }
-    if (_selectedTipo.isNotEmpty) {
-      final tipoValues = _tiposVeiculos.where((t) => _selectedTipo.contains(t['label'])).map((t) => t['value']!).toSet();
-      result = result.where((e) => tipoValues.contains(e.tipoVeiculo)).toList();
-    }
-
+  List<Frota> _applyFilter(List<Frota> list) {
     final query = _searchController.text.toLowerCase().trim();
-    if (query.isNotEmpty) {
-      result = result.where((frota) {
-        return frota.nome.toLowerCase().contains(query) ||
-            (frota.marca?.toLowerCase().contains(query) ?? false) ||
+    final ativos = list.where((f) => f.ativo).toList();
+
+    return ativos.where((frota) {
+      final regionalNome = _getRegionalNome(frota.regionalId);
+      final divisaoNome = _getDivisaoNome(frota.divisaoId);
+      final segmentoNome = _getSegmentoNome(frota.segmentoId);
+      final tipoLabel = _getTipoVeiculoLabel(frota.tipoVeiculo);
+      final marcaStr = frota.marca?.trim() ?? '';
+      final propLabel = Frota.getPropriedadeLabel(frota.propriedade);
+
+      // Filtros multiescolha
+      if (_selectedTipos.isNotEmpty && !_selectedTipos.contains(tipoLabel)) {
+        return false;
+      }
+      if (_selectedMarcas.isNotEmpty && !_selectedMarcas.contains(marcaStr)) {
+        return false;
+      }
+      if (_selectedPropriedades.isNotEmpty && !_selectedPropriedades.contains(propLabel)) {
+        return false;
+      }
+      if (_selectedRegionais.isNotEmpty && !_selectedRegionais.contains(regionalNome)) {
+        return false;
+      }
+      if (_selectedDivisoes.isNotEmpty && !_selectedDivisoes.contains(divisaoNome)) {
+        return false;
+      }
+      if (_selectedSegmentos.isNotEmpty && !_selectedSegmentos.contains(segmentoNome)) {
+        return false;
+      }
+
+      // Busca geral por texto
+      if (query.isNotEmpty) {
+        final matchesQuery = frota.nome.toLowerCase().contains(query) ||
+            marcaStr.toLowerCase().contains(query) ||
             frota.placa.toLowerCase().contains(query) ||
-            frota.tipoVeiculo.toLowerCase().contains(query) ||
-            (_getTipoVeiculoLabel(frota.tipoVeiculo).toLowerCase().contains(query)) ||
-            (frota.regional?.toLowerCase().contains(query) ?? false) ||
-            (frota.divisao?.toLowerCase().contains(query) ?? false) ||
-            (frota.segmento?.toLowerCase().contains(query) ?? false);
-      }).toList();
-    }
-    return result;
+            tipoLabel.toLowerCase().contains(query) ||
+            propLabel.toLowerCase().contains(query) ||
+            regionalNome.toLowerCase().contains(query) ||
+            divisaoNome.toLowerCase().contains(query) ||
+            segmentoNome.toLowerCase().contains(query);
+        if (!matchesQuery) return false;
+      }
+
+      return true;
+    }).toList();
   }
 
   void _onSearchChanged() {
     setState(() {
-      _filteredFrotas = _applyAllFilters();
+      _currentPage = 1;
+      _filteredFrotas = _applyFilter(_frotas);
     });
   }
 
-  void _onFilterChanged() {
-    setState(() {
-      _filteredFrotas = _applyAllFilters();
-    });
+  String _getRegionalNome(String? id) {
+    if (id == null) return '-';
+    return _regionais.cast<Regional?>().firstWhere(
+      (r) => r?.id == id,
+      orElse: () => null,
+    )?.regional ?? '-';
+  }
+
+  String _getDivisaoNome(String? id) {
+    if (id == null) return '-';
+    return _divisoes.cast<Divisao?>().firstWhere(
+      (d) => d?.id == id,
+      orElse: () => null,
+    )?.divisao ?? '-';
+  }
+
+  String _getSegmentoNome(String? id) {
+    if (id == null) return '-';
+    return _segmentos.cast<Segmento?>().firstWhere(
+      (s) => s?.id == id,
+      orElse: () => null,
+    )?.segmento ?? '-';
   }
 
   String _getTipoVeiculoLabel(String tipo) {
@@ -210,6 +285,17 @@ class _FrotaListViewState extends State<FrotaListView> {
         return tipo;
     }
   }
+
+  List<Frota> get _paginatedFrotas {
+    final startIndex = (_currentPage - 1) * _itemsPerPage;
+    if (startIndex >= _filteredFrotas.length) return [];
+    final endIndex = (startIndex + _itemsPerPage < _filteredFrotas.length)
+        ? startIndex + _itemsPerPage
+        : _filteredFrotas.length;
+    return _filteredFrotas.sublist(startIndex, endIndex);
+  }
+
+  int get _totalPages => (_filteredFrotas.length / _itemsPerPage).ceil().clamp(1, 9999);
 
   Future<void> _createFrota() async {
     final result = await showDialog<Frota>(
@@ -243,11 +329,10 @@ class _FrotaListViewState extends State<FrotaListView> {
   }
 
   Future<void> _duplicateFrota(Frota frota) async {
-    // Criar cópia com nome e placa modificados
     final duplicated = frota.copyWith(
       id: '',
       nome: '${frota.nome} (Cópia)',
-      placa: '${frota.placa}-CP', // Adicionar sufixo à placa
+      placa: '${frota.placa}-CP',
     );
 
     final result = await showDialog<Frota>(
@@ -312,26 +397,17 @@ class _FrotaListViewState extends State<FrotaListView> {
   }
 
   Future<void> _deleteFrota(Frota frota) async {
-    final confirm = await showDialog<bool>(
+    final confirmed = await TFModalDialog.confirm(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Confirmar exclusão'),
-        content: Text('Deseja realmente excluir a frota "${frota.nome}"?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            child: const Text('Excluir'),
-          ),
-        ],
-      ),
+      title: 'Confirmar Exclusão',
+      message: 'Deseja realmente excluir a frota "${frota.nome}"?\n\n'
+          'Placa: ${frota.placa}\n'
+          'Tipo: ${_getTipoVeiculoLabel(frota.tipoVeiculo)}',
+      confirmLabel: 'Excluir',
+      isDestructive: true,
     );
 
-    if (confirm == true) {
+    if (confirmed == true) {
       try {
         await _frotaService.deleteFrota(frota.id);
         await _loadFrotas();
@@ -358,628 +434,487 @@ class _FrotaListViewState extends State<FrotaListView> {
 
   @override
   Widget build(BuildContext context) {
+    final spacing = context.tfSpacing;
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final isDesktop = MediaQuery.of(context).size.width >= 768;
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Frota'),
-        actions: [
-          // Toggle de visualização
-          IconButton(
-            icon: Icon(_isTableView ? Icons.view_list : Icons.table_chart),
-            onPressed: () {
-              setState(() {
-                _isTableView = !_isTableView;
-              });
-            },
-            tooltip: _isTableView ? 'Visualização em Lista' : 'Visualização em Tabela',
-          ),
-          IconButton(
-            icon: const Icon(Icons.add),
-            onPressed: _createFrota,
-            tooltip: 'Nova Frota',
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          // Barra de busca
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: TextField(
-              controller: _searchController,
-              onChanged: (_) => _onSearchChanged(),
-              decoration: InputDecoration(
-                labelText: 'Buscar frota',
-                prefixIcon: const Icon(Icons.search),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
+      backgroundColor: colors.background,
+      body: SafeArea(
+        child: Padding(
+          padding: EdgeInsets.all(spacing.lg),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TFPageHeader(
+                title: 'Frota',
+                subtitle: 'Cadastro e gestão patrimonial de veículos e equipamentos',
+                onBack: () => Navigator.of(context).maybePop(),
+                primaryAction: TFButton(
+                  label: 'Nova Frota',
+                  leadingIcon: TFIcons.add,
+                  onPressed: _createFrota,
                 ),
-                suffixIcon: _searchController.text.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(Icons.clear),
-                        onPressed: () {
-                          _searchController.clear();
-                          _onSearchChanged();
-                        },
-                      )
-                    : null,
-              ),
-            ),
-          ),
-          // Filtros: Regional, Divisão, Segmento, Tipo (multiseleção com pesquisa)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 0),
-            child: _buildFiltersRow(),
-          ),
-          // Lista ou Tabela
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _filteredFrotas.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.directions_car_outlined,
-                              size: 64,
-                              color: Colors.grey[400],
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              _searchController.text.isEmpty
-                                  ? 'Nenhuma frota cadastrada'
-                                  : 'Nenhuma frota encontrada',
-                              style: TextStyle(
-                                fontSize: 16,
-                                color: Colors.grey[600],
-                              ),
-                            ),
-                          ],
-                        ),
-                      )
-                    : _isTableView
-                        ? _buildTableView()
-                        : _buildListView(),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildFiltersRow() {
-    final isMobile = Responsive.isMobile(context);
-    if (_isLoadingFilterOptions) {
-      return const SizedBox(
-        height: 48,
-        child: Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))),
-      );
-    }
-    if (isMobile) {
-      return LayoutBuilder(
-        builder: (context, constraints) {
-          return SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: ConstrainedBox(
-              constraints: BoxConstraints(minWidth: constraints.maxWidth),
-              child: IntrinsicHeight(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _buildMultiSelectFilterField('REGIONAL', _regionaisTotais, _selectedRegional, (v) {
-                      setState(() { _selectedRegional = v; _onFilterChanged(); });
-                    }, isMobile: true),
-                    const SizedBox(width: 8),
-                    _buildMultiSelectFilterField('DIVISÃO', _divisoesTotais, _selectedDivisao, (v) {
-                      setState(() { _selectedDivisao = v; _onFilterChanged(); });
-                    }, isMobile: true),
-                    const SizedBox(width: 8),
-                    _buildMultiSelectFilterField('SEGMENTO', _segmentosTotais, _selectedSegmento, (v) {
-                      setState(() { _selectedSegmento = v; _onFilterChanged(); });
-                    }, isMobile: true),
-                    const SizedBox(width: 8),
-                    _buildMultiSelectFilterField('TIPO', _tiposTotais, _selectedTipo, (v) {
-                      setState(() { _selectedTipo = v; _onFilterChanged(); });
-                    }, isMobile: true),
-                  ],
-                ),
-              ),
-            ),
-          );
-        },
-      );
-    }
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.grey[200],
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.grey[350]!),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: _buildMultiSelectFilterField('REGIONAL', _regionaisTotais, _selectedRegional, (v) {
-              setState(() { _selectedRegional = v; _onFilterChanged(); });
-            }, isMobile: false),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: _buildMultiSelectFilterField('DIVISÃO', _divisoesTotais, _selectedDivisao, (v) {
-              setState(() { _selectedDivisao = v; _onFilterChanged(); });
-            }, isMobile: false),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: _buildMultiSelectFilterField('SEGMENTO', _segmentosTotais, _selectedSegmento, (v) {
-              setState(() { _selectedSegmento = v; _onFilterChanged(); });
-            }, isMobile: false),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: _buildMultiSelectFilterField('TIPO', _tiposTotais, _selectedTipo, (v) {
-              setState(() { _selectedTipo = v; _onFilterChanged(); });
-            }, isMobile: false),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMultiSelectFilterField(
-    String label,
-    List<String> options,
-    Set<String> selectedValues,
-    ValueChanged<Set<String>> onChanged, {
-    bool isMobile = false,
-  }) {
-    final hasSelection = selectedValues.isNotEmpty;
-    final horizontalPad = isMobile ? 8.0 : 12.0;
-    final verticalPad = isMobile ? 6.0 : 8.0;
-    final fontSize = isMobile ? 11.0 : 12.0;
-    final labelSize = isMobile ? 9.0 : 10.0;
-    return Container(
-      constraints: isMobile ? const BoxConstraints(minWidth: 100) : null,
-      padding: EdgeInsets.symmetric(horizontal: horizontalPad, vertical: verticalPad),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(
-          color: hasSelection ? Colors.blue : Colors.grey[350]!,
-          width: isMobile ? 1 : 1.2,
-        ),
-      ),
-      child: InkWell(
-        onTap: () {
-          showDialog(
-            context: context,
-            builder: (ctx) => MultiSelectFilterDialog(
-              title: label,
-              options: options,
-              selectedValues: selectedValues,
-              onSelectionChanged: onChanged,
-              searchHint: 'Pesquisar...',
-            ),
-          );
-        },
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    label,
-                    style: TextStyle(
-                      fontSize: labelSize,
-                      color: Colors.grey[700],
-                      fontWeight: FontWeight.w600,
-                      height: 1.1,
-                    ),
-                  ),
-                  SizedBox(height: isMobile ? 2 : 4),
-                  Text(
-                    selectedValues.isEmpty
-                        ? 'Todos'
-                        : selectedValues.length == 1
-                            ? selectedValues.first
-                            : '${selectedValues.length} selecionado(s)',
-                    style: TextStyle(
-                      fontSize: fontSize,
-                      color: selectedValues.isEmpty ? Colors.grey[600]! : Colors.black87,
-                      height: 1.2,
-                    ),
-                    overflow: TextOverflow.ellipsis,
+                secondaryActions: [
+                  TFIconButton(
+                    icon: TFIcons.refresh,
+                    tooltip: 'Atualizar',
+                    variant: TFIconButtonVariant.standard,
+                    onPressed: _loadFrotas,
                   ),
                 ],
               ),
-            ),
-            Icon(Icons.arrow_drop_down, color: Colors.grey[600], size: isMobile ? 20 : 24),
-          ],
+              SizedBox(height: spacing.sm),
+              Row(
+                children: [
+                  Expanded(
+                    child: TFTextField(
+                      controller: _searchController,
+                      hint: 'Buscar por nome, marca, placa, tipo ou regional...',
+                      prefixIcon: const Icon(Icons.search),
+                    ),
+                  ),
+                  if (_hasActiveFilters) ...[
+                    SizedBox(width: spacing.sm),
+                    TFButton(
+                      label: 'Limpar Filtros',
+                      variant: TFButtonVariant.secondary,
+                      leadingIcon: Icons.filter_alt_off,
+                      onPressed: _clearAllFilters,
+                    ),
+                  ],
+                ],
+              ),
+              SizedBox(height: spacing.sm),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 170,
+                      child: TFMultiSelectFilterField(
+                        label: 'Tipo de Veículo',
+                        selectedValues: _selectedTipos,
+                        options: _getUniqueTipos(),
+                        isCompact: true,
+                        onChanged: (values) {
+                          setState(() {
+                            _selectedTipos = values;
+                            _currentPage = 1;
+                            _filteredFrotas = _applyFilter(_frotas);
+                          });
+                        },
+                      ),
+                    ),
+                    SizedBox(width: spacing.sm),
+                    SizedBox(
+                      width: 170,
+                      child: TFMultiSelectFilterField(
+                        label: 'Marca / Modelo',
+                        selectedValues: _selectedMarcas,
+                        options: _getUniqueMarcas(),
+                        isCompact: true,
+                        onChanged: (values) {
+                          setState(() {
+                            _selectedMarcas = values;
+                            _currentPage = 1;
+                            _filteredFrotas = _applyFilter(_frotas);
+                          });
+                        },
+                      ),
+                    ),
+                    SizedBox(width: spacing.sm),
+                    SizedBox(
+                      width: 170,
+                      child: TFMultiSelectFilterField(
+                        label: 'Propriedade',
+                        selectedValues: _selectedPropriedades,
+                        options: _getUniquePropriedades(),
+                        isCompact: true,
+                        onChanged: (values) {
+                          setState(() {
+                            _selectedPropriedades = values;
+                            _currentPage = 1;
+                            _filteredFrotas = _applyFilter(_frotas);
+                          });
+                        },
+                      ),
+                    ),
+                    SizedBox(width: spacing.sm),
+                    SizedBox(
+                      width: 170,
+                      child: TFMultiSelectFilterField(
+                        label: 'Regional',
+                        selectedValues: _selectedRegionais,
+                        options: _getUniqueRegionais(),
+                        isCompact: true,
+                        onChanged: (values) {
+                          setState(() {
+                            _selectedRegionais = values;
+                            _currentPage = 1;
+                            _filteredFrotas = _applyFilter(_frotas);
+                          });
+                        },
+                      ),
+                    ),
+                    SizedBox(width: spacing.sm),
+                    SizedBox(
+                      width: 170,
+                      child: TFMultiSelectFilterField(
+                        label: 'Divisão',
+                        selectedValues: _selectedDivisoes,
+                        options: _getUniqueDivisoes(),
+                        isCompact: true,
+                        onChanged: (values) {
+                          setState(() {
+                            _selectedDivisoes = values;
+                            _currentPage = 1;
+                            _filteredFrotas = _applyFilter(_frotas);
+                          });
+                        },
+                      ),
+                    ),
+                    SizedBox(width: spacing.sm),
+                    SizedBox(
+                      width: 170,
+                      child: TFMultiSelectFilterField(
+                        label: 'Segmento',
+                        selectedValues: _selectedSegmentos,
+                        options: _getUniqueSegmentos(),
+                        isCompact: true,
+                        onChanged: (values) {
+                          setState(() {
+                            _selectedSegmentos = values;
+                            _currentPage = 1;
+                            _filteredFrotas = _applyFilter(_frotas);
+                          });
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(height: spacing.md),
+              Expanded(
+                child: _isLoading
+                    ? const Center(
+                        child: TFLoading(
+                          mode: TFLoadingMode.section,
+                          message: 'Carregando frota...',
+                        ),
+                      )
+                    : _filteredFrotas.isEmpty
+                        ? TFEmptyState(
+                            icon: TFIcons.search,
+                            title: _frotas.isEmpty
+                                ? 'Nenhum veículo cadastrado na frota'
+                                : 'Nenhum veículo encontrado',
+                            description: _frotas.isEmpty
+                                ? 'Cadastre o primeiro veículo ou equipamento da operação.'
+                                : 'Tente refinar sua busca.',
+                            action: _frotas.isEmpty
+                                ? TFButton(
+                                    label: 'Cadastrar Primeiro Veículo',
+                                    leadingIcon: TFIcons.add,
+                                    onPressed: _createFrota,
+                                  )
+                                : TFButton(
+                                    label: 'Limpar Busca',
+                                    variant: TFButtonVariant.secondary,
+                                    onPressed: () => _searchController.clear(),
+                                  ),
+                          )
+                        : Column(
+                            children: [
+                              Expanded(
+                                child: isDesktop
+                                    ? _buildTableView()
+                                    : _buildCardsView(),
+                              ),
+                              if (_totalPages > 1) ...[
+                                SizedBox(height: spacing.sm),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(
+                                      'Página $_currentPage de $_totalPages (${_filteredFrotas.length} veículos)',
+                                      style: typography.bodySmall.copyWith(
+                                        color: colors.textSecondary,
+                                      ),
+                                    ),
+                                    Row(
+                                      children: [
+                                        TFIconButton(
+                                          icon: Icons.chevron_left,
+                                          tooltip: 'Página anterior',
+                                          variant: TFIconButtonVariant.standard,
+                                          onPressed: _currentPage > 1
+                                              ? () => setState(() => _currentPage--)
+                                              : null,
+                                        ),
+                                        SizedBox(width: spacing.xs),
+                                        TFIconButton(
+                                          icon: Icons.chevron_right,
+                                          tooltip: 'Próxima página',
+                                          variant: TFIconButtonVariant.standard,
+                                          onPressed: _currentPage < _totalPages
+                                              ? () => setState(() => _currentPage++)
+                                              : null,
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                                SizedBox(height: spacing.sm),
+                              ],
+                            ],
+                          ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildListView() {
-    return ListView.builder(
-      itemCount: _filteredFrotas.length,
+  Widget _buildCardsView() {
+    final items = _paginatedFrotas;
+    final spacing = context.tfSpacing;
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
+    return ListView.separated(
+      itemCount: items.length,
+      separatorBuilder: (_, __) => SizedBox(height: spacing.sm),
       itemBuilder: (context, index) {
-        final frota = _filteredFrotas[index];
-        return Card(
-          margin: const EdgeInsets.symmetric(
-            horizontal: 16.0,
-            vertical: 8.0,
-          ),
-          child: ExpansionTile(
-            leading: CircleAvatar(
-              backgroundColor: frota.emManutencao
-                  ? Colors.orange
-                  : (frota.ativo ? Colors.green : Colors.grey),
-              child: Icon(
-                _getTipoVeiculoIcon(frota.tipoVeiculo),
-                color: Colors.white,
-              ),
-            ),
-            title: Text(
-              frota.nome,
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                decoration: frota.ativo
-                    ? null
-                    : TextDecoration.lineThrough,
-              ),
-            ),
-            subtitle: Column(
+        final frota = items[index];
+        return TFCard(
+          child: Padding(
+            padding: EdgeInsets.all(spacing.sm),
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Tipo: ${_getTipoVeiculoLabel(frota.tipoVeiculo)}'),
-                if (frota.marca != null) Text('Marca: ${frota.marca}'),
-                Text('Placa: ${frota.placa}'),
-                if (frota.regional != null)
-                  Text('Regional: ${frota.regional}'),
-                if (frota.divisao != null)
-                  Text('Divisão: ${frota.divisao}'),
-                if (frota.segmento != null)
-                  Text('Segmento: ${frota.segmento}'),
                 Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: frota.ativo ? Colors.green[100] : Colors.red[100],
-                        borderRadius: BorderRadius.circular(12),
-                      ),
+                    Expanded(
                       child: Text(
-                        frota.ativo ? 'Ativo' : 'Inativo',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: frota.ativo ? Colors.green[800] : Colors.red[800],
-                          fontWeight: FontWeight.bold,
+                        frota.nome,
+                        style: typography.cardTitle.copyWith(
+                          color: colors.textPrimary,
                         ),
                       ),
                     ),
-                    if (frota.emManutencao) ...[
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: Colors.orange[100],
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Text(
-                          'Em Manutenção',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Colors.orange[800],
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ],
-            ),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.edit),
-                  onPressed: () => _editFrota(frota),
-                  tooltip: 'Editar',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.copy),
-                  color: Colors.orange,
-                  onPressed: () => _duplicateFrota(frota),
-                  tooltip: 'Duplicar',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.delete),
-                  onPressed: () => _deleteFrota(frota),
-                  tooltip: 'Excluir',
-                  color: Colors.red,
-                ),
-              ],
-            ),
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (frota.observacoes != null && frota.observacoes!.isNotEmpty) ...[
-                      const Text(
-                        'Observações:',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 14,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        frota.observacoes!,
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: Colors.grey[700],
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                    ],
-                    const Divider(),
-                    const SizedBox(height: 8),
                     Row(
                       children: [
-                        Expanded(
-                          child: _buildInfoItem(
-                            icon: Icons.calendar_today,
-                            label: 'Cadastrado em',
-                            value: frota.createdAt != null
-                                ? '${frota.createdAt!.day.toString().padLeft(2, '0')}/${frota.createdAt!.month.toString().padLeft(2, '0')}/${frota.createdAt!.year}'
-                                : 'Não informado',
-                          ),
-                        ),
-                        if (frota.updatedAt != null)
-                          Expanded(
-                            child: _buildInfoItem(
-                              icon: Icons.update,
-                              label: 'Atualizado em',
-                              value: '${frota.updatedAt!.day.toString().padLeft(2, '0')}/${frota.updatedAt!.month.toString().padLeft(2, '0')}/${frota.updatedAt!.year}',
+                        if (frota.emManutencao)
+                          Padding(
+                            padding: EdgeInsets.only(right: spacing.xs),
+                            child: const TFStatusBadge(
+                              label: 'Manutenção',
+                              severity: TFStatusSeverity.warning,
+                              compact: true,
                             ),
                           ),
+                        TFStatusBadge(
+                          label: frota.ativo ? 'Ativo' : 'Inativo',
+                          severity: frota.ativo
+                              ? TFStatusSeverity.success
+                              : TFStatusSeverity.neutral,
+                          compact: true,
+                        ),
                       ],
                     ),
                   ],
                 ),
-              ),
-            ],
+                SizedBox(height: spacing.xs),
+                Text(
+                  'Placa: ${frota.placa} • Tipo: ${_getTipoVeiculoLabel(frota.tipoVeiculo)}',
+                  style: typography.bodyMedium.copyWith(
+                    color: colors.textPrimary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                if (frota.marca != null && frota.marca!.isNotEmpty) ...[
+                  SizedBox(height: spacing.xs),
+                  Text(
+                    'Marca/Modelo: ${frota.marca!}',
+                    style: typography.bodySmall.copyWith(
+                      color: colors.textSecondary,
+                    ),
+                  ),
+                ],
+                SizedBox(height: spacing.xs),
+                Text(
+                  'Propriedade: ${Frota.getPropriedadeLabel(frota.propriedade)} | Regional: ${_getRegionalNome(frota.regionalId)} | Divisão: ${_getDivisaoNome(frota.divisaoId)} | Segmento: ${_getSegmentoNome(frota.segmentoId)}',
+                  style: typography.bodySmall.copyWith(
+                    color: colors.textSecondary,
+                  ),
+                ),
+                SizedBox(height: spacing.sm),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TFIconButton(
+                      icon: Icons.copy_rounded,
+                      tooltip: 'Duplicar veículo',
+                      variant: TFIconButtonVariant.subtle,
+                      onPressed: () => _duplicateFrota(frota),
+                    ),
+                    SizedBox(width: spacing.xs),
+                    TFIconButton(
+                      icon: TFIcons.edit,
+                      tooltip: 'Editar',
+                      variant: TFIconButtonVariant.standard,
+                      onPressed: () => _editFrota(frota),
+                    ),
+                    SizedBox(width: spacing.xs),
+                    TFIconButton(
+                      icon: TFIcons.delete,
+                      tooltip: 'Excluir',
+                      variant: TFIconButtonVariant.subtle,
+                      onPressed: () => _deleteFrota(frota),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         );
       },
     );
   }
 
-  Widget _buildInfoItem({
-    required IconData icon,
-    required String label,
-    required String value,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        children: [
-          Icon(icon, size: 16, color: Colors.grey[600]),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: Colors.grey[600],
-                  ),
-                ),
-                Text(
-                  value,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
+  Widget _buildTableView() {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
+    return TFDataTable<Frota>(
+      items: _paginatedFrotas,
+      columns: [
+        TFDataColumn<Frota>.text(
+          id: 'nome',
+          title: 'Nome / Identificação',
+          cellBuilder: (context, frota) => Text(
+            frota.nome,
+            style: typography.bodyMedium.copyWith(
+              color: colors.textPrimary,
+              fontWeight: FontWeight.w600,
             ),
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTableView() {
-    return Scrollbar(
-      controller: _horizontalTableScrollController,
-      thumbVisibility: true,
-      child: SingleChildScrollView(
-        controller: _horizontalTableScrollController,
-        scrollDirection: Axis.horizontal,
-        child: SingleChildScrollView(
-          scrollDirection: Axis.vertical,
-          child: DataTable(
-            headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
-            columns: const [
-              DataColumn(label: Text('Ações', style: TextStyle(fontWeight: FontWeight.bold))),
-              DataColumn(label: Text('Nome', style: TextStyle(fontWeight: FontWeight.bold))),
-              DataColumn(label: Text('Marca', style: TextStyle(fontWeight: FontWeight.bold))),
-              DataColumn(label: Text('Tipo', style: TextStyle(fontWeight: FontWeight.bold))),
-              DataColumn(label: Text('Placa', style: TextStyle(fontWeight: FontWeight.bold))),
-              DataColumn(label: Text('Regional', style: TextStyle(fontWeight: FontWeight.bold))),
-              DataColumn(label: Text('Divisão', style: TextStyle(fontWeight: FontWeight.bold))),
-              DataColumn(label: Text('Segmento', style: TextStyle(fontWeight: FontWeight.bold))),
-              DataColumn(label: Text('Manutenção', style: TextStyle(fontWeight: FontWeight.bold))),
-              DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold))),
-            ],
-            rows: _filteredFrotas.map((frota) {
-              return DataRow(
-                color: WidgetStateProperty.resolveWith<Color?>(
-                  (Set<WidgetState> states) {
-                    if (!frota.ativo) {
-                      return Colors.grey[100];
-                    }
-                    return null;
-                  },
-                ),
-                cells: [
-                  DataCell(
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          icon: const Icon(Icons.edit, size: 20),
-                          onPressed: () => _editFrota(frota),
-                          tooltip: 'Editar',
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.copy, size: 20, color: Colors.orange),
-                          onPressed: () => _duplicateFrota(frota),
-                          tooltip: 'Duplicar',
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.delete, size: 20, color: Colors.red),
-                          onPressed: () => _deleteFrota(frota),
-                          tooltip: 'Excluir',
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(),
-                        ),
-                      ],
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      frota.nome,
-                      style: TextStyle(
-                        fontWeight: FontWeight.w500,
-                        color: frota.ativo ? Colors.black : Colors.grey,
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      frota.marca ?? '-',
-                      style: TextStyle(
-                        color: frota.ativo ? Colors.black : Colors.grey,
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      _getTipoVeiculoLabel(frota.tipoVeiculo),
-                      style: TextStyle(
-                        color: frota.ativo ? Colors.black : Colors.grey,
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      frota.placa,
-                      style: TextStyle(
-                        fontWeight: FontWeight.w500,
-                        color: frota.ativo ? Colors.black : Colors.grey,
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      frota.regional ?? '-',
-                      style: TextStyle(
-                        color: frota.ativo ? Colors.black : Colors.grey,
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      frota.divisao ?? '-',
-                      style: TextStyle(
-                        color: frota.ativo ? Colors.black : Colors.grey,
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      frota.segmento ?? '-',
-                      style: TextStyle(
-                        color: frota.ativo ? Colors.black : Colors.grey,
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: frota.emManutencao ? Colors.orange[100] : Colors.green[100],
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        frota.emManutencao ? 'Sim' : 'Não',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: frota.emManutencao ? Colors.orange[800] : Colors.green[800],
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: frota.ativo ? Colors.green[100] : Colors.red[100],
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        frota.ativo ? 'Ativo' : 'Inativo',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: frota.ativo ? Colors.green[800] : Colors.red[800],
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              );
-            }).toList(),
+        ),
+        TFDataColumn<Frota>.text(
+          id: 'placa',
+          title: 'Placa',
+          width: 120,
+          cellBuilder: (context, frota) => Text(
+            frota.placa,
+            style: typography.bodyMedium.copyWith(
+              color: colors.textPrimary,
+            ),
           ),
         ),
-      ),
+        TFDataColumn<Frota>.text(
+          id: 'tipo',
+          title: 'Tipo',
+          width: 130,
+          cellBuilder: (context, frota) => Text(
+            _getTipoVeiculoLabel(frota.tipoVeiculo),
+            style: typography.bodyMedium.copyWith(
+              color: colors.textSecondary,
+            ),
+          ),
+        ),
+        TFDataColumn<Frota>.text(
+          id: 'marca',
+          title: 'Marca/Modelo',
+          width: 140,
+          cellBuilder: (context, frota) => Text(
+            frota.marca ?? '-',
+            style: typography.bodyMedium.copyWith(
+              color: colors.textSecondary,
+            ),
+          ),
+        ),
+        TFDataColumn<Frota>.text(
+          id: 'propriedade',
+          title: 'Propriedade',
+          width: 120,
+          cellBuilder: (context, frota) => Text(
+            Frota.getPropriedadeLabel(frota.propriedade),
+            style: typography.bodyMedium.copyWith(
+              color: colors.textSecondary,
+            ),
+          ),
+        ),
+        TFDataColumn<Frota>.text(
+          id: 'regional',
+          title: 'Regional',
+          width: 130,
+          cellBuilder: (context, frota) => Text(
+            _getRegionalNome(frota.regionalId),
+            style: typography.bodyMedium.copyWith(
+              color: colors.textSecondary,
+            ),
+          ),
+        ),
+        TFDataColumn<Frota>(
+          id: 'status',
+          label: const Text('Status'),
+          width: 180,
+          cellBuilder: (context, frota) => Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (frota.emManutencao)
+                const Padding(
+                  padding: EdgeInsets.only(right: 6),
+                  child: TFStatusBadge(
+                    label: 'Manutenção',
+                    severity: TFStatusSeverity.warning,
+                    compact: true,
+                  ),
+                ),
+              TFStatusBadge(
+                label: frota.ativo ? 'Ativo' : 'Inativo',
+                severity: frota.ativo
+                    ? TFStatusSeverity.success
+                    : TFStatusSeverity.neutral,
+                compact: true,
+              ),
+            ],
+          ),
+        ),
+        TFDataColumn<Frota>(
+          id: 'acoes',
+          label: const Text('Ações'),
+          width: 160,
+          alignment: Alignment.centerRight,
+          cellBuilder: (context, frota) => Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TFIconButton(
+                icon: Icons.copy_rounded,
+                tooltip: 'Duplicar',
+                variant: TFIconButtonVariant.subtle,
+                onPressed: () => _duplicateFrota(frota),
+              ),
+              TFIconButton(
+                icon: TFIcons.edit,
+                tooltip: 'Editar',
+                variant: TFIconButtonVariant.standard,
+                onPressed: () => _editFrota(frota),
+              ),
+              TFIconButton(
+                icon: TFIcons.delete,
+                tooltip: 'Excluir',
+                variant: TFIconButtonVariant.subtle,
+                onPressed: () => _deleteFrota(frota),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
-  }
-
-  IconData _getTipoVeiculoIcon(String tipo) {
-    switch (tipo) {
-      case 'CARRO_LEVE':
-      case 'PICKUP':
-        return Icons.directions_car;
-      case 'MUNCK':
-        return Icons.local_shipping;
-      case 'TRATOR':
-        return Icons.agriculture;
-      case 'CAMINHAO':
-        return Icons.fire_truck;
-      case 'VAN':
-        return Icons.airport_shuttle;
-      case 'MOTO':
-        return Icons.two_wheeler;
-      case 'ONIBUS':
-        return Icons.directions_bus;
-      default:
-        return Icons.directions_car;
-    }
   }
 }

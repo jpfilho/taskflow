@@ -68,6 +68,8 @@ class MelhoriaBug {
   final String? versaoId;
   final String? prioridade;
   final String? createdBy;
+  final String? feedback;
+  final DateTime? prazo;
   final DateTime? createdAt;
   final DateTime? updatedAt;
   final DateTime? concluidoEm;
@@ -83,6 +85,8 @@ class MelhoriaBug {
     this.versaoId,
     this.prioridade,
     this.createdBy,
+    this.feedback,
+    this.prazo,
     this.createdAt,
     this.updatedAt,
     this.concluidoEm,
@@ -94,6 +98,33 @@ class MelhoriaBug {
 
   List<String> get proximosStatusPossiveis =>
       kMelhoriasBugsTransicoes[status] ?? [];
+
+  /// Indica se a solicitação está em aberto (não finalizada).
+  bool get isAberta =>
+      status != 'CONCLUIDO' && status != 'REJEITADO' && status != 'DUPLICADO';
+
+  /// Dias restantes até o prazo (negativo se já venceu).
+  int? get diasRestantesPrazo {
+    if (prazo == null) return null;
+    final now = DateTime.now();
+    final hoje = DateTime(now.year, now.month, now.day);
+    final target = DateTime(prazo!.year, prazo!.month, prazo!.day);
+    return target.difference(hoje).inDays;
+  }
+
+  /// Indica se o prazo está vencido e a tarefa ainda está aberta.
+  bool get isPrazoVencido {
+    if (prazo == null || !isAberta) return false;
+    final d = diasRestantesPrazo;
+    return d != null && d < 0;
+  }
+
+  /// Indica se o prazo vence hoje ou nos próximos 3 dias.
+  bool get isPrazoProximo {
+    if (prazo == null || !isAberta) return false;
+    final d = diasRestantesPrazo;
+    return d != null && d >= 0 && d <= 3;
+  }
 
   static DateTime? _parseDate(dynamic v) {
     if (v == null) return null;
@@ -112,6 +143,8 @@ class MelhoriaBug {
       versaoId: map['versao_id'] as String?,
       prioridade: map['prioridade'] as String?,
       createdBy: map['created_by'] as String?,
+      feedback: map['feedback'] as String?,
+      prazo: _parseDate(map['prazo']),
       createdAt: _parseDate(map['created_at']),
       updatedAt: _parseDate(map['updated_at']),
       concluidoEm: _parseDate(map['concluido_em']),
@@ -130,6 +163,8 @@ class MelhoriaBug {
       'versao_id': versaoId,
       'prioridade': prioridade,
       'created_by': createdBy,
+      'feedback': feedback,
+      'prazo': prazo?.millisecondsSinceEpoch,
       'created_at': createdAt?.millisecondsSinceEpoch,
       'updated_at': updatedAt?.millisecondsSinceEpoch,
       'concluido_em': concluidoEm?.millisecondsSinceEpoch,
@@ -148,6 +183,8 @@ class MelhoriaBug {
       'versao_id': versaoId,
       'prioridade': prioridade,
       'created_by': createdBy,
+      'feedback': feedback,
+      'prazo': prazo?.toIso8601String(),
       'created_at': createdAt?.toIso8601String(),
       'updated_at': updatedAt?.toIso8601String(),
       'concluido_em': concluidoEm?.toIso8601String(),
@@ -165,6 +202,8 @@ class MelhoriaBug {
     String? versaoId,
     String? prioridade,
     String? createdBy,
+    String? feedback,
+    DateTime? prazo,
     DateTime? createdAt,
     DateTime? updatedAt,
     DateTime? concluidoEm,
@@ -180,6 +219,8 @@ class MelhoriaBug {
       versaoId: versaoId ?? this.versaoId,
       prioridade: prioridade ?? this.prioridade,
       createdBy: createdBy ?? this.createdBy,
+      feedback: feedback ?? this.feedback,
+      prazo: prazo ?? this.prazo,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       concluidoEm: concluidoEm ?? this.concluidoEm,

@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/grupo_chat.dart';
+import '../models/mensagem.dart';
 import '../services/chat_service.dart';
+import '../services/unread_chat_manager.dart';
 
 class ChatGruposList extends StatefulWidget {
   final String comunidadeId;
@@ -24,59 +27,89 @@ class ChatGruposList extends StatefulWidget {
 
 class _ChatGruposListState extends State<ChatGruposList> {
   final ChatService _chatService = ChatService();
+  final UnreadChatManager _unreadChatManager = UnreadChatManager();
+  StreamSubscription<Mensagem>? _mensagemEnviadaSub;
   List<GrupoChat> _grupos = [];
   bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
+    _unreadChatManager.addListener(_onUnreadManagerChanged);
+    _mensagemEnviadaSub = ChatService.onMensagemEnviada.listen((msg) {
+      if (mounted) {
+        _atualizarUltimaMensagemLocal(msg);
+      }
+    });
     _loadGrupos();
   }
 
-  Future<void> _loadGrupos() async {
-    if (!mounted) return;
-    setState(() => _isLoading = true);
-    try {
-      // Carregar grupos da comunidade (já vem com a última mensagem pré-populada!)
-      var grupos = await _chatService.listarGruposPorComunidade(widget.comunidadeId);
+  @override
+  void dispose() {
+    _mensagemEnviadaSub?.cancel();
+    _unreadChatManager.removeListener(_onUnreadManagerChanged);
+    super.dispose();
+  }
 
-      final gruposIds = grupos.where((g) => g.id != null).map((g) => g.id!).toList();
+  void _onUnreadManagerChanged() {
+    if (mounted) {
+      _loadGrupos(silent: true);
+    }
+  }
 
-      if (gruposIds.isEmpty) {
-         if (!mounted) return;
-         setState(() {
-            _grupos = [];
-            _isLoading = false;
-         });
-         return;
+  void _atualizarUltimaMensagemLocal(Mensagem msg) {
+    if (_grupos.isEmpty) return;
+    final index = _grupos.indexWhere((g) => g.id == msg.grupoId);
+    if (index != -1) {
+      final grupo = _grupos[index];
+      String? preview = msg.conteudo.trim();
+      if (preview.isEmpty) {
+        if (msg.tipo == 'imagem') {
+          preview = '📷 Imagem';
+        } else if (msg.tipo == 'audio') {
+          preview = '🎵 Áudio';
+        } else if (msg.tipo == 'video') {
+          preview = '🎥 Vídeo';
+        } else if (msg.tipo == 'documento') {
+          preview = '📄 Documento';
+        }
       }
-
-      // Buscar mensagens não lidas de todos os grupos em lote
-      final naoLidasMap = await _chatService.contarMensagensNaoLidasEmLote(gruposIds);
-
-      // Mapear as contagens de não lidas para cada grupo
-      var gruposProcessados = grupos.map((grupo) {
-        return grupo.copyWith(
-          mensagensNaoLidas: naoLidasMap[grupo.id] ?? 0,
-        );
-      }).toList();
-
-      // Ordenar por última mensagem (mais recente primeiro)
-      gruposProcessados.sort((a, b) {
-        final aData = a.ultimaMensagemAt ?? a.updatedAt ?? a.createdAt ?? DateTime(1970);
-        final bData = b.ultimaMensagemAt ?? b.updatedAt ?? b.createdAt ?? DateTime(1970);
-        return bData.compareTo(aData);
+      final updated = grupo.copyWith(
+        ultimaMensagemAt: msg.createdAt,
+        ultimaMensagemPreview: preview,
+        totalMensagens: (grupo.totalMensagens ?? 0) + 1,
+      );
+      final novaLista = List<GrupoChat>.from(_grupos);
+      novaLista.removeAt(index);
+      novaLista.insert(0, updated);
+      setState(() {
+        _grupos = novaLista;
       });
+    } else {
+      _loadGrupos(silent: true);
+    }
+  }
+
+  Future<void> _loadGrupos({bool silent = false}) async {
+    if (!mounted) return;
+    if (!silent) {
+      setState(() => _isLoading = true);
+    }
+    try {
+      // Carregar grupos da comunidade (já vem com a última mensagem pré-populada e ordenados)
+      var grupos = await _chatService.listarGruposPorComunidade(widget.comunidadeId);
 
       if (!mounted) return;
       setState(() {
-        _grupos = gruposProcessados;
+        _grupos = grupos;
         _isLoading = false;
       });
     } catch (e) {
       print('Erro ao carregar grupos: $e');
       if (!mounted) return;
-      setState(() => _isLoading = false);
+      if (!silent) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
@@ -146,7 +179,8 @@ class _ChatGruposListState extends State<ChatGruposList> {
                     itemCount: _grupos.length,
                     itemBuilder: (context, index) {
                       final grupo = _grupos[index];
-                      final naoLidas = grupo.mensagensNaoLidas ?? 0;
+                      final grupoKey = grupo.id ?? grupo.tarefaId;
+                      final naoLidas = _unreadChatManager.getUnreadForGroup(grupoKey);
 
                       return ListTile(
                         leading: CircleAvatar(
@@ -167,47 +201,77 @@ class _ChatGruposListState extends State<ChatGruposList> {
                             fontWeight: FontWeight.w500,
                           ),
                         ),
-                        subtitle: Row(
+                        subtitle: Text(
+                          grupo.ultimaMensagemPreview ?? 'Nenhuma mensagem',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                        trailing: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          mainAxisSize: MainAxisSize.min,
                           children: [
-                            Expanded(
-                              child: Text(
-                                grupo.ultimaMensagemPreview ?? 'Nenhuma mensagem',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: Colors.grey[600],
-                                ),
-                              ),
-                            ),
-                            if (grupo.ultimaMensagemAt != null) ...[
-                              const SizedBox(width: 8),
+                            if (grupo.ultimaMensagemAt != null)
                               Text(
                                 _formatarData(grupo.ultimaMensagemAt),
                                 style: TextStyle(
-                                  color: Colors.grey[600],
-                                  fontSize: 12,
+                                  color: naoLidas > 0 ? const Color(0xFF075E54) : Colors.grey[600],
+                                  fontSize: 11,
+                                  fontWeight: naoLidas > 0 ? FontWeight.w600 : FontWeight.normal,
                                 ),
                               ),
-                            ],
+                            const SizedBox(height: 4),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (grupo.totalMensagens != null && grupo.totalMensagens! > 0)
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                                    margin: EdgeInsets.only(right: naoLidas > 0 ? 4 : 0),
+                                    decoration: BoxDecoration(
+                                      color: Colors.grey[200],
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: Colors.grey[350]!, width: 0.5),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(Icons.chat_bubble_outline, size: 9, color: Colors.grey[600]),
+                                        const SizedBox(width: 2.5),
+                                        Text(
+                                          '${grupo.totalMensagens}',
+                                          style: TextStyle(
+                                            color: Colors.grey[700],
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                if (naoLidas > 0)
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF25D366), // Verde do WhatsApp
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Text(
+                                      naoLidas > 99 ? '99+' : naoLidas.toString(),
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
                           ],
                         ),
-                        trailing: naoLidas > 0
-                            ? Container(
-                                padding: const EdgeInsets.all(6),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF25D366), // Verde do WhatsApp
-                                  shape: BoxShape.circle,
-                                ),
-                                child: Text(
-                                  naoLidas > 99 ? '99+' : naoLidas.toString(),
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              )
-                            : null,
                         onTap: () => widget.onGrupoSelected(grupo.id ?? grupo.tarefaId),
                       );
                     },

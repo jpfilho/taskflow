@@ -1,6 +1,8 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../models/confirmacao_sap.dart';
 import '../services/confirmacao_sap_service.dart';
+import '../design_system/taskflow_design_system.dart';
 import 'package:intl/intl.dart';
 import 'multi_select_filter_dialog.dart';
 
@@ -36,16 +38,22 @@ class _ConfirmacaoSapViewState extends State<ConfirmacaoSapView> {
   List<String> _ordens = [];
   List<String> _operacoes = [];
   List<String> _statusUsuarios = [];
-  List<String> _centros = [];
+  List<String> _centrosTrabalho = [];
 
   @override
   void initState() {
     super.initState();
+    _loadFilters();
     _loadData();
-    _loadFilterOptions();
   }
 
-  Future<void> _loadFilterOptions() async {
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadFilters() async {
     try {
       final results = await Future.wait([
         _service.getDistinctValues('tipo'),
@@ -61,16 +69,17 @@ class _ConfirmacaoSapViewState extends State<ConfirmacaoSapView> {
           _ordens = results[1];
           _operacoes = results[2];
           _statusUsuarios = results[3];
-          _centros = results[4];
+          _centrosTrabalho = results[4];
         });
       }
     } catch (e) {
-      print('❌ Erro ao carregar opções de filtro SAP: $e');
+      if (kDebugMode) {
+        debugPrint('❌ Erro ao carregar opções de filtro SAP: $e');
+      }
     }
   }
 
   Future<void> _loadData() async {
-    print('🔍 [SAP DEBUG] Iniciando carregamento de dados (página: $_currentPage)...');
     setState(() => _isLoading = true);
     try {
       final results = await _service.list(
@@ -79,13 +88,11 @@ class _ConfirmacaoSapViewState extends State<ConfirmacaoSapView> {
         page: _currentPage,
         pageSize: _pageSize,
       );
-      print('🔍 [SAP DEBUG] Listagem concluída: ${results.length} itens.');
 
       final count = await _service.count(
         search: _searchController.text,
         filters: _filters,
       );
-      print('🔍 [SAP DEBUG] Contagem concluída: $count itens.');
 
       if (mounted) {
         setState(() {
@@ -95,8 +102,10 @@ class _ConfirmacaoSapViewState extends State<ConfirmacaoSapView> {
         });
       }
     } catch (e, stack) {
-      print('❌ [SAP DEBUG] Erro ao carregar dados SAP: $e');
-      print(stack);
+      if (kDebugMode) {
+        debugPrint('❌ [SAP DEBUG] Erro ao carregar dados SAP: $e');
+        debugPrint(stack.toString());
+      }
       if (mounted) {
         setState(() => _isLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(
@@ -108,145 +117,181 @@ class _ConfirmacaoSapViewState extends State<ConfirmacaoSapView> {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        _buildFilterBar(),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
-          child: Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _searchController,
-                  decoration: InputDecoration(
-                    hintText: 'Buscar por confirmação, ordem, tipo, texto, operador...',
-                    prefixIcon: const Icon(Icons.search),
-                    suffixIcon: _searchController.text.isNotEmpty
-                        ? IconButton(
-                            icon: const Icon(Icons.clear),
-                            onPressed: () {
-                              _searchController.clear();
-                              _currentPage = 0;
-                              _loadData();
-                            },
-                          )
-                        : null,
-                    border: const OutlineInputBorder(),
-                  ),
-                  onChanged: (value) {
-                    setState(() {}); // Repaint to show/hide clear icon
-                    _currentPage = 0;
-                    _loadData();
-                  },
-                  onSubmitted: (_) {
-                    _currentPage = 0;
-                    _loadData();
-                  },
-                ),
-              ),
-              const SizedBox(width: 8),
-              IconButton(
-                icon: const Icon(Icons.refresh),
-                onPressed: () {
-                  _currentPage = 0;
-                  _loadData();
-                },
-                tooltip: 'Atualizar',
-              ),
-            ],
-          ),
-        ),
-        Expanded(
-          child: _isLoading
-              ? const Center(child: CircularProgressIndicator())
-              : _confirmacoes.isEmpty
-                  ? Center(child: Text('Nenhum dado encontrado para os filtros selecionados (Contagem: $_totalCount)'))
-                  : SingleChildScrollView(
-                      scrollDirection: Axis.vertical,
-                      child: SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: DataTable(
-                          horizontalMargin: 12,
-                          columnSpacing: 24,
-                          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
-                          columns: const [
-                            DataColumn(label: Text('Confirmação')),
-                            DataColumn(label: Text('Tipo')),
-                            DataColumn(label: Text('Ordem')),
-                            DataColumn(label: Text('Operação')),
-                            DataColumn(label: Text('Texto Breve')),
-                            DataColumn(label: Text('Texto Breve Op.')),
-                            DataColumn(label: Text('Status Usuário')),
-                            DataColumn(label: Text('Status Sistema')),
-                            DataColumn(label: Text('Restri. Iníc.')),
-                            DataColumn(label: Text('Hora In.')),
-                            DataColumn(label: Text('Fim Restri.')),
-                            DataColumn(label: Text('Hora F.')),
-                            DataColumn(label: Text('Centro Trab.')),
-                            DataColumn(label: Text('Criado Por')),
-                            DataColumn(label: Text('Trab. Real')),
-                            DataColumn(label: Text('Data Conf.')),
-                           ],
-                          rows: _confirmacoes.map((item) {
-                            final isSelected = _selectedId == item.confirmacao;
-                            return DataRow(
-                              selected: isSelected,
-                              onSelectChanged: (selected) {
-                                setState(() {
-                                  if (selected == true) {
-                                    _selectedId = item.confirmacao;
-                                    widget.onSelect?.call(item);
-                                  } else {
-                                    _selectedId = null;
-                                    widget.onSelect?.call(null);
-                                  }
-                                });
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
+    return Container(
+      color: colors.background,
+      child: Column(
+        children: [
+          _buildFilterBar(),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    style: typography.bodyMedium.copyWith(color: colors.textPrimary),
+                    decoration: InputDecoration(
+                      hintText: 'Buscar por confirmação, ordem, tipo, texto, operador...',
+                      hintStyle: typography.bodyMedium.copyWith(color: colors.textMuted),
+                      prefixIcon: Icon(Icons.search, color: colors.textSecondary),
+                      suffixIcon: _searchController.text.isNotEmpty
+                          ? IconButton(
+                              icon: Icon(Icons.clear, color: colors.textSecondary),
+                              onPressed: () {
+                                _searchController.clear();
+                                _currentPage = 0;
+                                _loadData();
                               },
-                              cells: [
-                              DataCell(Text(item.confirmacao)),
-                              DataCell(Text(item.tipo ?? '')),
-                              DataCell(Text(item.ordem ?? '')),
-                              DataCell(Text(item.operacao ?? '')),
-                              DataCell(Text(item.textoBreve ?? '')),
-                              DataCell(Text(item.textoBreveOperacao ?? '')),
-                              DataCell(Text(item.statusUsuario ?? '')),
-                              DataCell(Text(item.statusSistema ?? '')),
-                              DataCell(Text(item.restricaoInicio != null 
-                                  ? DateFormat('dd/MM/yyyy').format(item.restricaoInicio!) 
-                                  : '')),
-                              DataCell(Text(item.resHorIn ?? '')),
-                              DataCell(Text(item.fimRestricao != null 
-                                  ? DateFormat('dd/MM/yyyy').format(item.fimRestricao!) 
-                                  : '')),
-                              DataCell(Text(item.resHoraF ?? '')),
-                              DataCell(Text(item.centroTrabalho ?? '')),
-                              DataCell(Text(item.criadoPor ?? '')),
-                              DataCell(Text(item.trabalhoReal?.toStringAsFixed(2) ?? '0.00')),
-                              DataCell(Text(item.dataConfirmacao != null 
-                                  ? DateFormat('dd/MM/yyyy').format(item.dataConfirmacao!) 
-                                  : '')),
-                            ]);
-                          }).toList(),
+                            )
+                          : null,
+                      filled: true,
+                      fillColor: colors.surface,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(color: colors.borderSubtle),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(color: colors.borderSubtle),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(color: colors.borderFocus, width: 1.5),
+                      ),
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+                    ),
+                    onChanged: (value) {
+                      setState(() {}); // Repaint to show/hide clear icon
+                      _currentPage = 0;
+                      _loadData();
+                    },
+                    onSubmitted: (_) {
+                      _currentPage = 0;
+                      _loadData();
+                    },
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: Icon(Icons.refresh, color: colors.textSecondary),
+                  onPressed: () {
+                    _currentPage = 0;
+                    _loadData();
+                  },
+                  tooltip: 'Atualizar',
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: _isLoading
+                ? const Center(child: TFLoading(message: 'Carregando dados SAP...'))
+                : _confirmacoes.isEmpty
+                    ? const Center(
+                        child: TFEmptyState(
+                          icon: Icons.table_rows_outlined,
+                          title: 'Nenhum dado SAP encontrado',
+                          description: 'Não foram encontrados registros para os filtros selecionados.',
+                        ),
+                      )
+                    : Container(
+                        color: colors.surface,
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.vertical,
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: DataTable(
+                              horizontalMargin: 12,
+                              columnSpacing: 24,
+                              headingRowColor: WidgetStateProperty.all(colors.surfaceSecondary),
+                              columns: [
+                                DataColumn(label: Text('Confirmação', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary))),
+                                DataColumn(label: Text('Tipo', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary))),
+                                DataColumn(label: Text('Ordem', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary))),
+                                DataColumn(label: Text('Operação', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary))),
+                                DataColumn(label: Text('Texto Breve', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary))),
+                                DataColumn(label: Text('Texto Breve Op.', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary))),
+                                DataColumn(label: Text('Status Usuário', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary))),
+                                DataColumn(label: Text('Status Sistema', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary))),
+                                DataColumn(label: Text('Restri. Iníc.', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary))),
+                                DataColumn(label: Text('Hora In.', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary))),
+                                DataColumn(label: Text('Fim Restri.', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary))),
+                                DataColumn(label: Text('Hora F.', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary))),
+                                DataColumn(label: Text('Centro Trab.', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary))),
+                                DataColumn(label: Text('Criado Por', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary))),
+                                DataColumn(label: Text('Trab. Real', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary))),
+                                DataColumn(label: Text('Data Conf.', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary))),
+                              ],
+                              rows: _confirmacoes.map((item) {
+                                final isSelected = _selectedId == item.confirmacao;
+                                return DataRow(
+                                  selected: isSelected,
+                                  onSelectChanged: (selected) {
+                                    setState(() {
+                                      if (selected == true) {
+                                        _selectedId = item.confirmacao;
+                                        widget.onSelect?.call(item);
+                                      } else {
+                                        _selectedId = null;
+                                        widget.onSelect?.call(null);
+                                      }
+                                    });
+                                  },
+                                  cells: [
+                                    DataCell(Text(item.confirmacao, style: typography.bodySmall.copyWith(color: colors.textPrimary))),
+                                    DataCell(Text(item.tipo ?? '', style: typography.bodySmall.copyWith(color: colors.textPrimary))),
+                                    DataCell(Text(item.ordem ?? '', style: typography.bodySmall.copyWith(color: colors.textPrimary))),
+                                    DataCell(Text(item.operacao ?? '', style: typography.bodySmall.copyWith(color: colors.textPrimary))),
+                                    DataCell(Text(item.textoBreve ?? '', style: typography.bodySmall.copyWith(color: colors.textPrimary))),
+                                    DataCell(Text(item.textoBreveOperacao ?? '', style: typography.bodySmall.copyWith(color: colors.textPrimary))),
+                                    DataCell(Text(item.statusUsuario ?? '', style: typography.bodySmall.copyWith(color: colors.textPrimary))),
+                                    DataCell(Text(item.statusSistema ?? '', style: typography.bodySmall.copyWith(color: colors.textPrimary))),
+                                    DataCell(Text(item.restricaoInicio != null 
+                                        ? DateFormat('dd/MM/yyyy').format(item.restricaoInicio!) 
+                                        : '', style: typography.bodySmall.copyWith(color: colors.textPrimary))),
+                                    DataCell(Text(item.resHorIn ?? '', style: typography.bodySmall.copyWith(color: colors.textPrimary))),
+                                    DataCell(Text(item.fimRestricao != null 
+                                        ? DateFormat('dd/MM/yyyy').format(item.fimRestricao!) 
+                                        : '', style: typography.bodySmall.copyWith(color: colors.textPrimary))),
+                                    DataCell(Text(item.resHoraF ?? '', style: typography.bodySmall.copyWith(color: colors.textPrimary))),
+                                    DataCell(Text(item.centroTrabalho ?? '', style: typography.bodySmall.copyWith(color: colors.textPrimary))),
+                                    DataCell(Text(item.criadoPor ?? '', style: typography.bodySmall.copyWith(color: colors.textPrimary))),
+                                    DataCell(Text(item.trabalhoReal?.toStringAsFixed(2) ?? '0.00', style: typography.bodySmall.copyWith(color: colors.textPrimary))),
+                                    DataCell(Text(item.dataConfirmacao != null 
+                                        ? DateFormat('dd/MM/yyyy').format(item.dataConfirmacao!) 
+                                        : '', style: typography.bodySmall.copyWith(color: colors.textPrimary))),
+                                  ],
+                                );
+                              }).toList(),
+                            ),
+                          ),
                         ),
                       ),
-                    ),
-        ),
-        _buildPagination(),
-      ],
+          ),
+          _buildPagination(),
+        ],
+      ),
     );
   }
 
   Widget _buildPagination() {
     final totalPages = (_totalCount / _pageSize).ceil();
     if (totalPages <= 1) return const SizedBox.shrink();
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
 
-    return Padding(
+    return Container(
+      color: colors.surface,
       padding: const EdgeInsets.symmetric(vertical: 8.0),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           IconButton(
-            icon: const Icon(Icons.chevron_left),
+            icon: Icon(Icons.chevron_left, color: _currentPage > 0 ? colors.textPrimary : colors.textDisabled),
             onPressed: _currentPage > 0
                 ? () {
                     setState(() => _currentPage--);
@@ -254,9 +299,12 @@ class _ConfirmacaoSapViewState extends State<ConfirmacaoSapView> {
                   }
                 : null,
           ),
-          Text('Página ${_currentPage + 1} de $totalPages ($_totalCount itens)'),
+          Text(
+            'Página ${_currentPage + 1} de $totalPages ($_totalCount itens)',
+            style: typography.bodyMedium.copyWith(color: colors.textSecondary),
+          ),
           IconButton(
-            icon: const Icon(Icons.chevron_right),
+            icon: Icon(Icons.chevron_right, color: _currentPage < totalPages - 1 ? colors.textPrimary : colors.textDisabled),
             onPressed: _currentPage < totalPages - 1
                 ? () {
                     setState(() => _currentPage++);
@@ -272,7 +320,7 @@ class _ConfirmacaoSapViewState extends State<ConfirmacaoSapView> {
   Widget _buildFilterBar() {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
       child: Row(
         children: [
           _buildMultiSelectFilter('Tipo', 'tipo', _tipos),
@@ -283,7 +331,7 @@ class _ConfirmacaoSapViewState extends State<ConfirmacaoSapView> {
           const SizedBox(width: 8),
           _buildMultiSelectFilter('Status Usuário', 'status_usuario', _statusUsuarios),
           const SizedBox(width: 8),
-          _buildMultiSelectFilter('Centro Trabalho', 'centro_trabalho', _centros),
+          _buildMultiSelectFilter('Centro Trabalho', 'centro_trabalho', _centrosTrabalho),
         ],
       ),
     );
@@ -292,6 +340,8 @@ class _ConfirmacaoSapViewState extends State<ConfirmacaoSapView> {
   Widget _buildMultiSelectFilter(String label, String key, List<String> options) {
     final selectedCount = _filters[key]?.length ?? 0;
     final isSelected = selectedCount > 0;
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
 
     return GestureDetector(
       onTap: () async {
@@ -301,9 +351,7 @@ class _ConfirmacaoSapViewState extends State<ConfirmacaoSapView> {
             title: 'Filtrar $label',
             options: options,
             selectedValues: _filters[key] ?? {},
-            onSelectionChanged: (values) {
-              // Já tratado pelo result do showDialog no nosso caso para recarregar
-            },
+            onSelectionChanged: (values) {},
           ),
         );
 
@@ -319,8 +367,8 @@ class _ConfirmacaoSapViewState extends State<ConfirmacaoSapView> {
         width: 155,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          color: isSelected ? Colors.blue.shade50 : Colors.white,
-          border: Border.all(color: isSelected ? Colors.blue : Colors.grey.shade300),
+          color: isSelected ? colors.primary.withValues(alpha: 0.08) : colors.surface,
+          border: Border.all(color: isSelected ? colors.primary : colors.borderSubtle),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Column(
@@ -329,9 +377,9 @@ class _ConfirmacaoSapViewState extends State<ConfirmacaoSapView> {
           children: [
             Text(
               label,
-              style: TextStyle(
+              style: typography.labelSmall.copyWith(
                 fontSize: 10,
-                color: isSelected ? Colors.blue : Colors.grey,
+                color: isSelected ? colors.primary : colors.textSecondary,
                 fontWeight: FontWeight.bold,
               ),
             ),
@@ -345,10 +393,10 @@ class _ConfirmacaoSapViewState extends State<ConfirmacaoSapView> {
                         : selectedCount == 1
                             ? _filters[key]!.first
                             : '$selectedCount selecionados',
-                    style: TextStyle(
+                    style: typography.bodySmall.copyWith(
                       fontSize: 13,
-                      color: isSelected ? Colors.blue.shade800 : Colors.black87,
-                      fontWeight: isSelected ? FontWeight.w500 : FontWeight.normal,
+                      color: isSelected ? colors.primary : colors.textPrimary,
+                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
                     ),
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -356,7 +404,7 @@ class _ConfirmacaoSapViewState extends State<ConfirmacaoSapView> {
                 Icon(
                   Icons.arrow_drop_down,
                   size: 18,
-                  color: isSelected ? Colors.blue : Colors.grey,
+                  color: isSelected ? colors.primary : colors.textSecondary,
                 ),
               ],
             ),

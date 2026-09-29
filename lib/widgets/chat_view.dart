@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/comunidade.dart';
 import '../services/chat_service.dart';
+import '../services/unread_chat_manager.dart';
 import 'chat_comunidades_list.dart';
 import 'chat_grupos_list.dart';
 import 'chat_screen.dart';
@@ -23,6 +24,7 @@ class ChatView extends StatefulWidget {
 
 class _ChatViewState extends State<ChatView> {
   final ChatService _chatService = ChatService();
+  final UnreadChatManager _unreadChatManager = UnreadChatManager();
   
   List<Comunidade> _comunidades = [];
   Map<String, int> _unreadPerCommunity = {};
@@ -35,7 +37,23 @@ class _ChatViewState extends State<ChatView> {
     super.initState();
     _selectedComunidadeId = widget.initialComunidadeId;
     _selectedGrupoId = widget.initialGrupoId;
+    _unreadPerCommunity = _unreadChatManager.unreadByCommunity;
+    _unreadChatManager.addListener(_onUnreadManagerChanged);
     _loadData();
+  }
+
+  @override
+  void dispose() {
+    _unreadChatManager.removeListener(_onUnreadManagerChanged);
+    super.dispose();
+  }
+
+  void _onUnreadManagerChanged() {
+    if (mounted) {
+      setState(() {
+        _unreadPerCommunity = _unreadChatManager.unreadByCommunity;
+      });
+    }
   }
 
   Future<void> _loadData() async {
@@ -59,33 +77,12 @@ class _ChatViewState extends State<ChatView> {
       
       setState(() {
         _comunidades = comunidades;
+        _unreadPerCommunity = _unreadChatManager.unreadByCommunity;
         _isLoading = false;
       });
-
-      // Carregar contagens de não lidas em background (não bloqueia a UI)
-      _loadUnreadCounts();
     } catch (e) {
       print('Erro ao carregar dados do chat: $e');
       setState(() => _isLoading = false);
-    }
-  }
-
-  Future<void> _loadUnreadCounts() async {
-    try {
-      final ids = _comunidades
-          .where((c) => c.id != null)
-          .map((c) => c.id!)
-          .toList();
-      if (ids.isEmpty) return;
-
-      final counts = await _chatService.contarNaoLidasPorComunidade(ids);
-      if (mounted) {
-        setState(() {
-          _unreadPerCommunity = counts;
-        });
-      }
-    } catch (e) {
-      print('Erro ao carregar contagens de não lidas: $e');
     }
   }
 
@@ -107,8 +104,6 @@ class _ChatViewState extends State<ChatView> {
       setState(() {
         _selectedGrupoId = null;
       });
-      // Recarregar contagens ao voltar de um chat (pode ter lido mensagens)
-      _loadUnreadCounts();
     } else if (_selectedComunidadeId != null) {
       setState(() {
         _selectedComunidadeId = null;

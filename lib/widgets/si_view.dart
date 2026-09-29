@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:file_picker/file_picker.dart';
 import 'dart:io';
@@ -7,6 +6,8 @@ import 'dart:convert';
 import 'dart:async';
 import '../models/si.dart';
 import '../services/si_service.dart';
+import '../services/auth_service_simples.dart';
+import '../services/executor_service.dart';
 import '../utils/responsive.dart';
 import 'task_form_dialog.dart';
 import 'task_selection_dialog.dart';
@@ -16,6 +17,12 @@ import '../models/status.dart';
 import '../services/status_service.dart';
 import 'task_view_dialog.dart';
 import 'multi_select_filter_dialog.dart';
+import '../utils/clipboard_helper.dart';
+import '../design_system/taskflow_design_system.dart';
+import 'gantt_chart.dart';
+import 'resizable_panel.dart';
+import 'si_dashboard_view.dart';
+import 'si_calendar_view.dart';
 
 class SIView extends StatefulWidget {
   const SIView({super.key});
@@ -27,6 +34,13 @@ class SIView extends StatefulWidget {
 class _SIViewState extends State<SIView> {
   final SIService _service = SIService();
   final StatusService _statusService = StatusService();
+  final AuthServiceSimples _authService = AuthServiceSimples();
+  final ExecutorService _executorService = ExecutorService();
+
+  bool _canEditTasks = false;
+  bool _canEditTasksChecked = false;
+  final Set<String> _sisVinculando = {};
+
   List<SI> _sis = [];
   List<SI> _todasSIs = []; // Todas as SIs para calcular estatísticas
   Set<String> _sisProgramadasIds = {}; // IDs das SIs vinculadas a tarefas
@@ -44,12 +58,66 @@ class _SIViewState extends State<SIView> {
   List<String> _statusDisponiveis = [];
   List<String> _locaisDisponiveis = [];
   List<String> _statusUsuarioDisponiveis = [];
-  bool _visualizacaoTabela = false; // false = cards, true = tabela
+  String _modoVisualizacao = 'tabela'; // 'tabela', 'cards', 'calendario', 'dashboard'
+  String _filtroTipoSI = 'abertas'; // 'todas', 'abertas', 'concluidas'
+  bool _filtrosVisiveis = false;
   StreamSubscription<String>? _statusChangeSubscription;
+
+  // Variáveis para integração do Gantt Chart
+  bool _exibirGantt = false;
+  GanttScale _ganttScale = GanttScale.daily;
+  final ScrollController _tableVerticalScrollController = ScrollController();
+  final ScrollController _ganttVerticalScrollController = ScrollController();
+
+  final viewOptions = [
+    ('tabela', Icons.table_chart, 'Tabela'),
+    ('cards', Icons.view_module, 'Cards'),
+    ('calendario', Icons.calendar_today, 'Calendário'),
+    ('dashboard', Icons.dashboard, 'Dashboard'),
+  ];
+
+  int? _sortColumnIndex = 9; // Coluna Data Início
+  bool _ordenacaoAscendente = false; // Decrescente por padrão (mais recentes primeiro!)
+
+  String _getSortColumnName() {
+    switch (_sortColumnIndex) {
+      case 2:
+        return 'solicitacao';
+      case 3:
+        return 'tipo';
+      case 4:
+        return 'texto_breve';
+      case 5:
+        return 'status_sistema';
+      case 6:
+        return 'status_usuario';
+      case 7:
+        return 'local_instalacao';
+      case 9:
+        return 'data_inicio';
+      case 10:
+        return 'data_fim';
+      case 11:
+        return 'cen';
+      default:
+        return 'data_inicio';
+    }
+  }
+
+  void _mudarOrdenacao(int columnIndex, bool ascending) {
+    setState(() {
+      _sortColumnIndex = columnIndex;
+      _ordenacaoAscendente = ascending;
+      _paginaAtual = 0;
+    });
+    _loadSIs();
+  }
 
   @override
   void initState() {
     super.initState();
+    _sincronizarScrolls();
+    _loadTaskEditPermission();
     _loadStatus();
     _loadFiltros();
     _loadSIs();
@@ -61,17 +129,178 @@ class _SIViewState extends State<SIView> {
     });
     // No desktop, tabela é o padrão
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && Responsive.isDesktop(context)) {
+      if (mounted) {
         setState(() {
-          _visualizacaoTabela = true;
+          _modoVisualizacao = Responsive.isDesktop(context) ? 'tabela' : 'cards';
         });
       }
     });
   }
 
+  Future<void> _loadTaskEditPermission() async {
+    try {
+      final usuario = _authService.currentUser;
+      if (usuario == null) {
+        _canEditTasks = false;
+        _canEditTasksChecked = true;
+        return;
+      }
+      if (usuario.isRoot) {
+        _canEditTasks = true;
+        _canEditTasksChecked = true;
+        return;
+      }
+      final email = usuario.email;
+      if (email.isEmpty) {
+        _canEditTasks = false;
+        _canEditTasksChecked = true;
+        return;
+      }
+      final permitido = await _executorService.isCoordenadorOuGerentePorLogin(email);
+      _canEditTasks = permitido;
+      _canEditTasksChecked = true;
+    } catch (e) {
+      _canEditTasks = false;
+      _canEditTasksChecked = true;
+    } finally {
+      if (mounted) setState(() {});
+    }
+  }
+
+  Future<bool> _ensureCanEditTasks() async {
+    if (!_canEditTasksChecked) {
+      await _loadTaskEditPermission();
+    }
+    if (!_canEditTasks) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Apenas coordenador ou gerente pode criar/editar tarefas.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return false;
+    }
+    return true;
+  }
+
+  void _sincronizarScrolls() {
+    _tableVerticalScrollController.addListener(() {
+      if (_tableVerticalScrollController.hasClients &&
+          _ganttVerticalScrollController.hasClients &&
+          _tableVerticalScrollController.position.isScrollingNotifier.value) {
+        final targetOffset = _tableVerticalScrollController.offset.clamp(
+          0.0,
+          _ganttVerticalScrollController.position.maxScrollExtent,
+        );
+        _ganttVerticalScrollController.jumpTo(targetOffset);
+      }
+    });
+
+    _ganttVerticalScrollController.addListener(() {
+      if (_ganttVerticalScrollController.hasClients &&
+          _tableVerticalScrollController.hasClients &&
+          _ganttVerticalScrollController.position.isScrollingNotifier.value) {
+        final targetOffset = _ganttVerticalScrollController.offset.clamp(
+          0.0,
+          _tableVerticalScrollController.position.maxScrollExtent,
+        );
+        _tableVerticalScrollController.jumpTo(targetOffset);
+      }
+    });
+  }
+
+  int _totalFiltrosAtivos() {
+    return _filtroStatus.length +
+        _filtroLocal.length +
+        _filtroStatusUsuario.length +
+        (_dataInicio != null ? 1 : 0) +
+        (_dataFim != null ? 1 : 0);
+  }
+
+  Color _getLocalColor(String? local) {
+    if (local == null || local.isEmpty) return Colors.grey.shade200;
+    final hash = local.hashCode.abs();
+    final colors = [
+      const Color(0xFFE0F2FE),
+      const Color(0xFFDCFCE7),
+      const Color(0xFFFEF3C7),
+      const Color(0xFFFEE2E2),
+      const Color(0xFFF3E8FF),
+      const Color(0xFFE0E7FF),
+      const Color(0xFFCCFBF1),
+      const Color(0xFFFFEDD5),
+    ];
+    return colors[hash % colors.length];
+  }
+
+  Color _getLocalTextColor(String? local) {
+    if (local == null || local.isEmpty) return Colors.grey.shade700;
+    final hash = local.hashCode.abs();
+    final textColors = [
+      const Color(0xFF0369A1),
+      const Color(0xFF15803D),
+      const Color(0xFFB45309),
+      const Color(0xFFB91C1C),
+      const Color(0xFF6B21A8),
+      const Color(0xFF3730A3),
+      const Color(0xFF0F766E),
+      const Color(0xFFC2410C),
+    ];
+    return textColors[hash % textColors.length];
+  }
+
+  Task _convertSIToTask(SI si) {
+    final listVinc = _sisProgramadasInfo[si.id];
+    final programadaInfo = listVinc?.isNotEmpty == true ? listVinc!.first : null;
+    final tarefaVinc = programadaInfo?['tarefa'] as Map<String, dynamic>?;
+
+    DateTime? inicio = si.dataInicio ?? si.dataCriacao;
+    if (tarefaVinc?['data_inicio'] != null) {
+      inicio = tarefaVinc!['data_inicio'] is String
+          ? DateTime.parse(tarefaVinc['data_inicio'] as String)
+          : tarefaVinc['data_inicio'] as DateTime;
+    }
+
+    DateTime? fim = si.dataFim;
+    if (tarefaVinc?['data_fim'] != null) {
+      fim = tarefaVinc!['data_fim'] is String
+          ? DateTime.parse(tarefaVinc['data_fim'] as String)
+          : tarefaVinc['data_fim'] as DateTime;
+    }
+
+    inicio ??= DateTime.now();
+    fim ??= inicio.add(const Duration(days: 1));
+    if (fim.isBefore(inicio)) fim = inicio.add(const Duration(days: 1));
+
+    final tarefaNome = tarefaVinc?['tarefa'] ?? si.textoBreve ?? si.solicitacao;
+    final tarefaStatus = (tarefaVinc?['status'] as String?) ??
+        (si.statusUsuario?.isNotEmpty == true ? si.statusUsuario! : 'CRI.');
+
+    final localStr = si.local ?? si.localInstalacao;
+
+    return Task(
+      id: si.id,
+      tarefa: 'SI ${si.solicitacao} - $tarefaNome',
+      dataInicio: inicio,
+      dataFim: fim,
+      status: tarefaStatus,
+      regional: 'TODAS',
+      divisao: si.cen ?? 'SI',
+      tipo: si.tipo ?? 'SI',
+      coordenador: si.criadoPor ?? 'N/A',
+      si: si.solicitacao,
+      observacoes: si.textoBreve ?? '',
+      locais: [if (localStr != null && localStr.isNotEmpty) localStr],
+    );
+  }
+
   @override
   void dispose() {
     _statusChangeSubscription?.cancel();
+    _tableVerticalScrollController.dispose();
+    _ganttVerticalScrollController.dispose();
     super.dispose();
   }
 
@@ -113,8 +342,14 @@ class _SIViewState extends State<SIView> {
       // Ordenar cada lista por data de vinculação (mais recente primeiro)
       for (final siId in info.keys) {
         info[siId]!.sort((a, b) {
-          final dataA = a['vinculado_em'] as DateTime?;
-          final dataB = b['vinculado_em'] as DateTime?;
+          DateTime? parseDate(dynamic v) {
+            if (v == null) return null;
+            if (v is DateTime) return v;
+            if (v is String) return DateTime.tryParse(v);
+            return null;
+          }
+          final dataA = parseDate(a['vinculado_em']);
+          final dataB = parseDate(b['vinculado_em']);
           if (dataA == null && dataB == null) return 0;
           if (dataA == null) return 1;
           if (dataB == null) return -1;
@@ -175,18 +410,52 @@ class _SIViewState extends State<SIView> {
     });
 
     try {
+      Set<String> baseStatusSistema = _statusDisponiveis.isNotEmpty
+          ? _statusDisponiveis.toSet()
+          : {'CRI.', 'PREP', 'LIBE', 'ENCE', 'ENTE'};
+      if (_filtroStatus.isNotEmpty) {
+        baseStatusSistema = _filtroStatus;
+      }
+
+      List<String>? backendFiltroStatus;
+      if (_filtroTipoSI == 'abertas') {
+        backendFiltroStatus = baseStatusSistema
+            .where(
+              (s) =>
+                  !s.toUpperCase().contains('ENCE') &&
+                  !s.toUpperCase().contains('ENTE'),
+            )
+            .toList();
+        if (backendFiltroStatus.isEmpty) backendFiltroStatus = ['DUMMY_EMPTY'];
+      } else if (_filtroTipoSI == 'concluidas') {
+        backendFiltroStatus = baseStatusSistema
+            .where(
+              (s) =>
+                  s.toUpperCase().contains('ENCE') ||
+                  s.toUpperCase().contains('ENTE'),
+            )
+            .toList();
+        if (backendFiltroStatus.isEmpty) backendFiltroStatus = ['DUMMY_EMPTY'];
+      } else {
+        backendFiltroStatus = _filtroStatus.isEmpty
+            ? null
+            : _filtroStatus.toList();
+      }
+
       final sis = await _service.getAllSIs(
-        filtroStatus: _filtroStatus.isEmpty ? null : _filtroStatus.toList(),
+        filtroStatus: backendFiltroStatus,
         filtroLocal: _filtroLocal.isEmpty ? null : _filtroLocal.toList(),
         filtroStatusUsuario: _filtroStatusUsuario.isEmpty ? null : _filtroStatusUsuario.toList(),
         dataInicio: _dataInicio,
         dataFim: _dataFim,
         limit: _itensPorPagina,
         offset: _paginaAtual * _itensPorPagina,
+        orderBy: _getSortColumnName(),
+        ascending: _ordenacaoAscendente,
       );
 
       final total = await _service.contarSIs(
-        filtroStatus: _filtroStatus.isEmpty ? null : _filtroStatus.toList(),
+        filtroStatus: backendFiltroStatus,
         filtroLocal: _filtroLocal.isEmpty ? null : _filtroLocal.toList(),
         filtroStatusUsuario: _filtroStatusUsuario.isEmpty ? null : _filtroStatusUsuario.toList(),
         dataInicio: _dataInicio,
@@ -204,14 +473,14 @@ class _SIViewState extends State<SIView> {
       setState(() {
         _isLoading = false;
       });
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Erro ao carregar SIs: $e'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erro ao carregar SIs: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -412,9 +681,41 @@ class _SIViewState extends State<SIView> {
 
   Future<void> _loadTodasSIsParaEstatisticas() async {
     try {
+      Set<String> baseStatusSistema = _statusDisponiveis.isNotEmpty
+          ? _statusDisponiveis.toSet()
+          : {'CRI.', 'PREP', 'LIBE', 'ENCE', 'ENTE'};
+      if (_filtroStatus.isNotEmpty) {
+        baseStatusSistema = _filtroStatus;
+      }
+
+      List<String>? backendFiltroStatus;
+      if (_filtroTipoSI == 'abertas') {
+        backendFiltroStatus = baseStatusSistema
+            .where(
+              (s) =>
+                  !s.toUpperCase().contains('ENCE') &&
+                  !s.toUpperCase().contains('ENTE'),
+            )
+            .toList();
+        if (backendFiltroStatus.isEmpty) backendFiltroStatus = ['DUMMY_EMPTY'];
+      } else if (_filtroTipoSI == 'concluidas') {
+        backendFiltroStatus = baseStatusSistema
+            .where(
+              (s) =>
+                  s.toUpperCase().contains('ENCE') ||
+                  s.toUpperCase().contains('ENTE'),
+            )
+            .toList();
+        if (backendFiltroStatus.isEmpty) backendFiltroStatus = ['DUMMY_EMPTY'];
+      } else {
+        backendFiltroStatus = _filtroStatus.isEmpty
+            ? null
+            : _filtroStatus.toList();
+      }
+
       // Carregar todas as SIs sem paginação para calcular estatísticas, usando os mesmos filtros
       final todasSIs = await _service.getAllSIs(
-        filtroStatus: _filtroStatus.isEmpty ? null : _filtroStatus.toList(),
+        filtroStatus: backendFiltroStatus,
         filtroLocal: _filtroLocal.isEmpty ? null : _filtroLocal.toList(),
         filtroStatusUsuario: _filtroStatusUsuario.isEmpty ? null : _filtroStatusUsuario.toList(),
         dataInicio: _dataInicio,
@@ -435,448 +736,453 @@ class _SIViewState extends State<SIView> {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
     final isMobile = Responsive.isMobile(context);
-    
-    // Calcular estatísticas para os dashboards usando as SIs filtradas
-    final totalSIs = _todasSIs.length;
-    // Contar apenas as SIs programadas que estão na lista filtrada
-    final sisProgramadas = _todasSIs.where((si) => _sisProgramadasIds.contains(si.id)).length;
-    final sisNaoProgramadas = totalSIs > 0 ? totalSIs - sisProgramadas : 0;
-    
-    // Contar por status sistema
-    final sisPorStatus = <String, int>{};
-    for (final si in _todasSIs) {
-      final status = si.statusSistema ?? 'Sem Status';
-      sisPorStatus[status] = (sisPorStatus[status] ?? 0) + 1;
-    }
-    
-    final statusMaisComum = sisPorStatus.entries.isNotEmpty
-        ? sisPorStatus.entries.reduce((a, b) => a.value > b.value ? a : b).key
-        : '-';
+    final isCompact = isMobile || MediaQuery.of(context).size.width < 900;
+    final totalFiltros = _totalFiltrosAtivos();
 
     return Scaffold(
+      backgroundColor: colors.background,
       body: Column(
         children: [
-          // Header com botões
+          // Toolbar superior moderna
           Container(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
-              color: Colors.white,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.grey.withOpacity(0.1),
-                  spreadRadius: 1,
-                  blurRadius: 3,
-                  offset: const Offset(0, 2),
-                ),
-              ],
+              color: colors.surface,
+              border: Border(
+                bottom: BorderSide(color: colors.borderSubtle),
+              ),
             ),
-            child: Row(
+            child: Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                const Text(
-                  'SIs',
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                  ),
+                // Título e seletor rápido (Todas, Abertas, Concluídas)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'SIs',
+                      style: typography.pageTitle.copyWith(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(width: 12),
+                    SegmentedButton<String>(
+                      segments: const [
+                        ButtonSegment(value: 'abertas', label: Text('Abertas')),
+                        ButtonSegment(value: 'concluidas', label: Text('Concluídas')),
+                        ButtonSegment(value: 'todas', label: Text('Todas')),
+                      ],
+                      selected: {_filtroTipoSI},
+                      onSelectionChanged: (newSelection) {
+                        setState(() {
+                          _filtroTipoSI = newSelection.first;
+                          _paginaAtual = 0;
+                        });
+                        _loadSIs();
+                        _loadTodasSIsParaEstatisticas();
+                      },
+                      showSelectedIcon: false,
+                      style: SegmentedButton.styleFrom(
+                        backgroundColor: colors.surface,
+                        selectedBackgroundColor: colors.primary,
+                        selectedForegroundColor: Colors.white,
+                        foregroundColor: colors.textSecondary,
+                        side: BorderSide(color: colors.borderSubtle, width: 1),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(TFRadius.r8),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 16),
-                // Dashboards compactos
-                if (!isMobile) ...[
-                  _buildDashboardCardCompacto(
-                    'Total',
-                    totalSIs.toString(),
-                    Icons.description,
-                    Colors.blue,
-                  ),
-                  const SizedBox(width: 8),
-                  _buildDashboardCardCompacto(
-                    'Programadas',
-                    sisProgramadas.toString(),
-                    Icons.task_alt,
-                    Colors.green,
-                  ),
-                  const SizedBox(width: 8),
-                  _buildDashboardCardCompacto(
-                    'Não Programadas',
-                    sisNaoProgramadas.toString(),
-                    Icons.pending_actions,
-                    Colors.orange,
-                  ),
-                  const SizedBox(width: 8),
-                  _buildDashboardCardCompacto(
-                    'Status Mais Comum',
-                    statusMaisComum.length > 15 ? '${statusMaisComum.substring(0, 15)}...' : statusMaisComum,
-                    Icons.label,
-                    Colors.purple,
-                  ),
-                ],
-                const Spacer(),
-                // Botão de alternar visualização
-                IconButton(
-                  onPressed: () {
-                    setState(() {
-                      _visualizacaoTabela = !_visualizacaoTabela;
-                    });
-                  },
-                  icon: Icon(_visualizacaoTabela ? Icons.view_module : Icons.table_chart),
-                  tooltip: _visualizacaoTabela ? 'Visualização em Cards' : 'Visualização em Tabela',
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton.icon(
-                  onPressed: _importarCSV,
-                  icon: const Icon(Icons.upload_file),
-                  label: const Text('Importar CSV'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blue,
-                    foregroundColor: Colors.white,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton.icon(
-                  onPressed: () {
-                    setState(() {
-                      _filtroStatus = {};
-                      _filtroLocal = {};
-                      _filtroStatusUsuario = {};
-                      _dataInicio = null;
-                      _dataFim = null;
-                      _paginaAtual = 0;
-                    });
-                    _loadSIs();
-                    _loadTodasSIsParaEstatisticas();
-                  },
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Atualizar'),
+
+                // Modos de visualização e ações
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    // Seletor de modo de visualização
+                    if (!isCompact)
+                      SegmentedButton<String>(
+                        segments: viewOptions.map((opt) {
+                          return ButtonSegment<String>(
+                            value: opt.$1,
+                            icon: Icon(opt.$2),
+                            label: Text(opt.$3),
+                          );
+                        }).toList(),
+                        selected: {_modoVisualizacao},
+                        onSelectionChanged: (Set<String> newSelection) {
+                          setState(() {
+                            _modoVisualizacao = newSelection.first;
+                          });
+                        },
+                        showSelectedIcon: false,
+                        style: SegmentedButton.styleFrom(
+                          backgroundColor: colors.surface,
+                          selectedBackgroundColor: colors.primary.withValues(alpha: 0.12),
+                          selectedForegroundColor: colors.primary,
+                          foregroundColor: colors.textSecondary,
+                          side: BorderSide(color: colors.borderSubtle, width: 1),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(TFRadius.r8),
+                          ),
+                        ),
+                      )
+                    else
+                      DropdownButtonHideUnderline(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: colors.surface,
+                            border: Border.all(color: colors.borderSubtle),
+                            borderRadius: BorderRadius.circular(TFRadius.r8),
+                          ),
+                          child: DropdownButton<String>(
+                            value: _modoVisualizacao,
+                            isDense: true,
+                            icon: const Icon(Icons.arrow_drop_down),
+                            dropdownColor: colors.surface,
+                            items: viewOptions.map((opt) {
+                              return DropdownMenuItem<String>(
+                                value: opt.$1,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(opt.$2, size: 18, color: colors.primary),
+                                    const SizedBox(width: 8),
+                                    Text(opt.$3, style: typography.bodySmall),
+                                  ],
+                                ),
+                              );
+                            }).toList(),
+                            onChanged: (String? newValue) {
+                              if (newValue != null) {
+                                setState(() {
+                                  _modoVisualizacao = newValue;
+                                });
+                              }
+                            },
+                          ),
+                        ),
+                      ),
+
+                    // Botão de alternância do Gantt desabilitado temporariamente
+                    /*
+                    if (_modoVisualizacao == 'tabela')
+                      IconButton(
+                        icon: Icon(
+                          _exibirGantt ? Icons.view_sidebar : Icons.view_sidebar_outlined,
+                          color: _exibirGantt ? colors.primary : colors.textSecondary,
+                        ),
+                        tooltip: _exibirGantt ? 'Ocultar Gantt' : 'Exibir Gantt',
+                        onPressed: () {
+                          setState(() {
+                            _exibirGantt = !_exibirGantt;
+                          });
+                        },
+                      ),
+                    */
+
+                    // Importar CSV
+                    OutlinedButton.icon(
+                      onPressed: _importarCSV,
+                      icon: const Icon(Icons.upload_file),
+                      label: isCompact ? const SizedBox.shrink() : const Text('Importar CSV'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: colors.textPrimary,
+                        side: BorderSide(color: colors.borderDefault),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(TFRadius.r8),
+                        ),
+                        minimumSize: Size(isCompact ? 40 : 0, 36),
+                        padding: EdgeInsets.symmetric(
+                          horizontal: isCompact ? 10 : 14,
+                          vertical: 10,
+                        ),
+                      ),
+                    ),
+
+                    // Atualizar
+                    ElevatedButton.icon(
+                      onPressed: () {
+                        setState(() {
+                          _paginaAtual = 0;
+                        });
+                        _loadSIs();
+                        _loadTodasSIsParaEstatisticas();
+                      },
+                      icon: const Icon(Icons.refresh),
+                      label: isCompact ? const SizedBox.shrink() : const Text('Atualizar'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: colors.primary,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(TFRadius.r8),
+                        ),
+                        minimumSize: Size(isCompact ? 40 : 0, 36),
+                        padding: EdgeInsets.symmetric(
+                          horizontal: isCompact ? 10 : 16,
+                          vertical: 10,
+                        ),
+                      ),
+                    ),
+
+                    // Filtros
+                    OutlinedButton.icon(
+                      onPressed: () {
+                        setState(() {
+                          _filtrosVisiveis = !_filtrosVisiveis;
+                        });
+                      },
+                      icon: Badge(
+                        isLabelVisible: totalFiltros > 0,
+                        label: Text('$totalFiltros'),
+                        child: Icon(
+                          _filtrosVisiveis ? Icons.filter_alt_off : Icons.filter_alt,
+                          color: totalFiltros > 0 ? colors.primary : colors.textSecondary,
+                        ),
+                      ),
+                      label: isCompact ? const SizedBox.shrink() : const Text('Filtros'),
+                      style: OutlinedButton.styleFrom(
+                        backgroundColor: _filtrosVisiveis
+                            ? colors.primary.withValues(alpha: 0.08)
+                            : colors.surface,
+                        side: BorderSide(
+                          color: _filtrosVisiveis ? colors.primary : colors.borderDefault,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(TFRadius.r8),
+                        ),
+                        minimumSize: Size(isCompact ? 40 : 0, 36),
+                        padding: EdgeInsets.symmetric(
+                          horizontal: isCompact ? 10 : 16,
+                          vertical: 10,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
 
           // Filtros
-          Container(
-            padding: EdgeInsets.all(isMobile ? 8 : 16),
-            decoration: BoxDecoration(
-              color: Colors.grey[100],
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.grey.withOpacity(0.1),
-                  spreadRadius: 1,
-                  blurRadius: 2,
-                  offset: const Offset(0, 1),
+          if (_filtrosVisiveis)
+            Container(
+              padding: const EdgeInsets.all(TFSpacing.s12),
+              decoration: BoxDecoration(
+                color: colors.surfaceSecondary,
+                border: Border(
+                  bottom: BorderSide(color: colors.borderSubtle),
                 ),
-              ],
-            ),
-            child: isMobile
-                ? ExpansionTile(
-                    title: Row(
-                      children: [
-                        const Icon(Icons.filter_list, size: 20),
-                        const SizedBox(width: 8),
-                        const Text('Filtros', style: TextStyle(fontSize: 16)),
-                        if (_filtroStatus.isNotEmpty || _filtroLocal.isNotEmpty || _filtroStatusUsuario.isNotEmpty || _dataInicio != null || _dataFim != null)
-                          Container(
-                            margin: const EdgeInsets.only(left: 8),
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: Colors.blue,
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Text(
-                              [
-                                if (_filtroStatus.isNotEmpty) '1',
-                                if (_filtroLocal.isNotEmpty) '1',
-                                if (_filtroStatusUsuario.isNotEmpty) '1',
-                                if (_dataInicio != null) '1',
-                                if (_dataFim != null) '1',
-                              ].length.toString(),
-                              style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
-                            ),
-                          ),
-                      ],
+              ),
+              child: Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  SizedBox(
+                    width: isMobile ? double.infinity : 200,
+                    child: _buildMultiSelectFilterField(
+                      'Status Sistema',
+                      _filtroStatus,
+                      _statusDisponiveis,
+                      (newValues) {
+                        setState(() {
+                          _filtroStatus = newValues;
+                          _paginaAtual = 0;
+                        });
+                        _loadSIs();
+                        _loadTodasSIsParaEstatisticas();
+                      },
                     ),
-                    initiallyExpanded: false,
-                    childrenPadding: const EdgeInsets.all(8),
-                    children: [
-                      _buildMultiSelectFilterField(
-                        'Status Sistema',
-                        _filtroStatus,
-                        _statusDisponiveis,
-                        (newValues) {
-                          setState(() {
-                            _filtroStatus = newValues;
-                            _paginaAtual = 0;
-                          });
-                          _loadSIs();
-                          _loadTodasSIsParaEstatisticas();
-                        },
-                      ),
-                      const SizedBox(height: 8),
-                      _buildMultiSelectFilterField(
-                        'Local de Instalação',
-                        _filtroLocal,
-                        _locaisDisponiveis,
-                        (newValues) {
-                          setState(() {
-                            _filtroLocal = newValues;
-                            _paginaAtual = 0;
-                          });
-                          _loadSIs();
-                          _loadTodasSIsParaEstatisticas();
-                        },
-                      ),
-                      const SizedBox(height: 8),
-                      _buildMultiSelectFilterField(
-                        'Status Usuário',
-                        _filtroStatusUsuario,
-                        _statusUsuarioDisponiveis,
-                        (newValues) {
-                          setState(() {
-                            _filtroStatusUsuario = newValues;
-                            _paginaAtual = 0;
-                          });
-                          _loadSIs();
-                          _loadTodasSIsParaEstatisticas();
-                        },
-                      ),
-                      const SizedBox(height: 8),
-                      _buildDateFilterField(
-                        'Data Início',
-                        _dataInicio,
-                        (date) {
-                          setState(() {
-                            _dataInicio = date;
-                            _paginaAtual = 0;
-                          });
-                          _loadSIs();
-                          _loadTodasSIsParaEstatisticas();
-                        },
-                      ),
-                      const SizedBox(height: 8),
-                      _buildDateFilterField(
-                        'Data Fim',
-                        _dataFim,
-                        (date) {
-                          setState(() {
-                            _dataFim = date;
-                            _paginaAtual = 0;
-                          });
-                          _loadSIs();
-                          _loadTodasSIsParaEstatisticas();
-                        },
-                      ),
-                    ],
-                  )
-                : Wrap(
-                    spacing: 16,
-                    runSpacing: 16,
-                    children: [
-                SizedBox(
-                  width: isMobile ? double.infinity : 200,
-                  child: _buildMultiSelectFilterField(
-                    'Status Sistema',
-                    _filtroStatus,
-                    _statusDisponiveis,
-                    (newValues) {
-                      setState(() {
-                        _filtroStatus = newValues;
-                        _paginaAtual = 0;
-                      });
-                      _loadSIs();
-                      _loadTodasSIsParaEstatisticas();
-                    },
                   ),
-                ),
-                SizedBox(
-                  width: isMobile ? double.infinity : 250,
-                  child: _buildMultiSelectFilterField(
-                    'Local de Instalação',
-                    _filtroLocal,
-                    _locaisDisponiveis,
-                    (newValues) {
-                      setState(() {
-                        _filtroLocal = newValues;
-                        _paginaAtual = 0;
-                      });
-                      _loadSIs();
-                      _loadTodasSIsParaEstatisticas();
-                    },
+                  SizedBox(
+                    width: isMobile ? double.infinity : 220,
+                    child: _buildMultiSelectFilterField(
+                      'Local / Instalação',
+                      _filtroLocal,
+                      _locaisDisponiveis,
+                      (newValues) {
+                        setState(() {
+                          _filtroLocal = newValues;
+                          _paginaAtual = 0;
+                        });
+                        _loadSIs();
+                        _loadTodasSIsParaEstatisticas();
+                      },
+                    ),
                   ),
-                ),
-                SizedBox(
-                  width: isMobile ? double.infinity : 200,
-                  child: _buildMultiSelectFilterField(
-                    'Status Usuário',
-                    _filtroStatusUsuario,
-                    _statusUsuarioDisponiveis,
-                    (newValues) {
-                      setState(() {
-                        _filtroStatusUsuario = newValues;
-                        _paginaAtual = 0;
-                      });
-                      _loadSIs();
-                      _loadTodasSIsParaEstatisticas();
-                    },
+                  SizedBox(
+                    width: isMobile ? double.infinity : 180,
+                    child: _buildMultiSelectFilterField(
+                      'Status Usuário',
+                      _filtroStatusUsuario,
+                      _statusUsuarioDisponiveis,
+                      (newValues) {
+                        setState(() {
+                          _filtroStatusUsuario = newValues;
+                          _paginaAtual = 0;
+                        });
+                        _loadSIs();
+                        _loadTodasSIsParaEstatisticas();
+                      },
+                    ),
                   ),
-                ),
-
-                // Filtro Data Início
-                SizedBox(
-                  width: isMobile ? double.infinity : 150,
-                  child: InkWell(
-                    onTap: () async {
-                      final date = await showDatePicker(
-                        context: context,
-                        initialDate: _dataInicio ?? DateTime.now(),
-                        firstDate: DateTime(2020),
-                        lastDate: DateTime(2030),
-                      );
-                      if (date != null) {
+                  SizedBox(
+                    width: isMobile ? double.infinity : 140,
+                    child: _buildDateFilterField(
+                      'Data Início',
+                      _dataInicio,
+                      (date) {
                         setState(() {
                           _dataInicio = date;
                           _paginaAtual = 0;
                         });
                         _loadSIs();
                         _loadTodasSIsParaEstatisticas();
-                      }
-                    },
-                    child: InputDecorator(
-                      decoration: const InputDecoration(
-                        labelText: 'Data Início',
-                        border: OutlineInputBorder(),
-                        filled: true,
-                        fillColor: Colors.white,
-                        suffixIcon: Icon(Icons.calendar_today),
-                      ),
-                      child: Text(
-                        _dataInicio != null
-                            ? '${_dataInicio!.day}/${_dataInicio!.month}/${_dataInicio!.year}'
-                            : 'Selecione',
-                      ),
+                      },
                     ),
                   ),
-                ),
-
-                // Filtro Data Fim
-                SizedBox(
-                  width: isMobile ? double.infinity : 150,
-                  child: InkWell(
-                    onTap: () async {
-                      final date = await showDatePicker(
-                        context: context,
-                        initialDate: _dataFim ?? DateTime.now(),
-                        firstDate: _dataInicio ?? DateTime(2020),
-                        lastDate: DateTime(2030),
-                      );
-                      if (date != null) {
+                  SizedBox(
+                    width: isMobile ? double.infinity : 140,
+                    child: _buildDateFilterField(
+                      'Data Fim',
+                      _dataFim,
+                      (date) {
                         setState(() {
                           _dataFim = date;
                           _paginaAtual = 0;
                         });
                         _loadSIs();
                         _loadTodasSIsParaEstatisticas();
-                      }
-                    },
-                    child: InputDecorator(
-                      decoration: const InputDecoration(
-                        labelText: 'Data Fim',
-                        border: OutlineInputBorder(),
-                        filled: true,
-                        fillColor: Colors.white,
-                        suffixIcon: Icon(Icons.calendar_today),
-                      ),
-                      child: Text(
-                        _dataFim != null
-                            ? '${_dataFim!.day}/${_dataFim!.month}/${_dataFim!.year}'
-                            : 'Selecione',
-                      ),
+                      },
                     ),
                   ),
-                ),
-
-                // Botão Limpar Filtros
-                if (!isMobile)
-                  ElevatedButton.icon(
-                    onPressed: () {
-                      setState(() {
-                        _filtroStatus = {};
-                        _filtroLocal = {};
-                        _filtroStatusUsuario = {};
-                        _dataInicio = null;
-                        _dataFim = null;
-                        _paginaAtual = 0;
-                      });
-                      _loadSIs();
-                      _loadTodasSIsParaEstatisticas();
-                    },
-                    icon: const Icon(Icons.clear),
-                    label: const Text('Limpar Filtros'),
-                  ),
-                    ],
-                  ),
-          ),
-
-          // Contador de resultados
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            color: Colors.blue[50],
-            child: Row(
-              children: [
-                Text(
-                  'Total: $_totalSIs SIs (${_sis.length} nesta página)',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.blue,
-                  ),
-                ),
-                const Spacer(),
-                Text(
-                  'Página ${_paginaAtual + 1} de ${(_totalSIs / _itensPorPagina).ceil()}',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.blue,
-                  ),
-                ),
-              ],
+                  if (totalFiltros > 0)
+                    TextButton.icon(
+                      onPressed: () {
+                        setState(() {
+                          _filtroStatus.clear();
+                          _filtroLocal.clear();
+                          _filtroStatusUsuario.clear();
+                          _dataInicio = null;
+                          _dataFim = null;
+                          _paginaAtual = 0;
+                        });
+                        _loadSIs();
+                        _loadTodasSIsParaEstatisticas();
+                      },
+                      icon: const Icon(Icons.clear, size: 16),
+                      label: const Text('Limpar Filtros'),
+                    ),
+                ],
+              ),
             ),
-          ),
 
-          // Lista de ats (Cards ou Tabela)
+          // Barra de status com total
+          if (_modoVisualizacao != 'dashboard')
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: colors.surface,
+                border: Border(
+                  bottom: BorderSide(color: colors.borderSubtle),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Text(
+                    '$_totalSIs SIs encontradas (${_sis.length} nesta página)',
+                    style: typography.bodySmall.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: colors.textSecondary,
+                    ),
+                  ),
+                  const Spacer(),
+                  if (_modoVisualizacao != 'calendario')
+                    Text(
+                      'Página ${_paginaAtual + 1} de ${(_totalSIs / _itensPorPagina).ceil().clamp(1, 9999)}',
+                      style: typography.bodySmall.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: colors.textSecondary,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+
+          // Conteúdo Principal
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
-                : _sis.isEmpty
-                    ? const Center(
-                        child: Text(
-                          'Nenhuma SI encontrada',
-                          style: TextStyle(fontSize: 16, color: Colors.grey),
-                        ),
+                : _modoVisualizacao == 'dashboard'
+                    ? SiDashboardView(
+                        sis: _todasSIs,
+                        sisProgramadasIds: _sisProgramadasIds,
                       )
-                    : _visualizacaoTabela
-                        ? _buildTabelaView()
-                        : ListView.builder(
-                            itemCount: _sis.length,
-                            itemBuilder: (context, index) {
-                              final si = _sis[index];
-                              return _buildSICard(si);
-                            },
-                          ),
+                    : _modoVisualizacao == 'calendario'
+                        ? SiCalendarView(
+                            sis: _todasSIs,
+                            onSITap: _mostrarDetalhesSI,
+                          )
+                        : _sis.isEmpty
+                            ? Center(
+                                child: TFEmptyState(
+                                  icon: Icons.search_off,
+                                  title: 'Nenhuma SI encontrada',
+                                  description: totalFiltros > 0
+                                      ? 'Não há SIs correspondentes aos filtros aplicados.'
+                                      : 'Não há SIs cadastradas.',
+                                  action: totalFiltros > 0
+                                      ? OutlinedButton(
+                                          onPressed: () {
+                                            setState(() {
+                                              _filtroStatus.clear();
+                                              _filtroLocal.clear();
+                                              _filtroStatusUsuario.clear();
+                                              _dataInicio = null;
+                                              _dataFim = null;
+                                              _paginaAtual = 0;
+                                            });
+                                            _loadSIs();
+                                            _loadTodasSIsParaEstatisticas();
+                                          },
+                                          child: const Text('Limpar Filtros'),
+                                        )
+                                      : null,
+                                ),
+                              )
+                            : _modoVisualizacao == 'tabela'
+                                ? (_exibirGantt
+                                    ? _buildSplitTabelaGanttView()
+                                    : _buildTabelaView(controller: _tableVerticalScrollController))
+                                : ListView.builder(
+                                    itemCount: _sis.length,
+                                    itemBuilder: (context, index) {
+                                      final si = _sis[index];
+                                      return _buildSICard(si);
+                                    },
+                                  ),
           ),
 
-          // Paginação
-          if (_totalSIs > _itensPorPagina)
+          // Paginação (oculta no dashboard e calendário)
+          if (_modoVisualizacao != 'dashboard' &&
+              _modoVisualizacao != 'calendario' &&
+              _totalSIs > _itensPorPagina)
             Container(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
-                color: Colors.white,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.grey.withOpacity(0.1),
-                    spreadRadius: 1,
-                    blurRadius: 2,
-                    offset: const Offset(0, -1),
-                  ),
-                ],
+                color: colors.surface,
+                border: Border(
+                  top: BorderSide(color: colors.borderSubtle),
+                ),
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -914,6 +1220,7 @@ class _SIViewState extends State<SIView> {
 
   // Criar tarefa a partir de uma at
   Future<void> _criarTarefaDaSI(SI si) async {
+    if (!await _ensureCanEditTasks()) return;
     try {
       // Calcular datas padrão
       final dataInicio = si.dataInicio ?? DateTime.now();
@@ -971,6 +1278,11 @@ class _SIViewState extends State<SIView> {
 
   // Vincular SI a uma tarefa existente
   Future<void> _vincularSITarefaExistente(SI si) async {
+    if (_sisVinculando.contains(si.id)) return;
+    setState(() {
+      _sisVinculando.add(si.id);
+    });
+
     try {
       final taskService = TaskService();
       final todasTarefas = await taskService.getAllTasks();
@@ -987,10 +1299,28 @@ class _SIViewState extends State<SIView> {
         return;
       }
       
+      // Extrair local da SI para pré-filtrar tarefas do mesmo local (apenas local e localInstalacao)
+      final locaisSI = <String>[];
+      if (si.local != null && si.local!.trim().isNotEmpty) {
+        locaisSI.add(si.local!.trim());
+      }
+      if (si.localInstalacao != null && si.localInstalacao!.trim().isNotEmpty) {
+        locaisSI.add(si.localInstalacao!.trim());
+      }
+
+      final localSIPrincipal = (si.local != null && si.local!.trim().isNotEmpty)
+          ? si.local!.trim()
+          : (locaisSI.isNotEmpty ? locaisSI.first : null);
+
+      if (!mounted) return;
+
       final tarefaSelecionada = await showDialog<Task>(
         context: context,
         builder: (context) => TaskSelectionDialog(
           tasks: todasTarefas,
+          siSolicitacao: si.solicitacao,
+          localPadrao: localSIPrincipal,
+          locaisPadrao: locaisSI,
         ),
       );
       
@@ -1009,12 +1339,12 @@ class _SIViewState extends State<SIView> {
             );
           }
         } catch (e, stackTrace) {
-          print('❌ Erro ao vincular at: $e');
+          print('❌ Erro ao vincular SI: $e');
           print('❌ Stack trace: $stackTrace');
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('Erro ao vincular at: ${e.toString()}'),
+                content: Text('Erro ao vincular SI: ${e.toString()}'),
                 backgroundColor: Colors.red,
                 duration: const Duration(seconds: 5),
               ),
@@ -1026,11 +1356,17 @@ class _SIViewState extends State<SIView> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Erro ao vincular at: $e'),
+            content: Text('Erro ao vincular SI: $e'),
             backgroundColor: Colors.red,
             duration: const Duration(seconds: 3),
           ),
         );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _sisVinculando.remove(si.id);
+        });
       }
     }
   }
@@ -1142,21 +1478,17 @@ class _SIViewState extends State<SIView> {
   }
 
   Future<void> _copiarParaAreaTransferencia(String texto, String mensagemSucesso) async {
-    try {
-      await Clipboard.setData(ClipboardData(text: texto));
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(mensagemSucesso), duration: const Duration(seconds: 1)),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Não foi possível copiar: $e'), backgroundColor: Colors.red, duration: const Duration(seconds: 3)),
-      );
-    }
+    await ClipboardHelper.copyAndNotify(
+      context,
+      texto,
+      successMessage: mensagemSucesso,
+      errorMessage: 'Não foi possível copiar o texto.',
+      duration: const Duration(seconds: 1),
+    );
   }
 
   Widget _buildSICard(SI si) {
+    final colors = context.tfColors;
     final isProgramada = _sisProgramadasIds.contains(si.id);
     final programadasList = isProgramada ? _sisProgramadasInfo[si.id] : null;
     final programadaInfo = programadasList?.isNotEmpty == true ? programadasList!.first : null;
@@ -1340,21 +1672,32 @@ class _SIViewState extends State<SIView> {
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
                     ElevatedButton.icon(
-                      onPressed: () => _criarTarefaDaSI(si),
+                      onPressed: _canEditTasks ? () => _criarTarefaDaSI(si) : null,
                       icon: const Icon(Icons.add_task, size: 18),
                       label: const Text('Criar Tarefa'),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green,
-                        foregroundColor: Colors.white,
+                        backgroundColor: colors.success,
+                        foregroundColor: colors.surface,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(TFRadius.r8)),
                       ),
                     ),
                     const SizedBox(width: 8),
                     OutlinedButton.icon(
-                      onPressed: () => _vincularSITarefaExistente(si),
-                      icon: const Icon(Icons.link, size: 18),
+                      onPressed: _sisVinculando.contains(si.id)
+                          ? null
+                          : () => _vincularSITarefaExistente(si),
+                      icon: _sisVinculando.contains(si.id)
+                          ? SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: colors.primary),
+                            )
+                          : const Icon(Icons.link, size: 18),
                       label: const Text('Vincular a Tarefa'),
                       style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.blue,
+                        foregroundColor: colors.primary,
+                        side: BorderSide(color: colors.borderSubtle),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(TFRadius.r8)),
                       ),
                     ),
                   ],
@@ -1463,50 +1806,6 @@ class _SIViewState extends State<SIView> {
     );
   }
 
-  Widget _buildDashboardCardCompacto(String title, String value, IconData icon, Color color) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: color.withOpacity(0.3),
-          width: 1,
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: color, size: 18),
-          const SizedBox(width: 6),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                title,
-                style: TextStyle(
-                  fontSize: 10,
-                  color: Colors.grey[600],
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              Text(
-                value,
-                style: TextStyle(
-                  fontSize: value.length > 20 ? 12 : 16,
-                  fontWeight: FontWeight.bold,
-                  color: color,
-                ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
 
 
   Widget _buildMultiSelectFilterField(
@@ -1599,25 +1898,108 @@ class _SIViewState extends State<SIView> {
     return Colors.grey;
   }
 
-  Widget _buildTabelaView() {
+  Widget _buildSplitTabelaGanttView() {
+    final List<Task> tasksForGantt = _sis.map((si) => _convertSIToTask(si)).toList();
+
+    DateTime ganttStartDate = DateTime.now().subtract(const Duration(days: 7));
+    DateTime ganttEndDate = DateTime.now().add(const Duration(days: 30));
+
+    if (_sis.isNotEmpty) {
+      DateTime? minDate;
+      DateTime? maxDate;
+      for (final task in tasksForGantt) {
+        final inicio = task.dataInicio;
+        final fim = task.dataFim;
+        if (minDate == null || inicio.isBefore(minDate)) minDate = inicio;
+        if (maxDate == null || fim.isAfter(maxDate)) maxDate = fim;
+      }
+      if (minDate != null) ganttStartDate = minDate.subtract(const Duration(days: 2));
+      if (maxDate != null) ganttEndDate = maxDate.add(const Duration(days: 5));
+    }
+
+    return ResizablePanel(
+      initialLeftWidth: MediaQuery.of(context).size.width * 0.5,
+      minLeftWidth: 250,
+      minRightWidth: 250,
+      leftChild: _buildTabelaView(controller: _tableVerticalScrollController),
+      rightChild: GanttChart(
+        key: ValueKey('gantt_chart_sis_${tasksForGantt.length}_$_ganttScale'),
+        tasks: tasksForGantt,
+        startDate: ganttStartDate,
+        endDate: ganttEndDate,
+        scale: _ganttScale,
+        onScaleChanged: (v) => setState(() => _ganttScale = v),
+        scrollController: _ganttVerticalScrollController,
+      ),
+    );
+  }
+
+  bool _isSiAtrasada(SI si) {
+    if (si.dataFim == null) return false;
+    final statusSis = si.statusSistema?.toUpperCase() ?? '';
+    final statusUsr = si.statusUsuario?.toUpperCase() ?? '';
+    final isConcluida = statusSis.contains('CONC') ||
+        statusSis.contains('CANC') ||
+        statusSis.contains('ENC') ||
+        statusUsr.contains('CONC') ||
+        statusUsr.contains('CANC');
+    if (isConcluida) return false;
+    final hoje = DateTime.now();
+    final hojeSemHora = DateTime(hoje.year, hoje.month, hoje.day);
+    return si.dataFim!.isBefore(hojeSemHora);
+  }
+
+  Widget _buildTabelaView({ScrollController? controller}) {
+    final colors = context.tfColors;
+
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: SingleChildScrollView(
+        controller: controller,
         child: DataTable(
-          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
-          columns: const [
-            DataColumn(label: Text('Ações', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Solicitação', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Tipo', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Texto Breve', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Status Sistema', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Status Usuário', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Local Instalação', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Tarefa Vinculada', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Data Início', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Data Fim', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Cen', style: TextStyle(fontWeight: FontWeight.bold))),
+          sortColumnIndex: _sortColumnIndex,
+          sortAscending: _ordenacaoAscendente,
+          headingRowColor: WidgetStateProperty.all(colors.primary.withValues(alpha: 0.08)),
+          columns: [
+            const DataColumn(label: Text('Ações', style: TextStyle(fontWeight: FontWeight.bold))),
+            const DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold))),
+            DataColumn(
+              label: const Text('Solicitação', style: TextStyle(fontWeight: FontWeight.bold)),
+              onSort: (col, asc) => _mudarOrdenacao(col, asc),
+            ),
+            DataColumn(
+              label: const Text('Tipo', style: TextStyle(fontWeight: FontWeight.bold)),
+              onSort: (col, asc) => _mudarOrdenacao(col, asc),
+            ),
+            DataColumn(
+              label: const Text('Texto Breve', style: TextStyle(fontWeight: FontWeight.bold)),
+              onSort: (col, asc) => _mudarOrdenacao(col, asc),
+            ),
+            DataColumn(
+              label: const Text('Status Sistema', style: TextStyle(fontWeight: FontWeight.bold)),
+              onSort: (col, asc) => _mudarOrdenacao(col, asc),
+            ),
+            DataColumn(
+              label: const Text('Status Usuário', style: TextStyle(fontWeight: FontWeight.bold)),
+              onSort: (col, asc) => _mudarOrdenacao(col, asc),
+            ),
+            DataColumn(
+              label: const Text('Local Instalação', style: TextStyle(fontWeight: FontWeight.bold)),
+              onSort: (col, asc) => _mudarOrdenacao(col, asc),
+            ),
+            const DataColumn(label: Text('Tarefa Vinculada', style: TextStyle(fontWeight: FontWeight.bold))),
+            DataColumn(
+              label: const Text('Data Início', style: TextStyle(fontWeight: FontWeight.bold)),
+              onSort: (col, asc) => _mudarOrdenacao(col, asc),
+            ),
+            DataColumn(
+              label: const Text('Data Fim', style: TextStyle(fontWeight: FontWeight.bold)),
+              onSort: (col, asc) => _mudarOrdenacao(col, asc),
+            ),
+            DataColumn(
+              label: const Text('Cen', style: TextStyle(fontWeight: FontWeight.bold)),
+              onSort: (col, asc) => _mudarOrdenacao(col, asc),
+            ),
           ],
           rows: _sis.map((si) {
             final isProgramada = _sisProgramadasIds.contains(si.id);
@@ -1627,10 +2009,11 @@ class _SIViewState extends State<SIView> {
             final tarefaStatus = tarefa?['status'] as String?;
             final statusColor = tarefaStatus != null ? _getTaskStatusColor(tarefaStatus) : null;
             final totalVinculacoes = programadasList?.length ?? 0;
-            
+            final emAtraso = _isSiAtrasada(si);
+
             return DataRow(
               color: isProgramada && statusColor != null
-                  ? WidgetStateProperty.all(statusColor.withOpacity(0.1))
+                  ? WidgetStateProperty.all(statusColor.withValues(alpha: 0.1))
                   : null,
               cells: [
                 DataCell(
@@ -1638,40 +2021,72 @@ class _SIViewState extends State<SIView> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Tooltip(
-                        message: 'Criar Tarefa',
+                        message: 'Visualizar Detalhes',
                         child: Material(
                           color: Colors.transparent,
                           child: InkWell(
-                            onTap: () => _criarTarefaDaSI(si),
-                            borderRadius: BorderRadius.circular(4),
+                            onTap: () => _mostrarDetalhesSI(si),
+                            borderRadius: BorderRadius.circular(TFRadius.r4),
                             child: Container(
-                              padding: const EdgeInsets.all(8),
+                              padding: const EdgeInsets.all(6),
                               decoration: BoxDecoration(
-                                color: Colors.green[50],
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(color: Colors.green[300]!),
+                                color: colors.surfaceSecondary,
+                                borderRadius: BorderRadius.circular(TFRadius.r4),
+                                border: Border.all(color: colors.borderSubtle),
                               ),
-                              child: const Icon(Icons.add_task, size: 20, color: Colors.green),
+                              child: Icon(Icons.visibility, size: 16, color: colors.primary),
                             ),
                           ),
                         ),
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 6),
+                      Tooltip(
+                        message: 'Criar Tarefa',
+                        child: Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: _canEditTasks ? () => _criarTarefaDaSI(si) : null,
+                            borderRadius: BorderRadius.circular(TFRadius.r4),
+                            child: Container(
+                              padding: const EdgeInsets.all(6),
+                              decoration: BoxDecoration(
+                                color: colors.surfaceSecondary,
+                                borderRadius: BorderRadius.circular(TFRadius.r4),
+                                border: Border.all(color: colors.borderSubtle),
+                              ),
+                              child: Icon(
+                                Icons.add_task,
+                                size: 16,
+                                color: _canEditTasks ? colors.success : colors.textDisabled,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
                       Tooltip(
                         message: 'Vincular a Tarefa',
                         child: Material(
                           color: Colors.transparent,
                           child: InkWell(
-                            onTap: () => _vincularSITarefaExistente(si),
-                            borderRadius: BorderRadius.circular(4),
+                            onTap: _sisVinculando.contains(si.id)
+                                ? null
+                                : () => _vincularSITarefaExistente(si),
+                            borderRadius: BorderRadius.circular(TFRadius.r4),
                             child: Container(
-                              padding: const EdgeInsets.all(8),
+                              padding: const EdgeInsets.all(6),
                               decoration: BoxDecoration(
-                                color: Colors.blue[50],
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(color: Colors.blue[300]!),
+                                color: colors.surfaceSecondary,
+                                borderRadius: BorderRadius.circular(TFRadius.r4),
+                                border: Border.all(color: colors.borderSubtle),
                               ),
-                              child: const Icon(Icons.link, size: 20, color: Colors.blue),
+                              child: _sisVinculando.contains(si.id)
+                                  ? SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(strokeWidth: 2, color: colors.primary),
+                                    )
+                                  : Icon(Icons.link, size: 16, color: colors.info),
                             ),
                           ),
                         ),
@@ -1705,7 +2120,7 @@ class _SIViewState extends State<SIView> {
                                 Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                                   decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.3),
+                                    color: Colors.white.withValues(alpha: 0.3),
                                     borderRadius: BorderRadius.circular(8),
                                   ),
                                   child: Text(
@@ -1724,18 +2139,18 @@ class _SIViewState extends State<SIView> {
                       : Container(
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
-                            color: Colors.grey[200],
+                            color: colors.surfaceSecondary,
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(Icons.cancel_outlined, color: Colors.grey[600], size: 14),
+                              Icon(Icons.cancel_outlined, color: colors.textMuted, size: 14),
                               const SizedBox(width: 4),
                               Text(
                                 'Não Programada',
                                 style: TextStyle(
-                                  color: Colors.grey[700],
+                                  color: colors.textSecondary,
                                   fontSize: 10,
                                   fontWeight: FontWeight.w500,
                                 ),
@@ -1755,7 +2170,7 @@ class _SIViewState extends State<SIView> {
                       const SizedBox(width: 8),
                       InkWell(
                         onTap: () => _copiarParaAreaTransferencia(si.solicitacao, 'SI copiada!'),
-                        child: const Icon(Icons.copy, size: 16, color: Colors.blue),
+                        child: Icon(Icons.copy, size: 16, color: colors.primary),
                       ),
                     ],
                   ),
@@ -1765,15 +2180,18 @@ class _SIViewState extends State<SIView> {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
-                      color: Colors.grey[300],
+                      color: colors.surfaceSecondary,
                       borderRadius: BorderRadius.circular(4),
                     ),
-                    child: Text(si.tipo ?? '-'),
+                    child: Text(
+                      si.tipo ?? '-',
+                      style: TextStyle(fontWeight: FontWeight.bold, color: colors.textPrimary),
+                    ),
                   ),
                 ),
                 DataCell(
                   SizedBox(
-                    width: 300,
+                    width: 280,
                     child: Text(
                       si.textoBreve ?? '-',
                       maxLines: 2,
@@ -1798,13 +2216,32 @@ class _SIViewState extends State<SIView> {
                   Text(si.statusUsuario ?? '-'),
                 ),
                 DataCell(
-                  SizedBox(
-                    width: 200,
-                    child: Text(
-                      si.localInstalacao ?? '-',
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                  Builder(
+                    builder: (context) {
+                      final localTexto = (si.local != null && si.local!.isNotEmpty)
+                          ? si.local!
+                          : (si.localInstalacao ?? '-');
+                      if (localTexto == '-') {
+                        return const Text('-', style: TextStyle(color: Colors.grey));
+                      }
+                      return Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: _getLocalColor(localTexto),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          localTexto,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: _getLocalTextColor(localTexto),
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      );
+                    },
                   ),
                 ),
                 DataCell(
@@ -1823,7 +2260,7 @@ class _SIViewState extends State<SIView> {
                                     tarefa['tarefa']?.toString() ?? '-',
                                     style: TextStyle(
                                       fontWeight: FontWeight.w500,
-                                      color: totalVinculacoes > 1 ? Colors.orange : Colors.blue,
+                                      color: totalVinculacoes > 1 ? Colors.orange : colors.primary,
                                       decoration: TextDecoration.underline,
                                     ),
                                     maxLines: 1,
@@ -1852,13 +2289,37 @@ class _SIViewState extends State<SIView> {
                             ),
                           ),
                         )
-                      : const Text('-', style: TextStyle(color: Colors.grey)),
+                      : Text('-', style: TextStyle(color: colors.textMuted)),
                 ),
                 DataCell(
                   Text(si.dataInicio != null ? _formatDate(si.dataInicio!) : '-'),
                 ),
                 DataCell(
-                  Text(si.dataFim != null ? _formatDate(si.dataFim!) : '-'),
+                  emAtraso
+                      ? Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.red.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.warning_amber_rounded, size: 14, color: Colors.red),
+                              const SizedBox(width: 4),
+                              Text(
+                                _formatDate(si.dataFim!),
+                                style: const TextStyle(
+                                  color: Colors.red,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      : Text(si.dataFim != null ? _formatDate(si.dataFim!) : '-'),
                 ),
                 DataCell(
                   Text(si.cen ?? '-'),

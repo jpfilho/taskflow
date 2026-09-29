@@ -1,5 +1,14 @@
 import 'package:flutter/material.dart';
-
+import 'package:url_launcher/url_launcher.dart';
+import '../../../../design_system/components/buttons/tf_button.dart';
+import '../../../../design_system/components/buttons/tf_icon_button.dart';
+import '../../../../design_system/components/cards/tf_card.dart';
+import '../../../../design_system/components/feedback/tf_empty_state.dart';
+import '../../../../design_system/components/feedback/tf_loading.dart';
+import '../../../../design_system/components/layout/tf_page_header.dart';
+import '../../../../design_system/foundations/tf_icons.dart';
+import '../../../../design_system/foundations/tf_radius.dart';
+import '../../../../design_system/theme/taskflow_theme_extension.dart';
 import '../../data/models/document.dart';
 import '../../data/models/document_version.dart';
 import '../../data/repositories/supabase_documents_repository.dart';
@@ -28,144 +37,272 @@ class _DocumentDetailPageState extends State<DocumentDetailPage> {
     _future = widget.repository.getDocumentById(widget.documentId);
   }
 
+  void _openUrl(BuildContext context, String url) {
+    launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+    final typography = context.tfTypography;
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Detalhe do Documento'),
-      ),
-      body: Container(
-        color: Colors.grey.shade100,
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 900),
-            child: FutureBuilder<Document>(
-              future: _future,
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                if (snapshot.hasError) {
-                  return Center(child: Text('Erro: ${snapshot.error}'));
-                }
-                final doc = snapshot.data;
-                if (doc == null) {
-                  return const Center(child: Text('Documento não encontrado'));
-                }
-                return SingleChildScrollView(
-                  padding: const EdgeInsets.all(16),
-                  child: Card(
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    elevation: 0,
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  doc.title,
-                                  style: Theme.of(context).textTheme.headlineSmall,
-                                ),
+      backgroundColor: colors.background,
+      body: SafeArea(
+        child: Column(
+          children: [
+            TFPageHeader(
+              title: 'Detalhes do Documento',
+              subtitle: 'Ficha técnica, metadados de arquivo e histórico de revisões.',
+              secondaryActions: [
+                TFButton(
+                  label: 'Voltar',
+                  variant: TFButtonVariant.secondary,
+                  leadingIcon: Icons.arrow_back_rounded,
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+              ],
+            ),
+            Expanded(
+              child: FutureBuilder<Document>(
+                future: _future,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: TFLoading(message: 'Carregando detalhes do documento...'));
+                  }
+                  if (snapshot.hasError) {
+                    return Center(
+                      child: TFEmptyState(
+                        title: 'Erro ao carregar documento',
+                        description: snapshot.error.toString(),
+                        icon: TFIcons.warning,
+                        action: TFButton(
+                          label: 'Voltar',
+                          leadingIcon: Icons.arrow_back_rounded,
+                          onPressed: () => Navigator.of(context).pop(),
+                        ),
+                      ),
+                    );
+                  }
+                  final doc = snapshot.data;
+                  if (doc == null) {
+                    return Center(
+                      child: TFEmptyState(
+                        title: 'Documento não encontrado',
+                        description: 'O documento solicitado pode ter sido removido ou não existe.',
+                        icon: Icons.search_off_rounded,
+                        action: TFButton(
+                          label: 'Voltar',
+                          leadingIcon: Icons.arrow_back_rounded,
+                          onPressed: () => Navigator.of(context).pop(),
+                        ),
+                      ),
+                    );
+                  }
+
+                  return SingleChildScrollView(
+                    padding: EdgeInsets.all(spacing.md),
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 900),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            TFCard(
+                              padding: EdgeInsets.all(spacing.md),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          doc.title,
+                                          style: typography.pageTitle.copyWith(color: colors.textPrimary),
+                                        ),
+                                      ),
+                                      if (doc.statusDocument != null)
+                                        DocumentStatusBadge(status: doc.statusDocument),
+                                    ],
+                                  ),
+                                  if (doc.description != null && doc.description!.isNotEmpty) ...[
+                                    SizedBox(height: spacing.sm),
+                                    Text(
+                                      doc.description!,
+                                      style: typography.bodyMedium.copyWith(color: colors.textSecondary),
+                                    ),
+                                  ],
+                                  SizedBox(height: spacing.md),
+                                  Divider(color: colors.borderSubtle, height: 1),
+                                  SizedBox(height: spacing.md),
+                                  Text(
+                                    'Metadados do Arquivo',
+                                    style: typography.sectionTitle.copyWith(color: colors.textPrimary),
+                                  ),
+                                  SizedBox(height: spacing.xs),
+                                  _infoRow(context, 'MIME Type:', doc.file.mimeType),
+                                  if (doc.file.extension != null)
+                                    _infoRow(context, 'Extensão:', doc.file.extension!.toUpperCase()),
+                                  if (doc.file.size != null)
+                                    _infoRow(context, 'Tamanho:', _formatBytes(doc.file.size!)),
+                                  if (doc.hierarchyPath.isNotEmpty)
+                                    _infoRow(context, 'Hierarquia Organizacional:', doc.hierarchyPath),
+                                  if (doc.creatorName != null)
+                                    _infoRow(context, 'Criado por:', doc.creatorName!),
+
+                                  if (doc.tags.isNotEmpty) ...[
+                                    SizedBox(height: spacing.sm),
+                                    Wrap(
+                                      spacing: spacing.xs,
+                                      runSpacing: spacing.xxs,
+                                      children: doc.tags.map((t) => Container(
+                                        padding: EdgeInsets.symmetric(horizontal: spacing.xs, vertical: 3),
+                                        decoration: BoxDecoration(
+                                          color: colors.surfaceSecondary,
+                                          borderRadius: TFRadius.borderRadiusSm,
+                                          border: Border.all(color: colors.borderSubtle),
+                                        ),
+                                        child: Text('#$t', style: typography.caption.copyWith(color: colors.textSecondary)),
+                                      )).toList(),
+                                    ),
+                                  ],
+
+                                  if (doc.file.url != null) ...[
+                                    SizedBox(height: spacing.lg),
+                                    TFButton(
+                                      label: 'Baixar Documento Original',
+                                      leadingIcon: TFIcons.download,
+                                      onPressed: () => _openUrl(context, doc.file.url!),
+                                    ),
+                                  ],
+                                ],
                               ),
-                              DocumentStatusBadge(status: doc.statusDocument),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          if (doc.description != null && doc.description!.isNotEmpty)
-                            Text(doc.description!),
-                          const SizedBox(height: 8),
-                          Text('MIME: ${doc.file.mimeType}'),
-                          if (doc.file.extension != null) Text('Extensão: ${doc.file.extension}'),
-                          if (doc.file.size != null) Text('Tamanho: ${doc.file.size} bytes'),
-                          if (doc.hierarchyPath.isNotEmpty) ...[
-                            const SizedBox(height: 8),
-                            Text('Hierarquia: ${doc.hierarchyPath}'),
+                            ),
+                            SizedBox(height: spacing.md),
+                            TFCard(
+                              padding: EdgeInsets.all(spacing.md),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Histórico de Versões',
+                                    style: typography.sectionTitle.copyWith(color: colors.textPrimary),
+                                  ),
+                                  SizedBox(height: spacing.xs),
+                                  if (doc.versions == null || doc.versions!.isEmpty)
+                                    Padding(
+                                      padding: EdgeInsets.symmetric(vertical: spacing.sm),
+                                      child: Text(
+                                        'Nenhuma versão anterior registrada para este documento.',
+                                        style: typography.bodySmall.copyWith(color: colors.textSecondary),
+                                      ),
+                                    )
+                                  else
+                                    ListView.separated(
+                                      shrinkWrap: true,
+                                      physics: const NeverScrollableScrollPhysics(),
+                                      itemCount: doc.versions!.length,
+                                      separatorBuilder: (_, __) => Divider(color: colors.borderSubtle, height: 1),
+                                      itemBuilder: (context, index) {
+                                        final v = doc.versions![index];
+                                        return _buildVersionItem(context, v);
+                                      },
+                                    ),
+                                ],
+                              ),
+                            ),
                           ],
-                          const SizedBox(height: 8),
-                          if (doc.tags.isNotEmpty)
-                            Wrap(
-                              spacing: 6,
-                              runSpacing: -6,
-                              children: doc.tags
-                                  .map((t) => Chip(
-                                        label: Text(t),
-                                        visualDensity: VisualDensity.compact,
-                                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                      ))
-                                  .toList(),
-                            ),
-                          const SizedBox(height: 16),
-                          Text(
-                            'Versões',
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                          const SizedBox(height: 8),
-                          if (doc.versions == null || doc.versions!.isEmpty)
-                            const Text('Nenhuma versão registrada')
-                          else
-                            Column(
-                              children: doc.versions!
-                                  .map((v) => _VersionTile(
-                                        version: v,
-                                        onDownload: v.fileUrl != null
-                                            ? () => _openUrl(context, v.fileUrl!)
-                                            : null,
-                                      ))
-                                  .toList(),
-                            ),
-                          const SizedBox(height: 16),
-                          if (doc.file.url != null)
-                            ElevatedButton.icon(
-                              onPressed: () => _openUrl(context, doc.file.url!),
-                              icon: const Icon(Icons.download),
-                              label: const Text('Baixar versão atual'),
-                            ),
-                        ],
+                        ),
                       ),
                     ),
-                  ),
-                );
-              },
+                  );
+                },
+              ),
             ),
-          ),
+          ],
         ),
       ),
     );
   }
 
-  void _openUrl(BuildContext context, String url) {
-    // Placeholder: usar url_launcher em apps finais.
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Abrir/baixar: $url')),
+  Widget _infoRow(BuildContext context, String label, String value) {
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+    final typography = context.tfTypography;
+
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: spacing.xxs),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 180,
+            child: Text(
+              label,
+              style: typography.bodySmall.copyWith(
+                color: colors.textSecondary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: typography.bodySmall.copyWith(
+                color: colors.textPrimary,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
-}
 
-class _VersionTile extends StatelessWidget {
-  final DocumentVersion version;
-  final VoidCallback? onDownload;
+  Widget _buildVersionItem(BuildContext context, DocumentVersion version) {
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+    final typography = context.tfTypography;
 
-  const _VersionTile({
-    required this.version,
-    this.onDownload,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      leading: const Icon(Icons.description),
-      title: Text('Versão ${version.version}'),
-      subtitle: Text(
-          'MIME: ${version.mimeType} • Tamanho: ${version.fileSize ?? 0} • ${version.createdAt.toLocal()}'),
-      trailing: onDownload != null
-          ? IconButton(
-              icon: const Icon(Icons.download),
-              onPressed: onDownload,
-            )
-          : null,
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: spacing.xs),
+      child: Row(
+        children: [
+          Icon(Icons.history_rounded, color: colors.primary, size: 20),
+          SizedBox(width: spacing.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Versão ${version.version}',
+                  style: typography.bodyMedium.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: colors.textPrimary,
+                  ),
+                ),
+                Text(
+                  'MIME: ${version.mimeType} • ${_formatBytes(version.fileSize ?? 0)} • ${version.createdAt.toLocal().toString().split('.').first}',
+                  style: typography.caption.copyWith(color: colors.textSecondary),
+                ),
+              ],
+            ),
+          ),
+          if (version.fileUrl != null)
+            TFIconButton(
+              icon: TFIcons.download,
+              tooltip: 'Baixar Versão ${version.version}',
+              onPressed: () => _openUrl(context, version.fileUrl!),
+            ),
+        ],
+      ),
     );
+  }
+
+  String _formatBytes(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
 }

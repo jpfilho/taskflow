@@ -15,6 +15,7 @@ import 'pex_apr_crc_view.dart';
 import 'task_form_dialog.dart';
 import '../services/task_service.dart';
 import '../services/executor_service.dart';
+import '../utils/clipboard_helper.dart';
 
 class TaskViewDialog extends StatefulWidget {
   final Task task;
@@ -252,15 +253,14 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
+                        SelectableText(
                           widget.task.tarefa,
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: Colors.white,
-                            fontSize: 20,
+                            fontSize: widget.task.tarefa.length > 80 ? 16 : 20,
                             fontWeight: FontWeight.bold,
+                            height: 1.25,
                           ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
                         ),
                         const SizedBox(height: 4),
                         Text(
@@ -690,25 +690,49 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
   }
 
   Future<void> _copiarParaAreaTransferencia(String texto, String mensagemSucesso) async {
-    try {
-      await Clipboard.setData(ClipboardData(text: texto));
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(mensagemSucesso), duration: const Duration(seconds: 1)),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Não foi possível copiar: $e'),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 3),
-        ),
-      );
-    }
+    await ClipboardHelper.copyAndNotify(
+      context,
+      texto,
+      successMessage: mensagemSucesso,
+      errorMessage: 'Não foi possível copiar o texto.',
+      duration: const Duration(seconds: 1),
+    );
+  }
+
+  Color _getStatusUsuarioColor(String? statusUsuario) {
+    if (statusUsuario == null || statusUsuario.isEmpty) return Colors.grey;
+    final status = statusUsuario.toUpperCase();
+    if (status.contains('CONC')) return Colors.green;
+    if (status.contains('CADU') || status.contains('CAIM')) return Colors.grey;
+    if (status.contains('REGI')) return Colors.orange;
+    if (status.contains('EMAM')) return Colors.yellow[700] ?? Colors.amber;
+    if (status.contains('ANLS')) return Colors.blue;
+    return Colors.grey;
+  }
+
+  Color _getStatusUsuarioTextColor(String? statusUsuario) {
+    if (statusUsuario == null || statusUsuario.isEmpty) return Colors.white;
+    final status = statusUsuario.toUpperCase();
+    if (status.contains('EMAM')) return Colors.black;
+    return Colors.white;
+  }
+
+  Color _getStatusSistemaColor(String? statusSistema) {
+    if (statusSistema == null || statusSistema.isEmpty) return Colors.grey;
+    final status = statusSistema.toUpperCase();
+    if (status.contains('MSPR')) return Colors.orange;
+    if (status.contains('MSPN')) return Colors.blue;
+    if (status.contains('MECE') || status.contains('CONC')) return Colors.green;
+    return const Color(0xFF1E3A5F);
   }
 
   Widget _buildNotaSAPCard(NotaSAP nota, int index) {
+    final statusSis = nota.statusSistema?.trim();
+    final statusUsu = nota.statusUsuario?.trim();
+    final sala = nota.sala?.trim();
+    final descricao = nota.descricao?.trim();
+    final local = nota.localInstalacao?.trim();
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
@@ -716,7 +740,7 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.08),
+            color: Colors.black.withOpacity(0.06),
             blurRadius: 8,
             offset: const Offset(0, 2),
           ),
@@ -724,38 +748,165 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
         border: Border.all(color: Colors.blue.withOpacity(0.2)),
       ),
       child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        childrenPadding: EdgeInsets.zero,
         leading: Container(
-          padding: const EdgeInsets.all(8),
+          width: 36,
+          height: 36,
+          alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: Colors.blue.withOpacity(0.1),
+            color: const Color(0xFF1E3A5F).withOpacity(0.08),
             borderRadius: BorderRadius.circular(8),
           ),
-          child: const Icon(Icons.description, color: Colors.blue, size: 20),
+          child: const Icon(Icons.description_outlined, color: Color(0xFF1E3A5F), size: 20),
         ),
-        title: Row(
-          children: [
-            Expanded(
-              child: Text(
-                'Nota: ${nota.nota}',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+        title: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Row(
+            children: [
+              Expanded(
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      'Nota: ${nota.nota}',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                        color: Color(0xFF1E3A5F),
+                      ),
+                    ),
+                    if (nota.tipo != null && nota.tipo!.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.grey[200],
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          nota.tipo!,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.grey[800],
+                          ),
+                        ),
+                      ),
+                    if (statusSis != null && statusSis.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: _getStatusSistemaColor(statusSis).withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: _getStatusSistemaColor(statusSis).withOpacity(0.4),
+                          ),
+                        ),
+                        child: Text(
+                          statusSis,
+                          style: TextStyle(
+                            color: _getStatusSistemaColor(statusSis),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    if (statusUsu != null && statusUsu.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: _getStatusUsuarioColor(statusUsu),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          statusUsu,
+                          style: TextStyle(
+                            color: _getStatusUsuarioTextColor(statusUsu),
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    if (sala != null && sala.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.indigo.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.indigo.withOpacity(0.25)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.meeting_room_outlined, size: 13, color: Colors.indigo),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Sala: $sala',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.indigo,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (descricao != null && descricao.isNotEmpty)
+                      Text(
+                        descricao,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey[850],
+                        ),
+                      ),
+                    if (local != null && local.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.grey[100],
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.grey[300]!),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.location_on_outlined, size: 13, color: Colors.grey[700]),
+                            const SizedBox(width: 4),
+                            Text(
+                              local,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                                color: Colors.grey[700],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
               ),
-            ),
-            IconButton(
-              icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(),
-              onPressed: () => _copiarParaAreaTransferencia(nota.nota, 'Nota copiada!'),
-              tooltip: 'Copiar nota',
-            ),
-          ],
+              IconButton(
+                icon: const Icon(Icons.copy_rounded, size: 18, color: Colors.blue),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                onPressed: () => _copiarParaAreaTransferencia(nota.nota, 'Nota copiada!'),
+                tooltip: 'Copiar nota',
+              ),
+            ],
+          ),
         ),
-        subtitle: nota.tipo != null ? Text('Tipo: ${nota.tipo}') : null,
         children: [
           Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                const Divider(height: 1),
+                const SizedBox(height: 12),
                 _buildInfoRowModern('Tipo', nota.tipo),
                 _buildInfoRowModern('Status Sistema', nota.statusSistema),
                 _buildInfoRowModern('Status Usuário', nota.statusUsuario),
@@ -859,6 +1010,18 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
   }
 
   Widget _buildOrdemCard(Ordem ordem, int index) {
+    final statusSis = ordem.statusSistema?.trim();
+    final statusUsu = ordem.statusUsuario?.trim();
+    final sala = ordem.sala?.trim();
+    final descricao = (ordem.textoBreve?.trim().isNotEmpty == true)
+        ? ordem.textoBreve!.trim()
+        : ordem.denominacaoObjeto?.trim();
+    final local = (ordem.localInstalacao?.trim().isNotEmpty == true)
+        ? ordem.localInstalacao!.trim()
+        : (ordem.denominacaoLocalInstalacao?.trim().isNotEmpty == true
+            ? ordem.denominacaoLocalInstalacao!.trim()
+            : ordem.local?.trim());
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
@@ -866,46 +1029,173 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.08),
+            color: Colors.black.withOpacity(0.06),
             blurRadius: 8,
             offset: const Offset(0, 2),
           ),
         ],
-        border: Border.all(color: Colors.orange.withOpacity(0.2)),
+        border: Border.all(color: Colors.orange.withOpacity(0.25)),
       ),
       child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        childrenPadding: EdgeInsets.zero,
         leading: Container(
-          padding: const EdgeInsets.all(8),
+          width: 36,
+          height: 36,
+          alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: Colors.orange.withOpacity(0.1),
+            color: Colors.orange.withOpacity(0.12),
             borderRadius: BorderRadius.circular(8),
           ),
-          child: const Icon(Icons.receipt_long, color: Colors.orange, size: 20),
+          child: const Icon(Icons.receipt_long_outlined, color: Colors.orange, size: 20),
         ),
-        title: Row(
-          children: [
-            Expanded(
-              child: Text(
-                'Ordem: ${ordem.ordem}',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+        title: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Row(
+            children: [
+              Expanded(
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      'Ordem: ${ordem.ordem}',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                        color: Color(0xFFE65100),
+                      ),
+                    ),
+                    if (ordem.tipo != null && ordem.tipo!.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.grey[200],
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          ordem.tipo!,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.grey[800],
+                          ),
+                        ),
+                      ),
+                    if (statusSis != null && statusSis.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: _getStatusSistemaColor(statusSis).withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: _getStatusSistemaColor(statusSis).withOpacity(0.4),
+                          ),
+                        ),
+                        child: Text(
+                          statusSis,
+                          style: TextStyle(
+                            color: _getStatusSistemaColor(statusSis),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    if (statusUsu != null && statusUsu.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: _getStatusUsuarioColor(statusUsu),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          statusUsu,
+                          style: TextStyle(
+                            color: _getStatusUsuarioTextColor(statusUsu),
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    if (sala != null && sala.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.indigo.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.indigo.withOpacity(0.25)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.meeting_room_outlined, size: 13, color: Colors.indigo),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Sala: $sala',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.indigo,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (descricao != null && descricao.isNotEmpty)
+                      Text(
+                        descricao,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey[850],
+                        ),
+                      ),
+                    if (local != null && local.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.grey[100],
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.grey[300]!),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.location_on_outlined, size: 13, color: Colors.grey[700]),
+                            const SizedBox(width: 4),
+                            Text(
+                              local,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                                color: Colors.grey[700],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
               ),
-            ),
-            IconButton(
-              icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(),
-              onPressed: () => _copiarParaAreaTransferencia(ordem.ordem, 'Ordem copiada!'),
-              tooltip: 'Copiar ordem',
-            ),
-          ],
+              IconButton(
+                icon: const Icon(Icons.copy_rounded, size: 18, color: Colors.blue),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                onPressed: () => _copiarParaAreaTransferencia(ordem.ordem, 'Ordem copiada!'),
+                tooltip: 'Copiar ordem',
+              ),
+            ],
+          ),
         ),
-        subtitle: ordem.tipo != null ? Text('Tipo: ${ordem.tipo}') : null,
         children: [
           Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                const Divider(height: 1),
+                const SizedBox(height: 12),
                 _buildInfoRowModern('Tipo', ordem.tipo),
                 _buildInfoRowModern('Status Sistema', ordem.statusSistema),
                 _buildInfoRowModern('Status Usuário', ordem.statusUsuario),
@@ -913,6 +1203,10 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
                 _buildInfoRowModern('Denominação Local', ordem.denominacaoLocalInstalacao),
                 _buildInfoRowModern('Denominação Objeto', ordem.denominacaoObjeto),
                 _buildInfoRowModern('Local Instalação', ordem.localInstalacao),
+                _buildInfoRowModern('Sala', ordem.sala),
+                _buildInfoRowModern('Local', ordem.local),
+                if (ordem.tolerancia != null)
+                  _buildInfoRowModern('Tolerância', _formatDate(ordem.tolerancia!)),
                 _buildInfoRowModern('Código SI', ordem.codigoSI),
                 _buildInfoRowModern('GPM', ordem.gpm),
                 if (ordem.inicioBase != null)

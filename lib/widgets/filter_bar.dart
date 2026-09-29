@@ -33,6 +33,8 @@ class FilterBar extends StatefulWidget {
   final int? warningsCountInTable;
   /// Total de tarefas com alerta retornadas pelo RPC (para exibir "7 de 19" e deixar coerente).
   final int? warningsTotalCount;
+  /// Lista de nomes de equipes disponíveis para o perfil do usuário logado.
+  final List<String>? equipesDisponiveis;
 
   const FilterBar({
     super.key,
@@ -56,6 +58,7 @@ class FilterBar extends StatefulWidget {
     this.onFilterOnlyWithWarnings,
     this.warningsCountInTable,
     this.warningsTotalCount,
+    this.equipesDisponiveis,
   });
 
   @override
@@ -71,7 +74,9 @@ class _FilterBarState extends State<FilterBar> {
   Set<String> _selectedExecutor = {};
   Set<String> _selectedFrota = {};
   Set<String> _selectedSegmento = {}; // Modo Frota
+  Set<String> _selectedPropriedade = {}; // Modo Frota
   Set<String> _selectedEmpresa = {}; // Modo Equipes
+  Set<String> _selectedEquipe = {}; // Modo Equipes
   Set<String> _selectedFuncao = {}; // Modo Equipes
   Set<String> _selectedMatricula = {}; // Modo Equipes
   Set<String> _selectedNome = {}; // Modo Equipes
@@ -101,7 +106,9 @@ class _FilterBarState extends State<FilterBar> {
   List<String> _executoresTotais = [];
   List<String> _frotasTotais = [];
   List<String> _segmentosTotais = []; // Usado no modo Frota (após DIVISAO)
+  List<String> _propriedadesTotais = []; // Usado no modo Frota
   List<String> _empresasTotais = []; // Modo Equipes
+  List<String> _equipesTotais = []; // Modo Equipes
   List<String> _funcoesTotais = []; // Modo Equipes
   List<String> _matriculasTotais = []; // Modo Equipes
   List<String> _nomesTotais = []; // Modo Equipes
@@ -137,6 +144,7 @@ class _FilterBarState extends State<FilterBar> {
     _statusTotais = [];
     _locaisTotais = [];
     _tiposTotais = [];
+    _equipesTotais = [];
     _executoresTotais = [];
     _frotasTotais = [];
     _coordenadoresTotais = [];
@@ -160,6 +168,7 @@ class _FilterBarState extends State<FilterBar> {
     Set<String> status = {};
     Set<String> locais = {};
     Set<String> tipos = {};
+    Set<String> equipes = {};
     Set<String> executores = {};
     Set<String> frotas = {};
     Set<String> coordenadores = {};
@@ -170,10 +179,16 @@ class _FilterBarState extends State<FilterBar> {
       if (t.status.isNotEmpty) splitAndAdd(status, t.status);
       if (t.locais.isNotEmpty) locais.addAll(t.locais.where((e) => e.isNotEmpty));
       if (t.tipo.isNotEmpty) splitAndAdd(tipos, t.tipo); // tipos também podem vir concatenados
+      if (t.equipes.isNotEmpty) splitListAndAdd(equipes, t.equipes.where((e) => e.isNotEmpty));
       if (t.executor.isNotEmpty) splitAndAdd(executores, t.executor);
       if (t.executores.isNotEmpty) splitListAndAdd(executores, t.executores.where((e) => e.isNotEmpty));
       if (t.frota.isNotEmpty) frotas.add(t.frota);
       if (t.coordenador.isNotEmpty) splitAndAdd(coordenadores, t.coordenador);
+    }
+
+    // Se fornecido via widget.equipesDisponiveis (escopo perfil do usuário), usar prioritariamente
+    if (widget.equipesDisponiveis != null && widget.equipesDisponiveis!.isNotEmpty) {
+      equipes.addAll(widget.equipesDisponiveis!);
     }
 
     List<String> sortSet(Set<String> s) {
@@ -187,6 +202,7 @@ class _FilterBarState extends State<FilterBar> {
     _statusTotais = sortSet(status);
     _locaisTotais = sortSet(locais);
     _tiposTotais = sortSet(tipos);
+    _equipesTotais = sortSet(equipes);
     _executoresTotais = sortSet(executores);
     _frotasTotais = sortSet(frotas);
     _coordenadoresTotais = sortSet(coordenadores);
@@ -204,23 +220,25 @@ class _FilterBarState extends State<FilterBar> {
       'regional': _selectedRegional.isEmpty ? null : _selectedRegional.join(','),
       'divisao': _selectedDivisao.isEmpty ? null : _selectedDivisao.join(','),
       'empresa': widget.teamMode ? (_selectedEmpresa.isEmpty ? null : _selectedEmpresa.join(',')) : null,
+      'equipe': _selectedEquipe.isEmpty ? null : _selectedEquipe.join(','),
       'funcao': widget.teamMode ? (_selectedFuncao.isEmpty ? null : _selectedFuncao.join(',')) : null,
       'matricula': widget.teamMode ? (_selectedMatricula.isEmpty ? null : _selectedMatricula.join(',')) : null,
       'nome': widget.teamMode ? (_selectedNome.isEmpty ? null : _selectedNome.join(',')) : null,
       'segmento': widget.fleetMode ? (_selectedSegmento.isEmpty ? null : _selectedSegmento.join(',')) : null,
+      'propriedade': widget.fleetMode ? (_selectedPropriedade.isEmpty ? null : _selectedPropriedade.join(',')) : null,
       'status': widget.fleetMode ? null : (_selectedStatus.isEmpty ? null : _selectedStatus.join(',')),
       'local': widget.fleetMode ? null : (_selectedLocal.isEmpty ? null : _selectedLocal.join(',')),
-      'tipo': widget.fleetMode ? null : (_selectedTipo.isEmpty ? null : _selectedTipo.join(',')),
-      'executor': widget.fleetMode ? null : (_selectedExecutor.isEmpty ? null : _selectedExecutor.join(',')),
+      'tipo': _selectedTipo.isEmpty ? null : _selectedTipo.join(','),
+      'executor': _selectedExecutor.isEmpty ? null : _selectedExecutor.join(','),
       'frota': _selectedFrota.isEmpty ? null : _selectedFrota.join(','),
-      'coordenador': widget.fleetMode ? null : (_selectedCoordenador.isEmpty ? null : _selectedCoordenador.join(',')),
+      'coordenador': (_selectedCoordenador.isEmpty ? null : _selectedCoordenador.join(',')),
       'minhasTarefas': widget.fleetMode ? null : (_minhasTarefas ? 'true' : null),
     };
     if (widget.fleetMode) {
-      current.removeWhere((k, v) => !['regional', 'divisao', 'segmento', 'frota'].contains(k));
+      current.removeWhere((k, v) => !['regional', 'divisao', 'segmento', 'propriedade', 'tipo', 'frota', 'equipe', 'executor', 'coordenador'].contains(k));
     }
     if (widget.teamMode) {
-      current.removeWhere((k, v) => !['divisao', 'empresa', 'funcao', 'matricula', 'nome'].contains(k));
+      current.removeWhere((k, v) => !['divisao', 'empresa', 'equipe', 'executor', 'funcao', 'matricula', 'nome', 'coordenador'].contains(k));
     }
 
     // Evitar disparar processamento se nada mudou
@@ -247,7 +265,12 @@ class _FilterBarState extends State<FilterBar> {
       _selectedRegional.isNotEmpty,
       _selectedDivisao.isNotEmpty,
       _selectedSegmento.isNotEmpty,
+      _selectedPropriedade.isNotEmpty,
+      _selectedTipo.isNotEmpty,
       _selectedFrota.isNotEmpty,
+      _selectedEquipe.isNotEmpty,
+      _selectedExecutor.isNotEmpty,
+      _selectedCoordenador.isNotEmpty,
     ].where((f) => f).length;
     
     const double barHeight = 72.0;
@@ -266,64 +289,150 @@ class _FilterBarState extends State<FilterBar> {
         ],
       ),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Filtros distribuídos
-          Expanded(
-            child: _buildTeamFilterField(
-              'REGIONAL', 
-              Icons.location_on,
-              _regionaisTotais, 
-              _selectedRegional, 
-              (v) {
-                setState(() { _selectedRegional = v; _updateFilters(); });
-              }
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _buildTeamFilterField(
-              'DIVISÃO', 
-              Icons.business_center,
-              _divisoesTotais, 
-              _selectedDivisao, 
-              (v) {
-                setState(() { _selectedDivisao = v; _updateFilters(); });
-              }
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _buildTeamFilterField(
-              'SEGMENTO', 
-              Icons.category,
-              _segmentosTotais, 
-              _selectedSegmento, 
-              (v) {
-                setState(() { _selectedSegmento = v; _updateFilters(); });
-              }
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _buildTeamFilterField(
-              'FROTA', 
-              Icons.local_shipping,
-              _frotasTotais, 
-              _selectedFrota, 
-              (v) {
-                setState(() { _selectedFrota = v; _updateFilters(); });
-              }
-            ),
-          ),
-          
-          // Botão Limpar
-          if (activeCount > 0) ...[
-            const SizedBox(width: 12),
-            _buildClearButton(activeCount),
-          ],
-        ],
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final isNarrow = constraints.maxWidth < 1450;
+
+          final regionalField = _buildTeamFilterField(
+            'REGIONAL', 
+            _regionaisTotais, 
+            _selectedRegional, 
+            (v) {
+              setState(() { _selectedRegional = v; _updateFilters(); });
+            }
+          );
+
+          final divisaoField = _buildTeamFilterField(
+            'DIVISÃO', 
+            _divisoesTotais, 
+            _selectedDivisao, 
+            (v) {
+              setState(() { _selectedDivisao = v; _updateFilters(); });
+            }
+          );
+
+          final segmentoField = _buildTeamFilterField(
+            'SEGMENTO', 
+            _segmentosTotais, 
+            _selectedSegmento, 
+            (v) {
+              setState(() { _selectedSegmento = v; _updateFilters(); });
+            }
+          );
+
+          final propriedadeField = _buildTeamFilterField(
+            'PROPRIEDADE', 
+            _propriedadesTotais, 
+            _selectedPropriedade, 
+            (v) {
+              setState(() { _selectedPropriedade = v; _updateFilters(); });
+            }
+          );
+
+          final tipoField = _buildTeamFilterField(
+            'TIPO', 
+            _tiposTotais, 
+            _selectedTipo, 
+            (v) {
+              setState(() { _selectedTipo = v; _updateFilters(); });
+            }
+          );
+
+          final frotaField = _buildTeamFilterField(
+            'FROTA', 
+            _frotasTotais, 
+            _selectedFrota, 
+            (v) {
+              setState(() { _selectedFrota = v; _updateFilters(); });
+            }
+          );
+
+          final equipeField = _buildTeamFilterField(
+            'EQUIPE', 
+            _equipesTotais, 
+            _selectedEquipe, 
+            (v) {
+              setState(() { _selectedEquipe = v; _updateFilters(); });
+            }
+          );
+
+          final executorField = _buildTeamFilterField(
+            'EXECUTOR', 
+            _executoresTotais, 
+            _selectedExecutor, 
+            (v) {
+              setState(() { _selectedExecutor = v; _updateFilters(); });
+            }
+          );
+
+          final coordenadorField = _buildTeamFilterField(
+            'COORDENADOR', 
+            _coordenadoresTotais, 
+            _selectedCoordenador, 
+            (v) {
+              setState(() { _selectedCoordenador = v; _updateFilters(); });
+            }
+          );
+
+          if (isNarrow) {
+            return SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SizedBox(width: 120, child: regionalField),
+                  const SizedBox(width: 6),
+                  SizedBox(width: 120, child: divisaoField),
+                  const SizedBox(width: 6),
+                  SizedBox(width: 120, child: segmentoField),
+                  const SizedBox(width: 6),
+                  SizedBox(width: 120, child: propriedadeField),
+                  const SizedBox(width: 6),
+                  SizedBox(width: 120, child: tipoField),
+                  const SizedBox(width: 6),
+                  SizedBox(width: 140, child: frotaField),
+                  const SizedBox(width: 6),
+                  SizedBox(width: 125, child: equipeField),
+                  const SizedBox(width: 6),
+                  SizedBox(width: 135, child: executorField),
+                  const SizedBox(width: 6),
+                  SizedBox(width: 135, child: coordenadorField),
+                  if (activeCount > 0) ...[
+                    const SizedBox(width: 8),
+                    _buildClearButton(activeCount),
+                  ],
+                ],
+              ),
+            );
+          }
+
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(child: regionalField),
+              const SizedBox(width: 6),
+              Expanded(child: divisaoField),
+              const SizedBox(width: 6),
+              Expanded(child: segmentoField),
+              const SizedBox(width: 6),
+              Expanded(child: propriedadeField),
+              const SizedBox(width: 6),
+              Expanded(child: tipoField),
+              const SizedBox(width: 6),
+              Expanded(flex: 2, child: frotaField),
+              const SizedBox(width: 6),
+              Expanded(child: equipeField),
+              const SizedBox(width: 6),
+              Expanded(child: executorField),
+              const SizedBox(width: 6),
+              Expanded(child: coordenadorField),
+              if (activeCount > 0) ...[
+                const SizedBox(width: 8),
+                _buildClearButton(activeCount),
+              ],
+            ],
+          );
+        },
       ),
     );
   }
@@ -333,7 +442,12 @@ class _FilterBarState extends State<FilterBar> {
       _selectedRegional = {};
       _selectedDivisao = {};
       _selectedSegmento = {};
+      _selectedPropriedade = {};
+      _selectedTipo = {};
       _selectedFrota = {};
+      _selectedEquipe = {};
+      _selectedExecutor = {};
+      _selectedCoordenador = {};
       _updateFilters();
     });
   }
@@ -342,9 +456,12 @@ class _FilterBarState extends State<FilterBar> {
     final activeCount = [
       _selectedDivisao.isNotEmpty,
       _selectedEmpresa.isNotEmpty,
+      _selectedEquipe.isNotEmpty,
+      _selectedExecutor.isNotEmpty,
       _selectedFuncao.isNotEmpty,
       _selectedMatricula.isNotEmpty,
       _selectedNome.isNotEmpty,
+      _selectedCoordenador.isNotEmpty,
     ].where((f) => f).length;
     
     const double barHeight = 72.0;
@@ -363,112 +480,165 @@ class _FilterBarState extends State<FilterBar> {
         ],
       ),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Campo de busca global à esquerda
-          Expanded(
-            flex: 2,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              decoration: BoxDecoration(
-                color: Colors.grey[100],
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.grey[300]!),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.search, color: Colors.grey[600], size: 20),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: TextField(
-                      decoration: const InputDecoration(
-                        hintText: 'Buscar...',
-                        border: InputBorder.none,
-                        isDense: true,
-                        hintStyle: TextStyle(fontSize: 13),
-                      ),
-                      style: const TextStyle(fontSize: 13),
-                      onChanged: (v) {
-                        setState(() {
-                          _selectedNome = v.trim().isEmpty ? {} : {v.trim()};
-                          _updateFilters();
-                        });
-                      },
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final isNarrow = constraints.maxWidth < 1250;
+          final searchWidget = Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            decoration: BoxDecoration(
+              color: Colors.grey[100],
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.grey[300]!),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.search, color: Colors.grey[600], size: 18),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: TextField(
+                    decoration: const InputDecoration(
+                      hintText: 'Buscar...',
+                      border: InputBorder.none,
+                      isDense: true,
+                      hintStyle: TextStyle(fontSize: 12),
                     ),
+                    style: const TextStyle(fontSize: 12),
+                    onChanged: (v) {
+                      setState(() {
+                        _selectedNome = v.trim().isEmpty ? {} : {v.trim()};
+                        _updateFilters();
+                      });
+                    },
                   ),
+                ),
+              ],
+            ),
+          );
+
+          final divisaoField = _buildTeamFilterField(
+            'DIVISÃO', 
+            _divisoesTotais, 
+            _selectedDivisao, 
+            (v) {
+              setState(() { _selectedDivisao = v; _updateFilters(); });
+            }
+          );
+
+          final empresaField = _buildTeamFilterField(
+            'EMPRESA', 
+            _empresasTotais, 
+            _selectedEmpresa, 
+            (v) {
+              setState(() { _selectedEmpresa = v; _updateFilters(); });
+            }
+          );
+
+          final equipeField = _buildTeamFilterField(
+            'EQUIPE', 
+            _equipesTotais, 
+            _selectedEquipe, 
+            (v) {
+              setState(() { _selectedEquipe = v; _updateFilters(); });
+            }
+          );
+
+          final executorField = _buildTeamFilterField(
+            'EXECUTOR', 
+            _executoresTotais, 
+            _selectedExecutor, 
+            (v) {
+              setState(() { _selectedExecutor = v; _updateFilters(); });
+            }
+          );
+
+          final funcaoField = _buildTeamFilterField(
+            'FUNÇÃO', 
+            _funcoesTotais, 
+            _selectedFuncao, 
+            (v) {
+              setState(() { _selectedFuncao = v; _updateFilters(); });
+            }
+          );
+
+          final matriculaField = _buildTeamFilterField(
+            'MATRÍCULA', 
+            _matriculasTotais, 
+            _selectedMatricula, 
+            (v) {
+              setState(() { _selectedMatricula = v; _updateFilters(); });
+            }
+          );
+
+          final coordenadorField = _buildTeamFilterField(
+            'COORDENADOR', 
+            _coordenadoresTotais, 
+            _selectedCoordenador, 
+            (v) {
+              setState(() { _selectedCoordenador = v; _updateFilters(); });
+            }
+          );
+
+          if (isNarrow) {
+            return SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SizedBox(width: 170, child: searchWidget),
+                  const SizedBox(width: 8),
+                  SizedBox(width: 115, child: divisaoField),
+                  const SizedBox(width: 6),
+                  SizedBox(width: 115, child: empresaField),
+                  const SizedBox(width: 6),
+                  SizedBox(width: 115, child: equipeField),
+                  const SizedBox(width: 6),
+                  SizedBox(width: 125, child: executorField),
+                  const SizedBox(width: 6),
+                  SizedBox(width: 115, child: funcaoField),
+                  const SizedBox(width: 6),
+                  SizedBox(width: 115, child: matriculaField),
+                  const SizedBox(width: 6),
+                  SizedBox(width: 125, child: coordenadorField),
+                  if (activeCount > 0) ...[
+                    const SizedBox(width: 8),
+                    _buildClearButton(activeCount),
+                  ],
                 ],
               ),
-            ),
-          ),
-          const SizedBox(width: 16),
-          
-          // Filtros distribuídos
-          Expanded(
-            flex: 1,
-            child: _buildTeamFilterField(
-              'DIVISÃO', 
-              Icons.business_center,
-              _divisoesTotais, 
-              _selectedDivisao, 
-              (v) {
-                setState(() { _selectedDivisao = v; _updateFilters(); });
-              }
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            flex: 1,
-            child: _buildTeamFilterField(
-              'EMPRESA', 
-              Icons.business,
-              _empresasTotais, 
-              _selectedEmpresa, 
-              (v) {
-                setState(() { _selectedEmpresa = v; _updateFilters(); });
-              }
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            flex: 1,
-            child: _buildTeamFilterField(
-              'FUNÇÃO', 
-              Icons.assignment_ind,
-              _funcoesTotais, 
-              _selectedFuncao, 
-              (v) {
-                setState(() { _selectedFuncao = v; _updateFilters(); });
-              }
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            flex: 1,
-            child: _buildTeamFilterField(
-              'MATRÍCULA', 
-              Icons.badge,
-              _matriculasTotais, 
-              _selectedMatricula, 
-              (v) {
-                setState(() { _selectedMatricula = v; _updateFilters(); });
-              }
-            ),
-          ),
-          
-          // Botão Limpar
-          if (activeCount > 0) ...[
-            const SizedBox(width: 12),
-            _buildClearButton(activeCount),
-          ],
-        ],
+            );
+          }
+
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(flex: 2, child: searchWidget),
+              const SizedBox(width: 10),
+              Expanded(child: divisaoField),
+              const SizedBox(width: 6),
+              Expanded(child: empresaField),
+              const SizedBox(width: 6),
+              Expanded(child: equipeField),
+              const SizedBox(width: 6),
+              Expanded(child: executorField),
+              const SizedBox(width: 6),
+              Expanded(child: funcaoField),
+              const SizedBox(width: 6),
+              Expanded(child: matriculaField),
+              const SizedBox(width: 6),
+              Expanded(child: coordenadorField),
+              if (activeCount > 0) ...[
+                const SizedBox(width: 8),
+                _buildClearButton(activeCount),
+              ],
+            ],
+          );
+        },
       ),
     );
   }
 
   Widget _buildTeamFilterField(
     String label, 
-    IconData icon,
     List<String> options, 
     Set<String> selectedValues, 
     ValueChanged<Set<String>> onChanged
@@ -498,11 +668,9 @@ class _FilterBarState extends State<FilterBar> {
         },
         borderRadius: BorderRadius.circular(8),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 8),
           child: Row(
             children: [
-              Icon(icon, size: 16, color: hasSelection ? Colors.blue[700] : Colors.grey[600]),
-              const SizedBox(width: 8),
               Expanded(
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -525,7 +693,7 @@ class _FilterBarState extends State<FilterBar> {
                               ? selectedValues.first
                               : '${selectedValues.length} itens',
                       style: TextStyle(
-                        fontSize: 12,
+                        fontSize: 11,
                         color: hasSelection ? Colors.blue[800] : Colors.black87,
                         fontWeight: hasSelection ? FontWeight.bold : FontWeight.normal,
                       ),
@@ -534,7 +702,7 @@ class _FilterBarState extends State<FilterBar> {
                   ],
                 ),
               ),
-              Icon(Icons.arrow_drop_down, size: 18, color: Colors.grey[400]),
+              Icon(Icons.arrow_drop_down, size: 16, color: Colors.grey[400]),
             ],
           ),
         ),
@@ -549,9 +717,12 @@ class _FilterBarState extends State<FilterBar> {
           setState(() {
             _selectedDivisao = {};
             _selectedEmpresa = {};
+            _selectedEquipe = {};
+            _selectedExecutor = {};
             _selectedFuncao = {};
             _selectedMatricula = {};
             _selectedNome = {};
+            _selectedCoordenador = {};
             _updateFilters();
           });
         },
@@ -595,7 +766,22 @@ class _FilterBarState extends State<FilterBar> {
     _regionaisTotais = List.from(opts['regionals'] ?? [])..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
     _divisoesTotais = List.from(opts['divisoes'] ?? [])..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
     _segmentosTotais = List.from(opts['segmentos'] ?? [])..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    if (opts['propriedades'] != null) {
+      _propriedadesTotais = List.from(opts['propriedades']!)..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    }
+    if (opts['tipos'] != null) {
+      _tiposTotais = List.from(opts['tipos']!)..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    }
     _frotasTotais = List.from(opts['frotas'] ?? [])..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    if (opts['equipes'] != null) {
+      _equipesTotais = List.from(opts['equipes']!)..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    }
+    if (opts['executores'] != null) {
+      _executoresTotais = List.from(opts['executores']!)..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    }
+    if (opts['coordenadores'] != null) {
+      _coordenadoresTotais = List.from(opts['coordenadores']!)..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    }
   }
 
   void _applyTeamFilterOptions() {
@@ -603,9 +789,18 @@ class _FilterBarState extends State<FilterBar> {
     if (opts == null) return;
     _divisoesTotais = List.from(opts['divisoes'] ?? [])..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
     _empresasTotais = List.from(opts['empresas'] ?? [])..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    if (opts['equipes'] != null) {
+      _equipesTotais = List.from(opts['equipes']!)..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    }
+    if (opts['executores'] != null) {
+      _executoresTotais = List.from(opts['executores']!)..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    }
     _funcoesTotais = List.from(opts['funcoes'] ?? [])..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
     _matriculasTotais = List.from(opts['matriculas'] ?? [])..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
     _nomesTotais = List.from(opts['nomes'] ?? [])..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    if (opts['coordenadores'] != null) {
+      _coordenadoresTotais = List.from(opts['coordenadores']!)..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    }
   }
 
   Future<void> _loadFilterValues({bool loadTotais = false}) async {
@@ -635,6 +830,7 @@ class _FilterBarState extends State<FilterBar> {
       _selectedDivisao = _parseFilterSet(widget.initialFilters!['divisao']);
       _selectedSegmento = _parseFilterSet(widget.initialFilters!['segmento']);
       _selectedEmpresa = _parseFilterSet(widget.initialFilters!['empresa']);
+      _selectedEquipe = _parseFilterSet(widget.initialFilters!['equipe']);
       _selectedFuncao = _parseFilterSet(widget.initialFilters!['funcao']);
       _selectedMatricula = _parseFilterSet(widget.initialFilters!['matricula']);
       _selectedNome = _parseFilterSet(widget.initialFilters!['nome']);
@@ -645,6 +841,13 @@ class _FilterBarState extends State<FilterBar> {
       _selectedFrota = _parseFilterSet(widget.initialFilters!['frota']);
       _selectedCoordenador = _parseFilterSet(widget.initialFilters!['coordenador']);
       _minhasTarefas = widget.initialFilters!['minhasTarefas'] == 'true';
+      _lastSentFilters = Map.from(widget.initialFilters!);
+    }
+    if (widget.fleetMode && widget.fleetFilterOptions != null) {
+      _applyFleetFilterOptions();
+    }
+    if (widget.teamMode && widget.teamFilterOptions != null) {
+      _applyTeamFilterOptions();
     }
     // Carregar valores iniciais a partir das tarefas visíveis (se houver)
     Future.microtask(() => _loadFilterValues(loadTotais: true));
@@ -669,6 +872,7 @@ class _FilterBarState extends State<FilterBar> {
         _selectedDivisao = _parseFilterSet(widget.initialFilters!['divisao']);
         _selectedSegmento = _parseFilterSet(widget.initialFilters!['segmento']);
         _selectedEmpresa = _parseFilterSet(widget.initialFilters!['empresa']);
+        _selectedEquipe = _parseFilterSet(widget.initialFilters!['equipe']);
         _selectedFuncao = _parseFilterSet(widget.initialFilters!['funcao']);
         _selectedMatricula = _parseFilterSet(widget.initialFilters!['matricula']);
         _selectedNome = _parseFilterSet(widget.initialFilters!['nome']);
@@ -707,6 +911,7 @@ class _FilterBarState extends State<FilterBar> {
         _selectedStatus.isNotEmpty,
         _selectedLocal.isNotEmpty,
         _selectedTipo.isNotEmpty,
+        _selectedEquipe.isNotEmpty,
         _selectedExecutor.isNotEmpty,
         _selectedFrota.isNotEmpty,
         _selectedCoordenador.isNotEmpty,
@@ -766,27 +971,33 @@ class _FilterBarState extends State<FilterBar> {
                           size: 16,
                           color: Colors.grey[700],
                         ),
-                        const SizedBox(width: 8),
-                        const Icon(Icons.filter_list, size: 14, color: Colors.grey),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Filtros',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey[700],
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
                         if (activeFiltersCount > 0) ...[
-                          const SizedBox(width: 8),
+                          const SizedBox(width: 4),
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
                             decoration: BoxDecoration(
-                              color: Colors.blue,
-                              borderRadius: BorderRadius.circular(7),
+                              color: Colors.blue[600],
+                              borderRadius: BorderRadius.circular(10),
                             ),
                             child: Text(
                               '$activeFiltersCount',
                               style: const TextStyle(
-                                color: Colors.white,
                                 fontSize: 9,
+                                color: Colors.white,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
                           ),
                         ],
-                        const SizedBox(width: 8),
                         if (widget.isFiltering)
                           SizedBox(
                             width: 12,
@@ -806,6 +1017,7 @@ class _FilterBarState extends State<FilterBar> {
                                 _selectedStatus = {};
                                 _selectedLocal = {};
                                 _selectedTipo = {};
+                                _selectedEquipe = {};
                                 _selectedExecutor = {};
                                 _selectedFrota = {};
                                 _selectedCoordenador = {};
@@ -860,6 +1072,9 @@ class _FilterBarState extends State<FilterBar> {
                     _buildMultiSelectFilterField('TIPO', _tiposTotais, _selectedTipo, (v) {
                       setState(() { _selectedTipo = v; _updateFilters(); });
                     }, isMobile: true),
+                    _buildMultiSelectFilterField('EQUIPE', _equipesTotais, _selectedEquipe, (v) {
+                      setState(() { _selectedEquipe = v; _updateFilters(); });
+                    }, isMobile: true),
                     _buildMultiSelectFilterField('EXECUTOR', _executoresTotais, _selectedExecutor, (v) {
                       setState(() { _selectedExecutor = v; _updateFilters(); });
                     }, isMobile: true),
@@ -885,6 +1100,7 @@ class _FilterBarState extends State<FilterBar> {
         _selectedStatus.isNotEmpty,
         _selectedLocal.isNotEmpty,
         _selectedTipo.isNotEmpty,
+        _selectedEquipe.isNotEmpty,
         _selectedExecutor.isNotEmpty,
         _selectedFrota.isNotEmpty,
         _selectedCoordenador.isNotEmpty,
@@ -895,7 +1111,7 @@ class _FilterBarState extends State<FilterBar> {
         width: double.infinity,
         height: 72,
         color: Colors.grey[200],
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         child: Stack(
               children: [
                 if (widget.isFiltering)
@@ -913,92 +1129,82 @@ class _FilterBarState extends State<FilterBar> {
                   ),
                 Padding(
                   padding: EdgeInsets.only(top: widget.isFiltering ? 3 : 0),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _buildSortSelector(isMobile: false),
-                      const SizedBox(width: 16),
-                    _buildMinhasTarefasToggle(label: false),
-                      if (widget.onFilterOnlyWithWarnings != null) ...[
-                        const SizedBox(width: 16),
-                        _buildAlertasToggle(label: false),
-                      ],
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: _buildMultiSelectFilterField(
-                          'REGIONAL', _regionaisTotais, _selectedRegional, (v) {
-                            setState(() { _selectedRegional = v; _updateFilters(); });
-                          },
-                          isMobile: false,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _buildMultiSelectFilterField(
-                          'DIVISAO', _divisoesTotais, _selectedDivisao, (v) {
-                            setState(() { _selectedDivisao = v; _updateFilters(); });
-                          },
-                          isMobile: false,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _buildMultiSelectFilterField(
-                          'STATUS', _statusTotais, _selectedStatus, (v) {
-                            setState(() { _selectedStatus = v; _updateFilters(); });
-                          },
-                          isMobile: false,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _buildMultiSelectFilterField(
-                          'LOCAL', _locaisTotais, _selectedLocal, (v) {
-                            setState(() { _selectedLocal = v; _updateFilters(); });
-                          },
-                          isMobile: false,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _buildMultiSelectFilterField(
-                          'TIPO', _tiposTotais, _selectedTipo, (v) {
-                            setState(() { _selectedTipo = v; _updateFilters(); });
-                          },
-                          isMobile: false,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _buildMultiSelectFilterField(
-                          'EXECUTOR', _executoresTotais, _selectedExecutor, (v) {
-                            setState(() { _selectedExecutor = v; _updateFilters(); });
-                          },
-                          isMobile: false,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _buildMultiSelectFilterField(
-                          'FROTA', _frotasTotais, _selectedFrota, (v) {
-                            setState(() { _selectedFrota = v; _updateFilters(); });
-                          },
-                          isMobile: false,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _buildMultiSelectFilterField(
-                          'COORDENADOR', _coordenadoresTotais, _selectedCoordenador, (v) {
-                            setState(() { _selectedCoordenador = v; _updateFilters(); });
-                          },
-                          isMobile: false,
-                        ),
-                      ),
-                      // ── Botão Limpar (aparece quando há filtros ativos) ──
-                      if (activeFiltersCount > 0) ...[
-                        const SizedBox(width: 12),
-                        Center(
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final bool isNarrow = constraints.maxWidth < 1500;
+
+                      final sortField = _buildSortSelector(isMobile: false);
+                      final minhasTarefasField = _buildMinhasTarefasToggle(label: false);
+                      final alertasField = widget.onFilterOnlyWithWarnings != null
+                          ? _buildAlertasToggle(label: false)
+                          : null;
+
+                      final regionalField = _buildMultiSelectFilterField(
+                        'REGIONAL', _regionaisTotais, _selectedRegional, (v) {
+                          setState(() { _selectedRegional = v; _updateFilters(); });
+                        },
+                        isMobile: false,
+                      );
+
+                      final divisaoField = _buildMultiSelectFilterField(
+                        'DIVISAO', _divisoesTotais, _selectedDivisao, (v) {
+                          setState(() { _selectedDivisao = v; _updateFilters(); });
+                        },
+                        isMobile: false,
+                      );
+
+                      final statusField = _buildMultiSelectFilterField(
+                        'STATUS', _statusTotais, _selectedStatus, (v) {
+                          setState(() { _selectedStatus = v; _updateFilters(); });
+                        },
+                        isMobile: false,
+                      );
+
+                      final localField = _buildMultiSelectFilterField(
+                        'LOCAL', _locaisTotais, _selectedLocal, (v) {
+                          setState(() { _selectedLocal = v; _updateFilters(); });
+                        },
+                        isMobile: false,
+                      );
+
+                      final tipoField = _buildMultiSelectFilterField(
+                        'TIPO', _tiposTotais, _selectedTipo, (v) {
+                          setState(() { _selectedTipo = v; _updateFilters(); });
+                        },
+                        isMobile: false,
+                      );
+
+                      final equipeField = _buildMultiSelectFilterField(
+                        'EQUIPE', _equipesTotais, _selectedEquipe, (v) {
+                          setState(() { _selectedEquipe = v; _updateFilters(); });
+                        },
+                        isMobile: false,
+                      );
+
+                      final executorField = _buildMultiSelectFilterField(
+                        'EXECUTOR', _executoresTotais, _selectedExecutor, (v) {
+                          setState(() { _selectedExecutor = v; _updateFilters(); });
+                        },
+                        isMobile: false,
+                      );
+
+                      final frotaField = _buildMultiSelectFilterField(
+                        'FROTA', _frotasTotais, _selectedFrota, (v) {
+                          setState(() { _selectedFrota = v; _updateFilters(); });
+                        },
+                        isMobile: false,
+                      );
+
+                      final coordenadorField = _buildMultiSelectFilterField(
+                        'COORDENADOR', _coordenadoresTotais, _selectedCoordenador, (v) {
+                          setState(() { _selectedCoordenador = v; _updateFilters(); });
+                        },
+                        isMobile: false,
+                      );
+
+                      Widget? clearButton;
+                      if (activeFiltersCount > 0) {
+                        clearButton = Center(
                           child: InkWell(
                             onTap: () {
                               setState(() {
@@ -1007,6 +1213,7 @@ class _FilterBarState extends State<FilterBar> {
                                 _selectedStatus = {};
                                 _selectedLocal = {};
                                 _selectedTipo = {};
+                                _selectedEquipe = {};
                                 _selectedExecutor = {};
                                 _selectedFrota = {};
                                 _selectedCoordenador = {};
@@ -1064,9 +1271,84 @@ class _FilterBarState extends State<FilterBar> {
                               ),
                             ),
                           ),
-                        ),
-                      ],
-                    ],
+                        );
+                      }
+
+                      if (isNarrow) {
+                        return SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              sortField,
+                              const SizedBox(width: 12),
+                              minhasTarefasField,
+                              if (alertasField != null) ...[
+                                const SizedBox(width: 12),
+                                alertasField,
+                              ],
+                              const SizedBox(width: 12),
+                              SizedBox(width: 120, child: regionalField),
+                              const SizedBox(width: 8),
+                              SizedBox(width: 120, child: divisaoField),
+                              const SizedBox(width: 8),
+                              SizedBox(width: 120, child: statusField),
+                              const SizedBox(width: 8),
+                              SizedBox(width: 120, child: localField),
+                              const SizedBox(width: 8),
+                              SizedBox(width: 120, child: tipoField),
+                              const SizedBox(width: 8),
+                              SizedBox(width: 120, child: equipeField),
+                              const SizedBox(width: 8),
+                              SizedBox(width: 125, child: executorField),
+                              const SizedBox(width: 8),
+                              SizedBox(width: 120, child: frotaField),
+                              const SizedBox(width: 8),
+                              SizedBox(width: 125, child: coordenadorField),
+                              if (clearButton != null) ...[
+                                const SizedBox(width: 10),
+                                clearButton,
+                              ],
+                            ],
+                          ),
+                        );
+                      }
+
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          sortField,
+                          const SizedBox(width: 12),
+                          minhasTarefasField,
+                          if (alertasField != null) ...[
+                            const SizedBox(width: 12),
+                            alertasField,
+                          ],
+                          const SizedBox(width: 12),
+                          Expanded(child: regionalField),
+                          const SizedBox(width: 8),
+                          Expanded(child: divisaoField),
+                          const SizedBox(width: 8),
+                          Expanded(child: statusField),
+                          const SizedBox(width: 8),
+                          Expanded(child: localField),
+                          const SizedBox(width: 8),
+                          Expanded(child: tipoField),
+                          const SizedBox(width: 8),
+                          Expanded(child: equipeField),
+                          const SizedBox(width: 8),
+                          Expanded(child: executorField),
+                          const SizedBox(width: 8),
+                          Expanded(child: frotaField),
+                          const SizedBox(width: 8),
+                          Expanded(child: coordenadorField),
+                          if (clearButton != null) ...[
+                            const SizedBox(width: 10),
+                            clearButton,
+                          ],
+                        ],
+                      );
+                    },
                   ),
                 ),
               ],

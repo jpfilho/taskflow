@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
+import '../design_system/taskflow_design_system.dart';
 import '../models/segmento.dart';
 import 'color_picker_dialog.dart';
-import 'form_dialog_helpers.dart';
 
 class SegmentoFormDialog extends StatefulWidget {
   final Segmento? segmento;
@@ -23,6 +23,7 @@ class _SegmentoFormDialogState extends State<SegmentoFormDialog> {
   late TextEditingController _corTextoController;
   Color _selectedBackgroundColor = Colors.grey;
   Color _selectedTextColor = Colors.white;
+  bool _isSaving = false;
 
   @override
   void initState() {
@@ -75,7 +76,7 @@ class _SegmentoFormDialogState extends State<SegmentoFormDialog> {
   }
 
   String _colorToHex(Color color) {
-    return '#${color.value.toRadixString(16).substring(2).toUpperCase()}';
+    return '#${color.toARGB32().toRadixString(16).substring(2).toUpperCase()}';
   }
 
   Future<void> _showBackgroundColorPicker() async {
@@ -114,6 +115,7 @@ class _SegmentoFormDialogState extends State<SegmentoFormDialog> {
 
   void _save() {
     if (_formKey.currentState!.validate()) {
+      setState(() => _isSaving = true);
       final corValue = _corController.text.trim();
       final corTextoValue = _corTextoController.text.trim();
       
@@ -136,350 +138,110 @@ class _SegmentoFormDialogState extends State<SegmentoFormDialog> {
   @override
   Widget build(BuildContext context) {
     final isEditing = widget.segmento != null;
-    final brightness = Theme.of(context).brightness;
-    final isDark = brightness == Brightness.dark;
+    final spacing = context.tfSpacing;
 
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.all(16),
-      elevation: 0,
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 512),
-        decoration: BoxDecoration(
-          color: isDark ? const Color(0xFF1e293b) : Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-            width: 1,
-          ),
-        ),
+    return TFFormDialog(
+      title: isEditing ? 'Editar Segmento' : 'Novo Segmento',
+      subtitle: 'Atualize as informações visuais e cadastrais do segmento.',
+      saveLabel: isEditing ? 'Salvar Alterações' : 'Criar Segmento',
+      isSaving: _isSaving,
+      onSave: _save,
+      onCancel: () => Navigator.of(context).pop(),
+      child: Form(
+        key: _formKey,
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
-            Padding(
-              padding: const EdgeInsets.fromLTRB(32, 32, 32, 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    isEditing ? 'Editar Segmento' : 'Novo Segmento',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w600,
-                      color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Atualize as informações do segmento.',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
-                    ),
-                  ),
-                ],
-              ),
+            TFTextField(
+              label: 'Segmento',
+              controller: _segmentoController,
+              required: true,
+              hint: 'Informe o nome do segmento',
+              validator: (value) {
+                if (value == null || value.trim().isEmpty) {
+                  return 'Campo obrigatório';
+                }
+                return null;
+              },
             ),
-
-            // Content
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                child: Form(
-                  key: _formKey,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      FloatingLabelTextField(
-                        label: 'Segmento *',
-                        controller: _segmentoController,
-                        isDark: isDark,
-                        validator: (value) {
-                          if (value == null || value.trim().isEmpty) {
-                            return 'Campo obrigatório';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 24),
-                      FloatingLabelTextField(
-                        label: 'Descrição',
-                        controller: _descricaoController,
-                        isDark: isDark,
-                        maxLines: 3,
-                      ),
-                      const SizedBox(height: 24),
-                      // Seletor de cor de fundo
-                      ColorPickerField(
-                        label: 'Cor de Fundo',
-                        color: _selectedBackgroundColor,
-                        colorHex: _corController.text,
-                        isDark: isDark,
-                        onTap: _showBackgroundColorPicker,
-                        icon: Icons.color_lens,
-                      ),
-                      const SizedBox(height: 24),
-                      // Seletor de cor do texto
-                      ColorPickerField(
-                        label: 'Cor do Texto',
-                        color: _selectedTextColor,
-                        colorHex: _corTextoController.text,
-                        isDark: isDark,
-                        onTap: _showTextColorPicker,
-                        icon: Icons.format_color_text,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+            SizedBox(height: spacing.md),
+            TFTextField(
+              label: 'Descrição',
+              controller: _descricaoController,
+              hint: 'Descrição detalhada do segmento (opcional)',
+              maxLines: 3,
             ),
-
-            // Footer com botões
-            Container(
-              padding: const EdgeInsets.all(32),
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF0f172a).withOpacity(0.5) : const Color(0xFFf8fafc),
-                border: Border(
-                  top: BorderSide(
-                    color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                    width: 1,
-                  ),
-                ),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
-                    ),
-                    child: Text(
-                      'Cancelar',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                        color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF475569),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  ElevatedButton(
-                    onPressed: _save,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF3b82f6),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 10),
-                      elevation: 2,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                    child: Text(
-                      isEditing ? 'Salvar Alterações' : 'Criar Segmento',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+            SizedBox(height: spacing.md),
+            _buildColorTile(
+              label: 'Cor de Fundo do Segmento',
+              color: _selectedBackgroundColor,
+              colorHex: _corController.text,
+              onTap: _showBackgroundColorPicker,
+            ),
+            SizedBox(height: spacing.sm),
+            _buildColorTile(
+              label: 'Cor do Texto do Segmento',
+              color: _selectedTextColor,
+              colorHex: _corTextoController.text,
+              onTap: _showTextColorPicker,
             ),
           ],
         ),
       ),
     );
   }
-}
 
-// Widget para campo de texto com label flutuante (mantido para compatibilidade, mas usar FloatingLabelTextField do helper)
-class _FloatingLabelTextField extends StatefulWidget {
-  final String label;
-  final TextEditingController controller;
-  final bool isDark;
-  final IconData? prefixIcon;
-  final TextInputType? keyboardType;
-  final String? Function(String?)? validator;
-  final int? maxLines;
+  Widget _buildColorTile({
+    required String label,
+    required Color color,
+    required String colorHex,
+    required VoidCallback onTap,
+  }) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final spacing = context.tfSpacing;
 
-  const _FloatingLabelTextField({
-    required this.label,
-    required this.controller,
-    required this.isDark,
-    this.prefixIcon,
-    this.keyboardType,
-    this.validator,
-    this.maxLines,
-  });
-
-  @override
-  State<_FloatingLabelTextField> createState() => _FloatingLabelTextFieldState();
-}
-
-class _FloatingLabelTextFieldState extends State<_FloatingLabelTextField> {
-  bool _isFocused = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final hasValue = widget.controller.text.isNotEmpty;
-    final shouldFloat = _isFocused || hasValue;
-
-    return Focus(
-      onFocusChange: (focused) {
-        setState(() {
-          _isFocused = focused;
-        });
-      },
-      child: TextFormField(
-        controller: widget.controller,
-        keyboardType: widget.keyboardType,
-        validator: widget.validator,
-        maxLines: widget.maxLines,
-        textCapitalization: widget.maxLines != null && widget.maxLines! > 1
-            ? TextCapitalization.sentences
-            : TextCapitalization.words,
-        style: TextStyle(
-          color: widget.isDark ? Colors.white : const Color(0xFF1e293b),
-        ),
-        decoration: InputDecoration(
-          labelText: widget.label,
-          labelStyle: TextStyle(
-            color: shouldFloat
-                ? const Color(0xFF3b82f6)
-                : (widget.isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b)),
-            fontSize: shouldFloat ? 12 : 16,
-          ),
-          floatingLabelStyle: const TextStyle(
-            color: Color(0xFF3b82f6),
-            fontSize: 12,
-            fontWeight: FontWeight.w500,
-          ),
-          floatingLabelAlignment: FloatingLabelAlignment.start,
-          floatingLabelBehavior: FloatingLabelBehavior.auto,
-          prefixIcon: widget.prefixIcon != null
-              ? Icon(
-                  widget.prefixIcon,
-                  color: widget.isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
-                )
-              : null,
-          filled: true,
-          fillColor: widget.prefixIcon != null
-              ? (widget.isDark ? const Color(0xFF0f172a).withOpacity(0.3) : const Color(0xFFf8fafc).withOpacity(0.5))
-              : Colors.transparent,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: BorderSide(
-              color: widget.isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-            ),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: BorderSide(
-              color: widget.isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-            ),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: const BorderSide(
-              color: Color(0xFF3b82f6),
-              width: 2,
-            ),
-          ),
-          errorBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: const BorderSide(
-              color: Colors.red,
-            ),
-          ),
-          focusedErrorBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: const BorderSide(
-              color: Colors.red,
-              width: 2,
-            ),
-          ),
-          contentPadding: EdgeInsets.symmetric(
-            horizontal: widget.prefixIcon != null ? 40 : 16,
-            vertical: 16,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// Widget para seletor de cor (mantido para compatibilidade, mas usar ColorPickerField do helper)
-class _ColorPickerField extends StatelessWidget {
-  final String label;
-  final Color color;
-  final String colorHex;
-  final bool isDark;
-  final VoidCallback onTap;
-  final IconData icon;
-
-  const _ColorPickerField({
-    required this.label,
-    required this.color,
-    required this.colorHex,
-    required this.isDark,
-    required this.onTap,
-    required this.icon,
-  });
-
-  @override
-  Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(TFRadius.r8),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        padding: EdgeInsets.symmetric(horizontal: spacing.sm, vertical: spacing.xs),
         decoration: BoxDecoration(
-          border: Border.all(
-            color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-          ),
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(TFRadius.r8),
+          border: Border.all(color: colors.borderSubtle),
+          color: colors.surface,
         ),
         child: Row(
           children: [
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-                color: const Color(0xFF3b82f6),
-              ),
-            ),
-            const Spacer(),
             Container(
-              width: 40,
-              height: 40,
+              width: 24,
+              height: 24,
               decoration: BoxDecoration(
                 color: color,
                 shape: BoxShape.circle,
-                border: Border.all(
-                  color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-                  width: 1,
-                ),
+                border: Border.all(color: colors.borderSubtle),
               ),
             ),
-            const SizedBox(width: 12),
+            SizedBox(width: spacing.sm),
+            Expanded(
+              child: Text(
+                label,
+                style: typography.bodyMedium.copyWith(color: colors.textPrimary),
+              ),
+            ),
             Text(
               colorHex,
-              style: TextStyle(
-                fontSize: 14,
-                color: isDark ? const Color(0xFFcbd5e1) : const Color(0xFF475569),
+              style: typography.bodySmall.copyWith(
+                color: colors.textSecondary,
+                fontFamily: 'monospace',
               ),
             ),
-            const SizedBox(width: 8),
-            Icon(
-              icon,
-              color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
-            ),
+            SizedBox(width: spacing.xs),
+            Icon(Icons.colorize_rounded, size: 16, color: colors.textMuted),
           ],
         ),
       ),
     );
   }
 }
+

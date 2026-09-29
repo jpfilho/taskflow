@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../design_system/taskflow_design_system.dart';
 import '../models/centro_trabalho.dart';
 import '../models/regional.dart';
 import '../models/divisao.dart';
@@ -34,6 +35,7 @@ class _CentroTrabalhoFormDialogState extends State<CentroTrabalhoFormDialog> {
   List<Segmento> _segmentos = [];
   
   bool _isLoading = true;
+  bool _isSaving = false;
   bool _ativo = true;
   
   // Seleções obrigatórias
@@ -111,7 +113,7 @@ class _CentroTrabalhoFormDialogState extends State<CentroTrabalhoFormDialog> {
         }
       });
     } catch (e) {
-      print('Erro ao carregar dados: $e');
+      debugPrint('Erro ao carregar dados: $e');
       setState(() {
         _isLoading = false;
       });
@@ -168,6 +170,7 @@ class _CentroTrabalhoFormDialogState extends State<CentroTrabalhoFormDialog> {
         return;
       }
 
+      setState(() => _isSaving = true);
       final centroTrabalho = CentroTrabalho(
         id: widget.centroTrabalho?.id ?? '',
         centroTrabalho: _centroTrabalhoController.text.trim(),
@@ -192,173 +195,139 @@ class _CentroTrabalhoFormDialogState extends State<CentroTrabalhoFormDialog> {
   @override
   Widget build(BuildContext context) {
     final isEditing = widget.centroTrabalho != null;
+    final spacing = context.tfSpacing;
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
 
-    return AlertDialog(
-      title: Text(isEditing ? 'Editar Centro de Trabalho' : 'Novo Centro de Trabalho'),
-      content: _isLoading
+    final filteredDivisoes = _divisoes
+        .where((d) => _selectedRegional == null || d.atuaNaRegional(_selectedRegional!.id))
+        .toList();
+
+    final filteredSegmentos = _segmentos
+        .where((s) => _selectedDivisao == null || _selectedDivisao!.segmentoIds.contains(s.id))
+        .toList();
+
+    return TFFormDialog(
+      title: isEditing ? 'Editar Centro de Trabalho' : 'Novo Centro de Trabalho',
+      subtitle: 'Atualize as informações e vínculos operacionais.',
+      saveLabel: isEditing ? 'Salvar Alterações' : 'Criar Centro de Trabalho',
+      isSaving: _isSaving,
+      onSave: _save,
+      onCancel: () => Navigator.of(context).pop(),
+      child: _isLoading
           ? const SizedBox(
               height: 200,
-              child: Center(child: CircularProgressIndicator()),
+              child: Center(child: TFLoading(message: 'Carregando dados...')),
             )
           : Form(
               key: _formKey,
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    TextFormField(
-                      controller: _centroTrabalhoController,
-                      decoration: const InputDecoration(
-                        labelText: 'Centro de Trabalho *',
-                        border: OutlineInputBorder(),
-                        hintText: 'Digite o nome do centro de trabalho',
-                      ),
-                      textCapitalization: TextCapitalization.words,
-                      validator: (value) {
-                        if (value == null || value.trim().isEmpty) {
-                          return 'Campo obrigatório';
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TFTextField(
+                    label: 'Centro de Trabalho',
+                    controller: _centroTrabalhoController,
+                    required: true,
+                    hint: 'Digite o nome do centro de trabalho',
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return 'Campo obrigatório';
+                      }
+                      return null;
+                    },
+                  ),
+                  SizedBox(height: spacing.md),
+                  TFTextField(
+                    label: 'Descrição',
+                    controller: _descricaoController,
+                    hint: 'Digite uma descrição (opcional)',
+                    maxLines: 2,
+                  ),
+                  SizedBox(height: spacing.md),
+                  TFTextField(
+                    label: 'GPM',
+                    controller: _gpmController,
+                    hint: 'Digite o GPM (numérico)',
+                    keyboardType: TextInputType.number,
+                    validator: (value) {
+                      if (value != null && value.trim().isNotEmpty) {
+                        final gpm = int.tryParse(value.trim());
+                        if (gpm == null) {
+                          return 'Digite um número válido';
                         }
-                        return null;
-                      },
+                      }
+                      return null;
+                    },
+                  ),
+                  SizedBox(height: spacing.lg),
+                  Text(
+                    'Vínculos Organizacionais',
+                    style: typography.bodyMedium.copyWith(
+                      color: colors.textPrimary,
+                      fontWeight: FontWeight.w600,
                     ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: _descricaoController,
-                      decoration: const InputDecoration(
-                        labelText: 'Descrição',
-                        border: OutlineInputBorder(),
-                        hintText: 'Digite uma descrição (opcional)',
-                      ),
-                      textCapitalization: TextCapitalization.sentences,
-                      maxLines: 2,
-                    ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: _gpmController,
-                      decoration: const InputDecoration(
-                        labelText: 'GPM',
-                        border: OutlineInputBorder(),
-                        hintText: 'Digite o GPM (numérico)',
-                      ),
-                      keyboardType: TextInputType.number,
-                      validator: (value) {
-                        if (value != null && value.trim().isNotEmpty) {
-                          final gpm = int.tryParse(value.trim());
-                          if (gpm == null) {
-                            return 'Digite um número válido';
-                          }
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 24),
-                    const Text(
-                      'Vínculos (obrigatórios):',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    // Regional
-                    DropdownButtonFormField<Regional>(
-                      initialValue: _selectedRegional,
-                      decoration: const InputDecoration(
-                        labelText: 'Regional *',
-                        border: OutlineInputBorder(),
-                      ),
-                      items: _regionais.map((regional) {
-                        return DropdownMenuItem<Regional>(
-                          value: regional,
-                          child: Text(regional.regional),
-                        );
-                      }).toList(),
-                      onChanged: _onRegionalChanged,
-                      validator: (value) {
-                        if (value == null) {
-                          return 'Selecione uma Regional';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 16),
-                    // Divisão
-                    DropdownButtonFormField<Divisao>(
-                      initialValue: _selectedDivisao,
-                      decoration: const InputDecoration(
-                        labelText: 'Divisão *',
-                        border: OutlineInputBorder(),
-                      ),
-                      items: _divisoes
-                          .where((d) => _selectedRegional == null || d.regionalId == _selectedRegional!.id)
-                          .map((divisao) {
-                        return DropdownMenuItem<Divisao>(
-                          value: divisao,
-                          child: Text(divisao.divisao),
-                        );
-                      }).toList(),
-                      onChanged: _onDivisaoChanged,
-                      validator: (value) {
-                        if (value == null) {
-                          return 'Selecione uma Divisão';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 16),
-                    // Segmento
-                    DropdownButtonFormField<Segmento>(
-                      initialValue: _selectedSegmento,
-                      decoration: const InputDecoration(
-                        labelText: 'Segmento *',
-                        border: OutlineInputBorder(),
-                      ),
-                      items: _segmentos
-                          .where((s) => _selectedDivisao == null || _selectedDivisao!.segmentoIds.contains(s.id))
-                          .map((segmento) {
-                        return DropdownMenuItem<Segmento>(
-                          value: segmento,
-                          child: Text(segmento.segmento),
-                        );
-                      }).toList(),
-                      onChanged: (segmento) {
-                        setState(() {
-                          _selectedSegmento = segmento;
-                        });
-                      },
-                      validator: (value) {
-                        if (value == null) {
-                          return 'Selecione um Segmento';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 16),
-                    // Ativo
-                    SwitchListTile(
-                      title: const Text('Ativo'),
-                      value: _ativo,
-                      onChanged: (value) {
-                        setState(() {
-                          _ativo = value;
-                        });
-                      },
-                    ),
-                  ],
-                ),
+                  ),
+                  SizedBox(height: spacing.sm),
+                  TFDropdown<Regional>(
+                    label: 'Regional',
+                    isRequired: true,
+                    hint: 'Selecione uma regional',
+                    value: _selectedRegional,
+                    items: _regionais,
+                    displayText: (r) => r.regional,
+                    onChanged: _onRegionalChanged,
+                    validator: (val) {
+                      if (val == null) return 'Selecione uma Regional';
+                      return null;
+                    },
+                  ),
+                  SizedBox(height: spacing.md),
+                  TFDropdown<Divisao>(
+                    label: 'Divisão',
+                    isRequired: true,
+                    hint: 'Selecione uma divisão',
+                    value: _selectedDivisao,
+                    items: filteredDivisoes,
+                    displayText: (d) => d.divisao,
+                    onChanged: _onDivisaoChanged,
+                    validator: (val) {
+                      if (val == null) return 'Selecione uma Divisão';
+                      return null;
+                    },
+                  ),
+                  SizedBox(height: spacing.md),
+                  TFDropdown<Segmento>(
+                    label: 'Segmento',
+                    isRequired: true,
+                    hint: 'Selecione um segmento',
+                    value: _selectedSegmento,
+                    items: filteredSegmentos,
+                    displayText: (s) => s.segmento,
+                    onChanged: (segmento) {
+                      setState(() {
+                        _selectedSegmento = segmento;
+                      });
+                    },
+                    validator: (val) {
+                      if (val == null) return 'Selecione um Segmento';
+                      return null;
+                    },
+                  ),
+                  SizedBox(height: spacing.lg),
+                  TFSwitch(
+                    label: 'Ativo',
+                    description: 'Define se o centro de trabalho está habilitado no sistema',
+                    value: _ativo,
+                    onChanged: (value) {
+                      setState(() {
+                        _ativo = value;
+                      });
+                    },
+                  ),
+                ],
               ),
             ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancelar'),
-        ),
-        ElevatedButton(
-          onPressed: _save,
-          child: Text(isEditing ? 'Salvar' : 'Criar'),
-        ),
-      ],
     );
   }
 }
+

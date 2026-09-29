@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
+import '../design_system/taskflow_design_system.dart';
 import '../models/tipo_atividade.dart';
 import '../services/tipo_atividade_service.dart';
 import 'tipo_atividade_form_dialog.dart';
-import '../utils/responsive.dart';
 
 class TipoAtividadeListView extends StatefulWidget {
   const TipoAtividadeListView({super.key});
@@ -16,22 +16,14 @@ class _TipoAtividadeListViewState extends State<TipoAtividadeListView> {
   List<TipoAtividade> _tiposAtividade = [];
   List<TipoAtividade> _filteredTiposAtividade = [];
   bool _isLoading = true;
+  bool _isTableView = true;
   final TextEditingController _searchController = TextEditingController();
-  bool _isTableView = false; // false = lista (cards), true = tabela
 
   @override
   void initState() {
     super.initState();
     _loadTiposAtividade();
     _searchController.addListener(_onSearchChanged);
-    // No desktop, tabela é o padrão
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && Responsive.isDesktop(context)) {
-        setState(() {
-          _isTableView = true;
-        });
-      }
-    });
   }
 
   @override
@@ -93,6 +85,7 @@ class _TipoAtividadeListViewState extends State<TipoAtividadeListView> {
   Future<void> _createTipoAtividade() async {
     final result = await showDialog<TipoAtividade>(
       context: context,
+      barrierDismissible: true,
       builder: (context) => const TipoAtividadeFormDialog(),
     );
 
@@ -122,7 +115,6 @@ class _TipoAtividadeListViewState extends State<TipoAtividadeListView> {
   }
 
   Future<void> _duplicateTipoAtividade(TipoAtividade tipoAtividade) async {
-    // Buscar tipo atualizado do banco para garantir dados completos
     final tipoAtualizado = await _tipoAtividadeService.getTipoAtividadeById(tipoAtividade.id);
     if (tipoAtualizado == null) {
       if (mounted) {
@@ -136,15 +128,17 @@ class _TipoAtividadeListViewState extends State<TipoAtividadeListView> {
       return;
     }
 
-    // Criar cópia com código e descrição modificados
+    if (!mounted) return;
+
     final duplicated = tipoAtualizado.copyWith(
       id: '',
-      codigo: '${tipoAtualizado.codigo}CP', // Adicionar sufixo ao código
+      codigo: '${tipoAtualizado.codigo}CP',
       descricao: '${tipoAtualizado.descricao} (Cópia)',
     );
 
     final result = await showDialog<TipoAtividade>(
       context: context,
+      barrierDismissible: true,
       builder: (context) => TipoAtividadeFormDialog(tipoAtividade: duplicated),
     );
 
@@ -164,7 +158,7 @@ class _TipoAtividadeListViewState extends State<TipoAtividadeListView> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Erro ao duplicar tipo de atividade'),
+              content: Text('Erro ao duplicar tipo de atividade.'),
               backgroundColor: Colors.red,
             ),
           );
@@ -174,7 +168,6 @@ class _TipoAtividadeListViewState extends State<TipoAtividadeListView> {
   }
 
   Future<void> _editTipoAtividade(TipoAtividade tipoAtividade) async {
-    // Buscar tipo atualizado do banco para garantir dados completos
     final tipoAtualizado = await _tipoAtividadeService.getTipoAtividadeById(tipoAtividade.id);
     if (tipoAtualizado == null) {
       if (mounted) {
@@ -188,8 +181,11 @@ class _TipoAtividadeListViewState extends State<TipoAtividadeListView> {
       return;
     }
 
+    if (!mounted) return;
+
     final result = await showDialog<TipoAtividade>(
       context: context,
+      barrierDismissible: true,
       builder: (context) => TipoAtividadeFormDialog(tipoAtividade: tipoAtualizado),
     );
 
@@ -219,23 +215,13 @@ class _TipoAtividadeListViewState extends State<TipoAtividadeListView> {
   }
 
   Future<void> _deleteTipoAtividade(TipoAtividade tipoAtividade) async {
-    final confirm = await showDialog<bool>(
+    final confirm = await TFModalDialog.confirm(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Confirmar exclusão'),
-        content: Text('Deseja realmente excluir o tipo de atividade "${tipoAtividade.codigo} - ${tipoAtividade.descricao}"?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Excluir'),
-          ),
-        ],
-      ),
+      title: 'Confirmar exclusão',
+      message: 'Deseja realmente excluir o tipo de atividade "${tipoAtividade.descricao}" (${tipoAtividade.codigo})?',
+      confirmLabel: 'Excluir',
+      cancelLabel: 'Cancelar',
+      isDestructive: true,
     );
 
     if (confirm == true) {
@@ -265,189 +251,265 @@ class _TipoAtividadeListViewState extends State<TipoAtividadeListView> {
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = TFBreakpoints.isMobile(context);
+    final spacing = context.tfSpacing;
+    final colors = context.tfColors;
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Cadastro de Tipos de Atividade'),
-        actions: [
-          // Toggle de visualização
-          IconButton(
-            icon: Icon(_isTableView ? Icons.view_list : Icons.table_chart),
-            onPressed: () {
-              setState(() {
-                _isTableView = !_isTableView;
-              });
-            },
-            tooltip: _isTableView ? 'Visualização em Lista' : 'Visualização em Tabela',
-          ),
-          IconButton(
-            icon: const Icon(Icons.add),
-            onPressed: _createTipoAtividade,
-            tooltip: 'Novo Tipo de Atividade',
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: TextField(
-              controller: _searchController,
-              decoration: const InputDecoration(
-                labelText: 'Buscar tipos de atividade',
-                prefixIcon: Icon(Icons.search),
-                border: OutlineInputBorder(),
+      backgroundColor: colors.background,
+      body: SafeArea(
+        child: Padding(
+          padding: EdgeInsets.all(isMobile ? spacing.sm : spacing.base),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TFPageHeader(
+                title: 'Tipos de Atividade',
+                subtitle: 'Configuração de categorias, cores do Gantt e segmentos operacionais',
+                onBack: () => Navigator.of(context).pop(),
+                primaryAction: TFButton(
+                  label: 'Novo Tipo',
+                  leadingIcon: TFIcons.add,
+                  onPressed: _createTipoAtividade,
+                ),
+                secondaryActions: [
+                  TFIconButton(
+                    icon: _isTableView ? Icons.view_list_rounded : Icons.table_chart_rounded,
+                    tooltip: _isTableView ? 'Visualizar em Lista' : 'Visualizar em Tabela',
+                    variant: TFIconButtonVariant.subtle,
+                    onPressed: () {
+                      setState(() {
+                        _isTableView = !_isTableView;
+                      });
+                    },
+                  ),
+                  TFIconButton(
+                    icon: TFIcons.refresh,
+                    tooltip: 'Recarregar tipos',
+                    variant: TFIconButtonVariant.subtle,
+                    onPressed: _loadTiposAtividade,
+                  ),
+                ],
               ),
-            ),
-          ),
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _filteredTiposAtividade.isEmpty
-                    ? const Center(
-                        child: Text('Nenhum tipo de atividade encontrado.'),
+              Padding(
+                padding: EdgeInsets.only(bottom: spacing.base),
+                child: TFTextField(
+                  controller: _searchController,
+                  hint: 'Buscar por código ou descrição...',
+                  prefixIcon: Icon(TFIcons.search, size: 18, color: colors.textSecondary),
+                  suffixIcon: _searchController.text.isNotEmpty
+                      ? IconButton(
+                          icon: Icon(TFIcons.close, size: 16, color: colors.textMuted),
+                          onPressed: () => _searchController.clear(),
+                          tooltip: 'Limpar busca',
+                        )
+                      : null,
+                ),
+              ),
+              Expanded(
+                child: _isLoading
+                    ? const TFLoading(
+                        mode: TFLoadingMode.section,
+                        message: 'Carregando tipos de atividade...',
                       )
-                    : _isTableView
-                        ? _buildTableView()
-                        : _buildListView(),
+                    : _filteredTiposAtividade.isEmpty
+                        ? TFEmptyState(
+                            icon: TFIcons.search,
+                            title: _tiposAtividade.isEmpty
+                                ? 'Nenhum tipo cadastrado'
+                                : 'Nenhum tipo de atividade encontrado',
+                            description: _tiposAtividade.isEmpty
+                                ? 'Cadastre o primeiro tipo de atividade para parametrizar tarefas.'
+                                : 'Tente buscar por outro termo ou limpe o campo de busca.',
+                            action: _tiposAtividade.isEmpty
+                                ? TFButton(
+                                    label: 'Cadastrar Primeiro Tipo',
+                                    leadingIcon: TFIcons.add,
+                                    onPressed: _createTipoAtividade,
+                                  )
+                                : TFButton(
+                                    label: 'Limpar Busca',
+                                    variant: TFButtonVariant.secondary,
+                                    onPressed: () => _searchController.clear(),
+                                  ),
+                          )
+                        : (isMobile || !_isTableView)
+                            ? _buildMobileList()
+                            : _buildDesktopTable(),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
 
-  Widget _buildListView() {
-    return ListView.builder(
+  Widget _buildDesktopTable() {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
+    return TFDataTable<TipoAtividade>(
+      items: _filteredTiposAtividade,
+      zebra: true,
+      columns: [
+        TFDataColumn<TipoAtividade>.text(
+          id: 'codigo',
+          title: 'Código',
+          width: 120,
+          cellBuilder: (context, tipo) => Text(
+            tipo.codigo,
+            style: typography.bodyMedium.copyWith(
+              color: colors.textPrimary,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        TFDataColumn<TipoAtividade>.text(
+          id: 'descricao',
+          title: 'Descrição',
+          cellBuilder: (context, tipo) => Text(
+            tipo.descricao,
+            style: typography.bodyMedium.copyWith(color: colors.textPrimary),
+          ),
+        ),
+        TFDataColumn<TipoAtividade>(
+          id: 'cor',
+          label: const Text('Cor'),
+          width: 80,
+          cellBuilder: (context, tipo) => Container(
+            width: 24,
+            height: 24,
+            decoration: BoxDecoration(
+              color: tipo.cor != null && tipo.cor!.isNotEmpty
+                  ? Color(int.parse(tipo.cor!.replaceFirst('#', '0xFF')))
+                  : Colors.grey,
+              shape: BoxShape.circle,
+              border: Border.all(color: colors.borderSubtle),
+            ),
+          ),
+        ),
+        TFDataColumn<TipoAtividade>(
+          id: 'status',
+          label: const Text('Status'),
+          width: 110,
+          cellBuilder: (context, tipo) => TFStatusBadge(
+            label: tipo.ativo ? 'Ativo' : 'Inativo',
+            severity: tipo.ativo ? TFStatusSeverity.success : TFStatusSeverity.neutral,
+            compact: true,
+          ),
+        ),
+        TFDataColumn<TipoAtividade>(
+          id: 'acoes',
+          label: const Text('Ações'),
+          width: 160,
+          alignment: Alignment.centerRight,
+          cellBuilder: (context, tipo) => Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TFIconButton(
+                icon: TFIcons.edit,
+                tooltip: 'Editar tipo',
+                variant: TFIconButtonVariant.standard,
+                onPressed: () => _editTipoAtividade(tipo),
+              ),
+              TFIconButton(
+                icon: Icons.copy_rounded,
+                tooltip: 'Duplicar tipo',
+                variant: TFIconButtonVariant.subtle,
+                onPressed: () => _duplicateTipoAtividade(tipo),
+              ),
+              TFIconButton(
+                icon: TFIcons.delete,
+                tooltip: 'Excluir tipo',
+                variant: TFIconButtonVariant.danger,
+                onPressed: () => _deleteTipoAtividade(tipo),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMobileList() {
+    final spacing = context.tfSpacing;
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
+    return ListView.separated(
       itemCount: _filteredTiposAtividade.length,
+      separatorBuilder: (_, __) => SizedBox(height: spacing.sm),
       itemBuilder: (context, index) {
         final tipo = _filteredTiposAtividade[index];
-        return Card(
-          margin: const EdgeInsets.symmetric(
-            horizontal: 16.0,
-            vertical: 8.0,
-          ),
-          child: ListTile(
-            title: Text('${tipo.codigo} - ${tipo.descricao}'),
-            subtitle: tipo.segmentos.isNotEmpty
-                ? Text('Segmentos: ${tipo.segmentos.join(", ")}')
-                : const Text('Sem segmentos associados'),
-            leading: tipo.ativo
-                ? const Icon(Icons.check_circle, color: Colors.green)
-                : const Icon(Icons.cancel, color: Colors.red),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.edit),
-                  onPressed: () => _editTipoAtividade(tipo),
-                  tooltip: 'Editar',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.copy),
-                  color: Colors.orange,
-                  onPressed: () => _duplicateTipoAtividade(tipo),
-                  tooltip: 'Duplicar',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.delete),
-                  onPressed: () => _deleteTipoAtividade(tipo),
-                  tooltip: 'Excluir',
-                  color: Colors.red,
-                ),
-              ],
-            ),
+        return TFCard(
+          variant: TFCardVariant.defaultCard,
+          padding: EdgeInsets.symmetric(horizontal: spacing.base, vertical: spacing.sm),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 16,
+                        height: 16,
+                        decoration: BoxDecoration(
+                          color: tipo.cor != null && tipo.cor!.isNotEmpty
+                              ? Color(int.parse(tipo.cor!.replaceFirst('#', '0xFF')))
+                              : Colors.grey,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      SizedBox(width: spacing.xs),
+                      Text(
+                        tipo.codigo,
+                        style: typography.cardTitle.copyWith(color: colors.textPrimary),
+                      ),
+                    ],
+                  ),
+                  TFStatusBadge(
+                    label: tipo.ativo ? 'Ativo' : 'Inativo',
+                    severity: tipo.ativo ? TFStatusSeverity.success : TFStatusSeverity.neutral,
+                    compact: true,
+                  ),
+                ],
+              ),
+              SizedBox(height: spacing.xs),
+              Text(
+                tipo.descricao,
+                style: typography.bodyMedium.copyWith(color: colors.textSecondary),
+              ),
+              SizedBox(height: spacing.sm),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TFButton(
+                    label: 'Editar',
+                    leadingIcon: TFIcons.edit,
+                    variant: TFButtonVariant.secondary,
+                    onPressed: () => _editTipoAtividade(tipo),
+                  ),
+                  SizedBox(width: spacing.xs),
+                  TFIconButton(
+                    icon: Icons.copy_rounded,
+                    tooltip: 'Duplicar',
+                    variant: TFIconButtonVariant.subtle,
+                    onPressed: () => _duplicateTipoAtividade(tipo),
+                  ),
+                  TFIconButton(
+                    icon: TFIcons.delete,
+                    tooltip: 'Excluir',
+                    variant: TFIconButtonVariant.danger,
+                    onPressed: () => _deleteTipoAtividade(tipo),
+                  ),
+                ],
+              ),
+            ],
           ),
         );
       },
     );
   }
-
-  Widget _buildTableView() {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: SingleChildScrollView(
-        child: DataTable(
-          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
-          columns: const [
-            DataColumn(label: Text('Código', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Descrição', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Segmentos', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Ações', style: TextStyle(fontWeight: FontWeight.bold))),
-          ],
-          rows: _filteredTiposAtividade.map((tipo) {
-            return DataRow(
-              cells: [
-                DataCell(
-                  Text(
-                    tipo.codigo,
-                    style: const TextStyle(fontWeight: FontWeight.w500),
-                  ),
-                ),
-                DataCell(Text(tipo.descricao)),
-                DataCell(
-                  Text(
-                    tipo.segmentos.isNotEmpty
-                        ? tipo.segmentos.join(', ')
-                        : 'Sem segmentos',
-                  ),
-                ),
-                DataCell(
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: tipo.ativo ? Colors.green[100] : Colors.red[100],
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      tipo.ativo ? 'Ativo' : 'Inativo',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: tipo.ativo ? Colors.green[800] : Colors.red[800],
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ),
-                DataCell(
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.edit, size: 20, color: Colors.blue),
-                        onPressed: () => _editTipoAtividade(tipo),
-                        tooltip: 'Editar',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.copy, size: 20, color: Colors.orange),
-                        onPressed: () => _duplicateTipoAtividade(tipo),
-                        tooltip: 'Duplicar',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.delete, size: 20, color: Colors.red),
-                        onPressed: () => _deleteTipoAtividade(tipo),
-                        tooltip: 'Excluir',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            );
-          }).toList(),
-        ),
-      ),
-    );
-  }
 }
-
-
-
-
-
-
-

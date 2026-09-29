@@ -3,15 +3,19 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
+import '../utils/clipboard_helper.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/task.dart';
 import '../models/executor.dart';
+import '../models/equipe.dart';
 import '../models/tipo_atividade.dart';
+import '../models/divisao.dart';
 import 'package:task2026/widgets/common/taskflow_calendar_marker_tooltip.dart';
 import '../models/feriado.dart';
 import '../models/status.dart';
 import '../services/task_service.dart';
 import '../services/executor_service.dart';
+import '../services/equipe_service.dart';
 import '../services/status_service.dart';
 import '../services/performance_monitor.dart';
 import '../services/tipo_atividade_service.dart';
@@ -28,6 +32,7 @@ import '../services/conflict_service.dart';
 import '../utils/responsive.dart';
 import '../utils/conflict_detection.dart';
 import 'common/taskflow_tooltip.dart';
+import '../design_system/taskflow_design_system.dart';
 
 class TeamScheduleView extends StatefulWidget {
   final TaskService taskService;
@@ -67,6 +72,36 @@ class TeamScheduleView extends StatefulWidget {
     this.onCreateSubtask,
   });
 
+  /// Helper canônico de checagem se uma tarefa está atribuída ao executor (por UUID)
+  static bool isTaskAssignedToExecutor(Task task, Executor executor) {
+    final execId = executor.id.trim().toLowerCase();
+    if (execId.isEmpty) return false;
+
+    if (task.executorIds.any((id) => id.trim().toLowerCase() == execId)) {
+      return true;
+    }
+    if (task.executorPeriods.any((ep) => ep.executorId.trim().toLowerCase() == execId)) {
+      return true;
+    }
+    return false;
+  }
+
+  /// Helper canônico de checagem se qualquer executor da tarefa pertence à equipe selecionada
+  static bool taskMatchesSelectedTeam(Task task, Set<String> teamExecutorIds) {
+    if (teamExecutorIds.isEmpty) return false;
+
+    final taskExecutorIds = <String>{
+      ...task.executorIds
+          .map((id) => id.trim().toLowerCase())
+          .where((id) => id.isNotEmpty),
+      ...task.executorPeriods
+          .map((p) => p.executorId.trim().toLowerCase())
+          .where((id) => id.isNotEmpty),
+    };
+
+    return taskExecutorIds.any(teamExecutorIds.contains);
+  }
+
   @override
   State<TeamScheduleView> createState() => _TeamScheduleViewState();
 }
@@ -86,6 +121,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
   List<Executor> _executores = [];
   bool _isLoading = true;
   List<ExecutorTaskRow> _executorRows = [];
+  List<Executor> _coordenadoresPerfil = [];
   Map<String, Set<DateTime>> _conflictDaysByExecutor = {};
   List<Task> _cachedTasksForConflict = [];
   final ScrollController _tableVerticalScrollController = ScrollController();
@@ -197,6 +233,11 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
   // Serviços para modal de atividades
   final StatusService _statusService = StatusService();
   Map<String, Status> _statusMap = {}; // Mapa de código de status -> Status
+
+  // Serviço de equipes e mapeamentos de membros
+  final EquipeService _equipeService = EquipeService();
+  List<Equipe> _todasEquipes = [];
+  Map<String, Set<String>> _equipesPorExecutorId = {};
   
   // Serviços do SAP
   final NotaSAPService _notaSAPService = NotaSAPService();
@@ -307,21 +348,49 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
     
     _loadData();
     _loadSAPCounts();
-    if (widget.conflictService != null) {
-      _loadBackendConflicts();
-    }
   }
 
   /// Carrega conflitos do backend (v_conflict_por_dia_executor / v_conflict_execution_events).
   /// Mesma fonte da tela de atividades (Gantt).
-  Future<void> _loadBackendConflicts() async {
+  Future<void> _loadBackendConflicts({bool rebuildRows = true}) async {
     final cs = widget.conflictService;
     if (cs == null) return;
     
     // Otimização: Só buscar se tivermos executores carregados
     if (_executores.isEmpty) return;
-    final executorIds = _executores.map((e) => e.id).toList();
     
+    // Filtrar apenas executores ativos que de fato possuem tarefas no período (relevantes)
+    final activeExecutorIds = _executores.map((e) => e.id.trim().toLowerCase()).toSet();
+    final relevantExecutorIds = <String>{};
+    for (final task in _tasks) {
+      for (final id in task.executorIds) {
+        final lower = id.trim().toLowerCase();
+        if (lower.isNotEmpty && activeExecutorIds.contains(lower)) {
+          relevantExecutorIds.add(id.trim());
+        }
+      }
+      for (final ep in task.executorPeriods) {
+        final lower = ep.executorId.trim().toLowerCase();
+        if (lower.isNotEmpty && activeExecutorIds.contains(lower)) {
+          relevantExecutorIds.add(ep.executorId.trim());
+        }
+      }
+    }
+
+    // Se não houver executores com tarefas no período, não há conflitos a buscar
+    if (relevantExecutorIds.isEmpty) {
+      if (mounted && _useBackendConflicts) {
+        setState(() {
+          _useBackendConflicts = false;
+          _conflictMapFromBackend = null;
+          _eventsByDayFromBackend = null;
+          _conflictFilterTaskIds = null;
+          _conflictFilterExecutorId = null;
+        });
+      }
+      return;
+    }
+
     final ok = await cs.isBackendAvailable();
     if (!ok) {
       if (mounted && _useBackendConflicts) {
@@ -337,8 +406,16 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
     }
     final start = widget.startDate;
     final end = widget.endDate;
-    final map = await cs.getConflictsForRange(start, end, executorIds: executorIds);
-    final events = await cs.getExecutionEventsForRange(start, end, executorIds: executorIds);
+    final targetExecutorIds = relevantExecutorIds.toList();
+
+    // Paralelizar consultas independentes de conflitos e eventos de execução
+    final results = await Future.wait([
+      cs.getConflictsForRange(start, end, executorIds: targetExecutorIds),
+      cs.getExecutionEventsForRange(start, end, executorIds: targetExecutorIds),
+    ]);
+    final map = results[0] as Map<String, ConflictInfo>;
+    final events = results[1] as Map<String, List<ExecutionEventFromBackend>>;
+
     if (!mounted) return;
     setState(() {
       _conflictMapFromBackend = map;
@@ -347,7 +424,9 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
       _conflictFilterExecutorId = null;
       _useBackendConflicts = true;
     });
-    await _buildExecutorRowsFromView();
+    if (rebuildRows) {
+      await _buildExecutorRowsFromView();
+    }
   }
 
   Future<void> _loadSAPCounts() async {
@@ -421,14 +500,24 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
     if (filters == null || filters.isEmpty) return rows;
     Set<String>? divisaoSet;
     Set<String>? empresaSet;
+    Set<String>? equipeSet;
+    Set<String>? executorSet;
     Set<String>? funcaoSet;
     Set<String>? matriculaSet;
     Set<String>? nomeSet;
+    Set<String>? coordenadorSet;
+
     if (filters['divisao'] != null && filters['divisao']!.trim().isNotEmpty) {
       divisaoSet = filters['divisao']!.split(',').map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty).toSet();
     }
     if (filters['empresa'] != null && filters['empresa']!.trim().isNotEmpty) {
       empresaSet = filters['empresa']!.split(',').map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty).toSet();
+    }
+    if (filters['equipe'] != null && filters['equipe']!.trim().isNotEmpty) {
+      equipeSet = filters['equipe']!.split(',').map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty).toSet();
+    }
+    if (filters['executor'] != null && filters['executor']!.trim().isNotEmpty) {
+      executorSet = filters['executor']!.split(',').map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty).toSet();
     }
     if (filters['funcao'] != null && filters['funcao']!.trim().isNotEmpty) {
       funcaoSet = filters['funcao']!.split(',').map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty).toSet();
@@ -439,33 +528,112 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
     if (filters['nome'] != null && filters['nome']!.trim().isNotEmpty) {
       nomeSet = filters['nome']!.split(',').map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty).toSet();
     }
-    if (divisaoSet == null && empresaSet == null && funcaoSet == null && matriculaSet == null && nomeSet == null) {
+    if (filters['coordenador'] != null && filters['coordenador']!.trim().isNotEmpty) {
+      coordenadorSet = filters['coordenador']!.split(',').map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty).toSet();
+    }
+    if (divisaoSet == null &&
+        empresaSet == null &&
+        equipeSet == null &&
+        executorSet == null &&
+        funcaoSet == null &&
+        matriculaSet == null &&
+        nomeSet == null &&
+        coordenadorSet == null) {
       return rows;
     }
-    return rows.where((row) {
+
+    // Obter os IDs dos executores membros das equipes selecionadas
+    Set<String>? selectedEquipeExecutorIds;
+    if (equipeSet != null && !equipeSet.contains('todos')) {
+      selectedEquipeExecutorIds = {};
+      for (final eq in _todasEquipes) {
+        final eqId = eq.id.trim().toLowerCase();
+        final eqNome = eq.nome.trim().toLowerCase();
+        if (equipeSet.contains(eqId) || equipeSet.contains(eqNome)) {
+          for (final ee in eq.executores) {
+            final execId = ee.executorId.trim().toLowerCase();
+            if (execId.isNotEmpty) {
+              selectedEquipeExecutorIds.add(execId);
+            }
+          }
+        }
+      }
+    }
+
+    // Expandir keywords dos coordenadores selecionados a partir de _coordenadoresPerfil
+    Set<String>? targetCoordKeywords;
+    if (coordenadorSet != null) {
+      targetCoordKeywords = {};
+      for (final sel in coordenadorSet) {
+        targetCoordKeywords.add(sel);
+        for (final cp in _coordenadoresPerfil) {
+          final n = cp.nome.trim().toLowerCase();
+          final nc = (cp.nomeCompleto ?? '').trim().toLowerCase();
+          final l = (cp.login ?? '').trim().toLowerCase();
+          if ((n.isNotEmpty && (n == sel || sel.contains(n) || n.contains(sel))) ||
+              (nc.isNotEmpty && (nc == sel || sel.contains(nc) || nc.contains(sel))) ||
+              (l.isNotEmpty && l == sel)) {
+            if (n.isNotEmpty) targetCoordKeywords.add(n);
+            if (nc.isNotEmpty) targetCoordKeywords.add(nc);
+            if (l.isNotEmpty) targetCoordKeywords.add(l);
+          }
+        }
+      }
+    }
+
+    return rows.map((row) {
       final e = row.executor;
+      final execId = e.id.trim().toLowerCase();
+
+      // 1. Filtro de Equipe: mostrar apenas executores membros da equipe selecionada
+      if (selectedEquipeExecutorIds != null && !selectedEquipeExecutorIds.contains(execId)) {
+        return null;
+      }
+
       if (divisaoSet != null) {
         final d = (e.divisao ?? '').trim().toLowerCase();
-        if (d.isEmpty || !divisaoSet.contains(d)) return false;
+        if (d.isEmpty || !divisaoSet.contains(d)) return null;
       }
       if (empresaSet != null) {
         final em = (e.empresa ?? '').trim().toLowerCase();
-        if (em.isEmpty || !empresaSet.contains(em)) return false;
+        if (em.isEmpty || !empresaSet.contains(em)) return null;
+      }
+      if (executorSet != null) {
+        final n = (e.nomeCompleto ?? e.nome).trim().toLowerCase();
+        final shortName = e.nome.trim().toLowerCase();
+        final matchesExec = executorSet.any((sel) =>
+            n == sel || shortName == sel || n.contains(sel) || sel.contains(n) || shortName.contains(sel) || sel.contains(shortName));
+        if (!matchesExec) return null;
       }
       if (funcaoSet != null) {
         final f = (e.funcao ?? '').trim().toLowerCase();
-        if (f.isEmpty || !funcaoSet.contains(f)) return false;
+        if (f.isEmpty || !funcaoSet.contains(f)) return null;
       }
       if (matriculaSet != null) {
         final m = (e.matricula ?? '').trim().toLowerCase();
-        if (m.isEmpty || !matriculaSet.contains(m)) return false;
+        if (m.isEmpty || !matriculaSet.contains(m)) return null;
       }
       if (nomeSet != null) {
         final n = (e.nomeCompleto ?? e.nome).trim().toLowerCase();
-        if (n.isEmpty || !nomeSet.contains(n)) return false;
+        if (n.isEmpty || !nomeSet.contains(n)) return null;
       }
-      return true;
-    }).toList();
+
+      // 2. Filtro de Coordenador nas tarefas da linha
+      if (targetCoordKeywords != null) {
+        final matchingTasks = row.tasks.where((t) {
+          final coord = t.coordenador.trim().toLowerCase();
+          if (coord.isEmpty) return false;
+          return targetCoordKeywords!.any((keyword) =>
+              coord == keyword || coord.contains(keyword) || keyword.contains(coord));
+        }).toList();
+
+        if (matchingTasks.isEmpty) return null;
+
+        return ExecutorTaskRow(executor: row.executor, tasks: matchingTasks);
+      }
+
+      return row;
+    }).whereType<ExecutorTaskRow>().toList();
   }
 
   void _notifyTeamFilterOptions(List<ExecutorTaskRow> rows) {
@@ -475,9 +643,12 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
   Map<String, List<String>> _buildTeamFilterOptions(List<ExecutorTaskRow> rows) {
     final divisoes = <String>{};
     final empresas = <String>{};
+    final equipes = <String>{};
+    final executores = <String>{};
     final funcoes = <String>{};
     final matriculas = <String>{};
     final nomes = <String>{};
+    final coordenadores = <String>{};
     for (final row in rows) {
       final e = row.executor;
       final d = (e.divisao ?? '').trim();
@@ -489,14 +660,37 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
       final m = (e.matricula ?? '').trim();
       if (m.isNotEmpty) matriculas.add(m);
       final n = (e.nomeCompleto ?? e.nome).trim();
-      if (n.isNotEmpty) nomes.add(n);
+      if (n.isNotEmpty) {
+        nomes.add(n);
+        executores.add(n);
+      }
+    }
+    // Equipes: estritamente as autorizadas para o perfil do usuário
+    for (final eq in _todasEquipes) {
+      final eqName = eq.nome.trim();
+      if (eqName.isNotEmpty) equipes.add(eqName);
+    }
+    for (final e in _executores) {
+      final n = (e.nomeCompleto ?? e.nome).trim();
+      if (n.isNotEmpty) {
+        nomes.add(n);
+        executores.add(n);
+      }
+    }
+    // Coordenadores: estritamente de acordo com o perfil do usuário (regional/divisão/segmento)
+    for (final c in _coordenadoresPerfil) {
+      final name = (c.nomeCompleto ?? c.nome).trim();
+      if (name.isNotEmpty) coordenadores.add(name);
     }
     return {
       'divisoes': divisoes.toList(),
       'empresas': empresas.toList(),
+      'equipes': equipes.toList(),
+      'executores': executores.toList(),
       'funcoes': funcoes.toList(),
       'matriculas': matriculas.toList(),
       'nomes': nomes.toList(),
+      'coordenadores': coordenadores.toList(),
     };
   }
 
@@ -527,126 +721,124 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
     }
 
     try {
-      // Carregar tipos de atividade primeiro
-      final tiposAtividade = await _tipoAtividadeService.getAllTiposAtividade();
-      _tipoAtividadeMap = {};
-      for (var tipo in tiposAtividade) {
-        _tipoAtividadeMap[tipo.codigo] = tipo;
+      final usuarioLogado = _authService.currentUser;
+      final isRestrictedUser = usuarioLogado != null && !usuarioLogado.isRoot && usuarioLogado.temPerfilConfigurado();
+
+      // Tarefas: reutilizar widget.filteredTasks se disponível, evitando query redundante
+      final Future<List<Task>> tasksFuture;
+      if (widget.filteredTasks != null && widget.filteredTasks!.isNotEmpty) {
+        print('📦 TeamScheduleView: Reutilizando ${widget.filteredTasks!.length} tarefas fornecidas pelo componente pai (sem re-query)');
+        tasksFuture = Future.value(widget.filteredTasks!);
+      } else {
+        PerformanceMonitor.start('TeamScheduleView.getTasksForRange');
+        tasksFuture = widget.taskService.getTasksForRange(
+          startDate: widget.startDate,
+          endDate: widget.endDate,
+          aplicarPerfil: false,
+        ).whenComplete(() => PerformanceMonitor.stop('TeamScheduleView.getTasksForRange'));
       }
-      print('✅ Tipos de atividade carregados: ${_tipoAtividadeMap.length}');
-      
-      // Carregar status
-      final statuses = await _statusService.getAllStatus();
-      _statusMap = {};
-      for (var status in statuses) {
-        _statusMap[status.codigo] = status;
-      }
-      // debug silenciado
-      
-      // Carregar feriados
-      await _loadFeriados();
-      
-      // Carregar todas as tarefas (sem filtrar por perfil) para permitir que executores multi-segmento
-      // vejam suas tarefas em qualquer segmento. A filtragem por perfil continua apenas para os executores.
-      // Carregar apenas tarefas que cruzam o período visível (otimização de performance)
-      PerformanceMonitor.start('TeamScheduleView.getTasksForRange');
-      final tasks = await widget.taskService.getTasksForRange(
-        startDate: widget.startDate,
-        endDate: widget.endDate,
-        aplicarPerfil: false,
-      );
-      PerformanceMonitor.stop('TeamScheduleView.getTasksForRange');
-      // debug silenciado
-      
-      final executores = await widget.executorService.getAllExecutores();
-      final executoresAtivos = executores.where((e) => e.ativo).toList();
-      print('✅ Executores ativos: ${executoresAtivos.length}');
-      
-      // Pré-processar referências de executores nas tarefas (id/nome/login/matrícula)
-      final Set<String> taskExecutorIds = {};
-      final Set<String> taskExecutorNamesNorm = {};
-      String norm(String v) => _normalizeText(v);
-      for (var task in tasks) {
-        for (var execId in task.executorIds) {
-          if (execId.isNotEmpty) taskExecutorIds.add(execId);
-        }
-        for (var execNome in task.executores) {
-          if (execNome.isNotEmpty) taskExecutorNamesNorm.add(norm(execNome));
-        }
-        if (task.executor.isNotEmpty) {
-          final parts = task.executor.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty);
-          for (var part in parts) {
-            taskExecutorNamesNorm.add(norm(part));
-          }
-        }
-        if (task.equipeExecutores != null) {
-          for (var ee in task.equipeExecutores!) {
-            if (ee.executorNome.isNotEmpty) {
-              taskExecutorNamesNorm.add(norm(ee.executorNome));
-            }
+
+      // Equipes
+      final Future<List<Equipe>> equipesFuture = isRestrictedUser
+          ? _equipeService.getEquipesPorPerfilUsuario(
+              regionalIds: usuarioLogado.regionalIds,
+              divisaoIds: usuarioLogado.divisaoIds,
+              segmentoIds: usuarioLogado.segmentoIds,
+            )
+          : _equipeService.getEquipesAtivas();
+
+      // Divisões (apenas se o perfil restrito tiver regionais para obter divisões dessas regionais)
+      final Future<List<Divisao>> divisoesFuture = (isRestrictedUser && usuarioLogado.regionalIds.isNotEmpty)
+          ? DivisaoService().getAllDivisoes()
+          : Future.value(const <Divisao>[]);
+
+      // Coordenadores
+      final Future<List<Executor>> coordenadoresFuture = isRestrictedUser
+          ? widget.executorService.getCoordenadoresPorPerfilUsuario(
+              regionalIds: usuarioLogado.regionalIds,
+              divisaoIds: usuarioLogado.divisaoIds,
+              segmentoIds: usuarioLogado.segmentoIds,
+            )
+          : widget.executorService.getCoordenadores();
+
+      // Executar todas as cargas independentes em paralelo
+      final results = await Future.wait<dynamic>([
+        _tipoAtividadeService.getAllTiposAtividade(),
+        _statusService.getAllStatus(),
+        equipesFuture,
+        tasksFuture,
+        widget.executorService.getAllExecutores(),
+        divisoesFuture,
+        coordenadoresFuture,
+      ]);
+
+      final tiposAtividade = (results[0] as List).cast<TipoAtividade>();
+      final statuses = (results[1] as List).cast<Status>();
+      _todasEquipes = (results[2] as List).cast<Equipe>();
+      final tasks = (results[3] as List).cast<Task>();
+      final executores = (results[4] as List).cast<Executor>();
+      final todasDivisoes = (results[5] as List).cast<Divisao>();
+      final coordenadoresPerfil = (results[6] as List).cast<Executor>();
+
+      // Mapas de tipos de atividade e status
+      _tipoAtividadeMap = {for (var tipo in tiposAtividade) tipo.codigo: tipo};
+      _statusMap = {for (var status in statuses) status.codigo: status};
+
+      // Mapear equipes por executor
+      _equipesPorExecutorId = {};
+      for (final eq in _todasEquipes) {
+        final eqNome = eq.nome.trim();
+        if (eqNome.isEmpty) continue;
+        for (final ee in eq.executores) {
+          if (ee.executorId.isNotEmpty) {
+            _equipesPorExecutorId.putIfAbsent(ee.executorId, () => {}).add(eqNome);
           }
         }
       }
 
+      // Definir tarefas na memória para feriados e filtragem
+      _tasks = tasks;
+
+      // Carregar feriados (depende de _tasks para allLocalIds)
+      await _loadFeriados();
+
+      final executoresAtivos = executores.where((e) => e.ativo).toList();
+
       // Filtrar executores pelo perfil do usuário
-      final usuario = _authService.currentUser;
       List<Executor> executoresFiltrados = executoresAtivos;
-      
-      // Filtrar sempre pelo perfil do usuário (regional/divisão/segmento), ignorando o perfil da tarefa
-      if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
-        print('🔒 Filtrando executores pelo perfil do usuário...');
-        print('   Regionais do perfil: ${usuario.regionalIds.length}');
-        print('   Divisões do perfil: ${usuario.divisaoIds.length}');
-        print('   Segmentos do perfil: ${usuario.segmentoIds.length}');
-        
-        // Divisões permitidas: as do usuário + todas as divisões das regionais do usuário
-        final Set<String> divisaoIdsPermitidas = Set.from(usuario.divisaoIds);
-        if (usuario.regionalIds.isNotEmpty) {
-          try {
-            final divisaoService = DivisaoService();
-            final todasDivisoes = await divisaoService.getAllDivisoes();
-            for (var regionalId in usuario.regionalIds) {
-              final divisoesDaRegional = todasDivisoes.where((d) => d.regionalId == regionalId);
-              divisaoIdsPermitidas.addAll(divisoesDaRegional.map((d) => d.id));
-            }
-          } catch (e) {
-            print('⚠️ Erro ao buscar divisões das regionais: $e');
+      if (isRestrictedUser) {
+        final Set<String> divisaoIdsPermitidas = Set.from(usuarioLogado.divisaoIds);
+        if (usuarioLogado.regionalIds.isNotEmpty) {
+          for (var regionalId in usuarioLogado.regionalIds) {
+            final divisoesDaRegional = todasDivisoes.where((d) => d.atuaNaRegional(regionalId));
+            divisaoIdsPermitidas.addAll(divisoesDaRegional.map((d) => d.id));
           }
         }
-        
-        // Filtrar executores APENAS pelo perfil do usuário (regional/divisão/segmento)
-        // Não incluir executores apenas por estarem referenciados em tarefas
+
         executoresFiltrados = executoresAtivos.where((executor) {
-          // Verificar divisão: deve estar nas divisões permitidas (do usuário ou das regionais do usuário)
           final temDivisaoPermitida = divisaoIdsPermitidas.isEmpty ||
               (executor.divisaoId != null && divisaoIdsPermitidas.contains(executor.divisaoId));
 
-          // Verificar segmento: deve ter pelo menos um segmento em comum com o perfil do usuário
-          // Se o usuário não tem segmentos configurados, aceitar qualquer executor
-          final temSegmentoPermitido = usuario.segmentoIds.isEmpty ||
-              executor.segmentoIds.any((segmentoId) => usuario.segmentoIds.contains(segmentoId));
+          final temSegmentoPermitido = usuarioLogado.segmentoIds.isEmpty ||
+              executor.segmentoIds.any((segmentoId) => usuarioLogado.segmentoIds.contains(segmentoId));
 
-          // Somente executores que pertencem ao perfil (regional/divisão/segmento) do usuário
           return temDivisaoPermitida && temSegmentoPermitido;
         }).toList();
-        
-        print('✅ Executores filtrados (por perfil do usuário): ${executoresFiltrados.length} de ${executoresAtivos.length}');
-      } else if (usuario != null && usuario.isRoot) {
-        print('👑 Usuário root: mostrando todos os executores');
-      } else {
-        print('⚠️ Usuário sem perfil configurado: mostrando todos os executores');
       }
-      
+
+      _coordenadoresPerfil = coordenadoresPerfil;
+
       setState(() {
         _tasks = tasks;
         _executores = executoresFiltrados;
       });
-      // Conflitos do backend (mesma regra da tela de atividades) antes de montar as linhas
+
+      // Conflitos do backend (rebuildRows: false evita montagem duplicada de linhas)
       if (widget.conflictService != null) {
-        await _loadBackendConflicts();
+        await _loadBackendConflicts(rebuildRows: false);
       }
-      // Manter loading até as linhas (view) estarem prontas, para não mostrar
-      // "Nenhum executor encontrado" antes de terminar o carregamento.
+
+      // Manter loading até as linhas (view) estarem prontas, montando uma única vez
       await _buildExecutorRowsFromView();
       if (mounted) {
         setState(() {
@@ -767,17 +959,6 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
       final executorIds = _executores.map((e) => e.id).toList();
       print('⏱ [TeamScheduleView] Buscando execuções | executores=${executorIds.length} | período=${widget.startDate.toString().substring(0, 10)} até ${widget.endDate.toString().substring(0, 10)}');
 
-      // Pré-computar chaves normalizadas por executor (nome, nomeCompleto, login, matrícula)
-      final Map<String, Set<String>> execKeySetById = {
-        for (final e in _executores)
-          e.id: ({
-            _normalizeText(e.nome),
-            if (e.nomeCompleto != null) _normalizeText(e.nomeCompleto!),
-            if (e.login != null) _normalizeText(e.login!),
-            if (e.matricula != null) _normalizeText(e.matricula!),
-          }..removeWhere((v) => v.isEmpty))
-      };
-      
       final querySw = Stopwatch()..start();
       final rows = await widget.taskService.getExecucoesDia(
         executorIds: executorIds,
@@ -787,67 +968,56 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
       querySw.stop();
       print('⏱ [TeamScheduleView] Query getExecucoesDia concluída em ${querySw.elapsedMilliseconds}ms | registros=${rows.length}');
 
-      final byExecutor = <String, List<Map<String, dynamic>>>{};
-      var conflictDaysByExecutor = <String, Set<DateTime>>{};
-      // Helpers para checar vínculo do executor com a tarefa e coletar segmentos não-EXECUÇÃO
-      bool matchesExecutor(Executor executor, {String? executorId, String? executorNome}) {
-        if (executorId != null && executorId.isNotEmpty) {
-          return executorId == executor.id;
+      // Índices pré-computados para acesso O(1):
+      // 1. Lookup de tarefas por ID (elimina 1.000.000+ buscas lineares)
+      final tasksByIdIndex = <String, Task>{
+        for (final t in _tasks) t.id: t,
+      };
+
+      // 2. Lookup de tarefas por Executor UUID canônico (elimina varredura O(E x T) e 240.000+ scans)
+      final tasksByExecutorId = <String, List<Task>>{};
+      for (final task in _tasks) {
+        final execIds = <String>{
+          ...task.executorIds.map((id) => id.trim().toLowerCase()),
+          ...task.executorPeriods.map((p) => p.executorId.trim().toLowerCase()),
+        }..remove('');
+
+        for (final execId in execIds) {
+          tasksByExecutorId.putIfAbsent(execId, () => []).add(task);
         }
-        if (executorNome != null && executorNome.isNotEmpty) {
-          final keys = execKeySetById[executor.id] ?? const {};
-          return keys.contains(_normalizeText(executorNome));
-        }
-        return false;
       }
 
+      final byExecutor = <String, List<Map<String, dynamic>>>{};
+      var conflictDaysByExecutor = <String, Set<DateTime>>{};
+
+      // Helper canônico: associação estrita por ID canônico de executor (UUID)
+      // ignore: unused_element
       bool isTaskAssignedToExecutor(Task task, Executor executor) {
-        final hasStructuredIds = task.executorIds.any((id) => id.trim().isNotEmpty) ||
-            task.executorPeriods.any((ep) => ep.executorId.trim().isNotEmpty);
+        final execId = executor.id.trim().toLowerCase();
+        if (execId.isEmpty) return false;
 
-        if (hasStructuredIds) {
-          if (task.executorIds.any((id) => id.isNotEmpty && id == executor.id)) return true;
-          for (final ep in task.executorPeriods) {
-            if (ep.executorId.isNotEmpty && ep.executorId == executor.id) return true;
-          }
-          return false;
+        // 1. Vínculo estruturado por executorIds (UUID)
+        if (task.executorIds.any((id) => id.trim().toLowerCase() == execId)) {
+          return true;
         }
 
-        // Por nomes/textos livres (usar chaves pré-computadas)
-        final keys = execKeySetById[executor.id] ?? const {};
+        // 2. Vínculo estruturado por executorPeriods via executorId (UUID)
+        if (task.executorPeriods.any((ep) => ep.executorId.trim().toLowerCase() == execId)) {
+          return true;
+        }
 
-        for (final nome in task.executores) {
-          if (nome.isNotEmpty && keys.contains(_normalizeText(nome))) return true;
-        }
-        if (task.executor.isNotEmpty) {
-          for (final nome in task.executor.split(',').map((e) => e.trim())) {
-            if (nome.isNotEmpty && keys.contains(_normalizeText(nome))) return true;
-          }
-        }
-        if (task.equipeExecutores != null) {
-          for (final ee in task.equipeExecutores!) {
-            if (ee.executorNome.isNotEmpty && keys.contains(_normalizeText(ee.executorNome))) return true;
-          }
-        }
-        for (final ep in task.executorPeriods) {
-          if (matchesExecutor(executor, executorId: ep.executorId, executorNome: ep.executorNome)) return true;
-        }
         return false;
       }
 
       List<GanttSegment> nonExecSegmentsForExecutor(Task task, Executor executor) {
-        // IMPORTANTE: Buscar em AMBOS os lugares:
-        // 1. executorPeriods (períodos específicos do executor)
-        // 2. ganttSegments (períodos gerais da tarefa)
-        // Combinar ambos para garantir que todos os períodos sejam incluídos
-        
         final List<GanttSegment> allNonExecSegments = [];
         final Set<String> segmentosJaIncluidos = {};
+        final execId = executor.id.trim().toLowerCase();
         
-        // 1. Buscar em executorPeriods (períodos específicos do executor)
+        // 1. Buscar em executorPeriods (períodos específicos do executor por UUID)
         _v('   🔍 Buscando em executorPeriods (${task.executorPeriods.length} períodos por executor)...');
         for (final ep in task.executorPeriods) {
-          if (matchesExecutor(executor, executorId: ep.executorId, executorNome: ep.executorNome)) {
+          if (ep.executorId.trim().toLowerCase() == execId) {
             _v('     ✅ Período encontrado para executor ${executor.nome}');
             for (final seg in ep.periods) {
               final tipo = (seg.tipoPeriodo ?? '').toUpperCase();
@@ -935,12 +1105,13 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
         final map = _conflictMapFromBackend!;
         conflictDaysByExecutor = {};
         final daysInPeriod = _getDaysInPeriod();
+        final relevantExecIds = tasksByExecutorId.keys.toSet();
         for (final exec in _executores) {
+          if (!relevantExecIds.contains(exec.id.trim().toLowerCase())) continue;
           for (final day in daysInPeriod) {
             final dayKey = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
-            final k1 = '${exec.id}_$dayKey';
-            final k2 = '${ConflictService.normalizeExecutorKey(exec.nome)}_$dayKey';
-            final info = map[k1] ?? map[k2];
+            final k1 = '${exec.id.toLowerCase()}_$dayKey';
+            final info = map[k1];
             if (info != null && info.hasConflict) {
               conflictDaysByExecutor.putIfAbsent(exec.id, () => <DateTime>{}).add(day);
             }
@@ -1005,7 +1176,8 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
               tasksById[taskId] = existing.copyWith(status: taskStatus);
             }
           } else {
-            tasksById[taskId] = Task(
+            final originalTask = tasksByIdIndex[taskId];
+            final baseTask = originalTask ?? Task(
               id: taskId,
               status: taskStatus,
               statusNome: '',
@@ -1019,7 +1191,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
               executores: const [],
               executor: '',
               frota: '',
-              coordenador: '',
+              coordenador: (r['task_coordenador'] ?? r['coordenador'] ?? '').toString(),
               si: '',
               dataInicio: day,
               dataFim: day,
@@ -1033,16 +1205,25 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
               localIds: locIds,
               hasConflict: hasConflict,
             );
+            tasksById[taskId] = baseTask.copyWith(
+              id: taskId,
+              status: taskStatus.isNotEmpty ? taskStatus : baseTask.status,
+              locais: locs.isNotEmpty ? locs : baseTask.locais,
+              localIds: locIds.isNotEmpty ? locIds : baseTask.localIds,
+              tipo: taskTipo.isNotEmpty ? taskTipo : baseTask.tipo,
+              tarefa: taskLabel.isNotEmpty ? taskLabel : baseTask.tarefa,
+              dataInicio: day,
+              dataFim: day,
+              hasConflict: hasConflict,
+            );
           }
         }
         parseSw.stop();
 
-        final normName = _normalizeText(executor.nome);
-        final isFranklin = normName.contains('franklinwt');
-
-        // --- ENRIQUECIMENTO (FIX): Complementar com _tasks para capturar atribuições via equipe ou nomes que a view pode ter perdido ---
+        // --- ENRIQUECIMENTO: Complementar com tarefas estruturadas por ID canônico de executor (UUID) via índice O(1) ---
         // Isso resolve o problema de executores que aparecem na tela de atividades mas não no Gantt de equipes
-        for (final task in _tasks) {
+        final assignedTasks = tasksByExecutorId[executor.id.trim().toLowerCase()] ?? const <Task>[];
+        for (final task in assignedTasks) {
           final cod = task.status.toUpperCase().trim();
           final isStatusExcluded = cod == 'CANC' ||
               cod == 'REPR' ||
@@ -1055,67 +1236,44 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
               cod.contains('RPGR');
           if (isStatusExcluded) continue;
 
-          if (isTaskAssignedToExecutor(task, executor)) {
-            // Verificar se a tarefa cruza o período visível
-            final periodStart = DateTime(widget.startDate.year, widget.startDate.month, widget.startDate.day);
-            final periodEnd = DateTime(widget.endDate.year, widget.endDate.month, widget.endDate.day);
+          // Verificar se a tarefa cruza o período visível
+          final periodStart = DateTime(widget.startDate.year, widget.startDate.month, widget.startDate.day);
+          final periodEnd = DateTime(widget.endDate.year, widget.endDate.month, widget.endDate.day);
+          
+          bool inRange = false;
+          if (task.ganttSegments.isNotEmpty) {
+            for (final seg in task.ganttSegments) {
+              if (!(seg.dataInicio.isAfter(periodEnd) || seg.dataFim.isBefore(periodStart))) {
+                inRange = true;
+                break;
+              }
+            }
+          } else {
+            inRange = !(task.dataInicio.isAfter(periodEnd) || task.dataFim.isBefore(periodStart));
+          }
+
+          if (inRange) {
+            // Adicionar ao mapa de tarefas se não estiver lá
+            tasksById.putIfAbsent(task.id, () => task);
+            final daysByTipo = taskDaysByTipo.putIfAbsent(task.id, () => {});
             
-            bool inRange = false;
+            // "Explodir" a tarefa em dias e mesclar com o que já existe
             if (task.ganttSegments.isNotEmpty) {
               for (final seg in task.ganttSegments) {
-                if (!(seg.dataInicio.isAfter(periodEnd) || seg.dataFim.isBefore(periodStart))) {
-                  inRange = true;
-                  break;
-                }
-              }
-            } else {
-              inRange = !(task.dataInicio.isAfter(periodEnd) || task.dataFim.isBefore(periodStart));
-            }
-
-            if (inRange) {
-              // Adicionar ao mapa de tarefas se não estiver lá
-              tasksById.putIfAbsent(task.id, () => task);
-              final daysByTipo = taskDaysByTipo.putIfAbsent(task.id, () => {});
-              
-              // "Explodir" a tarefa em dias e mesclar com o que já existe
-              if (task.ganttSegments.isNotEmpty) {
-                for (final seg in task.ganttSegments) {
-                  final tipo = (seg.tipoPeriodo ?? 'EXECUCAO').toUpperCase();
-                  final daysList = daysByTipo.putIfAbsent(tipo, () => []);
-                  
-                  DateTime d = DateTime(seg.dataInicio.year, seg.dataInicio.month, seg.dataInicio.day);
-                  final end = DateTime(seg.dataFim.year, seg.dataFim.month, seg.dataFim.day);
-                  int loopGuard1 = 0;
-                  while (!d.isAfter(end)) {
-                    loopGuard1++;
-                    if (loopGuard1 > 1000) {
-                      print('⚠️ [TeamScheduleView] loopGuard atingido em _buildExecutorRowsFromView (segmentos)');
-                      break;
-                    }
-                    if (!(d.isAfter(periodEnd) || d.isBefore(periodStart))) {
-                      // Mesclar apenas se o dia ainda não estiver na lista
-                      if (!daysList.any((existingDay) => 
-                          existingDay.year == d.year && 
-                          existingDay.month == d.month && 
-                          existingDay.day == d.day)) {
-                        daysList.add(d);
-                      }
-                    }
-                    d = DateTime(d.year, d.month, d.day + 1);
-                  }
-                }
-              } else {
-                final daysList = daysByTipo.putIfAbsent('EXECUCAO', () => []);
-                DateTime d = DateTime(task.dataInicio.year, task.dataInicio.month, task.dataInicio.day);
-                final end = DateTime(task.dataFim.year, task.dataFim.month, task.dataFim.day);
-                int loopGuard2 = 0;
+                final tipo = (seg.tipoPeriodo ?? 'EXECUCAO').toUpperCase();
+                final daysList = daysByTipo.putIfAbsent(tipo, () => []);
+                
+                DateTime d = DateTime(seg.dataInicio.year, seg.dataInicio.month, seg.dataInicio.day);
+                final end = DateTime(seg.dataFim.year, seg.dataFim.month, seg.dataFim.day);
+                int loopGuard1 = 0;
                 while (!d.isAfter(end)) {
-                  loopGuard2++;
-                  if (loopGuard2 > 1000) {
-                    print('⚠️ [TeamScheduleView] loopGuard atingido em _buildExecutorRowsFromView (tarefa simples)');
+                  loopGuard1++;
+                  if (loopGuard1 > 1000) {
+                    print('⚠️ [TeamScheduleView] loopGuard atingido em _buildExecutorRowsFromView (segmentos)');
                     break;
                   }
                   if (!(d.isAfter(periodEnd) || d.isBefore(periodStart))) {
+                    // Mesclar apenas se o dia ainda não estiver na lista
                     if (!daysList.any((existingDay) => 
                         existingDay.year == d.year && 
                         existingDay.month == d.month && 
@@ -1126,6 +1284,27 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                   d = DateTime(d.year, d.month, d.day + 1);
                 }
               }
+            } else {
+              final daysList = daysByTipo.putIfAbsent('EXECUCAO', () => []);
+              DateTime d = DateTime(task.dataInicio.year, task.dataInicio.month, task.dataInicio.day);
+              final end = DateTime(task.dataFim.year, task.dataFim.month, task.dataFim.day);
+              int loopGuard2 = 0;
+              while (!d.isAfter(end)) {
+                loopGuard2++;
+                if (loopGuard2 > 1000) {
+                  print('⚠️ [TeamScheduleView] loopGuard atingido em _buildExecutorRowsFromView (tarefa simples)');
+                  break;
+                }
+                if (!(d.isAfter(periodEnd) || d.isBefore(periodStart))) {
+                  if (!daysList.any((existingDay) => 
+                      existingDay.year == d.year && 
+                      existingDay.month == d.month && 
+                      existingDay.day == d.day)) {
+                    daysList.add(d);
+                  }
+                }
+                d = DateTime(d.year, d.month, d.day + 1);
+              }
             }
           }
         }
@@ -1135,13 +1314,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
         for (final entry in tasksById.entries.toList()) {
           final taskId = entry.key;
           final fromView = entry.value;
-          Task? fromList;
-          for (final t in _tasks) {
-            if (t.id == taskId) {
-              fromList = t;
-              break;
-            }
-          }
+          final fromList = tasksByIdIndex[taskId];
           if (fromList != null) {
             var updated = fromView;
             final cod = fromList.status.trim().toUpperCase();
@@ -1152,6 +1325,9 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
             }
             if (fromList.executorPeriods.isNotEmpty) {
               updated = updated.copyWith(executorPeriods: fromList.executorPeriods);
+            }
+            if (fromList.coordenador.isNotEmpty && (updated.coordenador.isEmpty || updated.coordenador != fromList.coordenador)) {
+              updated = updated.copyWith(coordenador: fromList.coordenador);
             }
             if (updated != fromView) tasksById[taskId] = updated;
           }
@@ -1238,9 +1414,8 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
           // Fallback: buscar segmentos de planejamento/deslocamento das tarefas originais
           // (caso esteja usando a view antiga que não tem tipo_periodo)
           print('⚠️ View antiga detectada, complementando com dados das tarefas originais...');
-          for (final task in _tasks) {
+          for (final task in assignedTasks) {
             if (ConflictDetection.isTaskExcludedFromConflict(task)) continue;
-            if (!isTaskAssignedToExecutor(task, executor)) continue;
 
             final nonExecSegments = nonExecSegmentsForExecutor(task, executor);
             if (nonExecSegments.isEmpty) continue;
@@ -1400,6 +1575,15 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
       d.year == date.year && d.month == date.month && d.day == date.day
     );
     return index >= 0 ? index * dayWidth : 0;
+  }
+
+  double _getTodayOffset(List<DateTime> days, double dayWidth) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final index = days.indexWhere((d) => 
+      d.year == today.year && d.month == today.month && d.day == today.day
+    );
+    return index >= 0 ? index * dayWidth : -1.0;
   }
 
   // Método para construir o conteúdo do segmento (texto ou ícone)
@@ -1660,7 +1844,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
+      return const Center(child: TFLoading(message: 'Carregando equipe...'));
     }
 
     final isMobile = Responsive.isMobile(context);
@@ -1759,29 +1943,39 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
 
 
   Widget _buildExecutorTable() {
+    final colors = context.tfColors;
     final isCompact = Responsive.isMobile(context) || Responsive.isTablet(context);
     final monthHeaderHeight = isCompact ? 0.0 : Responsive.kActivitiesHeaderTopHeight;
 
     if (_displayExecutorRows.isEmpty) {
-      return const Center(child: Text('Nenhum executor encontrado'));
+      return Center(
+        child: Text(
+          'Nenhum executor encontrado',
+          style: context.tfTypography.bodyMedium.copyWith(color: colors.textSecondary),
+        ),
+      );
     }
 
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: Colors.grey[300]!),
-      ),
-      child: Column(
-        children: [
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final needsHorizontalScroll = constraints.maxWidth.isFinite && constraints.maxWidth < 630.0;
+        final content = Container(
+          width: needsHorizontalScroll ? 630.0 : null,
+          decoration: BoxDecoration(
+            color: colors.surface,
+            border: Border.all(color: colors.borderSubtle),
+          ),
+          child: Column(
+            children: [
           // Espaço equivalente à linha de meses do Gantt (25px)
           if (monthHeaderHeight > 0)
             Container(
               height: monthHeaderHeight,
               decoration: BoxDecoration(
-                color: Colors.grey[100],
+                color: colors.surfaceSecondary,
                 border: Border(
                   bottom: BorderSide(
-                    color: Colors.grey[300]!,
+                    color: colors.borderSubtle,
                     width: 1,
                   ),
                 ),
@@ -1795,8 +1989,8 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
                 colors: [
-                  Colors.blue[700]!,
-                  Colors.blue[600]!,
+                  colors.primary,
+                  colors.primaryHover,
                 ],
               ),
               boxShadow: [
@@ -1870,7 +2064,18 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
         ],
       ),
     );
-  }
+
+    if (needsHorizontalScroll) {
+      return SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        physics: const ClampingScrollPhysics(),
+        child: content,
+      );
+    }
+    return content;
+  },
+);
+}
 
   Widget _buildExecutorTableRow(ExecutorTaskRow row, int index) {
     final executor = row.executor;
@@ -1909,6 +2114,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
         final totalWidth = days.length * dayWidth;
         final ganttAvailableWidth = constraints.maxWidth;
         final needsScroll = totalWidth > ganttAvailableWidth;
+        final todayOffset = _getTodayOffset(days, dayWidth);
         
         return Container(
           decoration: const BoxDecoration(
@@ -2050,154 +2256,113 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                     ),
                     child: Align(
                       alignment: Alignment.topLeft,
-                      child: needsScroll ? Scrollbar(
-                        controller: _ganttHorizontalScrollController,
-                        thickness: 10,
-                        radius: const Radius.circular(5),
-                        child: SingleChildScrollView(
-                          controller: _ganttHorizontalScrollController,
-                          scrollDirection: Axis.horizontal,
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          padding: EdgeInsets.zero,
-                          child: SizedBox(
+                      child: Builder(
+                        builder: (context) {
+                          final dayHeaderContent = SizedBox(
                             width: totalWidth,
                             height: dayHeaderHeight,
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.start,
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              textDirection: TextDirection.ltr,
-                              mainAxisSize: MainAxisSize.min,
-                              children: days.map((day) {
-                                final isWeekend = day.weekday == 6 || day.weekday == 7;
-                                final ferColor = _getHolidayColor(day);
-                                final isFeriado = ferColor != null;
-                                final holidayColor = _getHolidayColor(day);
-                                
-                                return Container(
-                                  width: dayWidth,
-                                  height: dayHeaderHeight,
-                                  decoration: BoxDecoration(
-                                    color: holidayColor ?? (isWeekend ? Colors.grey[200] : Colors.white),
-                                    border: Border(
-                                      right: BorderSide(
-                                        color: Colors.grey[300]!,
-                                        width: 1,
-                                      ),
-                                    ),
-                                  ),
-                                  alignment: Alignment.center,
-                                  child: _feriadosMap[DateTime(day.year, day.month, day.day)] != null
-                                    ? TaskFlowCalendarMarkerTooltip(
-                                        data: CalendarMarkerData(
-                                          title: _feriadosMap[DateTime(day.year, day.month, day.day)]?.map((e) => e.descricao).join(' + ') ?? 'Feriado',
-                                          type: (() {
-                                              final f = _feriadosMap[DateTime(day.year, day.month, day.day)]?.first;
-                                              if (f?.tipo == 'ESTADUAL') return MarkerType.stateHoliday;
-                                              if (f?.tipo == 'MUNICIPAL') return MarkerType.cityHoliday;
-                                              if (f?.tipo == 'EVENTO') return MarkerType.specialEvent;
-                                              return MarkerType.nationalHoliday;
-                                            })(),
-                                          date: day,
-                                          observation: _feriadosMap[DateTime(day.year, day.month, day.day)]?.first.tipo == 'EVENTO' ? 'Evento Setor Elétrico' : 'Dia não útil',
-                                        ),
-                                        child: Text(
-                                          day.day.toString().padLeft(2, '0'),
-                                          style: TextStyle(
-                                            fontSize: 11,
-                                            fontWeight: isFeriado ? FontWeight.bold : FontWeight.normal,
-                                            color: isFeriado
-                                                ? (holidayColor == Colors.orange[100] ? Colors.orange[900] : Colors.purple[900])
-                                                : (isWeekend ? Colors.grey[800] : Colors.black),
+                            child: Stack(
+                              children: [
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.start,
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  textDirection: TextDirection.ltr,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: days.map((day) {
+                                    final isWeekend = day.weekday == 6 || day.weekday == 7;
+                                    final ferColor = _getHolidayColor(day);
+                                    final isFeriado = ferColor != null;
+                                    final holidayColor = _getHolidayColor(day);
+                                    
+                                    return Container(
+                                      width: dayWidth,
+                                      height: dayHeaderHeight,
+                                      decoration: BoxDecoration(
+                                        color: holidayColor ?? (isWeekend ? Colors.grey[200] : Colors.white),
+                                        border: Border(
+                                          right: BorderSide(
+                                            color: Colors.grey[300]!,
+                                            width: 1,
                                           ),
                                         ),
-                                      )
-                                    : Text(
-                                        day.day.toString().padLeft(2, '0'),
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          fontWeight: isFeriado ? FontWeight.bold : FontWeight.normal,
-                                          color: isFeriado
-                                              ? (holidayColor == Colors.orange[100] ? Colors.orange[900] : Colors.purple[900])
-                                              : (isWeekend ? Colors.grey[800] : Colors.black),
-                                        ),
                                       ),
-                                );
-                              }).toList(),
-                            ),
-                          ),
-                        ),
-                      ) : SingleChildScrollView(
-                          controller: _ganttHorizontalScrollController,
-                          scrollDirection: Axis.horizontal,
-                          physics: const NeverScrollableScrollPhysics(),
-                          padding: EdgeInsets.zero,
-                          child: SizedBox(
-                            width: totalWidth,
-                            height: dayHeaderHeight,
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.start,
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              textDirection: TextDirection.ltr,
-                              mainAxisSize: MainAxisSize.min,
-                              children: days.map((day) {
-                                final isWeekend = day.weekday == 6 || day.weekday == 7;
-                                final ferColor = _getHolidayColor(day);
-                                final isFeriado = ferColor != null;
-                                final holidayColor = _getHolidayColor(day);
-                                
-                                return Container(
-                                  width: dayWidth,
-                                  height: dayHeaderHeight,
-                                  decoration: BoxDecoration(
-                                    color: holidayColor ?? (isWeekend ? Colors.grey[200] : Colors.white),
-                                    border: Border(
-                                      right: BorderSide(
-                                        color: Colors.grey[300]!,
-                                        width: 1,
-                                      ),
+                                      alignment: Alignment.center,
+                                      child: _feriadosMap[DateTime(day.year, day.month, day.day)] != null
+                                        ? TaskFlowCalendarMarkerTooltip(
+                                            data: CalendarMarkerData(
+                                              title: _feriadosMap[DateTime(day.year, day.month, day.day)]?.map((e) => e.descricao).join(' + ') ?? 'Feriado',
+                                              type: (() {
+                                                  final f = _feriadosMap[DateTime(day.year, day.month, day.day)]?.first;
+                                                  if (f?.tipo == 'ESTADUAL') return MarkerType.stateHoliday;
+                                                  if (f?.tipo == 'MUNICIPAL') return MarkerType.cityHoliday;
+                                                  if (f?.tipo == 'EVENTO') return MarkerType.specialEvent;
+                                                  return MarkerType.nationalHoliday;
+                                                })(),
+                                              date: day,
+                                              observation: _feriadosMap[DateTime(day.year, day.month, day.day)]?.first.tipo == 'EVENTO' ? 'Evento Setor Elétrico' : 'Dia não útil',
+                                            ),
+                                            child: Text(
+                                              day.day.toString().padLeft(2, '0'),
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                fontWeight: isFeriado ? FontWeight.bold : FontWeight.normal,
+                                                color: isFeriado
+                                                    ? (holidayColor == Colors.orange[100] ? Colors.orange[900] : Colors.purple[900])
+                                                    : (isWeekend ? Colors.grey[800] : Colors.black),
+                                              ),
+                                            ),
+                                          )
+                                        : Text(
+                                            day.day.toString().padLeft(2, '0'),
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: isFeriado ? FontWeight.bold : FontWeight.normal,
+                                              color: isFeriado
+                                                  ? (holidayColor == Colors.orange[100] ? Colors.orange[900] : Colors.purple[900])
+                                                  : (isWeekend ? Colors.grey[800] : Colors.black),
+                                            ),
+                                          ),
+                                    );
+                                  }).toList(),
+                                ),
+                                if (todayOffset >= 0)
+                                  Positioned(
+                                    left: todayOffset + (dayWidth / 2) - 8,
+                                    top: 0,
+                                    child: Container(
+                                      width: 16,
+                                      height: 16,
+                                      decoration: BoxDecoration(color: Colors.red[500], shape: BoxShape.circle),
+                                      child: const Icon(Icons.circle, size: 12, color: Colors.white),
                                     ),
                                   ),
-                                  alignment: Alignment.center,
-                                  child: _feriadosMap[DateTime(day.year, day.month, day.day)] != null
-                                    ? TaskFlowCalendarMarkerTooltip(
-                                        data: CalendarMarkerData(
-                                          title: _feriadosMap[DateTime(day.year, day.month, day.day)]?.map((e) => e.descricao).join(' + ') ?? 'Feriado',
-                                          type: (() {
-                                              final f = _feriadosMap[DateTime(day.year, day.month, day.day)]?.first;
-                                              if (f?.tipo == 'ESTADUAL') return MarkerType.stateHoliday;
-                                              if (f?.tipo == 'MUNICIPAL') return MarkerType.cityHoliday;
-                                              if (f?.tipo == 'EVENTO') return MarkerType.specialEvent;
-                                              return MarkerType.nationalHoliday;
-                                            })(),
-                                          date: day,
-                                          observation: _feriadosMap[DateTime(day.year, day.month, day.day)]?.first.tipo == 'EVENTO' ? 'Evento Setor Elétrico' : 'Dia não útil',
-                                        ),
-                                        child: Text(
-                                          day.day.toString().padLeft(2, '0'),
-                                          style: TextStyle(
-                                            fontSize: 11,
-                                            fontWeight: isFeriado ? FontWeight.bold : FontWeight.normal,
-                                            color: isFeriado
-                                                ? (holidayColor == Colors.orange[100] ? Colors.orange[900] : Colors.purple[900])
-                                                : (isWeekend ? Colors.grey[800] : Colors.black),
-                                          ),
-                                        ),
-                                      )
-                                    : Text(
-                                        day.day.toString().padLeft(2, '0'),
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          fontWeight: isFeriado ? FontWeight.bold : FontWeight.normal,
-                                          color: isFeriado
-                                              ? (holidayColor == Colors.orange[100] ? Colors.orange[900] : Colors.purple[900])
-                                              : (isWeekend ? Colors.grey[800] : Colors.black),
-                                        ),
-                                      ),
-                                );
-                              }).toList(),
+                              ],
                             ),
-                          ),
-                        ),
+                          );
+
+                          if (needsScroll) {
+                            return Scrollbar(
+                              controller: _ganttHorizontalScrollController,
+                              thickness: 10,
+                              radius: const Radius.circular(5),
+                              child: SingleChildScrollView(
+                                controller: _ganttHorizontalScrollController,
+                                scrollDirection: Axis.horizontal,
+                                physics: const AlwaysScrollableScrollPhysics(),
+                                padding: EdgeInsets.zero,
+                                child: dayHeaderContent,
+                              ),
+                            );
+                          }
+                          return SingleChildScrollView(
+                            controller: _ganttHorizontalScrollController,
+                            scrollDirection: Axis.horizontal,
+                            physics: const NeverScrollableScrollPhysics(),
+                            padding: EdgeInsets.zero,
+                            child: dayHeaderContent,
+                          );
+                        },
+                      ),
                     ),
                   ),
                 ],
@@ -2235,7 +2400,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                           left: 0,
                           right: 0,
                           bottom: 0,
-                          child: _buildGanttRow(row, days, dayWidth, index, needsScroll),
+                          child: _buildGanttRow(row, days, dayWidth, index, needsScroll, todayOffset),
                         ),
                       ],
                     );
@@ -2269,7 +2434,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
     );
   }
 
-  Widget _buildGanttRow(ExecutorTaskRow row, List<DateTime> days, double dayWidth, int index, bool needsScroll) {
+  Widget _buildGanttRow(ExecutorTaskRow row, List<DateTime> days, double dayWidth, int index, bool needsScroll, [double todayOffset = -1.0]) {
     final totalWidth = days.length * dayWidth;
     // Verificar se este executor tem conflito em qualquer dia do período
     final hasConflict = _hasConflictForExecutor(row.executor.id);
@@ -2326,20 +2491,12 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                   ),
                   // Segmentos das tarefas (usar períodos por executor se disponível)
                   ...row.tasks.expand((task) {
-                    // Verificar se há períodos específicos para este executor
+                    // Verificar se há períodos específicos para este executor exclusivamente por UUID
                     ExecutorPeriod? executorPeriod;
-                    final execKeys = <String>{
-                      _normalizeText(row.executor.nome),
-                      if (row.executor.nomeCompleto != null) _normalizeText(row.executor.nomeCompleto!),
-                      if (row.executor.login != null) _normalizeText(row.executor.login!),
-                      if (row.executor.matricula != null) _normalizeText(row.executor.matricula!),
-                    }..removeWhere((e) => e.isEmpty);
-                    
-                    for (var ep in task.executorPeriods) {
-                      final normEpName = _normalizeText(ep.executorNome);
-                      final sameId = ep.executorId.toLowerCase() == row.executor.id.toLowerCase();
-                      final sameNameNorm = normEpName.isNotEmpty && execKeys.contains(normEpName);
-                      if (sameId || sameNameNorm) {
+                    final rowExecutorId = row.executor.id.trim().toLowerCase();
+                    for (final ep in task.executorPeriods) {
+                      final periodExecutorId = ep.executorId.trim().toLowerCase();
+                      if (periodExecutorId.isNotEmpty && periodExecutorId == rowExecutorId) {
                         executorPeriod = ep;
                         break;
                       }
@@ -2561,6 +2718,29 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                         return IgnorePointer(child: dayCell); // Empty cells should not intercept clicks
                       }).toList(),
                     ),
+                  // Linha do dia atual (idêntica à de atividades)
+                  if (todayOffset >= 0)
+                    Positioned(
+                      left: todayOffset + (dayWidth / 2),
+                      top: 0,
+                      bottom: 0,
+                      child: IgnorePointer(
+                        ignoring: true,
+                        child: Container(
+                          width: 3,
+                          decoration: BoxDecoration(
+                            color: Colors.red[600],
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.red.withValues(alpha: 0.7),
+                                blurRadius: 4,
+                                spreadRadius: 1,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -2591,6 +2771,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
   }
 
   Widget _buildCell(String text, double width, {TextAlign? textAlign, bool hasConflict = false}) {
+    final colors = context.tfColors;
     return SizedBox(
       width: width,
       child: Padding(
@@ -2600,7 +2781,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
           style: TextStyle(
             fontSize: 11,
             fontWeight: hasConflict ? FontWeight.bold : FontWeight.normal,
-            color: hasConflict ? Colors.red[900] : Colors.black,
+            color: hasConflict ? colors.danger : colors.textPrimary,
           ),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
@@ -2611,6 +2792,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
   }
 
   Widget _buildTasksCell(int taskCount, ExecutorTaskRow row, double width, {bool hasConflict = false}) {
+    final colors = context.tfColors;
     return SizedBox(
       width: width,
       child: Padding(
@@ -2623,7 +2805,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
               style: TextStyle(
                 fontSize: 11,
                 fontWeight: hasConflict ? FontWeight.bold : FontWeight.normal,
-                color: hasConflict ? Colors.red[900] : Colors.black,
+                color: hasConflict ? colors.danger : colors.textPrimary,
               ),
             ),
             if (taskCount > 0) ...[
@@ -2635,7 +2817,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                   child: Icon(
                     Icons.visibility,
                     size: 16,
-                    color: Colors.blue[600],
+                    color: colors.primary,
                   ),
                 ),
               ),
@@ -2647,6 +2829,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
   }
 
   Widget _buildExecutorNameCell(Executor executor, double width, {bool hasConflict = false}) {
+    final colors = context.tfColors;
     return SizedBox(
       width: width,
       child: Padding(
@@ -2660,7 +2843,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                 style: TextStyle(
                   fontSize: 11,
                   fontWeight: hasConflict ? FontWeight.bold : FontWeight.normal,
-                  color: hasConflict ? Colors.red[900] : Colors.black,
+                  color: hasConflict ? colors.danger : colors.textPrimary,
                 ),
                 textAlign: TextAlign.right,
                 maxLines: 1,
@@ -2675,7 +2858,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                 child: Icon(
                   Icons.visibility,
                   size: 16,
-                  color: Colors.blue[600],
+                  color: colors.primary,
                 ),
               ),
             ),
@@ -3195,6 +3378,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
     final List<Widget> monthHeaders = [];
     DateTime? currentMonthDate;
     int startIndex = 0;
+    final colors = context.tfColors;
     
     for (int i = 0; i < days.length; i++) {
       final day = days[i];
@@ -3216,14 +3400,14 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
               width: monthWidth,
               child: Container(
                 decoration: BoxDecoration(
-                  color: Colors.grey[100],
+                  color: colors.surfaceSecondary,
                   border: Border(
                     right: BorderSide(
-                      color: Colors.grey[300]!,
+                      color: colors.borderSubtle,
                       width: 1,
                     ),
                     bottom: BorderSide(
-                      color: Colors.grey[300]!,
+                      color: colors.borderSubtle,
                       width: 1,
                     ),
                   ),
@@ -3234,7 +3418,7 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
                     style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
-                      color: Colors.grey[700],
+                      color: colors.textSecondary,
                     ),
                   ),
                 ),
@@ -3243,14 +3427,13 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
           );
         }
         
-        // Iniciar novo mês
-        currentMonthDate = DateTime(day.year, day.month);
+        currentMonthDate = day;
         startIndex = i;
       }
     }
     
     // Adicionar o último mês
-    if (currentMonthDate != null) {
+    if (currentMonthDate != null && startIndex < days.length) {
       final monthWidth = (days.length - startIndex) * dayWidth;
       final monthOffset = startIndex * dayWidth;
       
@@ -3262,10 +3445,14 @@ class _TeamScheduleViewState extends State<TeamScheduleView> {
           width: monthWidth,
           child: Container(
             decoration: BoxDecoration(
-              color: Colors.grey[100],
+              color: colors.surfaceSecondary,
               border: Border(
+                right: BorderSide(
+                  color: colors.borderSubtle,
+                  width: 1,
+                ),
                 bottom: BorderSide(
-                  color: Colors.grey[300]!,
+                  color: colors.borderSubtle,
                   width: 1,
                 ),
               ),
@@ -4686,28 +4873,13 @@ class _ExecutorDetailsModal extends StatelessWidget {
   }
 
   Future<void> _copyToClipboard(BuildContext context, String text, String label) async {
-    try {
-      await Clipboard.setData(ClipboardData(text: text));
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('$label copiado para a área de transferência'),
-          duration: const Duration(seconds: 2),
-          backgroundColor: Colors.green[600],
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    } catch (e) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Não foi possível copiar: $e'),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 3),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    }
+    await ClipboardHelper.copyAndNotify(
+      context,
+      text,
+      successMessage: '$label copiado para a área de transferência',
+      errorMessage: 'Não foi possível copiar o texto.',
+      duration: const Duration(seconds: 2),
+    );
   }
 
   void _shareExecutorInfo(BuildContext context) {

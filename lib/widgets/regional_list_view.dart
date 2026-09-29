@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../design_system/taskflow_design_system.dart';
 import '../models/regional.dart';
 import '../services/regional_service.dart';
 import 'regional_form_dialog.dart';
@@ -15,6 +16,7 @@ class _RegionalListViewState extends State<RegionalListView> {
   List<Regional> _regionais = [];
   List<Regional> _filteredRegionais = [];
   bool _isLoading = true;
+  bool _isTableView = true;
   final TextEditingController _searchController = TextEditingController();
   int _currentPage = 1;
   final int _itemsPerPage = 10;
@@ -102,7 +104,6 @@ class _RegionalListViewState extends State<RegionalListView> {
     final result = await showDialog<Regional>(
       context: context,
       barrierDismissible: true,
-      barrierColor: Colors.black54,
       builder: (context) => const RegionalFormDialog(),
     );
 
@@ -138,7 +139,6 @@ class _RegionalListViewState extends State<RegionalListView> {
     final result = await showDialog<Regional>(
       context: context,
       barrierDismissible: true,
-      barrierColor: Colors.black54,
       builder: (context) => RegionalFormDialog(regional: regional),
     );
 
@@ -179,7 +179,6 @@ class _RegionalListViewState extends State<RegionalListView> {
     final result = await showDialog<Regional>(
       context: context,
       barrierDismissible: true,
-      barrierColor: Colors.black54,
       builder: (context) => RegionalFormDialog(regional: duplicated),
     );
 
@@ -212,28 +211,15 @@ class _RegionalListViewState extends State<RegionalListView> {
   }
 
   Future<void> _deleteRegional(Regional regional) async {
-    final confirm = await showDialog<bool>(
+    final confirm = await TFModalDialog.confirm(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Confirmar Exclusão'),
-        content: Text(
-          'Deseja realmente excluir a regional:\n\n'
-          'Regional: ${regional.regional}\n'
+      title: 'Confirmar exclusão',
+      message: 'Deseja realmente excluir a regional "${regional.regional}"?\n\n'
           'Sigla: ${regional.divisao}\n'
           'Empresa: ${regional.empresa}',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Excluir'),
-          ),
-        ],
-      ),
+      confirmLabel: 'Excluir',
+      cancelLabel: 'Cancelar',
+      isDestructive: true,
     );
 
     if (confirm == true) {
@@ -252,7 +238,7 @@ class _RegionalListViewState extends State<RegionalListView> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Erro ao excluir regional'),
+              content: Text('Erro ao excluir regional.'),
               backgroundColor: Colors.red,
             ),
           );
@@ -263,404 +249,306 @@ class _RegionalListViewState extends State<RegionalListView> {
 
   @override
   Widget build(BuildContext context) {
-    final brightness = Theme.of(context).brightness;
-    final isDark = brightness == Brightness.dark;
+    final isMobile = TFBreakpoints.isMobile(context);
+    final spacing = context.tfSpacing;
+    final colors = context.tfColors;
 
     return Scaffold(
-      backgroundColor: isDark ? const Color(0xFF0f172a) : const Color(0xFFf1f5f9),
+      backgroundColor: colors.background,
       body: SafeArea(
-        child: Column(
-          children: [
-            // Header moderno
-            Container(
-              padding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF1e293b) : Colors.white,
-                border: Border(
-                  bottom: BorderSide(
-                    color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                    width: 1,
-                  ),
+        child: Padding(
+          padding: EdgeInsets.all(isMobile ? spacing.sm : spacing.base),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TFPageHeader(
+                title: 'Cadastro de Regionais',
+                subtitle: 'Gerenciamento operacional de regionais e divisões',
+                onBack: () => Navigator.of(context).pop(),
+                primaryAction: TFButton(
+                  label: 'Nova Regional',
+                  leadingIcon: TFIcons.add,
+                  onPressed: _createRegional,
                 ),
-              ),
-              child: Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.arrow_back),
-                    onPressed: () => Navigator.of(context).pop(),
-                    color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
+                secondaryActions: [
+                  TFIconButton(
+                    icon: _isTableView ? Icons.view_list_rounded : Icons.table_chart_rounded,
+                    tooltip: _isTableView ? 'Visualizar em Lista' : 'Visualizar em Tabela',
+                    variant: TFIconButtonVariant.subtle,
+                    onPressed: () {
+                      setState(() {
+                        _isTableView = !_isTableView;
+                      });
+                    },
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Cadastro de Regionais',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w600,
-                        color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                      ),
-                    ),
-                  ),
-                  ElevatedButton.icon(
-                    onPressed: _createRegional,
-                    icon: const Icon(Icons.add, size: 20),
-                    label: const Text('Nova Regional'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF3b82f6),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      elevation: 0,
-                    ),
+                  TFIconButton(
+                    icon: TFIcons.refresh,
+                    tooltip: 'Recarregar regionais',
+                    variant: TFIconButtonVariant.subtle,
+                    onPressed: _loadRegionais,
                   ),
                 ],
               ),
-            ),
-
-            // Barra de busca
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF1e293b) : Colors.white,
-                border: Border(
-                  bottom: BorderSide(
-                    color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                    width: 1,
-                  ),
-                ),
-              ),
-              child: TextField(
-                controller: _searchController,
-                decoration: InputDecoration(
-                  hintText: 'Buscar por regional, divisão ou empresa...',
-                  prefixIcon: Icon(
-                    Icons.search,
-                    color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
-                  ),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: BorderSide(
-                      color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-                    ),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: BorderSide(
-                      color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-                    ),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: const BorderSide(
-                      color: Color(0xFF3b82f6),
-                      width: 2,
-                    ),
-                  ),
-                  filled: true,
-                  fillColor: isDark ? const Color(0xFF0f172a) : const Color(0xFFf8fafc),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                ),
-                style: TextStyle(
-                  color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                ),
-              ),
-            ),
-
-            // Tabela
-            Expanded(
-              child: _isLoading
-                  ? Center(
-                      child: CircularProgressIndicator(
-                        color: const Color(0xFF3b82f6),
-                      ),
-                    )
-                  : _filteredRegionais.isEmpty
-                      ? Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.location_city,
-                                size: 64,
-                                color: isDark ? const Color(0xFF475569) : const Color(0xFF94a3b8),
-                              ),
-                              const SizedBox(height: 16),
-                              Text(
-                                _regionais.isEmpty
-                                    ? 'Nenhuma regional cadastrada'
-                                    : 'Nenhuma regional encontrada',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
-                                ),
-                              ),
-                              if (_regionais.isEmpty) ...[
-                                const SizedBox(height: 16),
-                                ElevatedButton.icon(
-                                  onPressed: _createRegional,
-                                  icon: const Icon(Icons.add),
-                                  label: const Text('Criar Primeira Regional'),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: const Color(0xFF3b82f6),
-                                    foregroundColor: Colors.white,
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
+              Padding(
+                padding: EdgeInsets.only(bottom: spacing.base),
+                child: TFTextField(
+                  controller: _searchController,
+                  hint: 'Buscar por regional, sigla ou empresa...',
+                  prefixIcon: Icon(TFIcons.search, size: 18, color: colors.textSecondary),
+                  suffixIcon: _searchController.text.isNotEmpty
+                      ? IconButton(
+                          icon: Icon(TFIcons.close, size: 16, color: colors.textMuted),
+                          onPressed: () => _searchController.clear(),
+                          tooltip: 'Limpar busca',
                         )
-                      : Container(
-                          margin: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: isDark ? const Color(0xFF1e293b) : Colors.white,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                              width: 1,
-                            ),
-                          ),
-                          child: Column(
-                            children: [
-                              // Cabeçalho da tabela
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                decoration: BoxDecoration(
-                                  color: isDark ? const Color(0xFF0f172a) : const Color(0xFFf8fafc),
-                                  borderRadius: const BorderRadius.only(
-                                    topLeft: Radius.circular(12),
-                                    topRight: Radius.circular(12),
+                      : null,
+                ),
+              ),
+              Expanded(
+                child: _isLoading
+                    ? const TFLoading(
+                        mode: TFLoadingMode.section,
+                        message: 'Carregando regionais...',
+                      )
+                    : _filteredRegionais.isEmpty
+                        ? TFEmptyState(
+                            icon: TFIcons.search,
+                            title: _regionais.isEmpty
+                                ? 'Nenhuma regional cadastrada'
+                                : 'Nenhuma regional encontrada',
+                            description: _regionais.isEmpty
+                                ? 'Cadastre a primeira regional operacional para começar.'
+                                : 'Tente buscar por outro termo ou limpe o campo de busca.',
+                            action: _regionais.isEmpty
+                                ? TFButton(
+                                    label: 'Cadastrar Primeira Regional',
+                                    leadingIcon: TFIcons.add,
+                                    onPressed: _createRegional,
+                                  )
+                                : TFButton(
+                                    label: 'Limpar Busca',
+                                    variant: TFButtonVariant.secondary,
+                                    onPressed: () => _searchController.clear(),
                                   ),
-                                  border: Border(
-                                    bottom: BorderSide(
-                                      color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                                      width: 1,
-                                    ),
-                                  ),
-                                ),
-                                child: Row(
-                                  children: [
-                                    Expanded(
-                                      flex: 2,
-                                      child: Text(
-                                        'Regional',
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600,
-                                          color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                                        ),
-                                      ),
-                                    ),
-                                    Expanded(
-                                      flex: 2,
-                                      child: Text(
-                                        'Sigla',
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600,
-                                          color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                                        ),
-                                      ),
-                                    ),
-                                    Expanded(
-                                      flex: 2,
-                                      child: Text(
-                                        'Empresa',
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600,
-                                          color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                                        ),
-                                      ),
-                                    ),
-                                    SizedBox(
-                                      width: 120,
-                                      child: Text(
-                                        'Ações',
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600,
-                                          color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-
-                              // Corpo da tabela
-                              Expanded(
-                                child: ListView.separated(
-                                  itemCount: _paginatedRegionais.length,
-                                  separatorBuilder: (context, index) => Divider(
-                                    height: 1,
-                                    thickness: 1,
-                                    color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                                  ),
-                                  itemBuilder: (context, index) {
-                                    final regional = _paginatedRegionais[index];
-                                    return InkWell(
-                                      onTap: () => _editRegional(regional),
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                                        child: Row(
-                                          children: [
-                                            Expanded(
-                                              flex: 2,
-                                              child: Text(
-                                                regional.regional,
-                                                style: TextStyle(
-                                                  fontSize: 14,
-                                                  fontWeight: FontWeight.w500,
-                                                  color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                                                ),
-                                              ),
-                                            ),
-                                            Expanded(
-                                              flex: 2,
-                                              child: Text(
-                                                regional.divisao.isNotEmpty ? regional.divisao : '-',
-                                                style: TextStyle(
-                                                  fontSize: 14,
-                                                  color: isDark ? const Color(0xFFcbd5e1) : const Color(0xFF475569),
-                                                ),
-                                              ),
-                                            ),
-                                            Expanded(
-                                              flex: 2,
-                                              child: Text(
-                                                regional.empresa.isNotEmpty ? regional.empresa : '-',
-                                                style: TextStyle(
-                                                  fontSize: 14,
-                                                  color: isDark ? const Color(0xFFcbd5e1) : const Color(0xFF475569),
-                                                ),
-                                              ),
-                                            ),
-                                            SizedBox(
-                                              width: 120,
-                                              child: Row(
-                                                mainAxisAlignment: MainAxisAlignment.end,
-                                                children: [
-                                                  IconButton(
-                                                    icon: const Icon(Icons.edit, size: 20),
-                                                    color: const Color(0xFF3b82f6),
-                                                    onPressed: () => _editRegional(regional),
-                                                    tooltip: 'Editar',
-                                                  ),
-                                                  IconButton(
-                                                    icon: const Icon(Icons.copy, size: 20),
-                                                    color: const Color(0xFFf59e0b),
-                                                    onPressed: () => _duplicateRegional(regional),
-                                                    tooltip: 'Duplicar',
-                                                  ),
-                                                  IconButton(
-                                                    icon: const Icon(Icons.delete, size: 20),
-                                                    color: const Color(0xFFef4444),
-                                                    onPressed: () => _deleteRegional(regional),
-                                                    tooltip: 'Excluir',
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                ),
-                              ),
-
-                              // Rodapé com paginação
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                decoration: BoxDecoration(
-                                  color: isDark ? const Color(0xFF0f172a) : const Color(0xFFf8fafc),
-                                  borderRadius: const BorderRadius.only(
-                                    bottomLeft: Radius.circular(12),
-                                    bottomRight: Radius.circular(12),
-                                  ),
-                                  border: Border(
-                                    top: BorderSide(
-                                      color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                                      width: 1,
-                                    ),
-                                  ),
-                                ),
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Text(
-                                      'Mostrando ${_paginatedRegionais.length} de ${_filteredRegionais.length} regionais',
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
-                                      ),
-                                    ),
-                                    Row(
-                                      children: [
-                                        TextButton(
-                                          onPressed: _currentPage > 1
-                                              ? () {
-                                                  setState(() {
-                                                    _currentPage--;
-                                                  });
-                                                }
-                                              : null,
-                                          style: TextButton.styleFrom(
-                                            foregroundColor: _currentPage > 1
-                                                ? (isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b))
-                                                : (isDark ? const Color(0xFF475569) : const Color(0xFF94a3b8)),
-                                          ),
-                                          child: const Text('Anterior'),
-                                        ),
-                                        Container(
-                                          margin: const EdgeInsets.symmetric(horizontal: 8),
-                                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                          decoration: BoxDecoration(
-                                            color: const Color(0xFF3b82f6),
-                                            borderRadius: BorderRadius.circular(6),
-                                          ),
-                                          child: Text(
-                                            '$_currentPage',
-                                            style: const TextStyle(
-                                              color: Colors.white,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
-                                        ),
-                                        TextButton(
-                                          onPressed: _currentPage < _totalPages
-                                              ? () {
-                                                  setState(() {
-                                                    _currentPage++;
-                                                  });
-                                                }
-                                              : null,
-                                          style: TextButton.styleFrom(
-                                            foregroundColor: _currentPage < _totalPages
-                                                ? (isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b))
-                                                : (isDark ? const Color(0xFF475569) : const Color(0xFF94a3b8)),
-                                          ),
-                                          child: const Text('Próximo'),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-            ),
-          ],
+                          )
+                        : (isMobile || !_isTableView)
+                            ? _buildMobileList()
+                            : _buildDesktopTable(),
+              ),
+              if (_totalPages > 1 && !_isLoading && _filteredRegionais.isNotEmpty)
+                _buildPagination(),
+            ],
+          ),
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _loadRegionais,
-        backgroundColor: const Color(0xFF3b82f6),
-        tooltip: 'Atualizar',
-        child: const Icon(Icons.refresh, color: Colors.white),
+    );
+  }
+
+  Widget _buildDesktopTable() {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
+    return TFDataTable<Regional>(
+      items: _paginatedRegionais,
+      zebra: true,
+      columns: [
+        TFDataColumn<Regional>.text(
+          id: 'regional',
+          title: 'Regional',
+          cellBuilder: (context, regional) => Text(
+            regional.regional,
+            style: typography.bodyMedium.copyWith(
+              color: colors.textPrimary,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+        TFDataColumn<Regional>.text(
+          id: 'sigla',
+          title: 'Sigla',
+          cellBuilder: (context, regional) => Text(
+            regional.divisao.isNotEmpty ? regional.divisao : '-',
+            style: typography.bodyMedium.copyWith(
+              color: colors.textSecondary,
+            ),
+          ),
+        ),
+        TFDataColumn<Regional>.text(
+          id: 'empresa',
+          title: 'Empresa',
+          cellBuilder: (context, regional) => Text(
+            regional.empresa.isNotEmpty ? regional.empresa : '-',
+            style: typography.bodyMedium.copyWith(
+              color: colors.textSecondary,
+            ),
+          ),
+        ),
+        TFDataColumn<Regional>(
+          id: 'acoes',
+          label: const Text('Ações'),
+          width: 160,
+          alignment: Alignment.centerRight,
+          cellBuilder: (context, regional) => Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TFIconButton(
+                icon: TFIcons.edit,
+                tooltip: 'Editar regional',
+                variant: TFIconButtonVariant.standard,
+                onPressed: () => _editRegional(regional),
+              ),
+              TFIconButton(
+                icon: Icons.copy_rounded,
+                tooltip: 'Duplicar regional',
+                variant: TFIconButtonVariant.subtle,
+                onPressed: () => _duplicateRegional(regional),
+              ),
+              TFIconButton(
+                icon: TFIcons.delete,
+                tooltip: 'Excluir regional',
+                variant: TFIconButtonVariant.danger,
+                onPressed: () => _deleteRegional(regional),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMobileList() {
+    final spacing = context.tfSpacing;
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
+    return ListView.separated(
+      itemCount: _paginatedRegionais.length,
+      separatorBuilder: (_, __) => SizedBox(height: spacing.sm),
+      itemBuilder: (context, index) {
+        final regional = _paginatedRegionais[index];
+        return TFCard(
+          variant: TFCardVariant.defaultCard,
+          padding: EdgeInsets.symmetric(horizontal: spacing.base, vertical: spacing.sm),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      regional.regional,
+                      style: typography.cardTitle.copyWith(color: colors.textPrimary),
+                    ),
+                  ),
+                  if (regional.divisao.isNotEmpty)
+                    TFStatusBadge(
+                      label: regional.divisao,
+                      severity: TFStatusSeverity.neutral,
+                      compact: true,
+                    ),
+                ],
+              ),
+              if (regional.empresa.isNotEmpty) ...[
+                SizedBox(height: spacing.xs),
+                Text(
+                  'Empresa: ${regional.empresa}',
+                  style: typography.bodySmall.copyWith(color: colors.textSecondary),
+                ),
+              ],
+              SizedBox(height: spacing.sm),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TFButton(
+                    label: 'Editar',
+                    leadingIcon: TFIcons.edit,
+                    variant: TFButtonVariant.secondary,
+                    onPressed: () => _editRegional(regional),
+                  ),
+                  SizedBox(width: spacing.xs),
+                  TFIconButton(
+                    icon: Icons.copy_rounded,
+                    tooltip: 'Duplicar',
+                    variant: TFIconButtonVariant.subtle,
+                    onPressed: () => _duplicateRegional(regional),
+                  ),
+                  TFIconButton(
+                    icon: TFIcons.delete,
+                    tooltip: 'Excluir',
+                    variant: TFIconButtonVariant.danger,
+                    onPressed: () => _deleteRegional(regional),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildPagination() {
+    final spacing = context.tfSpacing;
+
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: spacing.base,
+        vertical: spacing.sm,
+      ),
+      decoration: BoxDecoration(
+        color: context.tfColors.surface,
+        border: Border(
+          top: BorderSide(color: context.tfColors.borderSubtle, width: 1),
+        ),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            'Mostrando ${_paginatedRegionais.length} de ${_filteredRegionais.length} regionais',
+            style: context.tfTypography.bodySmall.copyWith(
+              color: context.tfColors.textSecondary,
+            ),
+          ),
+          Row(
+            children: [
+              TFButton(
+                label: 'Anterior',
+                variant: TFButtonVariant.ghost,
+                onPressed: _currentPage > 1
+                    ? () => setState(() => _currentPage--)
+                    : null,
+              ),
+              SizedBox(width: spacing.xs),
+              Container(
+                padding: EdgeInsets.symmetric(
+                  horizontal: spacing.sm,
+                  vertical: spacing.xs,
+                ),
+                decoration: BoxDecoration(
+                  color: context.tfColors.primary,
+                  borderRadius: BorderRadius.circular(TFRadius.r8),
+                ),
+                child: Text(
+                  '$_currentPage',
+                  style: context.tfTypography.bodySmall.copyWith(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              SizedBox(width: spacing.xs),
+              TFButton(
+                label: 'Próximo',
+                variant: TFButtonVariant.ghost,
+                onPressed: _currentPage < _totalPages
+                    ? () => setState(() => _currentPage++)
+                    : null,
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

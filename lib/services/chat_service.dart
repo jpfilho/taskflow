@@ -1,6 +1,9 @@
+import 'dart:async';
+import 'package:flutter/foundation.dart';
 import '../models/mensagem.dart';
 import '../models/comunidade.dart';
 import '../models/grupo_chat.dart';
+import '../models/chat_unread_snapshot.dart';
 import '../config/supabase_config.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'auth_service_simples.dart';
@@ -13,9 +16,17 @@ class ChatService {
   factory ChatService() => _instance;
   ChatService._internal();
 
-  final SupabaseClient _supabase = SupabaseConfig.client;
-  final TaskService _taskService = TaskService();
-  final TelegramService _telegramService = TelegramService();
+  @visibleForTesting
+  ChatService.forTesting();
+
+  static final StreamController<Mensagem> _mensagemEnviadaController =
+      StreamController<Mensagem>.broadcast();
+  static Stream<Mensagem> get onMensagemEnviada =>
+      _mensagemEnviadaController.stream;
+
+  SupabaseClient get _supabase => SupabaseConfig.client;
+  TaskService get _taskService => TaskService();
+  TelegramService get _telegramService => TelegramService();
 
   // Obter ID do usuário atual
   String? get currentUserId {
@@ -309,57 +320,90 @@ class ChatService {
     }
   }
 
-  // Listar grupos de uma comunidade
+  // Listar grupos de uma comunidade (com última mensagem e contagem pré-populadas)
   Future<List<GrupoChat>> listarGruposPorComunidade(String comunidadeId) async {
     try {
       final response = await _supabase
           .from('grupos_chat')
-          .select('''
-            *,
-            mensagens!grupos_chat_ultima_mensagem_fkey(
-              id,
-              conteudo,
-              created_at
-            )
-          ''')
+          .select()
           .eq('comunidade_id', comunidadeId)
           .order('updated_at', ascending: false);
 
-      final grupos = <GrupoChat>[];
-      for (var item in response) {
-        final mensagens = item['mensagens'] as List?;
-        final ultimaMensagem = mensagens?.isNotEmpty == true
-            ? mensagens?.first
-            : null;
+      final gruposRaw = (response as List)
+          .map((map) => GrupoChat.fromMap(map as Map<String, dynamic>))
+          .toList();
 
-        final grupo = GrupoChat.fromMap(item);
-        if (ultimaMensagem != null) {
-          grupos.add(grupo.copyWith(
-            ultimaMensagemAt: DateTime.parse(ultimaMensagem['created_at']),
-            ultimaMensagemPreview: ultimaMensagem['conteudo'] as String?,
-          ));
-        } else {
-          grupos.add(grupo);
+      if (gruposRaw.isEmpty) return [];
+
+      final grupoIds = gruposRaw.map((g) => g.id).whereType<String>().toList();
+
+      // Buscar em paralelo: últimas mensagens e contagens totais de mensagens
+      final results = await Future.wait([
+        obterUltimaMensagemPorGrupos(grupoIds),
+        contarMensagensPorGrupos(grupoIds),
+      ]);
+      final ultimasMsgs = results[0] as Map<String, Mensagem>;
+      final contagens = results[1] as Map<String, int>;
+
+      final grupos = <GrupoChat>[];
+      for (final grupo in gruposRaw) {
+        final ultimaMsg = ultimasMsgs[grupo.id];
+        final total = contagens[grupo.id] ?? 0;
+
+        String? preview = ultimaMsg?.conteudo.trim();
+        if (preview != null && preview.isEmpty) {
+          if (ultimaMsg?.tipo == 'imagem') {
+            preview = '📷 Imagem';
+          } else if (ultimaMsg?.tipo == 'audio') {
+            preview = '🎵 Áudio';
+          } else if (ultimaMsg?.tipo == 'video') {
+            preview = '🎥 Vídeo';
+          } else if (ultimaMsg?.tipo == 'documento') {
+            preview = '📄 Documento';
+          }
         }
+
+        grupos.add(grupo.copyWith(
+          ultimaMensagemAt: ultimaMsg?.createdAt,
+          ultimaMensagemPreview: preview,
+          totalMensagens: total,
+        ));
       }
+
+      // Ordenar por última mensagem (mais recente primeiro)
+      grupos.sort((a, b) {
+        final aData = a.ultimaMensagemAt ?? a.updatedAt ?? a.createdAt ?? DateTime(1970);
+        final bData = b.ultimaMensagemAt ?? b.updatedAt ?? b.createdAt ?? DateTime(1970);
+        return bData.compareTo(aData);
+      });
 
       return grupos;
     } catch (e) {
-      print('Erro no query principal de listarGruposPorComunidade: $e');
-      // Se falhar, tentar sem join
-      try {
-        final response = await _supabase
-            .from('grupos_chat')
-            .select()
-            .eq('comunidade_id', comunidadeId)
-            .order('updated_at', ascending: false);
+      print('Erro ao listar grupos por comunidade: $e');
+      throw Exception('Erro ao listar grupos: $e');
+    }
+  }
 
-        return (response as List)
-            .map((map) => GrupoChat.fromMap(map as Map<String, dynamic>))
-            .toList();
-      } catch (e2) {
-        throw Exception('Erro ao listar grupos: $e2');
+  // Contar mensagens de múltiplos grupos diretamente
+  Future<Map<String, int>> contarMensagensPorGrupos(List<String> gruposIds) async {
+    if (gruposIds.isEmpty) return {};
+    try {
+      final response = await _supabase
+          .from('mensagens')
+          .select('grupo_id')
+          .inFilter('grupo_id', gruposIds);
+
+      final map = <String, int>{};
+      for (var item in (response as List)) {
+        final gId = item['grupo_id'] as String?;
+        if (gId != null) {
+          map[gId] = (map[gId] ?? 0) + 1;
+        }
       }
+      return map;
+    } catch (e) {
+      print('Erro ao contar mensagens por grupos: $e');
+      return {};
     }
   }
 
@@ -666,6 +710,9 @@ class ChatService {
           .eq('id', grupoId);
 
       final mensagemEnviada = Mensagem.fromMap(response);
+      _mensagemEnviadaController.add(mensagemEnviada);
+
+      invalidateTotalUnreadCache();
 
       // Enviar para Telegram (se houver subscription ativa)
       // Não aguardar para não bloquear o envio da mensagem
@@ -831,6 +878,7 @@ class ChatService {
             .eq('id', mensagemId);
         print('✅ [Chat] Soft delete local concluído');
       }
+      invalidateTotalUnreadCache();
     } catch (e) {
       throw Exception('Erro ao excluir mensagem: $e');
     }
@@ -918,6 +966,7 @@ class ChatService {
           'mensagem_id': mensagemId,
           'usuario_id': userId,
         });
+        invalidateTotalUnreadCache();
       }
     } catch (e) {
       throw Exception('Erro ao marcar mensagem como lida: $e');
@@ -931,10 +980,10 @@ class ChatService {
       final userId = currentUserId ?? 'anonymous';
       if (userId == 'anonymous') return;
 
-      // 1. Obter todas as mensagens do grupo (apenas IDs)
+      // 1. Obter todas as mensagens do grupo (apenas IDs e usuario_id)
       var todasMensagens = await _supabase
           .from('mensagens')
-          .select('id')
+          .select('id, usuario_id')
           .eq('grupo_id', grupoIdOuTarefaId)
           .isFilter('deleted_at', null);
 
@@ -952,7 +1001,7 @@ class ChatService {
           final realGrupoId = grupo['id'] as String;
           todasMensagens = await _supabase
               .from('mensagens')
-              .select('id')
+              .select('id, usuario_id')
               .eq('grupo_id', realGrupoId)
               .isFilter('deleted_at', null);
         }
@@ -960,7 +1009,19 @@ class ChatService {
 
       if (todasMensagens.isEmpty) return;
 
-      final mensagemIds = (todasMensagens as List)
+      // Filtrar apenas mensagens de outros usuários (mensagens próprias nunca contam como não lidas)
+      final mensagensOutros = (todasMensagens as List).where((m) {
+        final senderId = m['usuario_id']?.toString();
+        return senderId != userId;
+      }).toList();
+
+      if (mensagensOutros.isEmpty) {
+        // Todas as mensagens do grupo já são do próprio usuário
+        invalidateTotalUnreadCache();
+        return;
+      }
+
+      final mensagemIds = mensagensOutros
           .map((m) => m['id'] as String)
           .toList();
 
@@ -986,7 +1047,10 @@ class ChatService {
       // 3. Inserir apenas as não lidas
       final naoLidasIds = mensagemIds.where((id) => !jaLidasSet.contains(id)).toList();
 
-      if (naoLidasIds.isEmpty) return;
+      if (naoLidasIds.isEmpty) {
+        invalidateTotalUnreadCache();
+        return;
+      }
 
       // Inserir em chunks para evitar payloads muito grandes
       for (var i = 0; i < naoLidasIds.length; i += chunkSize) {
@@ -1005,6 +1069,7 @@ class ChatService {
         );
       }
 
+      invalidateTotalUnreadCache();
       print('✅ Marcadas ${naoLidasIds.length} mensagens como lidas no grupo $grupoIdOuTarefaId');
     } catch (e) {
       print('⚠️ Erro ao marcar mensagens como lidas em lote: $e');
@@ -1020,13 +1085,22 @@ class ChatService {
       // Obter todas as mensagens ativas do grupo (excluir deletadas)
       final todasMensagens = await _supabase
           .from('mensagens')
-          .select('id')
+          .select('id, usuario_id')
           .eq('grupo_id', grupoId)
           .isFilter('deleted_at', null);
 
       if (todasMensagens.isEmpty) return 0;
 
-      final mensagemIds = (todasMensagens as List)
+      // Mensagens enviadas pelo próprio usuário NUNCA são contabilizadas como não lidas para ele
+      final mensagensOutros = (todasMensagens as List).where((m) {
+        if (userId == 'anonymous') return true;
+        final senderId = m['usuario_id']?.toString();
+        return senderId != userId;
+      }).toList();
+
+      if (mensagensOutros.isEmpty) return 0;
+
+      final mensagemIds = mensagensOutros
           .map((m) => m['id'] as String)
           .toList();
 
@@ -1073,7 +1147,7 @@ class ChatService {
          );
          futuresMsgs.add(
            _supabase.from('mensagens')
-               .select('id, grupo_id')
+               .select('id, grupo_id, usuario_id')
                .inFilter('grupo_id', chunk)
                .isFilter('deleted_at', null),
          );
@@ -1123,7 +1197,13 @@ class ChatService {
       for (var row in todasMensagens) {
         final mId = row['id'] as String;
         final gId = row['grupo_id'] as String;
+        final senderId = row['usuario_id']?.toString();
         
+        // Mensagens enviadas pelo próprio usuário NUNCA são contabilizadas como não lidas para ele
+        if (userId != 'anonymous' && senderId != null && senderId == userId) {
+          continue;
+        }
+
         if (!lidasSet.contains(mId)) {
           unreadCounts[gId] = (unreadCounts[gId] ?? 0) + 1;
         }
@@ -1178,62 +1258,136 @@ class ChatService {
   // Cache para contagem total (badge do header)
   static int? _cachedTotalUnread;
   static DateTime? _lastTotalUnreadFetch;
-  static const _totalUnreadCacheDuration = Duration(minutes: 10);
+  static String? _cachedUserId;
+  // Reduzido para 15 segundos para proteger contra chamadas simultâneas/rajadas sem congelar a UI por 10 minutos
+  static const _totalUnreadCacheDuration = Duration(seconds: 15);
 
-  Future<int> contarTotalMensagensNaoLidas() async {
+  /// Invalida o cache estático de contagem total não lida (ex: ao ler, enviar ou receber mensagens)
+  static void invalidateTotalUnreadCache() {
+    _cachedTotalUnread = null;
+    _lastTotalUnreadFetch = null;
+    _cachedUserId = null;
+  }
+
+  /// Invalida o cache estático de contagem total não lida (método de instância)
+  void invalidarCacheNaoLidas() => invalidateTotalUnreadCache();
+
+  /// Carrega snapshot completo e consistente de mensagens não lidas
+  /// (Total, por Comunidade e por Grupo) em apenas uma operação em lote.
+  Future<ChatUnreadSnapshot> carregarSnapshotNaoLidasCompleto() async {
+    PerformanceMonitor.start('ChatService.carregarSnapshotNaoLidasCompleto');
+    final userId = currentUserId;
+
+    try {
+      // 1. Listar todas as comunidades acessíveis ao usuário
+      final comunidades = await listarComunidades();
+      if (comunidades.isEmpty) {
+        PerformanceMonitor.stop('ChatService.carregarSnapshotNaoLidasCompleto');
+        return ChatUnreadSnapshot.empty();
+      }
+
+      // 2. Coletar grupos e mapeamento grupoId -> comunidadeId em lote
+      final idsComunidades = comunidades.map((c) => c.id).whereType<String>().toList();
+      final todosGruposIds = <String>[];
+      final groupToCommunity = <String, String>{};
+
+      if (idsComunidades.isNotEmpty) {
+        try {
+          final grupos = await _supabase
+              .from('grupos_chat')
+              .select('id, comunidade_id')
+              .inFilter('comunidade_id', idsComunidades);
+
+          for (final g in grupos) {
+            final gid = g['id']?.toString();
+            final cid = g['comunidade_id']?.toString();
+            if (gid != null) {
+              todosGruposIds.add(gid);
+              if (cid != null) {
+                groupToCommunity[gid] = cid;
+              }
+            }
+          }
+        } catch (e) {
+          print('⚠️ Erro ao listar grupos em lote para snapshot: $e');
+        }
+      }
+
+      if (todosGruposIds.isEmpty) {
+        PerformanceMonitor.stop('ChatService.carregarSnapshotNaoLidasCompleto');
+        return ChatUnreadSnapshot.empty();
+      }
+
+      // 3. Contar não lidas por grupo em lote (reutiliza método da Fase 1)
+      final naoLidasMap = await contarMensagensNaoLidasEmLote(todosGruposIds);
+
+      // 4. Agregar por comunidade e total
+      final unreadByCommunity = <String, int>{};
+      for (final cid in idsComunidades) {
+        unreadByCommunity[cid] = 0;
+      }
+
+      int total = 0;
+      for (final entry in naoLidasMap.entries) {
+        final gId = entry.key;
+        final count = entry.value;
+        if (count > 0) {
+          total += count;
+          final cId = groupToCommunity[gId];
+          if (cId != null) {
+            unreadByCommunity[cId] = (unreadByCommunity[cId] ?? 0) + count;
+          }
+        }
+      }
+
+      _cachedTotalUnread = total;
+      _cachedUserId = userId;
+      _lastTotalUnreadFetch = DateTime.now();
+
+      final snapshot = ChatUnreadSnapshot(
+        totalUnread: total,
+        unreadByCommunity: unreadByCommunity,
+        unreadByGroup: naoLidasMap,
+        groupToCommunity: groupToCommunity,
+        timestamp: DateTime.now(),
+      );
+
+      PerformanceMonitor.stop('ChatService.carregarSnapshotNaoLidasCompleto');
+      return snapshot;
+    } catch (e) {
+      print('❌ Erro ao carregar snapshot completo de mensagens não lidas: $e');
+      PerformanceMonitor.stop('ChatService.carregarSnapshotNaoLidasCompleto');
+      rethrow;
+    }
+  }
+
+  Future<int> contarTotalMensagensNaoLidas({bool forceRefresh = false}) async {
     PerformanceMonitor.start('ChatService.contarTotalMensagensNaoLidas');
     
-    if (_lastTotalUnreadFetch != null && _cachedTotalUnread != null &&
+    final userId = currentUserId;
+
+    // Se o usuário mudou ou foi solicitada atualização forçada, limpa o cache
+    if (forceRefresh || userId != _cachedUserId) {
+      _cachedTotalUnread = null;
+      _lastTotalUnreadFetch = null;
+    }
+
+    if (!forceRefresh &&
+        _lastTotalUnreadFetch != null &&
+        _cachedTotalUnread != null &&
         DateTime.now().difference(_lastTotalUnreadFetch!) < _totalUnreadCacheDuration) {
       PerformanceMonitor.stop('ChatService.contarTotalMensagensNaoLidas');
       return _cachedTotalUnread!;
     }
 
     try {
-      // 1. Listar todas as comunidades acessíveis ao usuário
-      final comunidades = await listarComunidades();
-      if (comunidades.isEmpty) return 0;
-
-      // 2. Coletar todos os IDs de grupos de todas as comunidades em uma única chamada (Bulk)
-      final idsComunidades = comunidades.map((c) => c.id).whereType<String>().toList();
-      final todosGruposIds = <String>[];
-      
-      if (idsComunidades.isNotEmpty) {
-        try {
-          final grupos = await _supabase
-              .from('grupos_chat')
-              .select('id')
-              .inFilter('comunidade_id', idsComunidades);
-          
-          for (final g in grupos) {
-            final gid = g['id']?.toString();
-            if (gid != null) todosGruposIds.add(gid);
-          }
-        } catch (e) {
-          print('⚠️ Erro ao listar grupos em lote: $e');
-        }
-      }
-
-      if (todosGruposIds.isEmpty) return 0;
-
-      // 3. Contar não lidas em lote (uma única chamada)
-      final naoLidasMap = await contarMensagensNaoLidasEmLote(todosGruposIds);
-
-      // 4. Somar totais
-      int total = 0;
-      for (final count in naoLidasMap.values) {
-        total += count;
-      }
-
-      _cachedTotalUnread = total;
-      _lastTotalUnreadFetch = DateTime.now();
-      
+      final snapshot = await carregarSnapshotNaoLidasCompleto();
       PerformanceMonitor.stop('ChatService.contarTotalMensagensNaoLidas');
-      return total;
+      return snapshot.totalUnread;
     } catch (e) {
       print('❌ Erro ao contar total de mensagens não lidas: $e');
       PerformanceMonitor.stop('ChatService.contarTotalMensagensNaoLidas');
-      return 0;
+      return _cachedTotalUnread ?? 0;
     }
   }
 

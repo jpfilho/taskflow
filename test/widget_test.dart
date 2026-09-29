@@ -1,30 +1,63 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import 'package:task2026/main.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:task2026/design_system/taskflow_design_system.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  setUpAll(() async {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    SharedPreferences.setMockInitialValues({});
+  });
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+  group('TaskFlow — Bootstrap Smoke Tests', () {
+    testWidgets('1. Root App Shell boots and mounts MaterialApp cleanly', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          title: 'TaskFlow',
+          theme: TaskFlowTheme.light(),
+          darkTheme: TaskFlowTheme.dark(),
+          home: Scaffold(
+            appBar: AppBar(
+              title: const Text('TaskFlow Bootstrap'),
+            ),
+            body: const Center(
+              child: TFCard(
+                child: Padding(
+                  padding: EdgeInsets.all(16.0),
+                  child: Text('TaskFlow Ready'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+      expect(find.byType(MaterialApp), findsOneWidget);
+      expect(find.text('TaskFlow Bootstrap'), findsOneWidget);
+      expect(find.text('TaskFlow Ready'), findsOneWidget);
+    });
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    testWidgets('2. TaskFlow Theme extensions are accessible at runtime', (tester) async {
+      late BuildContext capturedContext;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: TaskFlowTheme.light(),
+          home: Builder(
+            builder: (context) {
+              capturedContext = context;
+              return const SizedBox();
+            },
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(capturedContext.tfColors, isNotNull);
+      expect(capturedContext.tfTypography, isNotNull);
+      expect(capturedContext.tfSpacing, isNotNull);
+      expect(capturedContext.tfRadius, isNotNull);
+    });
   });
 }

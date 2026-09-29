@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
+import '../design_system/taskflow_design_system.dart';
 import '../models/nota_sap.dart';
 import '../utils/responsive.dart';
 
@@ -17,23 +18,23 @@ class NotasSAPDashboardView extends StatelessWidget {
     final stats = _calculateStats(notas);
 
     return SingleChildScrollView(
-      padding: EdgeInsets.all(isMobile ? 16 : 24),
+      padding: EdgeInsets.all(isMobile ? TFSpacing.s8 : TFSpacing.s16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _buildOverviewCards(stats, isMobile),
-          const SizedBox(height: 24),
+          _buildOverviewCards(context, stats, isMobile),
+          const SizedBox(height: TFSpacing.s16),
           if (!isMobile)
             IntrinsicHeight(
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Expanded(
-                    child: _buildNotasVencimentoPorMesChart(notas, isMobile),
+                    child: _buildNotasVencimentoPorMesChart(context, notas, isMobile),
                   ),
-                  const SizedBox(width: 16),
+                  const SizedBox(width: TFSpacing.s12),
                   Expanded(
-                    child: _buildNotasAbertasPorLocalChart(notas, isMobile),
+                    child: _buildNotasAbertasPorLocalChart(context, notas, isMobile),
                   ),
                 ],
               ),
@@ -41,55 +42,55 @@ class NotasSAPDashboardView extends StatelessWidget {
           else
             Column(
               children: [
-                _buildNotasVencimentoPorMesChart(notas, isMobile),
-                const SizedBox(height: 16),
-                _buildNotasAbertasPorLocalChart(notas, isMobile),
+                _buildNotasVencimentoPorMesChart(context, notas, isMobile),
+                const SizedBox(height: TFSpacing.s12),
+                _buildNotasAbertasPorLocalChart(context, notas, isMobile),
               ],
             ),
-          const SizedBox(height: 24),
+          const SizedBox(height: TFSpacing.s16),
           if (!isMobile)
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
-                  child: _buildStatusChart(stats, isMobile),
+                  child: _buildStatusChart(context, stats, isMobile),
                 ),
-                const SizedBox(width: 16),
+                const SizedBox(width: TFSpacing.s12),
                 Expanded(
-                  child: _buildPrioridadeChart(stats, isMobile),
+                  child: _buildPrioridadeChart(context, stats, isMobile),
                 ),
               ],
             )
           else
             Column(
               children: [
-                _buildStatusChart(stats, isMobile),
-                const SizedBox(height: 16),
-                _buildPrioridadeChart(stats, isMobile),
+                _buildStatusChart(context, stats, isMobile),
+                const SizedBox(height: TFSpacing.s12),
+                _buildPrioridadeChart(context, stats, isMobile),
               ],
             ),
-          const SizedBox(height: 32),
-          _buildPrazoSection(stats, isMobile),
-          const SizedBox(height: 32),
+          const SizedBox(height: TFSpacing.s24),
+          _buildPrazoSection(context, stats, isMobile),
+          const SizedBox(height: TFSpacing.s24),
           if (!isMobile)
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
-                  child: _buildTipoChart(stats, isMobile),
+                  child: _buildTipoChart(context, stats, isMobile),
                 ),
-                const SizedBox(width: 16),
+                const SizedBox(width: TFSpacing.s12),
                 Expanded(
-                  child: _buildTopLocaisGPMs(stats, isMobile),
+                  child: _buildTopLocaisGPMs(context, stats, isMobile),
                 ),
               ],
             )
           else
             Column(
               children: [
-                _buildTipoChart(stats, isMobile),
-                const SizedBox(height: 16),
-                _buildTopLocaisGPMs(stats, isMobile),
+                _buildTipoChart(context, stats, isMobile),
+                const SizedBox(height: TFSpacing.s12),
+                _buildTopLocaisGPMs(context, stats, isMobile),
               ],
             ),
         ],
@@ -175,149 +176,148 @@ class NotasSAPDashboardView extends StatelessWidget {
     };
   }
 
-  Widget _buildOverviewCards(Map<String, dynamic> stats, bool isMobile) {
-    return Row(
-      children: [
-        Expanded(
-          child: _buildModernStatCard(
-            'Total',
-            (stats['total'] as int).toString(),
-            Icons.description,
-            Colors.blue,
-            isMobile,
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _buildModernStatCard(
-            'Abertas',
-            (stats['abertas'] as int).toString(),
-            Icons.folder_open,
-            Colors.orange,
-            isMobile,
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _buildModernStatCard(
-            'Concluídas',
-            (stats['concluidas'] as int).toString(),
-            Icons.check_circle,
-            Colors.green,
-            isMobile,
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _buildModernStatCard(
-            'Vencidas',
-            (stats['vencidas'] as int).toString(),
-            Icons.warning,
-            Colors.red,
-            isMobile,
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _buildModernStatCard(
-            'Em Risco',
-            (stats['emRisco'] as int).toString(),
-            Icons.error_outline,
-            Colors.yellow[700]!,
-            isMobile,
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _buildModernStatCard(
-            'No Prazo',
-            (stats['noPrazo'] as int).toString(),
-            Icons.schedule,
-            Colors.teal,
-            isMobile,
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _buildModernStatCard(
-            'Sem Prazo',
-            (stats['semPrazo'] as int).toString(),
-            Icons.help_outline,
-            Colors.grey,
-            isMobile,
-          ),
-        ),
-      ],
+  Widget _buildOverviewCards(BuildContext context, Map<String, dynamic> stats, bool isMobile) {
+    final colors = context.tfColors;
+
+    final cards = [
+      _buildModernStatCard(
+        context,
+        'Total',
+        (stats['total'] as int).toString(),
+        Icons.description,
+        colors.primary,
+        isMobile,
+      ),
+      _buildModernStatCard(
+        context,
+        'Abertas',
+        (stats['abertas'] as int).toString(),
+        Icons.folder_open,
+        colors.warning,
+        isMobile,
+      ),
+      _buildModernStatCard(
+        context,
+        'Concluídas',
+        (stats['concluidas'] as int).toString(),
+        Icons.check_circle,
+        colors.success,
+        isMobile,
+      ),
+      _buildModernStatCard(
+        context,
+        'Vencidas',
+        (stats['vencidas'] as int).toString(),
+        Icons.warning,
+        colors.danger,
+        isMobile,
+      ),
+      _buildModernStatCard(
+        context,
+        'Em Risco',
+        (stats['emRisco'] as int).toString(),
+        Icons.error_outline,
+        colors.warning,
+        isMobile,
+      ),
+      _buildModernStatCard(
+        context,
+        'No Prazo',
+        (stats['noPrazo'] as int).toString(),
+        Icons.schedule,
+        colors.info,
+        isMobile,
+      ),
+      _buildModernStatCard(
+        context,
+        'Sem Prazo',
+        (stats['semPrazo'] as int).toString(),
+        Icons.help_outline,
+        colors.textSecondary,
+        isMobile,
+      ),
+    ];
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final crossAxisCount = constraints.maxWidth < TFBreakpoints.sm
+            ? 2
+            : (constraints.maxWidth < TFBreakpoints.lg ? 4 : 7);
+        return GridView.count(
+          crossAxisCount: crossAxisCount,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          mainAxisSpacing: TFSpacing.s8,
+          crossAxisSpacing: TFSpacing.s8,
+          childAspectRatio: isMobile ? 1.4 : 1.6,
+          children: cards,
+        );
+      },
     );
   }
 
   Widget _buildModernStatCard(
+    BuildContext context,
     String title,
     String value,
     IconData icon,
     Color color,
     bool isMobile,
   ) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: color.withOpacity(0.1),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
+    final typography = context.tfTypography;
+    final colors = context.tfColors;
+
+    return TFCard(
+      padding: EdgeInsets.symmetric(
+        horizontal: isMobile ? TFSpacing.s4 : TFSpacing.s8,
+        vertical: isMobile ? TFSpacing.s4 : TFSpacing.s8,
       ),
-      child: Padding(
-        padding: EdgeInsets.symmetric(
-          horizontal: isMobile ? 10 : 14,
-          vertical: isMobile ? 8 : 10,
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: EdgeInsets.all(isMobile ? 6 : 7),
-              decoration: BoxDecoration(
-                color: color.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Icon(icon, color: color, size: isMobile ? 16 : 18),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(TFSpacing.s4),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(TFRadius.r4),
             ),
-            const SizedBox(width: 8),
-            Column(
+            child: Icon(icon, color: color, size: isMobile ? 16 : 18),
+          ),
+          const SizedBox(width: TFSpacing.s4),
+          Expanded(
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
                   value,
-                  style: TextStyle(
+                  style: typography.cardTitle.copyWith(
                     fontSize: isMobile ? 16 : 18,
                     fontWeight: FontWeight.bold,
                     color: color,
                     height: 1.1,
                   ),
                 ),
-                const SizedBox(height: 1),
                 Text(
                   title,
-                  style: TextStyle(
-                    fontSize: isMobile ? 9 : 10,
-                    color: Colors.grey[700],
-                    fontWeight: FontWeight.w500,
+                  style: typography.caption.copyWith(
+                    fontSize: isMobile ? 10 : 11,
+                    color: colors.textSecondary,
+                    height: 1.1,
                   ),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildNotasAbertasPorLocalChart(List<NotaSAP> notas, bool isMobile) {
+  Widget _buildNotasAbertasPorLocalChart(BuildContext context, List<NotaSAP> notas, bool isMobile) {
+    final colors = context.tfColors;
+
     // Calcular notas abertas por local
     final abertasPorLocal = <String, int>{};
     for (var nota in notas) {
@@ -330,7 +330,7 @@ class NotasSAPDashboardView extends StatelessWidget {
     }
 
     if (abertasPorLocal.isEmpty) {
-      return _buildEmptyChart('Notas Abertas por Local', isMobile);
+      return _buildEmptyChart(context, 'Notas Abertas por Local', isMobile);
     }
 
     // Ordenar e pegar os top 10
@@ -342,10 +342,12 @@ class NotasSAPDashboardView extends StatelessWidget {
         : 1.0;
 
     return _buildChartCard(
+      context,
       'Notas Abertas por Local',
       Icons.location_on,
-      Colors.teal,
+      colors.primary,
       _buildHorizontalBarChartForLocals(
+        context,
         topEntries,
         maxValue,
         isMobile,
@@ -355,7 +357,9 @@ class NotasSAPDashboardView extends StatelessWidget {
     );
   }
 
-  Widget _buildNotasVencimentoPorMesChart(List<NotaSAP> notas, bool isMobile) {
+  Widget _buildNotasVencimentoPorMesChart(BuildContext context, List<NotaSAP> notas, bool isMobile) {
+    final colors = context.tfColors;
+
     // Calcular notas que vencem por mês no ano vigente
     final anoAtual = DateTime.now().year;
     final vencimentoPorMes = <int, int>{};
@@ -389,10 +393,12 @@ class NotasSAPDashboardView extends StatelessWidget {
     ];
     
     return _buildChartCard(
+      context,
       'Notas que Vencem em $anoAtual',
       Icons.calendar_today,
-      Colors.blue,
+      colors.primary,
       _buildHorizontalBarChart(
+        context,
         meses,
         valores,
         nomesMeses,
@@ -406,7 +412,6 @@ class NotasSAPDashboardView extends StatelessWidget {
   }
   
   Color _getColorForMonth(int mes) {
-    // Cores diferentes para cada mês
     final colors = [
       Colors.blue[400]!,
       Colors.blue[500]!,
@@ -425,25 +430,29 @@ class NotasSAPDashboardView extends StatelessWidget {
   }
 
   Widget _buildHorizontalBarChartForLocals(
+    BuildContext context,
     List<MapEntry<String, int>> entries,
     double maxValue,
     bool isMobile,
   ) {
-    final colors = [
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
+    final barColors = [
+      colors.primary,
+      colors.info,
+      colors.success,
+      colors.warning,
+      colors.danger,
       Colors.teal,
       Colors.cyan,
-      Colors.blue,
       Colors.indigo,
-      Colors.purple,
       Colors.deepPurple,
       Colors.blueGrey,
-      Colors.grey,
-      Colors.brown,
-      Colors.amber,
     ];
     
     return SizedBox(
-      height: isMobile ? 400 : 500,
+      height: isMobile ? 380 : 460,
       child: ListView(
         shrinkWrap: true,
         physics: const NeverScrollableScrollPhysics(),
@@ -452,21 +461,19 @@ class NotasSAPDashboardView extends StatelessWidget {
           final item = entry.value;
           final valor = item.value.toDouble();
           final percentage = maxValue > 0 ? (valor / maxValue) : 0.0;
-          final color = colors[index % colors.length];
+          final color = barColors[index % barColors.length];
           
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 4),
             child: Row(
               children: [
                 SizedBox(
-                  width: isMobile ? 50 : 60,
+                  width: isMobile ? 60 : 70,
                   child: Text(
                     item.key.length > (isMobile ? 8 : 12) 
                         ? '${item.key.substring(0, isMobile ? 8 : 12)}...' 
                         : item.key,
-                    style: TextStyle(
-                      fontSize: isMobile ? 10 : 11,
-                      color: Colors.grey[700],
+                    style: typography.caption.copyWith(
                       fontWeight: FontWeight.w500,
                     ),
                     maxLines: 1,
@@ -483,8 +490,8 @@ class NotasSAPDashboardView extends StatelessWidget {
                         Container(
                           height: isMobile ? 24 : 28,
                           decoration: BoxDecoration(
-                            color: Colors.grey[200],
-                            borderRadius: BorderRadius.circular(6),
+                            color: colors.surfaceSecondary,
+                            borderRadius: BorderRadius.circular(TFRadius.r4),
                           ),
                         ),
                         if (percentage > 0)
@@ -495,15 +502,14 @@ class NotasSAPDashboardView extends StatelessWidget {
                               height: isMobile ? 24 : 28,
                               decoration: BoxDecoration(
                                 color: color,
-                                borderRadius: BorderRadius.circular(6),
+                                borderRadius: BorderRadius.circular(TFRadius.r4),
                               ),
                               alignment: Alignment.centerRight,
                               padding: const EdgeInsets.symmetric(horizontal: 8),
                               child: valor > 0
                                   ? Text(
                                       valor.toInt().toString(),
-                                      style: TextStyle(
-                                        fontSize: isMobile ? 10 : 11,
+                                      style: typography.caption.copyWith(
                                         color: Colors.white,
                                         fontWeight: FontWeight.bold,
                                       ),
@@ -520,9 +526,7 @@ class NotasSAPDashboardView extends StatelessWidget {
                   width: isMobile ? 30 : 35,
                   child: Text(
                     valor.toInt().toString(),
-                    style: TextStyle(
-                      fontSize: isMobile ? 11 : 12,
-                      color: Colors.grey[700],
+                    style: typography.caption.copyWith(
                       fontWeight: FontWeight.bold,
                     ),
                     textAlign: TextAlign.right,
@@ -537,6 +541,7 @@ class NotasSAPDashboardView extends StatelessWidget {
   }
 
   Widget _buildHorizontalBarChart(
+    BuildContext context,
     List<int> meses,
     List<double> valores,
     List<String> nomesMeses,
@@ -544,8 +549,11 @@ class NotasSAPDashboardView extends StatelessWidget {
     Color Function(int) getColor,
     bool isMobile,
   ) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
     return SizedBox(
-      height: isMobile ? 400 : 500,
+      height: isMobile ? 380 : 460,
       child: ListView(
         shrinkWrap: true,
         physics: const NeverScrollableScrollPhysics(),
@@ -563,9 +571,7 @@ class NotasSAPDashboardView extends StatelessWidget {
                   width: isMobile ? 35 : 40,
                   child: Text(
                     nomesMeses[mes - 1],
-                    style: TextStyle(
-                      fontSize: isMobile ? 10 : 11,
-                      color: Colors.grey[700],
+                    style: typography.caption.copyWith(
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -580,8 +586,8 @@ class NotasSAPDashboardView extends StatelessWidget {
                         Container(
                           height: isMobile ? 24 : 28,
                           decoration: BoxDecoration(
-                            color: Colors.grey[200],
-                            borderRadius: BorderRadius.circular(6),
+                            color: colors.surfaceSecondary,
+                            borderRadius: BorderRadius.circular(TFRadius.r4),
                           ),
                         ),
                         if (percentage > 0)
@@ -592,20 +598,19 @@ class NotasSAPDashboardView extends StatelessWidget {
                               height: isMobile ? 24 : 28,
                               decoration: BoxDecoration(
                                 color: getColor(mes),
-                                borderRadius: BorderRadius.circular(6),
+                                borderRadius: BorderRadius.circular(TFRadius.r4),
                               ),
                               alignment: Alignment.centerRight,
                               padding: const EdgeInsets.symmetric(horizontal: 8),
                               child: valor > 0
                                   ? Text(
                                       valor.toInt().toString(),
-                                      style: TextStyle(
-                                        fontSize: isMobile ? 10 : 11,
+                                      style: typography.caption.copyWith(
                                         color: Colors.white,
                                         fontWeight: FontWeight.bold,
                                       ),
                                     )
-                                  : const SizedBox.shrink(),
+                                  : null,
                             ),
                           ),
                       ],
@@ -617,9 +622,7 @@ class NotasSAPDashboardView extends StatelessWidget {
                   width: isMobile ? 30 : 35,
                   child: Text(
                     valor.toInt().toString(),
-                    style: TextStyle(
-                      fontSize: isMobile ? 11 : 12,
-                      color: Colors.grey[700],
+                    style: typography.caption.copyWith(
                       fontWeight: FontWeight.bold,
                     ),
                     textAlign: TextAlign.right,
@@ -633,10 +636,11 @@ class NotasSAPDashboardView extends StatelessWidget {
     );
   }
 
-  Widget _buildStatusChart(Map<String, dynamic> stats, bool isMobile) {
+  Widget _buildStatusChart(BuildContext context, Map<String, dynamic> stats, bool isMobile) {
+    final colors = context.tfColors;
     final porStatus = stats['porStatus'] as Map<String, int>;
     if (porStatus.isEmpty) {
-      return _buildEmptyChart('Status', isMobile);
+      return _buildEmptyChart(context, 'Status', isMobile);
     }
 
     final sortedEntries = porStatus.entries.toList()
@@ -644,9 +648,10 @@ class NotasSAPDashboardView extends StatelessWidget {
     final topEntries = sortedEntries.take(6).toList();
 
     return _buildChartCard(
+      context,
       'Distribuição por Status',
       Icons.assessment,
-      Colors.blue,
+      colors.primary,
       PieChart(
         PieChartData(
           sectionsSpace: 2,
@@ -654,18 +659,18 @@ class NotasSAPDashboardView extends StatelessWidget {
           sections: topEntries.asMap().entries.map((entry) {
             final index = entry.key;
             final item = entry.value;
-            final colors = [
-              Colors.blue,
-              Colors.green,
-              Colors.orange,
-              Colors.red,
-              Colors.purple,
+            final sectionColors = [
+              colors.primary,
+              colors.success,
+              colors.warning,
+              colors.danger,
+              colors.info,
               Colors.teal,
             ];
             return PieChartSectionData(
               value: item.value.toDouble(),
               title: '${item.value}',
-              color: colors[index % colors.length],
+              color: sectionColors[index % sectionColors.length],
               radius: isMobile ? 50 : 70,
               titleStyle: TextStyle(
                 fontSize: isMobile ? 12 : 14,
@@ -676,15 +681,16 @@ class NotasSAPDashboardView extends StatelessWidget {
           }).toList(),
         ),
       ),
-      _buildLegend(topEntries, isMobile),
+      _buildLegend(context, topEntries, isMobile),
       isMobile,
     );
   }
 
-  Widget _buildPrioridadeChart(Map<String, dynamic> stats, bool isMobile) {
+  Widget _buildPrioridadeChart(BuildContext context, Map<String, dynamic> stats, bool isMobile) {
+    final colors = context.tfColors;
     final porPrioridade = stats['porPrioridade'] as Map<String, int>;
     if (porPrioridade.isEmpty) {
-      return _buildEmptyChart('Prioridade', isMobile);
+      return _buildEmptyChart(context, 'Prioridade', isMobile);
     }
 
     final sortedEntries = porPrioridade.entries.toList()
@@ -692,9 +698,10 @@ class NotasSAPDashboardView extends StatelessWidget {
     final topEntries = sortedEntries.take(5).toList();
 
     return _buildChartCard(
+      context,
       'Distribuição por Prioridade',
       Icons.priority_high,
-      Colors.orange,
+      colors.warning,
       BarChart(
         BarChartData(
           alignment: BarChartAlignment.spaceAround,
@@ -704,7 +711,7 @@ class NotasSAPDashboardView extends StatelessWidget {
           barTouchData: BarTouchData(
             enabled: true,
             touchTooltipData: BarTouchTooltipData(
-              getTooltipColor: (group) => Colors.grey[800]!,
+              getTooltipColor: (group) => colors.surfaceSecondary,
             ),
           ),
           titlesData: FlTitlesData(
@@ -723,7 +730,7 @@ class NotasSAPDashboardView extends StatelessWidget {
                       item.key.length > 8 ? '${item.key.substring(0, 8)}...' : item.key,
                       style: TextStyle(
                         fontSize: isMobile ? 10 : 12,
-                        color: Colors.grey[700],
+                        color: colors.textSecondary,
                       ),
                     ),
                   );
@@ -740,7 +747,7 @@ class NotasSAPDashboardView extends StatelessWidget {
                     value.toInt().toString(),
                     style: TextStyle(
                       fontSize: isMobile ? 10 : 12,
-                      color: Colors.grey[700],
+                      color: colors.textSecondary,
                     ),
                   );
                 },
@@ -759,7 +766,7 @@ class NotasSAPDashboardView extends StatelessWidget {
             horizontalInterval: 1,
             getDrawingHorizontalLine: (value) {
               return FlLine(
-                color: Colors.grey[200]!,
+                color: colors.borderSubtle,
                 strokeWidth: 1,
               );
             },
@@ -768,19 +775,20 @@ class NotasSAPDashboardView extends StatelessWidget {
           barGroups: topEntries.asMap().entries.map((entry) {
             final index = entry.key;
             final item = entry.value;
-            final colors = [
-              Colors.red,
-              Colors.orange,
-              Colors.yellow[700]!,
-              Colors.blue,
-              Colors.green,
+            final barColors = [
+              colors.primary,
+              colors.info,
+              colors.success,
+              colors.warning,
+              colors.danger,
+              Colors.teal,
             ];
             return BarChartGroupData(
               x: index,
               barRods: [
                 BarChartRodData(
                   toY: item.value.toDouble(),
-                  color: colors[index % colors.length],
+                  color: barColors[index % barColors.length],
                   width: isMobile ? 16 : 24,
                   borderRadius: const BorderRadius.vertical(
                     top: Radius.circular(8),
@@ -796,10 +804,11 @@ class NotasSAPDashboardView extends StatelessWidget {
     );
   }
 
-  Widget _buildTipoChart(Map<String, dynamic> stats, bool isMobile) {
+  Widget _buildTipoChart(BuildContext context, Map<String, dynamic> stats, bool isMobile) {
+    final colors = context.tfColors;
     final porTipo = stats['porTipo'] as Map<String, int>;
     if (porTipo.isEmpty) {
-      return _buildEmptyChart('Tipo', isMobile);
+      return _buildEmptyChart(context, 'Tipo', isMobile);
     }
 
     final sortedEntries = porTipo.entries.toList()
@@ -807,9 +816,10 @@ class NotasSAPDashboardView extends StatelessWidget {
     final topEntries = sortedEntries.take(6).toList();
 
     return _buildChartCard(
+      context,
       'Distribuição por Tipo',
       Icons.category,
-      Colors.purple,
+      colors.info,
       BarChart(
         BarChartData(
           alignment: BarChartAlignment.spaceAround,
@@ -819,7 +829,7 @@ class NotasSAPDashboardView extends StatelessWidget {
           barTouchData: BarTouchData(
             enabled: true,
             touchTooltipData: BarTouchTooltipData(
-              getTooltipColor: (group) => Colors.grey[800]!,
+              getTooltipColor: (group) => colors.surfaceSecondary,
             ),
           ),
           titlesData: FlTitlesData(
@@ -838,7 +848,7 @@ class NotasSAPDashboardView extends StatelessWidget {
                       item.key.length > 6 ? '${item.key.substring(0, 6)}...' : item.key,
                       style: TextStyle(
                         fontSize: isMobile ? 10 : 12,
-                        color: Colors.grey[700],
+                        color: colors.textSecondary,
                       ),
                     ),
                   );
@@ -855,7 +865,7 @@ class NotasSAPDashboardView extends StatelessWidget {
                     value.toInt().toString(),
                     style: TextStyle(
                       fontSize: isMobile ? 10 : 12,
-                      color: Colors.grey[700],
+                      color: colors.textSecondary,
                     ),
                   );
                 },
@@ -874,7 +884,7 @@ class NotasSAPDashboardView extends StatelessWidget {
             horizontalInterval: 1,
             getDrawingHorizontalLine: (value) {
               return FlLine(
-                color: Colors.grey[200]!,
+                color: colors.borderSubtle,
                 strokeWidth: 1,
               );
             },
@@ -883,20 +893,20 @@ class NotasSAPDashboardView extends StatelessWidget {
           barGroups: topEntries.asMap().entries.map((entry) {
             final index = entry.key;
             final item = entry.value;
-            final colors = [
-              Colors.purple,
-              Colors.indigo,
-              Colors.blue,
+            final barColors = [
+              colors.primary,
+              colors.info,
+              colors.success,
+              colors.warning,
+              colors.danger,
               Colors.teal,
-              Colors.green,
-              Colors.orange,
             ];
             return BarChartGroupData(
               x: index,
               barRods: [
                 BarChartRodData(
                   toY: item.value.toDouble(),
-                  color: colors[index % colors.length],
+                  color: barColors[index % barColors.length],
                   width: isMobile ? 16 : 24,
                   borderRadius: const BorderRadius.vertical(
                     top: Radius.circular(8),
@@ -912,28 +922,35 @@ class NotasSAPDashboardView extends StatelessWidget {
     );
   }
 
-  Widget _buildPrazoSection(Map<String, dynamic> stats, bool isMobile) {
+  Widget _buildPrazoSection(BuildContext context, Map<String, dynamic> stats, bool isMobile) {
+    final colors = context.tfColors;
     final notasVencidas = stats['notasVencidas'] as List<NotaSAP>;
     final notasEmRisco = stats['notasEmRisco'] as List<NotaSAP>;
+
+    if (notasVencidas.isEmpty && notasEmRisco.isEmpty) {
+      return const SizedBox.shrink();
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (notasVencidas.isNotEmpty)
           _buildAlertSection(
+            context,
             'Notas Vencidas',
-            Icons.warning,
-            Colors.red,
+            Icons.error_outline,
+            colors.danger,
             notasVencidas,
             isMobile,
           ),
         if (notasVencidas.isNotEmpty && notasEmRisco.isNotEmpty)
-          const SizedBox(height: 16),
+          const SizedBox(height: TFSpacing.s12),
         if (notasEmRisco.isNotEmpty)
           _buildAlertSection(
+            context,
             'Notas em Risco (0-30 dias)',
             Icons.error_outline,
-            Colors.yellow[700]!,
+            colors.warning,
             notasEmRisco,
             isMobile,
           ),
@@ -942,73 +959,53 @@ class NotasSAPDashboardView extends StatelessWidget {
   }
 
   Widget _buildAlertSection(
+    BuildContext context,
     String title,
     IconData icon,
     Color color,
     List<NotaSAP> notas,
     bool isMobile,
   ) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: color.withOpacity(0.1),
-            blurRadius: 15,
-            offset: const Offset(0, 5),
-          ),
-        ],
-      ),
+    final typography = context.tfTypography;
+
+    return TFCard(
+      padding: EdgeInsets.zero,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.all(TFSpacing.s12),
             decoration: BoxDecoration(
-              color: color.withOpacity(0.1),
+              color: color.withValues(alpha: 0.08),
               borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(20),
+                top: Radius.circular(TFRadius.r8),
               ),
             ),
             child: Row(
               children: [
-                Icon(icon, color: color, size: 28),
-                const SizedBox(width: 12),
+                Icon(icon, color: color, size: 24),
+                const SizedBox(width: TFSpacing.s8),
                 Expanded(
                   child: Text(
                     title,
-                    style: TextStyle(
-                      fontSize: isMobile ? 18 : 22,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.grey[800],
+                    style: typography.cardTitle.copyWith(
+                      fontSize: isMobile ? 16 : 18,
                     ),
                   ),
                 ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: color,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    '${notas.length}',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                  ),
+                TFStatusBadge(
+                  label: '${notas.length}',
+                  severity: color == context.tfColors.danger ? TFStatusSeverity.danger : TFStatusSeverity.warning,
                 ),
               ],
             ),
           ),
           Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(TFSpacing.s12),
             child: Column(
               children: notas.take(10).map((nota) {
                 final diasRestantes = nota.diasRestantes ?? 0;
-                return _buildNotaTile(nota, diasRestantes, isMobile);
+                return _buildNotaTile(context, nota, diasRestantes, isMobile);
               }).toList(),
             ),
           ),
@@ -1017,22 +1014,25 @@ class NotasSAPDashboardView extends StatelessWidget {
     );
   }
 
-  Widget _buildNotaTile(NotaSAP nota, int diasRestantes, bool isMobile) {
+  Widget _buildNotaTile(BuildContext context, NotaSAP nota, int diasRestantes, bool isMobile) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
+      margin: const EdgeInsets.only(bottom: TFSpacing.s4),
+      padding: const EdgeInsets.all(TFSpacing.s8),
       decoration: BoxDecoration(
-        color: Colors.grey[50],
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey[200]!),
+        color: colors.surfaceSecondary,
+        borderRadius: BorderRadius.circular(TFRadius.r4),
+        border: Border.all(color: colors.borderSubtle),
       ),
       child: Row(
         children: [
           Container(
             width: 4,
-            height: 60,
+            height: 50,
             decoration: BoxDecoration(
-              color: diasRestantes <= 0 ? Colors.red : Colors.yellow[700],
+              color: diasRestantes <= 0 ? colors.danger : colors.warning,
               borderRadius: BorderRadius.circular(2),
             ),
           ),
@@ -1041,152 +1041,148 @@ class NotasSAPDashboardView extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'Nota: ${nota.nota}',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                  ),
-                ),
-                if (nota.descricao != null) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    nota.descricao!,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.grey[600],
-                    ),
-                  ),
-                ],
-                if (nota.dataVencimento != null) ...[
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Icon(Icons.calendar_today, size: 14, color: Colors.grey[600]),
-                      const SizedBox(width: 4),
-                      Text(
-                        'Vencimento: ${_formatDate(nota.dataVencimento!)}',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey[600],
-                        ),
+                Row(
+                  children: [
+                    Text(
+                      nota.nota,
+                      style: typography.bodyMedium.copyWith(
+                        fontWeight: FontWeight.bold,
                       ),
-                    ],
+                    ),
+                    const SizedBox(width: 8),
+                    if (nota.tipo != null && nota.tipo!.isNotEmpty)
+                      TFStatusBadge(
+                        label: nota.tipo!,
+                        severity: TFStatusSeverity.neutral,
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  nota.descricao ?? '',
+                  style: typography.bodySmall,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (nota.localInstalacao != null && nota.localInstalacao!.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    'Local: ${nota.localInstalacao}',
+                    style: typography.caption.copyWith(
+                      color: colors.textSecondary,
+                    ),
                   ),
                 ],
               ],
             ),
           ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: diasRestantes <= 0 ? Colors.red : Colors.yellow[700],
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              diasRestantes <= 0
-                  ? '${diasRestantes.abs()} dias'
-                  : '$diasRestantes dias',
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              TFStatusBadge(
+                label: diasRestantes < 0
+                    ? '${diasRestantes.abs()}d atrasada'
+                    : diasRestantes == 0
+                        ? 'Vence hoje'
+                        : '$diasRestantes dias',
+                severity: diasRestantes <= 0 ? TFStatusSeverity.danger : TFStatusSeverity.warning,
               ),
-            ),
+              if (nota.dataVencimento != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  _formatDate(nota.dataVencimento!),
+                  style: typography.caption.copyWith(
+                    color: colors.textSecondary,
+                  ),
+                ),
+              ],
+            ],
           ),
         ],
       ),
     );
   }
 
-  Widget _buildTopLocaisGPMs(Map<String, dynamic> stats, bool isMobile) {
+  Widget _buildTopLocaisGPMs(BuildContext context, Map<String, dynamic> stats, bool isMobile) {
+    final colors = context.tfColors;
     final porLocal = stats['porLocal'] as Map<String, int>;
     final porGPM = stats['porGPM'] as Map<String, int>;
 
     return Column(
       children: [
-        _buildTopList('Top Locais', Icons.location_on, Colors.teal, porLocal, isMobile),
-        const SizedBox(height: 16),
-        _buildTopList('Top GPMs', Icons.business, Colors.indigo, porGPM, isMobile),
+        _buildTopList(context, 'Top Locais', Icons.location_on, colors.primary, porLocal, isMobile),
+        const SizedBox(height: TFSpacing.s12),
+        _buildTopList(context, 'Top GPMs', Icons.business, colors.info, porGPM, isMobile),
       ],
     );
   }
 
   Widget _buildTopList(
+    BuildContext context,
     String title,
     IconData icon,
     Color color,
     Map<String, int> items,
     bool isMobile,
   ) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
     if (items.isEmpty) {
-      return _buildEmptyChart(title, isMobile);
+      return _buildEmptyChart(context, title, isMobile);
     }
 
     final sortedItems = items.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
 
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: color.withOpacity(0.1),
-            blurRadius: 15,
-            offset: const Offset(0, 5),
-          ),
-        ],
-      ),
+    return TFCard(
+      padding: EdgeInsets.zero,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.all(TFSpacing.s12),
             decoration: BoxDecoration(
-              color: color.withOpacity(0.1),
+              color: color.withValues(alpha: 0.08),
               borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(20),
+                top: Radius.circular(TFRadius.r8),
               ),
             ),
             child: Row(
               children: [
-                Icon(icon, color: color, size: 24),
-                const SizedBox(width: 12),
+                Icon(icon, color: color, size: 20),
+                const SizedBox(width: TFSpacing.s4),
                 Text(
                   title,
-                  style: TextStyle(
-                    fontSize: isMobile ? 18 : 20,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.grey[800],
+                  style: typography.cardTitle.copyWith(
+                    fontSize: isMobile ? 16 : 18,
                   ),
                 ),
               ],
             ),
           ),
           Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(TFSpacing.s12),
             child: Column(
               children: sortedItems.take(5).toList().asMap().entries.map((entry) {
                 final index = entry.key;
                 final item = entry.value;
                 return Container(
-                  margin: const EdgeInsets.only(bottom: 12),
-                  padding: const EdgeInsets.all(16),
+                  margin: const EdgeInsets.only(bottom: TFSpacing.s4),
+                  padding: const EdgeInsets.all(TFSpacing.s8),
                   decoration: BoxDecoration(
-                    color: Colors.grey[50],
-                    borderRadius: BorderRadius.circular(12),
+                    color: colors.surfaceSecondary,
+                    borderRadius: BorderRadius.circular(TFRadius.r4),
+                    border: Border.all(color: colors.borderSubtle),
                   ),
                   child: Row(
                     children: [
                       Container(
-                        width: 40,
-                        height: 40,
+                        width: 32,
+                        height: 32,
                         decoration: BoxDecoration(
-                          color: color.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(10),
+                          color: color.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(TFRadius.r4),
                         ),
                         child: Center(
                           child: Text(
@@ -1194,34 +1190,33 @@ class NotasSAPDashboardView extends StatelessWidget {
                             style: TextStyle(
                               color: color,
                               fontWeight: FontWeight.bold,
-                              fontSize: 16,
+                              fontSize: 14,
                             ),
                           ),
                         ),
                       ),
-                      const SizedBox(width: 12),
+                      const SizedBox(width: 10),
                       Expanded(
                         child: Text(
                           item.key,
-                          style: const TextStyle(
-                            fontSize: 14,
+                          style: typography.bodySmall.copyWith(
                             fontWeight: FontWeight.w500,
                           ),
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                         decoration: BoxDecoration(
                           color: color,
-                          borderRadius: BorderRadius.circular(8),
+                          borderRadius: BorderRadius.circular(TFRadius.r4),
                         ),
                         child: Text(
                           '${item.value}',
                           style: const TextStyle(
                             color: Colors.white,
                             fontWeight: FontWeight.bold,
-                            fontSize: 14,
+                            fontSize: 12,
                           ),
                         ),
                       ),
@@ -1237,6 +1232,7 @@ class NotasSAPDashboardView extends StatelessWidget {
   }
 
   Widget _buildChartCard(
+    BuildContext context,
     String title,
     IconData icon,
     Color color,
@@ -1244,65 +1240,48 @@ class NotasSAPDashboardView extends StatelessWidget {
     Widget? legend,
     bool isMobile,
   ) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: color.withOpacity(0.1),
-            blurRadius: 15,
-            offset: const Offset(0, 5),
-          ),
-        ],
-      ),
+    final typography = context.tfTypography;
+
+    return TFCard(
+      padding: EdgeInsets.zero,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.all(TFSpacing.s12),
             decoration: BoxDecoration(
-              color: color.withOpacity(0.1),
+              color: color.withValues(alpha: 0.08),
               borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(20),
+                top: Radius.circular(TFRadius.r8),
               ),
             ),
             child: Row(
               children: [
-                Icon(icon, color: color, size: 24),
-                const SizedBox(width: 12),
+                Icon(icon, color: color, size: 20),
+                const SizedBox(width: TFSpacing.s4),
                 Expanded(
                   child: Text(
                     title,
-                    style: TextStyle(
-                      fontSize: isMobile ? 18 : 20,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.grey[800],
+                    style: typography.cardTitle.copyWith(
+                      fontSize: isMobile ? 16 : 18,
                     ),
                   ),
                 ),
               ],
             ),
           ),
-          ConstrainedBox(
-            constraints: BoxConstraints(
-              minHeight: isMobile ? 400 : 500,
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: chart is BarChart || chart is PieChart
-                  ? SizedBox(
-                      height: isMobile ? 250 : 300,
-                      child: chart,
-                    )
-                  : chart,
+          Padding(
+            padding: const EdgeInsets.all(TFSpacing.s12),
+            child: SizedBox(
+              height: isMobile ? 320 : 400,
+              child: chart,
             ),
           ),
           if (legend != null) ...[
             const Divider(height: 1),
             Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(TFSpacing.s8),
               child: legend,
             ),
           ],
@@ -1311,54 +1290,35 @@ class NotasSAPDashboardView extends StatelessWidget {
     );
   }
 
-  Widget _buildEmptyChart(String title, bool isMobile) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.grey.withOpacity(0.1),
-            blurRadius: 15,
-            offset: const Offset(0, 5),
-          ),
-        ],
-      ),
+  Widget _buildEmptyChart(BuildContext context, String title, bool isMobile) {
+    return TFCard(
       child: Padding(
-        padding: const EdgeInsets.all(40),
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.bar_chart, size: 48, color: Colors.grey[400]),
-              const SizedBox(height: 16),
-              Text(
-                'Sem dados de $title',
-                style: TextStyle(
-                  fontSize: 16,
-                  color: Colors.grey[600],
-                ),
-              ),
-            ],
-          ),
+        padding: const EdgeInsets.all(TFSpacing.s16),
+        child: TFEmptyState(
+          icon: Icons.bar_chart,
+          title: 'Sem dados de $title',
+          description: 'Nenhum dado encontrado para exibição no momento.',
         ),
       ),
     );
   }
 
-  Widget _buildLegend(List<MapEntry<String, int>> entries, bool isMobile) {
-    final colors = [
-      Colors.blue,
-      Colors.green,
-      Colors.orange,
-      Colors.red,
-      Colors.purple,
+  Widget _buildLegend(BuildContext context, List<MapEntry<String, int>> entries, bool isMobile) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
+    final legendColors = [
+      colors.primary,
+      colors.success,
+      colors.warning,
+      colors.danger,
+      colors.info,
       Colors.teal,
     ];
 
     return Wrap(
-      spacing: 16,
-      runSpacing: 12,
+      spacing: TFSpacing.s8,
+      runSpacing: TFSpacing.s4,
       children: entries.asMap().entries.map((entry) {
         final index = entry.key;
         final item = entry.value;
@@ -1366,27 +1326,23 @@ class NotasSAPDashboardView extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 16,
-              height: 16,
+              width: 12,
+              height: 12,
               decoration: BoxDecoration(
-                color: colors[index % colors.length],
-                borderRadius: BorderRadius.circular(4),
+                color: legendColors[index % legendColors.length],
+                borderRadius: BorderRadius.circular(2),
               ),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 6),
             Text(
               item.key,
-              style: TextStyle(
-                fontSize: isMobile ? 11 : 12,
-                color: Colors.grey[700],
-              ),
+              style: typography.caption,
             ),
             const SizedBox(width: 4),
             Text(
               '(${item.value})',
-              style: TextStyle(
-                fontSize: isMobile ? 11 : 12,
-                color: Colors.grey[500],
+              style: typography.caption.copyWith(
+                color: colors.textSecondary,
                 fontWeight: FontWeight.bold,
               ),
             ),

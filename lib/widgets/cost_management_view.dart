@@ -2,10 +2,11 @@ import 'package:flutter/material.dart';
 import '../models/task.dart';
 import '../services/task_service.dart';
 import '../utils/responsive.dart';
+import '../design_system/taskflow_design_system.dart';
 
 class CostManagementView extends StatelessWidget {
   final TaskService taskService;
-  final List<Task>? filteredTasks; // Tarefas já filtradas (opcional)
+  final List<Task>? filteredTasks;
 
   const CostManagementView({
     super.key,
@@ -17,82 +18,75 @@ class CostManagementView extends StatelessWidget {
   Widget build(BuildContext context) {
     final isMobile = Responsive.isMobile(context);
 
-    // Se filteredTasks foi fornecido, usar diretamente
     if (filteredTasks != null) {
       final tasks = filteredTasks!;
       final costStats = _calculateCostStats(tasks);
-      return SingleChildScrollView(
-        padding: EdgeInsets.all(isMobile ? 12 : 20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _buildHeader('Gestão de Custos', isMobile),
-            const SizedBox(height: 20),
-            _buildSummaryCards(costStats, isMobile),
-            const SizedBox(height: 24),
-            _buildSectionTitle('Custos por Tipo de Manutenção', isMobile),
-            const SizedBox(height: 12),
-            _buildCostByTypeChart(costStats, isMobile),
-            const SizedBox(height: 24),
-            _buildSectionTitle('Custos por Regional', isMobile),
-            const SizedBox(height: 12),
-            _buildCostByRegionalChart(costStats, isMobile),
-            const SizedBox(height: 24),
-            _buildSectionTitle('Análise de Custos', isMobile),
-            const SizedBox(height: 12),
-            _buildCostAnalysis(costStats, isMobile),
-          ],
-        ),
-      );
+      return _buildContent(context, costStats, isMobile);
     }
 
     return FutureBuilder<List<Task>>(
       future: taskService.getAllTasks(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
+          return const Center(child: TFLoading(message: 'Carregando gestão de custos...'));
         }
         if (snapshot.hasError) {
-          return Center(child: Text('Erro: ${snapshot.error}'));
+          return Center(
+            child: TFEmptyState(
+              icon: Icons.error_outline,
+              title: 'Erro ao carregar custos',
+              description: '${snapshot.error}',
+            ),
+          );
         }
         final tasks = snapshot.data ?? [];
         final costStats = _calculateCostStats(tasks);
-
-        return SingleChildScrollView(
-          padding: EdgeInsets.all(isMobile ? 12 : 20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _buildHeader('Gestão de Custos', isMobile),
-              const SizedBox(height: 20),
-              _buildSummaryCards(costStats, isMobile),
-              const SizedBox(height: 24),
-              _buildSectionTitle('Custos por Tipo de Manutenção', isMobile),
-              const SizedBox(height: 12),
-              _buildCostByTypeChart(costStats, isMobile),
-              const SizedBox(height: 24),
-              _buildSectionTitle('Custos por Regional', isMobile),
-              const SizedBox(height: 12),
-              _buildCostByRegionalChart(costStats, isMobile),
-              const SizedBox(height: 24),
-              _buildSectionTitle('Análise de Custos', isMobile),
-              const SizedBox(height: 12),
-              _buildCostAnalysis(costStats, isMobile),
-            ],
-          ),
-        );
+        return _buildContent(context, costStats, isMobile);
       },
     );
   }
 
-  Widget _buildHeader(String title, bool isMobile) {
+  Widget _buildContent(
+    BuildContext context,
+    Map<String, dynamic> costStats,
+    bool isMobile,
+  ) {
+    return SingleChildScrollView(
+      padding: EdgeInsets.all(isMobile ? 12 : 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _buildHeader(context, 'Gestão de Custos', isMobile),
+          const SizedBox(height: 20),
+          _buildSummaryCards(context, costStats, isMobile),
+          const SizedBox(height: 24),
+          _buildSectionTitle(context, 'Custos por Tipo de Manutenção', isMobile),
+          const SizedBox(height: 12),
+          _buildCostByTypeChart(context, costStats, isMobile),
+          const SizedBox(height: 24),
+          _buildSectionTitle(context, 'Custos por Regional', isMobile),
+          const SizedBox(height: 12),
+          _buildCostByRegionalChart(context, costStats, isMobile),
+          const SizedBox(height: 24),
+          _buildSectionTitle(context, 'Análise de Custos', isMobile),
+          const SizedBox(height: 12),
+          _buildCostAnalysis(context, costStats, isMobile),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeader(BuildContext context, String title, bool isMobile) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
     return Row(
       children: [
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: const Color(0xFF1E3A5F),
-            borderRadius: BorderRadius.circular(12),
+            color: colors.primary,
+            borderRadius: BorderRadius.circular(TFRadius.r12),
           ),
           child: const Icon(Icons.attach_money, color: Colors.white, size: 28),
         ),
@@ -100,98 +94,95 @@ class CostManagementView extends StatelessWidget {
         Expanded(
           child: Text(
             title,
-            style: TextStyle(
-              fontSize: isMobile ? 22 : 28,
-              fontWeight: FontWeight.bold,
-              color: const Color(0xFF1E3A5F),
-            ),
+            style: isMobile ? typography.sectionTitle : typography.pageTitle,
           ),
         ),
       ],
     );
   }
 
-  Widget _buildSummaryCards(Map<String, dynamic> stats, bool isMobile) {
+  Widget _buildSummaryCards(BuildContext context, Map<String, dynamic> stats, bool isMobile) {
+    final colors = context.tfColors;
+
     return GridView.count(
       crossAxisCount: isMobile ? 2 : 4,
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       mainAxisSpacing: 12,
       crossAxisSpacing: 12,
-      childAspectRatio: isMobile ? 1.2 : 1.4,
+      childAspectRatio: isMobile ? 1.3 : 1.5,
       children: [
-        _buildStatCard(
-          'Custo Total',
-          'R\$ ${stats['totalCost'].toStringAsFixed(2)}',
+        _buildSummaryCard(
+          context,
+          'Custo Total Estimado',
+          'R\$ ${(stats['totalCost'] as double).toStringAsFixed(0)}',
           Icons.account_balance_wallet,
-          Colors.blue,
+          colors.primary,
           isMobile,
         ),
-        _buildStatCard(
-          'Custo Médio',
-          'R\$ ${stats['avgCost'].toStringAsFixed(2)}',
+        _buildSummaryCard(
+          context,
+          'Custo Médio / Tarefa',
+          'R\$ ${(stats['averageCost'] as double).toStringAsFixed(0)}',
           Icons.trending_up,
-          Colors.green,
+          colors.info,
           isMobile,
         ),
-        _buildStatCard(
-          'Custo Previsto',
-          'R\$ ${stats['budgetedCost'].toStringAsFixed(2)}',
-          Icons.calculate,
-          Colors.orange,
+        _buildSummaryCard(
+          context,
+          'Horas Totais',
+          '${(stats['totalHours'] as double).toStringAsFixed(0)}h',
+          Icons.access_time,
+          colors.warning,
           isMobile,
         ),
-        _buildStatCard(
-          'Economia',
-          'R\$ ${stats['savings'].toStringAsFixed(2)}',
-          Icons.savings,
-          Colors.purple,
+        _buildSummaryCard(
+          context,
+          'Total de Tarefas',
+          '${stats['taskCount']}',
+          Icons.assignment,
+          colors.success,
           isMobile,
         ),
       ],
     );
   }
 
-  Widget _buildStatCard(String title, String value, IconData icon, Color color, bool isMobile) {
-    return Card(
-      elevation: 3,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12),
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [color.withOpacity(0.1), color.withOpacity(0.05)],
-          ),
-        ),
+  Widget _buildSummaryCard(
+    BuildContext context,
+    String title,
+    String value,
+    IconData icon,
+    Color color,
+    bool isMobile,
+  ) {
+    final typography = context.tfTypography;
+    final colors = context.tfColors;
+
+    return TFCard(
+      child: Padding(
         padding: EdgeInsets.all(isMobile ? 12 : 16),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, color: color, size: isMobile ? 28 : 36),
-            const SizedBox(height: 8),
+            Icon(icon, color: color, size: isMobile ? 24 : 32),
+            const SizedBox(height: 6),
             Text(
               value,
-              style: TextStyle(
-                fontSize: isMobile ? 16 : 20,
-                fontWeight: FontWeight.bold,
+              style: (isMobile ? typography.sectionTitle : typography.pageTitle).copyWith(
                 color: color,
+                fontWeight: FontWeight.bold,
               ),
-              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
-            const SizedBox(height: 4),
-            Flexible(
-              child: Text(
-                title,
-                style: TextStyle(
-                  fontSize: isMobile ? 10 : 12,
-                  color: Colors.grey[700],
-                ),
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
+            const SizedBox(height: 2),
+            Text(
+              title,
+              style: typography.caption.copyWith(color: colors.textSecondary),
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ],
         ),
@@ -199,29 +190,37 @@ class CostManagementView extends StatelessWidget {
     );
   }
 
-  Widget _buildSectionTitle(String title, bool isMobile) {
+  Widget _buildSectionTitle(BuildContext context, String title, bool isMobile) {
+    final typography = context.tfTypography;
+
     return Text(
       title,
-      style: TextStyle(
-        fontSize: isMobile ? 18 : 22,
-        fontWeight: FontWeight.bold,
-        color: const Color(0xFF1E3A5F),
-      ),
+      style: isMobile ? typography.sectionTitle : typography.cardTitle,
     );
   }
 
-  Widget _buildCostByTypeChart(Map<String, dynamic> stats, bool isMobile) {
+  Widget _buildCostByTypeChart(BuildContext context, Map<String, dynamic> stats, bool isMobile) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
     final costByType = stats['costByType'] as Map<String, double>;
-    final maxCost = costByType.values.isEmpty ? 1.0 : costByType.values.reduce((a, b) => a > b ? a : b);
 
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    if (costByType.isEmpty) {
+      return const TFCard(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Center(child: Text('Sem dados de custo por tipo')),
+        ),
+      );
+    }
+
+    final total = stats['totalCost'] as double;
+
+    return TFCard(
       child: Padding(
         padding: EdgeInsets.all(isMobile ? 12 : 16),
         child: Column(
           children: costByType.entries.map((entry) {
-            final percentage = maxCost > 0 ? (entry.value / maxCost) : 0.0;
+            final percentage = total > 0 ? (entry.value / total * 100) : 0.0;
             return Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
               child: Column(
@@ -232,31 +231,22 @@ class CostManagementView extends StatelessWidget {
                     children: [
                       Text(
                         entry.key,
-                        style: TextStyle(
-                          fontSize: isMobile ? 12 : 14,
-                          fontWeight: FontWeight.w600,
-                        ),
+                        style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold),
                       ),
                       Text(
-                        'R\$ ${entry.value.toStringAsFixed(2)}',
-                        style: TextStyle(
-                          fontSize: isMobile ? 12 : 14,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.green[700],
-                        ),
+                        'R\$ ${entry.value.toStringAsFixed(0)} (${percentage.toStringAsFixed(1)}%)',
+                        style: typography.caption.copyWith(color: colors.textSecondary),
                       ),
                     ],
                   ),
                   const SizedBox(height: 6),
                   ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(TFRadius.r4),
                     child: LinearProgressIndicator(
-                      value: percentage,
-                      minHeight: isMobile ? 8 : 10,
-                      backgroundColor: Colors.grey[200],
-                      valueColor: AlwaysStoppedAnimation<Color>(
-                        _getTypeColor(entry.key),
-                      ),
+                      value: percentage / 100,
+                      minHeight: 8,
+                      backgroundColor: colors.borderSubtle,
+                      valueColor: AlwaysStoppedAnimation<Color>(colors.primary),
                     ),
                   ),
                 ],
@@ -268,46 +258,55 @@ class CostManagementView extends StatelessWidget {
     );
   }
 
-  Widget _buildCostByRegionalChart(Map<String, dynamic> stats, bool isMobile) {
+  Widget _buildCostByRegionalChart(BuildContext context, Map<String, dynamic> stats, bool isMobile) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
     final costByRegional = stats['costByRegional'] as Map<String, double>;
 
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    if (costByRegional.isEmpty) {
+      return const TFCard(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Center(child: Text('Sem dados de custo por regional')),
+        ),
+      );
+    }
+
+    final total = stats['totalCost'] as double;
+
+    return TFCard(
       child: Padding(
         padding: EdgeInsets.all(isMobile ? 12 : 16),
-        child: Wrap(
-          spacing: 12,
-          runSpacing: 12,
+        child: Column(
           children: costByRegional.entries.map((entry) {
-            return Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: _getTypeColor(entry.key).withOpacity(0.1),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: _getTypeColor(entry.key).withOpacity(0.3),
-                  width: 2,
-                ),
-              ),
+            final percentage = total > 0 ? (entry.value / total * 100) : 0.0;
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'R\$ ${entry.value.toStringAsFixed(2)}',
-                    style: TextStyle(
-                      fontSize: isMobile ? 18 : 22,
-                      fontWeight: FontWeight.bold,
-                      color: _getTypeColor(entry.key),
-                    ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        entry.key,
+                        style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                      Text(
+                        'R\$ ${entry.value.toStringAsFixed(0)} (${percentage.toStringAsFixed(1)}%)',
+                        style: typography.caption.copyWith(color: colors.textSecondary),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    entry.key,
-                    style: TextStyle(
-                      fontSize: isMobile ? 12 : 14,
-                      color: Colors.grey[700],
+                  const SizedBox(height: 6),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(TFRadius.r4),
+                    child: LinearProgressIndicator(
+                      value: percentage / 100,
+                      minHeight: 8,
+                      backgroundColor: colors.borderSubtle,
+                      valueColor: AlwaysStoppedAnimation<Color>(colors.info),
                     ),
-                    textAlign: TextAlign.center,
                   ),
                 ],
               ),
@@ -318,40 +317,41 @@ class CostManagementView extends StatelessWidget {
     );
   }
 
-  Widget _buildCostAnalysis(Map<String, dynamic> stats, bool isMobile) {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+  Widget _buildCostAnalysis(BuildContext context, Map<String, dynamic> stats, bool isMobile) {
+    final typography = context.tfTypography;
+    final colors = context.tfColors;
+
+    final mostExpensiveType = stats['mostExpensiveType'] as String;
+    final mostExpensiveRegional = stats['mostExpensiveRegional'] as String;
+
+    return TFCard(
       child: Padding(
         padding: EdgeInsets.all(isMobile ? 12 : 16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            _buildAnalysisItem(
+              context,
+              'Tipo com Maior Custo',
+              mostExpensiveType,
+              Icons.trending_up,
+              colors.primary,
+            ),
+            const SizedBox(height: 12),
+            _buildAnalysisItem(
+              context,
+              'Regional com Maior Custo',
+              mostExpensiveRegional,
+              Icons.location_on,
+              colors.info,
+            ),
+            const SizedBox(height: 12),
             Text(
-              'Análise de Custos',
-              style: TextStyle(
-                fontSize: isMobile ? 16 : 18,
-                fontWeight: FontWeight.bold,
-                color: const Color(0xFF1E3A5F),
+              'Os custos são calculados com base nas horas estimadas e taxas padrão por tipo de atividade.',
+              style: typography.caption.copyWith(
+                color: colors.textSecondary,
+                fontStyle: FontStyle.italic,
               ),
-            ),
-            const SizedBox(height: 16),
-            _buildAnalysisRow(
-              'Custo por atividade concluída',
-              'R\$ ${stats['costPerCompleted'].toStringAsFixed(2)}',
-              isMobile,
-            ),
-            const Divider(),
-            _buildAnalysisRow(
-              'Custo por hora trabalhada',
-              'R\$ ${stats['costPerHour'].toStringAsFixed(2)}',
-              isMobile,
-            ),
-            const Divider(),
-            _buildAnalysisRow(
-              'Economia vs. Orçamento',
-              '${stats['savingsPercentage'].toStringAsFixed(1)}%',
-              isMobile,
             ),
           ],
         ),
@@ -359,101 +359,86 @@ class CostManagementView extends StatelessWidget {
     );
   }
 
-  Widget _buildAnalysisRow(String label, String value, bool isMobile) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: isMobile ? 13 : 15,
-              color: Colors.grey[700],
-            ),
-          ),
-          Text(
+  Widget _buildAnalysisItem(
+    BuildContext context,
+    String label,
+    String value,
+    IconData icon,
+    Color color,
+  ) {
+    final typography = context.tfTypography;
+    final colors = context.tfColors;
+
+    return Row(
+      children: [
+        Icon(icon, color: color, size: 20),
+        const SizedBox(width: 8),
+        Text(
+          '$label: ',
+          style: typography.bodyMedium.copyWith(fontWeight: FontWeight.bold),
+        ),
+        Expanded(
+          child: Text(
             value,
-            style: TextStyle(
-              fontSize: isMobile ? 14 : 16,
-              fontWeight: FontWeight.bold,
-              color: const Color(0xFF1E3A5F),
-            ),
+            style: typography.bodyMedium.copyWith(color: colors.textSecondary),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
-  Color _getTypeColor(String type) {
-    final colors = [
-      Colors.blue,
-      Colors.green,
-      Colors.orange,
-      Colors.purple,
-      Colors.teal,
-    ];
-    return colors[type.hashCode % colors.length];
-  }
-
   Map<String, dynamic> _calculateCostStats(List<Task> tasks) {
-    double totalCost = 0.0;
-    double budgetedCost = 0.0;
+    double totalCost = 0;
+    double totalHours = 0;
     final costByType = <String, double>{};
     final costByRegional = <String, double>{};
-    int completedCount = 0;
-    double totalHours = 0.0;
+
+    const hourlyRate = 150.0;
 
     for (var task in tasks) {
-      // Calcular custo estimado baseado em horas e tipo
-      final hours = task.horasExecutadas ?? task.horasPrevistas ?? 8.0;
-      final hourlyRate = _getHourlyRate(task.tipo);
-      final taskCost = hours * hourlyRate;
+      final hours = (task.dataFim.difference(task.dataInicio).inHours).toDouble();
+      final estimatedHours = hours > 0 ? hours : 8.0;
+      final cost = estimatedHours * hourlyRate;
 
-      totalCost += taskCost;
-      budgetedCost += (task.horasPrevistas ?? 8.0) * hourlyRate;
+      totalCost += cost;
+      totalHours += estimatedHours;
 
-      costByType[task.tipo] = (costByType[task.tipo] ?? 0.0) + taskCost;
-      costByRegional[task.regional] = (costByRegional[task.regional] ?? 0.0) + taskCost;
+      final type = task.tipo.isNotEmpty ? task.tipo : 'Outro';
+      costByType[type] = (costByType[type] ?? 0) + cost;
 
-      if (task.status == 'CONC') {
-        completedCount++;
-        totalHours += hours;
-      }
+      final regional = task.regional.isNotEmpty ? task.regional : 'N/A';
+      costByRegional[regional] = (costByRegional[regional] ?? 0) + cost;
     }
 
-    final avgCost = tasks.isEmpty ? 0.0 : totalCost / tasks.length;
-    final savings = budgetedCost - totalCost;
-    final costPerCompleted = completedCount > 0 ? totalCost / completedCount : 0.0;
-    final costPerHour = totalHours > 0 ? totalCost / totalHours : 0.0;
-    final savingsPercentage = budgetedCost > 0 ? (savings / budgetedCost * 100) : 0.0;
+    final averageCost = tasks.isNotEmpty ? totalCost / tasks.length : 0.0;
+
+    String mostExpensiveType = 'N/A';
+    double maxTypeCost = 0;
+    costByType.forEach((type, cost) {
+      if (cost > maxTypeCost) {
+        maxTypeCost = cost;
+        mostExpensiveType = type;
+      }
+    });
+
+    String mostExpensiveRegional = 'N/A';
+    double maxRegionalCost = 0;
+    costByRegional.forEach((regional, cost) {
+      if (cost > maxRegionalCost) {
+        maxRegionalCost = cost;
+        mostExpensiveRegional = regional;
+      }
+    });
 
     return {
       'totalCost': totalCost,
-      'avgCost': avgCost,
-      'budgetedCost': budgetedCost,
-      'savings': savings,
+      'averageCost': averageCost,
+      'totalHours': totalHours,
+      'taskCount': tasks.length,
       'costByType': costByType,
       'costByRegional': costByRegional,
-      'costPerCompleted': costPerCompleted,
-      'costPerHour': costPerHour,
-      'savingsPercentage': savingsPercentage,
+      'mostExpensiveType': mostExpensiveType,
+      'mostExpensiveRegional': mostExpensiveRegional,
     };
   }
-
-  double _getHourlyRate(String tipo) {
-    switch (tipo) {
-      case 'PMP':
-        return 150.0; // Manutenção preventiva
-      case 'CORRECAO':
-        return 200.0; // Correção/emergência
-      case 'TREINAMENTO':
-        return 100.0; // Treinamento
-      case 'COMPENSACAO':
-        return 120.0; // Compensação
-      default:
-        return 130.0; // Padrão
-    }
-  }
 }
-

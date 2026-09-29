@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/task.dart';
 import '../services/task_service.dart';
 import '../utils/responsive.dart';
+import '../design_system/taskflow_design_system.dart';
 
 class FleetManagementView extends StatelessWidget {
   final TaskService taskService;
@@ -16,6 +17,8 @@ class FleetManagementView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isMobile = Responsive.isMobile(context);
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
 
     // Se filteredTasks foi fornecido, usar diretamente
     if (filteredTasks != null) {
@@ -26,17 +29,17 @@ class FleetManagementView extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _buildHeader('Gestão de Frota', isMobile),
+            _buildHeader('Gestão de Frota', isMobile, colors, typography),
             const SizedBox(height: 20),
-            _buildSummaryCards(fleetStats, isMobile),
+            _buildSummaryCards(fleetStats, isMobile, colors, typography),
             const SizedBox(height: 24),
-            _buildSectionTitle('Status dos Veículos', isMobile),
+            _buildSectionTitle('Status dos Veículos', isMobile, colors, typography),
             const SizedBox(height: 12),
-            _buildFleetList(fleetStats, isMobile),
+            _buildFleetList(fleetStats, isMobile, colors, typography),
             const SizedBox(height: 24),
-            _buildSectionTitle('Utilização por Tipo', isMobile),
+            _buildSectionTitle('Utilização por Tipo', isMobile, colors, typography),
             const SizedBox(height: 12),
-            _buildUtilizationChart(fleetStats, isMobile),
+            _buildUtilizationChart(fleetStats, isMobile, colors, typography),
           ],
         ),
       );
@@ -46,44 +49,49 @@ class FleetManagementView extends StatelessWidget {
       future: taskService.getAllTasks(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
+          return const Center(child: TFLoading(message: 'Carregando frota...'));
         }
         if (snapshot.hasError) {
-          return Center(child: Text('Erro: ${snapshot.error}'));
+          return Center(
+            child: Text(
+              'Erro: ${snapshot.error}',
+              style: typography.bodyMedium.copyWith(color: colors.danger),
+            ),
+          );
         }
         final tasks = snapshot.data ?? [];
         final fleetStats = _calculateFleetStats(tasks);
 
         return SingleChildScrollView(
-      padding: EdgeInsets.all(isMobile ? 12 : 20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _buildHeader('Gestão de Frota', isMobile),
-          const SizedBox(height: 20),
-          _buildSummaryCards(fleetStats, isMobile),
-          const SizedBox(height: 24),
-          _buildSectionTitle('Status dos Veículos', isMobile),
-          const SizedBox(height: 12),
-          _buildFleetList(fleetStats, isMobile),
-          const SizedBox(height: 24),
-          _buildSectionTitle('Utilização por Tipo', isMobile),
-          const SizedBox(height: 12),
-          _buildUtilizationChart(fleetStats, isMobile),
-        ],
-      ),
-    );
+          padding: EdgeInsets.all(isMobile ? 12 : 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildHeader('Gestão de Frota', isMobile, colors, typography),
+              const SizedBox(height: 20),
+              _buildSummaryCards(fleetStats, isMobile, colors, typography),
+              const SizedBox(height: 24),
+              _buildSectionTitle('Status dos Veículos', isMobile, colors, typography),
+              const SizedBox(height: 12),
+              _buildFleetList(fleetStats, isMobile, colors, typography),
+              const SizedBox(height: 24),
+              _buildSectionTitle('Utilização por Tipo', isMobile, colors, typography),
+              const SizedBox(height: 12),
+              _buildUtilizationChart(fleetStats, isMobile, colors, typography),
+            ],
+          ),
+        );
       },
     );
   }
 
-  Widget _buildHeader(String title, bool isMobile) {
+  Widget _buildHeader(String title, bool isMobile, TFSemanticColors colors, TFTypography typography) {
     return Row(
       children: [
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: const Color(0xFF1E3A5F),
+            color: colors.primary,
             borderRadius: BorderRadius.circular(12),
           ),
           child: const Icon(Icons.directions_car, color: Colors.white, size: 28),
@@ -92,10 +100,10 @@ class FleetManagementView extends StatelessWidget {
         Expanded(
           child: Text(
             title,
-            style: TextStyle(
+            style: typography.pageTitle.copyWith(
               fontSize: isMobile ? 22 : 28,
               fontWeight: FontWeight.bold,
-              color: const Color(0xFF1E3A5F),
+              color: colors.textPrimary,
             ),
           ),
         ),
@@ -103,7 +111,7 @@ class FleetManagementView extends StatelessWidget {
     );
   }
 
-  Widget _buildSummaryCards(Map<String, dynamic> stats, bool isMobile) {
+  Widget _buildSummaryCards(Map<String, dynamic> stats, bool isMobile, TFSemanticColors colors, TFTypography typography) {
     return GridView.count(
       crossAxisCount: isMobile ? 2 : 4,
       shrinkWrap: true,
@@ -116,45 +124,65 @@ class FleetManagementView extends StatelessWidget {
           'Total de Veículos',
           stats['totalVeiculos'].toString(),
           Icons.directions_car,
-          Colors.blue,
+          colors.primary,
           isMobile,
+          colors,
+          typography,
         ),
         _buildStatCard(
           'Em Uso',
           stats['emUso'].toString(),
           Icons.local_shipping,
-          Colors.orange,
+          colors.warning,
           isMobile,
+          colors,
+          typography,
         ),
         _buildStatCard(
           'Disponíveis',
           stats['disponiveis'].toString(),
           Icons.check_circle,
-          Colors.green,
+          colors.success,
           isMobile,
+          colors,
+          typography,
         ),
         _buildStatCard(
           'Taxa de Utilização',
           '${stats['taxaUtilizacao'].toStringAsFixed(1)}%',
           Icons.trending_up,
-          Colors.purple,
+          colors.info,
           isMobile,
+          colors,
+          typography,
         ),
       ],
     );
   }
 
-  Widget _buildStatCard(String title, String value, IconData icon, Color color, bool isMobile) {
+  Widget _buildStatCard(
+    String title,
+    String value,
+    IconData icon,
+    Color color,
+    bool isMobile,
+    TFSemanticColors colors,
+    TFTypography typography,
+  ) {
     return Card(
-      elevation: 3,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      elevation: 0,
+      color: colors.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: colors.borderSubtle),
+      ),
       child: Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(12),
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: [color.withOpacity(0.1), color.withOpacity(0.05)],
+            colors: [color.withOpacity(0.12), color.withOpacity(0.03)],
           ),
         ),
         padding: EdgeInsets.all(isMobile ? 12 : 16),
@@ -165,7 +193,7 @@ class FleetManagementView extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               value,
-              style: TextStyle(
+              style: typography.display.copyWith(
                 fontSize: isMobile ? 22 : 28,
                 fontWeight: FontWeight.bold,
                 color: color,
@@ -175,9 +203,9 @@ class FleetManagementView extends StatelessWidget {
             Flexible(
               child: Text(
                 title,
-                style: TextStyle(
+                style: typography.labelSmall.copyWith(
                   fontSize: isMobile ? 10 : 12,
-                  color: Colors.grey[700],
+                  color: colors.textSecondary,
                 ),
                 textAlign: TextAlign.center,
                 maxLines: 2,
@@ -190,32 +218,37 @@ class FleetManagementView extends StatelessWidget {
     );
   }
 
-  Widget _buildSectionTitle(String title, bool isMobile) {
+  Widget _buildSectionTitle(String title, bool isMobile, TFSemanticColors colors, TFTypography typography) {
     return Text(
       title,
-      style: TextStyle(
+      style: typography.sectionTitle.copyWith(
         fontSize: isMobile ? 16 : 20,
         fontWeight: FontWeight.bold,
-        color: const Color(0xFF1E3A5F),
+        color: colors.textPrimary,
       ),
     );
   }
 
-  Widget _buildFleetList(Map<String, dynamic> stats, bool isMobile) {
+  Widget _buildFleetList(Map<String, dynamic> stats, bool isMobile, TFSemanticColors colors, TFTypography typography) {
     final vehicles = stats['vehicles'] as Map<String, Map<String, dynamic>>;
     
     return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      elevation: 0,
+      color: colors.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: colors.borderSubtle),
+      ),
       child: Column(
         children: vehicles.entries.map((entry) {
           final vehicle = entry.value;
           final status = vehicle['status'] as String;
+          final statusColor = _getStatusColor(status, colors);
           return Container(
             padding: EdgeInsets.all(isMobile ? 12 : 16),
             decoration: BoxDecoration(
               border: Border(
-                bottom: BorderSide(color: Colors.grey[200]!, width: 1),
+                bottom: BorderSide(color: colors.borderSubtle, width: 1),
               ),
             ),
             child: Row(
@@ -223,12 +256,12 @@ class FleetManagementView extends StatelessWidget {
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: _getStatusColor(status).withOpacity(0.1),
+                    color: statusColor.withOpacity(0.12),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Icon(
                     Icons.directions_car,
-                    color: _getStatusColor(status),
+                    color: statusColor,
                     size: isMobile ? 24 : 28,
                   ),
                 ),
@@ -239,17 +272,18 @@ class FleetManagementView extends StatelessWidget {
                     children: [
                       Text(
                         entry.key,
-                        style: TextStyle(
+                        style: typography.cardTitle.copyWith(
                           fontSize: isMobile ? 14 : 16,
                           fontWeight: FontWeight.bold,
+                          color: colors.textPrimary,
                         ),
                       ),
                       const SizedBox(height: 4),
                       Text(
                         '${vehicle['tasks']} atividades • ${vehicle['lastMaintenance']}',
-                        style: TextStyle(
+                        style: typography.bodySmall.copyWith(
                           fontSize: isMobile ? 11 : 12,
-                          color: Colors.grey[600],
+                          color: colors.textSecondary,
                         ),
                       ),
                     ],
@@ -258,14 +292,14 @@ class FleetManagementView extends StatelessWidget {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
-                    color: _getStatusColor(status).withOpacity(0.1),
+                    color: statusColor.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: Text(
                     status,
-                    style: TextStyle(
+                    style: typography.labelSmall.copyWith(
                       fontSize: isMobile ? 10 : 11,
-                      color: _getStatusColor(status),
+                      color: statusColor,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -278,13 +312,17 @@ class FleetManagementView extends StatelessWidget {
     );
   }
 
-  Widget _buildUtilizationChart(Map<String, dynamic> stats, bool isMobile) {
+  Widget _buildUtilizationChart(Map<String, dynamic> stats, bool isMobile, TFSemanticColors colors, TFTypography typography) {
     final utilization = stats['utilization'] as Map<String, int>;
     final maxUtil = utilization.values.isEmpty ? 1 : utilization.values.reduce((a, b) => a > b ? a : b);
 
     return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      elevation: 0,
+      color: colors.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: colors.borderSubtle),
+      ),
       child: Padding(
         padding: EdgeInsets.all(isMobile ? 12 : 16),
         child: Column(
@@ -300,16 +338,17 @@ class FleetManagementView extends StatelessWidget {
                     children: [
                       Text(
                         entry.key,
-                        style: TextStyle(
+                        style: typography.labelMedium.copyWith(
                           fontSize: isMobile ? 12 : 14,
                           fontWeight: FontWeight.w600,
+                          color: colors.textPrimary,
                         ),
                       ),
                       Text(
                         '${entry.value} usos',
-                        style: TextStyle(
+                        style: typography.bodySmall.copyWith(
                           fontSize: isMobile ? 11 : 12,
-                          color: Colors.grey[600],
+                          color: colors.textSecondary,
                         ),
                       ),
                     ],
@@ -320,9 +359,9 @@ class FleetManagementView extends StatelessWidget {
                     child: LinearProgressIndicator(
                       value: percentage,
                       minHeight: isMobile ? 8 : 10,
-                      backgroundColor: Colors.grey[200],
+                      backgroundColor: colors.surfaceSecondary,
                       valueColor: AlwaysStoppedAnimation<Color>(
-                        percentage > 0.8 ? Colors.blue : percentage > 0.5 ? Colors.cyan : Colors.teal,
+                        percentage > 0.8 ? colors.primary : percentage > 0.5 ? colors.info : colors.success,
                       ),
                     ),
                   ),
@@ -335,18 +374,18 @@ class FleetManagementView extends StatelessWidget {
     );
   }
 
-  Color _getStatusColor(String status) {
+  Color _getStatusColor(String status, TFSemanticColors colors) {
     switch (status.toUpperCase()) {
       case 'EM USO':
-        return Colors.orange;
+        return colors.warning;
       case 'DISPONÍVEL':
-        return Colors.green;
+        return colors.success;
       case 'MANUTENÇÃO':
-        return Colors.red;
+        return colors.danger;
       case 'RESERVADO':
-        return Colors.blue;
+        return colors.primary;
       default:
-        return Colors.grey;
+        return colors.textSecondary;
     }
   }
 

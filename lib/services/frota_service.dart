@@ -25,22 +25,28 @@ class FrotaService {
     return frota.toMap();
   }
 
-  // Buscar todas as frotas
-  Future<List<Frota>> getAllFrotas() async {
+  // Buscar todas as frotas (por padrão apenas ativas)
+  Future<List<Frota>> getAllFrotas({bool apenasAtivos = true}) async {
     // Se offline, ler do banco local
     if (!_connectivity.isConnected) {
-      return await _getAllFrotasFromLocal();
+      return await _getAllFrotasFromLocal(apenasAtivos: apenasAtivos);
     }
 
     try {
-      final response = await _supabase
+      var query = _supabase
           .from('frota')
           .select('''
             *,
             regionais!left(regional),
             divisoes!left(divisao),
             segmentos!left(segmento)
-          ''')
+          ''');
+
+      if (apenasAtivos) {
+        query = query.eq('ativo', true);
+      }
+
+      final response = await query
           .order('nome', ascending: true)
           .timeout(
             const Duration(seconds: 30),
@@ -51,7 +57,7 @@ class FrotaService {
 
       if (response.isEmpty) {
         // Se não houver dados online, tentar do banco local
-        return await _getAllFrotasFromLocal();
+        return await _getAllFrotasFromLocal(apenasAtivos: apenasAtivos);
       }
 
       final frotasList = response as List;
@@ -72,14 +78,18 @@ class FrotaService {
     } catch (e) {
       print('Erro ao buscar frota do Supabase: $e');
       // Fallback para banco local
-      return await _getAllFrotasFromLocal();
+      return await _getAllFrotasFromLocal(apenasAtivos: apenasAtivos);
     }
   }
 
-  Future<List<Frota>> _getAllFrotasFromLocal() async {
+  Future<List<Frota>> _getAllFrotasFromLocal({bool apenasAtivos = true}) async {
     try {
       final db = await _localDb.database;
-      final frotasRows = await db.query('frota_local', orderBy: 'nome ASC');
+      final frotasRows = await db.query(
+        'frota_local',
+        where: apenasAtivos ? 'ativo = 1' : null,
+        orderBy: 'nome ASC',
+      );
       
       return frotasRows.map((row) => _frotaFromLocalMap(row)).toList();
     } catch (e) {

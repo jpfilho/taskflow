@@ -13,6 +13,7 @@ import '../services/task_service.dart';
 import '../utils/conflict_detection.dart';
 import 'common/taskflow_tooltip.dart';
 import 'gantt_chart.dart' show GanttPeriod;
+import '../design_system/components/inputs/tf_date_range_picker.dart';
 
 /// Widget público para barras arrastáveis do Gantt.
 /// Equivale ao antigo `_DraggableSegment` (privado em gantt_chart.dart).
@@ -49,12 +50,14 @@ class GanttSegmentWidget extends StatefulWidget {
   final ValueNotifier<int>? conflictsVersionNotifier;
   final void Function(Set<String>)? onFilterConflictTasks;
   final bool isConflictFilterActive;
+  final int subSegmentIndex;
 
   const GanttSegmentWidget({
     super.key,
     required this.task,
     required this.segmentIndex,
     required this.segment,
+    this.subSegmentIndex = 0,
     required this.normalizedStartDate,
     required this.normalizedEndDate,
     required this.barWidth,
@@ -301,6 +304,9 @@ class _GanttSegmentWidgetState extends State<GanttSegmentWidget> {
   }
 
   _DragMode _getDragMode(double x) {
+    if (widget.segment.tipoPeriodo?.toUpperCase() == 'DESLOCAMENTO') {
+      return _DragMode.move;
+    }
     if (x < _resizeHandleWidth) return _DragMode.resizeStart;
     if (x > widget.barWidth - _resizeHandleWidth) return _DragMode.resizeEnd;
     return _DragMode.move;
@@ -433,6 +439,23 @@ class _GanttSegmentWidgetState extends State<GanttSegmentWidget> {
         _currentStartDate!.year, _currentStartDate!.month, _currentStartDate!.day);
       final normalizedEnd = DateTime(
         _currentEndDate!.year, _currentEndDate!.month, _currentEndDate!.day);
+
+      final isDeslocamento = widget.segment.tipoPeriodo?.toUpperCase() == 'DESLOCAMENTO';
+      final DateTime targetStart;
+      final DateTime targetEnd;
+      if (isDeslocamento) {
+        if (widget.subSegmentIndex == 1) {
+          targetEnd = normalizedEnd;
+          targetStart = widget.segment.dataInicio.isAfter(targetEnd) ? targetEnd : widget.segment.dataInicio;
+        } else {
+          targetStart = normalizedStart;
+          targetEnd = widget.segment.dataFim.isBefore(targetStart) ? targetStart : widget.segment.dataFim;
+        }
+      } else {
+        targetStart = normalizedStart;
+        targetEnd = normalizedEnd;
+      }
+
       final isExecutorRow = widget.task.id.contains('_executor_');
 
       if (isExecutorRow) {
@@ -452,8 +475,8 @@ class _GanttSegmentWidgetState extends State<GanttSegmentWidget> {
                   label: widget.segment.label,
                   tipo: widget.segment.tipo,
                   tipoPeriodo: widget.segment.tipoPeriodo,
-                  dataInicio: normalizedStart,
-                  dataFim: normalizedEnd,
+                  dataInicio: targetStart,
+                  dataFim: targetEnd,
                 );
                 updatedEPs[epIdx] = ExecutorPeriod(
                   executorId: ep.executorId,
@@ -475,8 +498,8 @@ class _GanttSegmentWidgetState extends State<GanttSegmentWidget> {
           label: widget.segment.label,
           tipo: widget.segment.tipo,
           tipoPeriodo: widget.segment.tipoPeriodo,
-          dataInicio: normalizedStart,
-          dataFim: normalizedEnd,
+          dataInicio: targetStart,
+          dataFim: targetEnd,
         );
         final updatedTask = widget.task.copyWith(
           ganttSegments: updatedSegments,
@@ -746,7 +769,7 @@ class _GanttSegmentWidgetState extends State<GanttSegmentWidget> {
                     if (v != null)
                       setDialogState(() {
                         selectedTipoPeriodo = v;
-                        if (v == 'DESLOCAMENTO') newEnd = newStart;
+                        if (v == 'DESLOCAMENTO' && newEnd.isBefore(newStart)) newEnd = newStart;
                       });
                   },
                 ),
@@ -760,7 +783,7 @@ class _GanttSegmentWidgetState extends State<GanttSegmentWidget> {
                     ),
                     trailing: const Icon(Icons.date_range),
                     onTap: () async {
-                      final dr = await showDateRangePicker(
+                      final dr = await showTFDateRangePicker(
                         context: context,
                         initialDateRange: DateTimeRange(
                           start: newStart,
@@ -843,7 +866,7 @@ class _GanttSegmentWidgetState extends State<GanttSegmentWidget> {
                     )
                     ? selectedTipoPeriodo.toUpperCase().trim()
                     : 'EXECUCAO';
-                final finalDataFim = tipoPeriodoFinal == 'DESLOCAMENTO'
+                final finalDataFim = (tipoPeriodoFinal == 'DESLOCAMENTO' && newEnd.isBefore(newStart))
                     ? newStart
                     : newEnd;
                 final updatedSegments = List<GanttSegment>.from(

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/task.dart';
 import '../utils/responsive.dart';
+import '../design_system/taskflow_design_system.dart';
 
 class MaintenanceChecklistView extends StatefulWidget {
   final Task? task;
@@ -24,7 +25,6 @@ class _MaintenanceChecklistViewState extends State<MaintenanceChecklistView> {
   }
 
   void _loadChecklists() {
-    // Checklists por tipo de manutenção
     _checklists['PMP'] = [
       ChecklistItem('Verificar estado geral do equipamento', false),
       ChecklistItem('Inspecionar conexões elétricas', false),
@@ -67,30 +67,33 @@ class _MaintenanceChecklistViewState extends State<MaintenanceChecklistView> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _buildHeader(isMobile),
+          _buildHeader(context, isMobile),
           const SizedBox(height: 20),
-          if (widget.task != null) _buildTaskInfo(widget.task!, isMobile),
+          if (widget.task != null) _buildTaskInfo(context, widget.task!, isMobile),
           const SizedBox(height: 24),
-          _buildSectionTitle('Checklist de Manutenção', isMobile),
+          _buildSectionTitle(context, 'Checklist de Manutenção', isMobile),
           const SizedBox(height: 12),
-          _buildChecklist(checklist, isMobile),
+          _buildChecklist(context, checklist, isMobile),
           const SizedBox(height: 24),
-          _buildProgressCard(checklist, isMobile),
+          _buildProgressCard(context, checklist, isMobile),
           const SizedBox(height: 24),
-          _buildActionButtons(isMobile),
+          _buildActionButtons(context, isMobile),
         ],
       ),
     );
   }
 
-  Widget _buildHeader(bool isMobile) {
+  Widget _buildHeader(BuildContext context, bool isMobile) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
     return Row(
       children: [
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: const Color(0xFF1E3A5F),
-            borderRadius: BorderRadius.circular(12),
+            color: colors.primary,
+            borderRadius: BorderRadius.circular(TFRadius.r12),
           ),
           child: const Icon(Icons.checklist, color: Colors.white, size: 28),
         ),
@@ -98,21 +101,18 @@ class _MaintenanceChecklistViewState extends State<MaintenanceChecklistView> {
         Expanded(
           child: Text(
             'Checklist de Manutenção',
-            style: TextStyle(
-              fontSize: isMobile ? 22 : 28,
-              fontWeight: FontWeight.bold,
-              color: const Color(0xFF1E3A5F),
-            ),
+            style: isMobile ? typography.sectionTitle : typography.pageTitle,
           ),
         ),
       ],
     );
   }
 
-  Widget _buildTaskInfo(Task task, bool isMobile) {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+  Widget _buildTaskInfo(BuildContext context, Task task, bool isMobile) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
+    return TFCard(
       child: Padding(
         padding: EdgeInsets.all(isMobile ? 12 : 16),
         child: Column(
@@ -120,35 +120,22 @@ class _MaintenanceChecklistViewState extends State<MaintenanceChecklistView> {
           children: [
             Text(
               task.tarefa,
-              style: TextStyle(
-                fontSize: isMobile ? 16 : 18,
-                fontWeight: FontWeight.bold,
-              ),
+              style: typography.cardTitle.copyWith(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
             Row(
               children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: _getStatusColor(task.status).withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    task.status,
-                    style: TextStyle(
-                      color: _getStatusColor(task.status),
-                      fontWeight: FontWeight.w600,
-                      fontSize: isMobile ? 11 : 12,
-                    ),
-                  ),
+                TFStatusBadge(
+                  label: task.status,
+                  severity: _mapStatusToSeverity(task.status),
                 ),
-                const SizedBox(width: 8),
-                Text(
-                  '${task.tipo} • ${task.locais.isNotEmpty ? task.locais.join(', ') : ''}',
-                  style: TextStyle(
-                    fontSize: isMobile ? 12 : 14,
-                    color: Colors.grey[600],
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    '${task.tipo} • ${task.locais.isNotEmpty ? task.locais.join(', ') : ''}',
+                    style: typography.caption.copyWith(color: colors.textSecondary),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
               ],
@@ -159,32 +146,47 @@ class _MaintenanceChecklistViewState extends State<MaintenanceChecklistView> {
     );
   }
 
-  Widget _buildSectionTitle(String title, bool isMobile) {
+  TFStatusSeverity _mapStatusToSeverity(String status) {
+    switch (status.toUpperCase()) {
+      case 'CONC':
+      case 'CONCLUIDA':
+        return TFStatusSeverity.success;
+      case 'ANDA':
+      case 'EM_ANDAMENTO':
+        return TFStatusSeverity.warning;
+      case 'CANC':
+      case 'CANCELADA':
+        return TFStatusSeverity.danger;
+      default:
+        return TFStatusSeverity.info;
+    }
+  }
+
+  Widget _buildSectionTitle(BuildContext context, String title, bool isMobile) {
+    final typography = context.tfTypography;
+
     return Text(
       title,
-      style: TextStyle(
-        fontSize: isMobile ? 18 : 22,
-        fontWeight: FontWeight.bold,
-        color: const Color(0xFF1E3A5F),
-      ),
+      style: isMobile ? typography.cardTitle : typography.sectionTitle,
     );
   }
 
-  Widget _buildChecklist(List<ChecklistItem> checklist, bool isMobile) {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+  Widget _buildChecklist(BuildContext context, List<ChecklistItem> checklist, bool isMobile) {
+    return TFCard(
       child: Column(
         children: checklist.asMap().entries.map((entry) {
           final index = entry.key;
           final item = entry.value;
-          return _buildChecklistItem(item, index, isMobile);
+          return _buildChecklistItem(context, item, index, isMobile);
         }).toList(),
       ),
     );
   }
 
-  Widget _buildChecklistItem(ChecklistItem item, int index, bool isMobile) {
+  Widget _buildChecklistItem(BuildContext context, ChecklistItem item, int index, bool isMobile) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
     return InkWell(
       onTap: () {
         setState(() {
@@ -195,22 +197,22 @@ class _MaintenanceChecklistViewState extends State<MaintenanceChecklistView> {
         padding: EdgeInsets.all(isMobile ? 12 : 16),
         decoration: BoxDecoration(
           border: Border(
-            bottom: BorderSide(color: Colors.grey[200]!, width: 1),
+            bottom: BorderSide(color: colors.borderSubtle, width: 1),
           ),
-          color: item.completed ? Colors.green.withOpacity(0.05) : Colors.white,
+          color: item.completed ? colors.success.withValues(alpha: 0.04) : Colors.transparent,
         ),
         child: Row(
           children: [
             Container(
-              width: 24,
-              height: 24,
+              width: 22,
+              height: 22,
               decoration: BoxDecoration(
-                color: item.completed ? Colors.green : Colors.white,
+                color: item.completed ? colors.success : Colors.transparent,
                 border: Border.all(
-                  color: item.completed ? Colors.green : Colors.grey[400]!,
+                  color: item.completed ? colors.success : colors.borderSubtle,
                   width: 2,
                 ),
-                borderRadius: BorderRadius.circular(6),
+                borderRadius: BorderRadius.circular(TFRadius.r4),
               ),
               child: item.completed
                   ? const Icon(Icons.check, color: Colors.white, size: 16)
@@ -220,65 +222,50 @@ class _MaintenanceChecklistViewState extends State<MaintenanceChecklistView> {
             Expanded(
               child: Text(
                 item.description,
-                style: TextStyle(
-                  fontSize: isMobile ? 13 : 15,
+                style: typography.bodyMedium.copyWith(
                   decoration: item.completed ? TextDecoration.lineThrough : null,
-                  color: item.completed ? Colors.grey[600] : Colors.grey[800],
+                  color: item.completed ? colors.textSecondary : colors.textPrimary,
                 ),
               ),
             ),
             if (item.completed)
-              Icon(Icons.check_circle, color: Colors.green, size: 20),
+              Icon(Icons.check_circle, color: colors.success, size: 20),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildProgressCard(List<ChecklistItem> checklist, bool isMobile) {
+  Widget _buildProgressCard(BuildContext context, List<ChecklistItem> checklist, bool isMobile) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
     final completed = checklist.where((item) => item.completed).length;
     final total = checklist.length;
     final percentage = total > 0 ? (completed / total * 100) : 0.0;
 
-    return Card(
-      elevation: 3,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12),
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Colors.green.withOpacity(0.1),
-              Colors.green.withOpacity(0.05),
-            ],
-          ),
-        ),
+    return TFCard(
+      child: Padding(
         padding: EdgeInsets.all(isMobile ? 16 : 20),
         child: Column(
           children: [
             Text(
               'Progresso do Checklist',
-              style: TextStyle(
-                fontSize: isMobile ? 16 : 18,
-                fontWeight: FontWeight.bold,
-                color: const Color(0xFF1E3A5F),
-              ),
+              style: typography.cardTitle.copyWith(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 16),
             Stack(
               alignment: Alignment.center,
               children: [
                 SizedBox(
-                  width: isMobile ? 120 : 150,
-                  height: isMobile ? 120 : 150,
+                  width: isMobile ? 110 : 130,
+                  height: isMobile ? 110 : 130,
                   child: CircularProgressIndicator(
                     value: percentage / 100,
-                    strokeWidth: 12,
-                    backgroundColor: Colors.grey[200],
+                    strokeWidth: 10,
+                    backgroundColor: colors.borderSubtle,
                     valueColor: AlwaysStoppedAnimation<Color>(
-                      percentage == 100 ? Colors.green : Colors.blue,
+                      percentage == 100 ? colors.success : colors.primary,
                     ),
                   ),
                 ),
@@ -286,18 +273,14 @@ class _MaintenanceChecklistViewState extends State<MaintenanceChecklistView> {
                   children: [
                     Text(
                       '${percentage.toStringAsFixed(0)}%',
-                      style: TextStyle(
-                        fontSize: isMobile ? 28 : 36,
+                      style: (isMobile ? typography.sectionTitle : typography.display).copyWith(
+                        color: percentage == 100 ? colors.success : colors.primary,
                         fontWeight: FontWeight.bold,
-                        color: percentage == 100 ? Colors.green : Colors.blue,
                       ),
                     ),
                     Text(
                       '$completed de $total',
-                      style: TextStyle(
-                        fontSize: isMobile ? 12 : 14,
-                        color: Colors.grey[600],
-                      ),
+                      style: typography.caption.copyWith(color: colors.textSecondary),
                     ),
                   ],
                 ),
@@ -309,57 +292,36 @@ class _MaintenanceChecklistViewState extends State<MaintenanceChecklistView> {
     );
   }
 
-  Widget _buildActionButtons(bool isMobile) {
+  Widget _buildActionButtons(BuildContext context, bool isMobile) {
     return Row(
       children: [
         Expanded(
-          child: ElevatedButton.icon(
+          child: TFButton(
+            label: 'Salvar Checklist',
+            leadingIcon: Icons.save,
+            variant: TFButtonVariant.primary,
             onPressed: () {
-              // Salvar checklist
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('Checklist salvo com sucesso!')),
               );
             },
-            icon: const Icon(Icons.save),
-            label: const Text('Salvar Checklist'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF1E3A5F),
-              foregroundColor: Colors.white,
-              padding: EdgeInsets.symmetric(vertical: isMobile ? 12 : 16),
-            ),
           ),
         ),
         const SizedBox(width: 12),
         Expanded(
-          child: OutlinedButton.icon(
+          child: TFButton(
+            label: 'Imprimir',
+            leadingIcon: Icons.print,
+            variant: TFButtonVariant.secondary,
             onPressed: () {
-              // Imprimir checklist
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('Preparando para impressão...')),
               );
             },
-            icon: const Icon(Icons.print),
-            label: const Text('Imprimir'),
-            style: OutlinedButton.styleFrom(
-              padding: EdgeInsets.symmetric(vertical: isMobile ? 12 : 16),
-            ),
           ),
         ),
       ],
     );
-  }
-
-  Color _getStatusColor(String status) {
-    switch (status) {
-      case 'ANDA':
-        return Colors.orange;
-      case 'CONC':
-        return Colors.green;
-      case 'PROG':
-        return Colors.blue;
-      default:
-        return Colors.grey;
-    }
   }
 }
 
@@ -369,9 +331,3 @@ class ChecklistItem {
 
   ChecklistItem(this.description, this.completed);
 }
-
-
-
-
-
-

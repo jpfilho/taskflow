@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
+import '../design_system/taskflow_design_system.dart';
 import '../models/funcao.dart';
 import '../services/funcao_service.dart';
 import 'funcao_form_dialog.dart';
-import '../utils/responsive.dart';
 
 class FuncaoListView extends StatefulWidget {
   const FuncaoListView({super.key});
@@ -26,7 +26,7 @@ class _FuncaoListViewState extends State<FuncaoListView> {
     _searchController.addListener(_onSearchChanged);
     // No desktop, tabela é o padrão
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && Responsive.isDesktop(context)) {
+      if (mounted && TFBreakpoints.isDesktop(context)) {
         setState(() {
           _isTableView = true;
         });
@@ -122,7 +122,6 @@ class _FuncaoListViewState extends State<FuncaoListView> {
   }
 
   Future<void> _duplicateFuncao(Funcao funcao) async {
-    // Criar cópia com nome modificado
     final duplicated = funcao.copyWith(
       id: '',
       funcao: '${funcao.funcao} (Cópia)',
@@ -190,23 +189,13 @@ class _FuncaoListViewState extends State<FuncaoListView> {
   }
 
   Future<void> _deleteFuncao(Funcao funcao) async {
-    final confirm = await showDialog<bool>(
+    final confirm = await TFModalDialog.confirm(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Confirmar exclusão'),
-        content: Text('Deseja realmente excluir a função "${funcao.funcao}"?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Excluir'),
-          ),
-        ],
-      ),
+      title: 'Confirmar exclusão',
+      message: 'Deseja realmente excluir a função "${funcao.funcao}"?',
+      confirmLabel: 'Excluir',
+      cancelLabel: 'Cancelar',
+      isDestructive: true,
     );
 
     if (confirm == true) {
@@ -236,93 +225,171 @@ class _FuncaoListViewState extends State<FuncaoListView> {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Cadastro de Funções'),
-        actions: [
-          // Toggle de visualização
-          IconButton(
-            icon: Icon(_isTableView ? Icons.view_list : Icons.table_chart),
-            onPressed: () {
-              setState(() {
-                _isTableView = !_isTableView;
-              });
-            },
-            tooltip: _isTableView ? 'Visualização em Lista' : 'Visualização em Tabela',
-          ),
-          IconButton(
-            icon: const Icon(Icons.add),
-            onPressed: _createFuncao,
-            tooltip: 'Nova Função',
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: TextField(
-              controller: _searchController,
-              decoration: const InputDecoration(
-                labelText: 'Buscar funções',
-                prefixIcon: Icon(Icons.search),
-                border: OutlineInputBorder(),
+      backgroundColor: colors.background,
+      body: SafeArea(
+        child: Padding(
+          padding: EdgeInsets.all(spacing.base),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Cabeçalho Oficial TFPageHeader
+              TFPageHeader(
+                title: 'Cadastro de Funções',
+                subtitle: 'Gestão de cargos, especialidades técnicas e permissões de executores',
+                onBack: () => Navigator.of(context).maybePop(),
+                primaryAction: TFButton(
+                  label: 'Nova Função',
+                  leadingIcon: TFIcons.add,
+                  onPressed: _createFuncao,
+                ),
+                secondaryActions: [
+                  TFIconButton(
+                    icon: _isTableView ? Icons.view_list_rounded : Icons.table_chart_rounded,
+                    tooltip: _isTableView ? 'Alternar para visualização em Lista' : 'Alternar para visualização em Tabela',
+                    variant: TFIconButtonVariant.subtle,
+                    onPressed: () {
+                      setState(() {
+                        _isTableView = !_isTableView;
+                      });
+                    },
+                  ),
+                  TFIconButton(
+                    icon: TFIcons.refresh,
+                    tooltip: 'Recarregar funções',
+                    variant: TFIconButtonVariant.subtle,
+                    onPressed: _loadFuncoes,
+                  ),
+                ],
               ),
-            ),
-          ),
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _filteredFuncoes.isEmpty
-                    ? const Center(
-                        child: Text('Nenhuma função encontrada.'),
+
+              // Campo de Busca Padronizado TFTextField
+              Padding(
+                padding: EdgeInsets.only(bottom: spacing.base),
+                child: TFTextField(
+                  controller: _searchController,
+                  hint: 'Buscar funções por nome ou descrição...',
+                  prefixIcon: Icon(TFIcons.search, size: 18, color: colors.textSecondary),
+                  suffixIcon: _searchController.text.isNotEmpty
+                      ? IconButton(
+                          icon: Icon(TFIcons.close, size: 16, color: colors.textMuted),
+                          onPressed: () => _searchController.clear(),
+                          tooltip: 'Limpar busca',
+                        )
+                      : null,
+                ),
+              ),
+
+              // Conteúdo da Lista ou Tabela
+              Expanded(
+                child: _isLoading
+                    ? const TFLoading(
+                        mode: TFLoadingMode.section,
+                        message: 'Carregando funções cadastradas...',
                       )
-                    : _isTableView
-                        ? _buildTableView()
-                        : _buildListView(),
+                    : _filteredFuncoes.isEmpty
+                        ? TFEmptyState(
+                            icon: TFIcons.search,
+                            title: 'Nenhuma função encontrada',
+                            description: _searchController.text.isNotEmpty
+                                ? 'Não foram encontradas funções correspondentes ao termo "${_searchController.text}".'
+                                : 'Não existem funções cadastradas no sistema.',
+                            action: _searchController.text.isNotEmpty
+                                ? TFButton(
+                                    label: 'Limpar Busca',
+                                    variant: TFButtonVariant.secondary,
+                                    onPressed: () => _searchController.clear(),
+                                  )
+                                : TFButton(
+                                    label: 'Cadastrar Primeira Função',
+                                    leadingIcon: TFIcons.add,
+                                    variant: TFButtonVariant.primary,
+                                    onPressed: _createFuncao,
+                                  ),
+                          )
+                        : _isTableView
+                            ? _buildTableView()
+                            : _buildListView(),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
 
   Widget _buildListView() {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final spacing = context.tfSpacing;
+
     return ListView.builder(
       itemCount: _filteredFuncoes.length,
       itemBuilder: (context, index) {
         final funcao = _filteredFuncoes[index];
-        return Card(
-          margin: const EdgeInsets.symmetric(
-            horizontal: 16.0,
-            vertical: 8.0,
-          ),
-          child: ListTile(
-            title: Text(funcao.funcao),
-            subtitle: funcao.descricao != null && funcao.descricao!.isNotEmpty
-                ? Text(funcao.descricao!)
-                : null,
-            leading: funcao.ativo
-                ? const Icon(Icons.check_circle, color: Colors.green)
-                : const Icon(Icons.cancel, color: Colors.red),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
+        return Padding(
+          padding: EdgeInsets.only(bottom: spacing.sm),
+          child: TFCard(
+            variant: TFCardVariant.defaultCard,
+            padding: EdgeInsets.symmetric(horizontal: spacing.base, vertical: spacing.sm),
+            child: Row(
               children: [
-                IconButton(
-                  icon: const Icon(Icons.edit),
-                  onPressed: () => _editFuncao(funcao),
-                  tooltip: 'Editar',
+                // Status visual acessível (cor + texto + ícone)
+                TFStatusBadge(
+                  label: funcao.ativo ? 'Ativo' : 'Inativo',
+                  severity: funcao.ativo ? TFStatusSeverity.success : TFStatusSeverity.neutral,
+                  icon: funcao.ativo ? TFIcons.success : TFIcons.warning,
+                  compact: true,
                 ),
-                IconButton(
-                  icon: const Icon(Icons.copy),
-                  color: Colors.orange,
-                  onPressed: () => _duplicateFuncao(funcao),
-                  tooltip: 'Duplicar',
+                SizedBox(width: spacing.md),
+                // Textos descritivos
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        funcao.funcao,
+                        style: typography.cardTitle.copyWith(color: colors.textPrimary),
+                      ),
+                      if (funcao.descricao != null && funcao.descricao!.isNotEmpty) ...[
+                        SizedBox(height: spacing.xxs),
+                        Text(
+                          funcao.descricao!,
+                          style: typography.bodySmall.copyWith(color: colors.textSecondary),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ],
+                  ),
                 ),
-                IconButton(
-                  icon: const Icon(Icons.delete),
-                  onPressed: () => _deleteFuncao(funcao),
-                  tooltip: 'Excluir',
-                  color: Colors.red,
+                // Ações padronizadas com TFIconButton
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TFIconButton(
+                      icon: TFIcons.edit,
+                      tooltip: 'Editar função "${funcao.funcao}"',
+                      variant: TFIconButtonVariant.standard,
+                      onPressed: () => _editFuncao(funcao),
+                    ),
+                    TFIconButton(
+                      icon: Icons.copy_rounded,
+                      tooltip: 'Duplicar função "${funcao.funcao}"',
+                      variant: TFIconButtonVariant.subtle,
+                      onPressed: () => _duplicateFuncao(funcao),
+                    ),
+                    TFIconButton(
+                      icon: TFIcons.delete,
+                      tooltip: 'Excluir função "${funcao.funcao}"',
+                      variant: TFIconButtonVariant.danger,
+                      onPressed: () => _deleteFuncao(funcao),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -333,90 +400,82 @@ class _FuncaoListViewState extends State<FuncaoListView> {
   }
 
   Widget _buildTableView() {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: SingleChildScrollView(
-        child: DataTable(
-          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
-          columns: const [
-            DataColumn(label: Text('Função', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Descrição', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Ações', style: TextStyle(fontWeight: FontWeight.bold))),
-          ],
-          rows: _filteredFuncoes.map((funcao) {
-            return DataRow(
-              cells: [
-                DataCell(
-                  Text(
-                    funcao.funcao,
-                    style: const TextStyle(fontWeight: FontWeight.w500),
-                  ),
-                ),
-                DataCell(
-                  Text(
-                    funcao.descricao != null && funcao.descricao!.isNotEmpty
-                        ? funcao.descricao!
-                        : '-',
-                  ),
-                ),
-                DataCell(
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: funcao.ativo ? Colors.green[100] : Colors.red[100],
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      funcao.ativo ? 'Ativo' : 'Inativo',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: funcao.ativo ? Colors.green[800] : Colors.red[800],
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ),
-                DataCell(
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.edit, size: 20, color: Colors.blue),
-                        onPressed: () => _editFuncao(funcao),
-                        tooltip: 'Editar',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.copy, size: 20, color: Colors.orange),
-                        onPressed: () => _duplicateFuncao(funcao),
-                        tooltip: 'Duplicar',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.delete, size: 20, color: Colors.red),
-                        onPressed: () => _deleteFuncao(funcao),
-                        tooltip: 'Excluir',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            );
-          }).toList(),
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
+    return TFDataTable<Funcao>(
+      items: _filteredFuncoes,
+      zebra: true,
+      columns: [
+        TFDataColumn<Funcao>.text(
+          id: 'funcao',
+          title: 'Função',
+          cellBuilder: (context, funcao) => Text(
+            funcao.funcao,
+            style: typography.bodyMedium.copyWith(
+              color: colors.textPrimary,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
         ),
-      ),
+        TFDataColumn<Funcao>.text(
+          id: 'descricao',
+          title: 'Descrição',
+          cellBuilder: (context, funcao) => Text(
+            funcao.descricao != null && funcao.descricao!.isNotEmpty
+                ? funcao.descricao!
+                : '-',
+            style: typography.bodySmall.copyWith(color: colors.textSecondary),
+          ),
+        ),
+        TFDataColumn<Funcao>(
+          id: 'status',
+          label: const Text('Status'),
+          width: 130,
+          cellBuilder: (context, funcao) => Align(
+            alignment: Alignment.centerLeft,
+            child: TFStatusBadge(
+              label: funcao.ativo ? 'Ativo' : 'Inativo',
+              severity: funcao.ativo ? TFStatusSeverity.success : TFStatusSeverity.neutral,
+              icon: funcao.ativo ? TFIcons.success : TFIcons.warning,
+              compact: true,
+            ),
+          ),
+        ),
+        TFDataColumn<Funcao>(
+          id: 'acoes',
+          label: const Text('Ações'),
+          width: 160,
+          alignment: Alignment.centerRight,
+          cellBuilder: (context, funcao) => Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TFIconButton(
+                icon: TFIcons.edit,
+                tooltip: 'Editar função "${funcao.funcao}"',
+                variant: TFIconButtonVariant.standard,
+                iconSize: 18,
+                onPressed: () => _editFuncao(funcao),
+              ),
+              TFIconButton(
+                icon: Icons.copy_rounded,
+                tooltip: 'Duplicar função "${funcao.funcao}"',
+                variant: TFIconButtonVariant.subtle,
+                iconSize: 18,
+                onPressed: () => _duplicateFuncao(funcao),
+              ),
+              TFIconButton(
+                icon: TFIcons.delete,
+                tooltip: 'Excluir função "${funcao.funcao}"',
+                variant: TFIconButtonVariant.danger,
+                iconSize: 18,
+                onPressed: () => _deleteFuncao(funcao),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
+
 }
-
-
-
-
-
-
-

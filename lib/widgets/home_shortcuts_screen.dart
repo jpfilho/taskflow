@@ -1,30 +1,79 @@
 import 'package:flutter/material.dart';
 import '../config/app_menu_config.dart';
 import '../services/auth_service_simples.dart';
-import '../services/theme_service.dart';
-import '../providers/theme_provider.dart';
+import '../design_system/taskflow_design_system.dart';
+import 'perfil_usuario_view.dart';
 
-// Cores do launcher (referência Task & Maintenance Launcher)
-const _kPrimaryLauncher = Color(0xFF1132D4);
-const _kBackgroundLight = Color(0xFFF6F6F8);
-const _kBackgroundDark = Color(0xFF101322);
+/// Cores corporativas específicas por módulo (garantindo contraste e legibilidade perfeita)
+Color _getModuleColor(int index, TFSemanticColors colors) {
+  switch (index) {
+    case 0:
+      return colors.primary; // Programação / Atividades
+    case 1:
+      return const Color(0xFF4F46E5); // Equipe (Indigo)
+    case 2:
+      return const Color(0xFF0D9488); // Frota (Teal)
+    case 20:
+      return colors.success; // Horas SAP (Verde)
+    case 27:
+      return colors.warning; // Confirmação de Ordens (Âmbar)
+    case 16:
+      return const Color(0xFF7C3AED); // Notas SAP (Violeta)
+    case 17:
+      return const Color(0xFF1D4ED8); // Ordens (Azul Marinho)
+    case 18:
+      return const Color(0xFF2563EB); // ATs
+    case 19:
+      return const Color(0xFFEA580C); // SIs (Laranja)
+    case 15:
+      return const Color(0xFF0284C7); // Chat (Sky)
+    case 23:
+      return const Color(0xFFDB2777); // Mídia (Pink)
+    case 26:
+      return colors.danger; // Bugs e Melhorias (Vermelho)
+    default:
+      return colors.primary;
+  }
+}
 
-/// Cores por tile (índice % length): container bg e ícone
-final _kTileColors = [
-  (_kPrimaryLauncher, _kPrimaryLauncher),
-  (const Color(0xFFDBEAFE), const Color(0xFF2563EB)), // blue
-  (const Color(0xFFE0E7FF), const Color(0xFF4F46E5)), // indigo
-  (const Color(0xFFD1FAE5), const Color(0xFF059669)), // emerald
-  (const Color(0xFFFEF3C7), const Color(0xFFD97706)), // amber
-  (const Color(0xFFFCE7F3), const Color(0xFFDB2777)), // rose
-  (const Color(0xFFCCFBF1), const Color(0xFF0D9488)), // teal
-  (const Color(0xFFEDE9FE), const Color(0xFF7C3AED)), // violet
-];
+/// Subtítulo funcional e contextual de cada módulo
+String _getModuleSubtitle(int index) {
+  switch (index) {
+    case 0:
+      return 'Gantt & Tarefas';
+    case 1:
+      return 'Escala & Recursos';
+    case 2:
+      return 'Veículos & Controle';
+    case 20:
+      return 'Apontamento SAP';
+    case 27:
+      return 'Conferência Ordens';
+    case 16:
+      return 'Notas de Manutenção';
+    case 17:
+      return 'Ordens de Serviço';
+    case 18:
+      return 'Autorizações Trab.';
+    case 19:
+      return 'Solicitações Interv.';
+    case 15:
+      return 'Canais & Mensagens';
+    case 23:
+      return 'Álbuns de Imagens';
+    case 26:
+      return 'Chamados & Suporte';
+    case 14:
+      return 'Preferências';
+    default:
+      return 'Gestão Operacional';
+  }
+}
 
-/// Tela inicial de atalhos no mobile (estilo launcher).
-/// Layout inspirado em Task & Maintenance Launcher: header com saudação, card de alertas, grid 2 colunas, bottom nav.
+/// Tela inicial de atalhos no mobile em total conformidade com o TaskFlow Design System.
+/// Substitui os fundos com blur e cards genéricos por superfícies flat + border oficiais.
 class HomeShortcutsScreen extends StatelessWidget {
-  final ValueChanged<int> onShortcutTap;
+  final void Function(int index, {String? viewMode, int? selectedTab}) onShortcutTap;
   /// Quantidade de alertas críticos (opcional). Se > 0, exibe card de alertas.
   final int? criticalAlertsCount;
 
@@ -36,317 +85,360 @@ class HomeShortcutsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final themeProvider = ThemeProvider();
-    final currentTheme = themeProvider.currentTheme;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final spacing = context.tfSpacing;
+
     final allItems = AppMenuConfig.getVisibleItemsForCurrentUser();
     final user = AuthServiceSimples().currentUser;
     final displayName = _displayName(user?.nome, user?.email);
-    final barBg = ThemeService.getBarBackgroundColorSync(currentTheme);
-    final primary = _kPrimaryLauncher;
+    final isRoot = user?.isRoot ?? false;
 
     return Scaffold(
-      backgroundColor: isDark ? _kBackgroundDark : _kBackgroundLight,
-      body: Stack(
-        children: [
-          // Background sutil (blur circles)
-          Positioned(
-            top: -96,
-            right: -96,
-            child: Container(
-              width: 256,
-              height: 256,
+      backgroundColor: colors.background,
+      body: SafeArea(
+        bottom: false,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Header institucional com design limpo do TaskFlow
+            Container(
+              padding: EdgeInsets.fromLTRB(spacing.lg, spacing.lg, spacing.lg, spacing.md),
               decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: primary.withOpacity(0.2),
-                boxShadow: [
-                  BoxShadow(
-                    color: primary.withOpacity(0.15),
-                    blurRadius: 80,
-                    spreadRadius: 20,
-                  ),
-                ],
+                color: colors.surface,
+                border: Border(
+                  bottom: BorderSide(color: colors.borderSubtle),
+                ),
               ),
-            ),
-          ),
-          Positioned(
-            top: MediaQuery.of(context).size.height * 0.4,
-            left: -128,
-            child: Container(
-              width: 320,
-              height: 320,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: primary.withOpacity(0.1),
-                boxShadow: [
-                  BoxShadow(
-                    color: primary.withOpacity(0.08),
-                    blurRadius: 100,
-                    spreadRadius: 30,
+              child: Row(
+                children: [
+                  // Avatar elegante com borda e inicial
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: colors.primary.withValues(alpha: 0.1),
+                      borderRadius: TFRadius.borderRadiusMd,
+                      border: Border.all(
+                        color: colors.primary.withValues(alpha: 0.25),
+                        width: 1.5,
+                      ),
+                    ),
+                    child: Center(
+                      child: Text(
+                        displayName.isNotEmpty ? displayName.substring(0, 1).toUpperCase() : 'U',
+                        style: typography.cardTitle.copyWith(
+                          color: colors.primary,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
                   ),
-                ],
-              ),
-            ),
-          ),
-          SafeArea(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Header: Bem-vindo + nome + avatar
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                  SizedBox(width: spacing.md),
+                  // Saudação e Papel do Usuário
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Olá, $displayName!',
+                          style: typography.pageTitle.copyWith(
+                            color: colors.textPrimary,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.3,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 2),
+                        Row(
                           children: [
-                            Text(
-                              'Bem-vindo de volta,',
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w500,
-                                color: isDark
-                                    ? Colors.white70
-                                    : Colors.grey.shade600,
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: isRoot
+                                    ? colors.danger.withValues(alpha: 0.12)
+                                    : colors.primary.withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                isRoot ? 'ADMINISTRADOR ROOT' : 'OPERADOR',
+                                style: typography.labelSmall.copyWith(
+                                  color: isRoot ? colors.danger : colors.primary,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 10,
+                                  letterSpacing: 0.5,
+                                ),
                               ),
                             ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'Olá, $displayName!',
-                              style: TextStyle(
-                                fontSize: 28,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: -0.5,
-                                color: isDark ? Colors.white : const Color(0xFF0F172A),
-                              ),
+                            SizedBox(width: spacing.sm),
+                            const TFSyncIndicator(
+                              state: TFSyncState.online,
+                              compact: true,
                             ),
                           ],
                         ),
-                      ),
-                      Container(
-                        width: 48,
-                        height: 48,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: primary.withOpacity(0.3),
-                            width: 2,
+                      ],
+                    ),
+                  ),
+                  // Ação rápida: Perfil
+                  IconButton(
+                    icon: Icon(Icons.account_circle_outlined, color: colors.textSecondary, size: 26),
+                    tooltip: 'Meu Perfil',
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const PerfilUsuarioView()),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+
+            // Conteúdo scrollável com os atalhos
+            Expanded(
+              child: ListView(
+                padding: EdgeInsets.fromLTRB(spacing.lg, spacing.lg, spacing.lg, 100),
+                children: [
+                  // Card de Alertas Críticos (quando houver)
+                  if (criticalAlertsCount != null && criticalAlertsCount! > 0) ...[
+                    TFCard(
+                      variant: TFCardVariant.interactive,
+                      onTap: () => onShortcutTap(9),
+                      padding: EdgeInsets.all(spacing.md),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: EdgeInsets.all(spacing.sm),
+                            decoration: BoxDecoration(
+                              color: colors.danger.withValues(alpha: 0.12),
+                              borderRadius: TFRadius.borderRadiusSm,
+                            ),
+                            child: Icon(TFIcons.warning, color: colors.danger, size: 22),
                           ),
-                          color: barBg.withOpacity(0.9),
-                        ),
-                        child: Center(
-                          child: Text(
-                            displayName.isNotEmpty
-                                ? displayName.substring(0, 1).toUpperCase()
-                                : '?',
-                            style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                              color: primary,
+                          SizedBox(width: spacing.md),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'PENDÊNCIAS CRÍTICAS',
+                                  style: typography.labelSmall.copyWith(
+                                    color: colors.danger,
+                                    fontWeight: FontWeight.bold,
+                                    letterSpacing: 0.8,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  '$criticalAlertsCount atividades requerem atenção imediata.',
+                                  style: typography.bodySmall.copyWith(
+                                    color: colors.textPrimary,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
+                          Icon(TFIcons.chevronRight, color: colors.textMuted, size: 18),
+                        ],
+                      ),
+                    ),
+                    SizedBox(height: spacing.lg),
+                  ],
+
+                  // Título da Seção
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'MÓDULOS OPERACIONAIS',
+                        style: typography.labelSmall.copyWith(
+                          color: colors.textSecondary,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                      Text(
+                        '${allItems.length} disponíveis',
+                        style: typography.labelSmall.copyWith(
+                          color: colors.textMuted,
                         ),
                       ),
                     ],
                   ),
-                ),
-                // Card de alertas (quando há contagem)
-                if (criticalAlertsCount != null && criticalAlertsCount! > 0) ...[
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: Material(
-                      color: primary.withOpacity(isDark ? 0.15 : 0.08),
-                      borderRadius: BorderRadius.circular(12),
-                      child: InkWell(
-                        onTap: () => onShortcutTap(9),
-                        borderRadius: BorderRadius.circular(12),
-                        child: Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: primary.withOpacity(0.2),
-                            ),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Row(
-                                    children: [
-                                      Container(
-                                        width: 8,
-                                        height: 8,
-                                        decoration: const BoxDecoration(
-                                          color: Colors.red,
-                                          shape: BoxShape.circle,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        'ALERTAS CRÍTICOS',
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.bold,
-                                          letterSpacing: 1.2,
-                                          color: primary,
-                                        ),
-                                      ),
-                                    ],
+                  SizedBox(height: spacing.md),
+
+                  // Grid de Módulos Operacionais com TFCard oficial
+                  GridView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 2,
+                      mainAxisSpacing: 12,
+                      crossAxisSpacing: 12,
+                      childAspectRatio: 1.35,
+                    ),
+                    itemCount: allItems.length,
+                    itemBuilder: (context, i) {
+                      final item = allItems[i];
+                      final moduleColor = _getModuleColor(item.index, colors);
+                      final subtitle = _getModuleSubtitle(item.index);
+                      final hasAlert = item.index == 0 && criticalAlertsCount != null && criticalAlertsCount! > 0;
+
+                      return TFCard(
+                        variant: TFCardVariant.interactive,
+                        onTap: () => onShortcutTap(item.index),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            // Linha superior: Ícone com fundo temático + badge opcional
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Container(
+                                  width: 38,
+                                  height: 38,
+                                  decoration: BoxDecoration(
+                                    color: moduleColor.withValues(alpha: 0.12),
+                                    borderRadius: BorderRadius.circular(8),
                                   ),
-                                  Icon(
-                                    Icons.keyboard_arrow_down_rounded,
-                                    color: primary,
-                                    size: 24,
+                                  child: Icon(
+                                    item.icon,
+                                    color: moduleColor,
+                                    size: 20,
                                   ),
-                                ],
-                              ),
-                              const SizedBox(height: 8),
-                              RichText(
-                                text: TextSpan(
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w500,
-                                    color: isDark
-                                        ? Colors.white70
-                                        : Colors.black87,
-                                  ),
-                                  children: [
-                                    const TextSpan(
-                                        text: 'Você tem '),
-                                    TextSpan(
-                                      text: '$criticalAlertsCount pendências',
-                                      style: TextStyle(
+                                ),
+                                if (hasAlert)
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: colors.danger,
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Text(
+                                      '$criticalAlertsCount',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 10,
                                         fontWeight: FontWeight.bold,
-                                        color: primary,
                                       ),
                                     ),
-                                    const TextSpan(
-                                        text:
-                                            ' que precisam de atenção imediata.'),
-                                  ],
+                                  )
+                                else
+                                  Icon(
+                                    TFIcons.chevronRight,
+                                    color: colors.textMuted.withValues(alpha: 0.5),
+                                    size: 16,
+                                  ),
+                              ],
+                            ),
+                            // Informações do Módulo
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  item.label,
+                                  style: typography.bodyMedium.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                    color: colors.textPrimary,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
-                              ),
-                            ],
-                          ),
+                                const SizedBox(height: 1),
+                                Text(
+                                  subtitle,
+                                  style: typography.labelSmall.copyWith(
+                                    color: colors.textMuted,
+                                    fontSize: 11,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                          ],
                         ),
-                      ),
-                    ),
+                      );
+                    },
                   ),
-                  const SizedBox(height: 24),
                 ],
-                // Título da seção
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24),
-                  child: Text(
-                    'MÓDULOS DO SISTEMA',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 2,
-                      color: isDark
-                          ? Colors.white54
-                          : Colors.grey.shade500,
-                    ),
-                  ),
+              ),
+            ),
+          ],
+        ),
+      ),
+
+      // Barra de navegação inferior corporativa do TaskFlow
+      bottomNavigationBar: Container(
+        decoration: BoxDecoration(
+          color: colors.surface,
+          border: Border(
+            top: BorderSide(color: colors.borderSubtle),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 8,
+              offset: const Offset(0, -2),
+            ),
+          ],
+        ),
+        child: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _NavButton(
+                  icon: Icons.home_rounded,
+                  label: 'Início',
+                  isSelected: true,
+                  colors: colors,
+                  typography: typography,
+                  onTap: () {},
                 ),
-                const SizedBox(height: 16),
-                // Grid 2 colunas
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: GridView.builder(
-                      gridDelegate:
-                          const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 2,
-                        mainAxisSpacing: 16,
-                        crossAxisSpacing: 16,
-                        childAspectRatio: 0.95,
-                      ),
-                      itemCount: allItems.length,
-                      itemBuilder: (context, i) {
-                        final item = allItems[i];
-                        final colors = _kTileColors[i % _kTileColors.length];
-                        return _LauncherTile(
-                          label: item.label,
-                          icon: item.icon,
-                          tileColor: colors.$1,
-                          iconColor: colors.$2,
-                          badgeCount: item.index == 0 && criticalAlertsCount != null && criticalAlertsCount! > 0
-                              ? criticalAlertsCount
-                              : null,
-                          onTap: () => onShortcutTap(item.index),
-                          isDark: isDark,
-                        );
-                      },
-                    ),
-                  ),
+                _NavButton(
+                  icon: Icons.grid_view_rounded,
+                  label: 'Programação',
+                  isSelected: false,
+                  colors: colors,
+                  typography: typography,
+                  onTap: () => onShortcutTap(0),
                 ),
-                const SizedBox(height: 100),
+                _NavButton(
+                  icon: Icons.dynamic_feed_rounded,
+                  label: 'Feed',
+                  isSelected: false,
+                  colors: colors,
+                  typography: typography,
+                  onTap: () => onShortcutTap(0, viewMode: 'feed', selectedTab: 4),
+                ),
+                _NavButton(
+                  icon: Icons.chat_bubble_outline_rounded,
+                  label: 'Chat',
+                  isSelected: false,
+                  colors: colors,
+                  typography: typography,
+                  onTap: () => onShortcutTap(15),
+                ),
+                _NavButton(
+                  icon: Icons.settings_rounded,
+                  label: 'Config',
+                  isSelected: false,
+                  colors: colors,
+                  typography: typography,
+                  onTap: () => onShortcutTap(14),
+                ),
               ],
             ),
           ),
-          // Bottom navigation
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: Container(
-              padding: EdgeInsets.only(
-                left: 24,
-                right: 24,
-                top: 16,
-                bottom: 16 + MediaQuery.of(context).padding.bottom,
-              ),
-              decoration: BoxDecoration(
-                color: (isDark ? _kBackgroundDark : Colors.white)
-                    .withOpacity(0.9),
-                border: Border(
-                  top: BorderSide(
-                    color: isDark
-                        ? Colors.white12
-                        : Colors.black.withOpacity(0.06),
-                  ),
-                ),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  _NavItem(
-                    icon: Icons.home_rounded,
-                    label: 'Home',
-                    isSelected: true,
-                    primary: primary,
-                  ),
-                  _NavItem(
-                    icon: Icons.search_rounded,
-                    label: 'Buscar',
-                    onTap: () => onShortcutTap(0),
-                    primary: primary,
-                  ),
-                  _NavItem(
-                    icon: Icons.notifications_rounded,
-                    label: 'Avisos',
-                    badge: criticalAlertsCount != null && criticalAlertsCount! > 0,
-                    onTap: () => onShortcutTap(9),
-                    primary: primary,
-                  ),
-                  _NavItem(
-                    icon: Icons.person_rounded,
-                    label: 'Perfil',
-                    onTap: () => onShortcutTap(14),
-                    primary: primary,
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -366,173 +458,48 @@ class HomeShortcutsScreen extends StatelessWidget {
   }
 }
 
-class _LauncherTile extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final Color tileColor;
-  final Color iconColor;
-  final int? badgeCount;
-  final VoidCallback onTap;
-  final bool isDark;
-
-  const _LauncherTile({
-    required this.label,
-    required this.icon,
-    required this.tileColor,
-    required this.iconColor,
-    this.badgeCount,
-    required this.onTap,
-    required this.isDark,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: isDark ? const Color(0xFF1E293B) : Colors.white,
-      borderRadius: BorderRadius.circular(12),
-      elevation: 0,
-      shadowColor: Colors.black26,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 12),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: isDark
-                  ? Colors.white.withOpacity(0.08)
-                  : Colors.black.withOpacity(0.06),
-            ),
-          ),
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              if (badgeCount != null && badgeCount! > 0)
-                Positioned(
-                  top: -4,
-                  right: -4,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 6,
-                      vertical: 2,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.red,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Text(
-                      '$badgeCount',
-                      style: const TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
-                ),
-              Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Container(
-                    width: 56,
-                    height: 56,
-                    decoration: BoxDecoration(
-                      color: tileColor,
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Icon(icon, color: iconColor, size: 28),
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    label,
-                    textAlign: TextAlign.center,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: isDark ? Colors.white : const Color(0xFF334155),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _NavItem extends StatelessWidget {
+class _NavButton extends StatelessWidget {
   final IconData icon;
   final String label;
   final bool isSelected;
-  final VoidCallback? onTap;
-  final bool badge;
-  final Color primary;
+  final TFSemanticColors colors;
+  final TFTypography typography;
+  final VoidCallback onTap;
 
-  const _NavItem({
+  const _NavButton({
     required this.icon,
     required this.label,
-    this.isSelected = false,
-    this.onTap,
-    this.badge = false,
-    required this.primary,
+    required this.isSelected,
+    required this.colors,
+    required this.typography,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final activeColor = colors.primary;
+    final inactiveColor = colors.textMuted;
+
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Icon(
-                  icon,
-                  size: 24,
-                  color: isSelected
-                      ? primary
-                      : (isDark ? Colors.white54 : Colors.grey),
-                ),
-                if (badge)
-                  Positioned(
-                    top: -2,
-                    right: -2,
-                    child: Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        color: Colors.red,
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: isDark
-                              ? const Color(0xFF101322)
-                              : Colors.white,
-                          width: 1.5,
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
+            Icon(
+              icon,
+              color: isSelected ? activeColor : inactiveColor,
+              size: 22,
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 3),
             Text(
               label,
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
-                color: isSelected
-                    ? primary
-                    : (isDark ? Colors.white54 : Colors.grey),
+              style: typography.labelSmall.copyWith(
+                color: isSelected ? activeColor : inactiveColor,
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                fontSize: 11,
               ),
             ),
           ],

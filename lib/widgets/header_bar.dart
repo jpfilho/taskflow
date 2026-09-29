@@ -6,7 +6,10 @@ import '../providers/theme_provider.dart';
 import 'perfil_usuario_view.dart';
 import 'sync_status_widget.dart';
 import 'gantt_chart.dart';
+import '../design_system/components/inputs/tf_date_range_picker.dart';
+import 'app_download_qr_dialog.dart';
 import 'dart:async';
+import '../services/unread_chat_manager.dart';
 
 class HeaderBar extends StatefulWidget {
   final DateTime startDate;
@@ -201,252 +204,276 @@ class _HeaderBarState extends State<HeaderBar> {
     final currentTheme = themeProvider.currentTheme;
     final barBackground = ThemeService.getBarBackgroundColorSync(currentTheme);
     
-    // Mobile: linha compacta ocupando toda a largura, colada às laterais.
-    return SizedBox(
-      height: 44,
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        physics: const BouncingScrollPhysics(),
-        child: Container(
-          width: MediaQuery.of(context).size.width,
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: Icon(Icons.menu, color: iconColor, size: 20),
-                    onPressed: widget.onMenuPressed,
-                    padding: const EdgeInsets.symmetric(horizontal: 2),
-                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                  ),
-                  const SizedBox(width: 6),
-                  PopupMenuButton<String>(
-                    offset: const Offset(0, 40),
-                    color: Colors.white,
-                    itemBuilder: (context) => [
-                      const PopupMenuItem(
-                        value: 'perfil',
+    // Mobile: barra ergonômica com altura adequada para touch (50px)
+    return Container(
+      height: 50,
+      color: barBackground,
+      child: SafeArea(
+        bottom: false,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          physics: const BouncingScrollPhysics(),
+          child: Container(
+            constraints: BoxConstraints(minWidth: MediaQuery.of(context).size.width),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                // Esquerda: Botão Menu (Drawer) + Perfil Rápido
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: Icon(Icons.menu, color: iconColor, size: 22),
+                      onPressed: widget.onMenuPressed,
+                      tooltip: 'Menu do Sistema',
+                      padding: const EdgeInsets.all(8),
+                      constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                    ),
+                    const SizedBox(width: 4),
+                    PopupMenuButton<String>(
+                      offset: const Offset(0, 42),
+                      color: Colors.white,
+                      itemBuilder: (context) => [
+                        const PopupMenuItem(
+                          value: 'perfil',
+                          child: Row(
+                            children: [
+                              Icon(Icons.person, size: 18, color: Colors.blue),
+                              SizedBox(width: 8),
+                              Text('Meu Perfil', style: TextStyle(fontSize: 13)),
+                            ],
+                          ),
+                        ),
+                        if (widget.onLogout != null)
+                          const PopupMenuItem(
+                            value: 'logout',
+                            child: Row(
+                              children: [
+                                Icon(Icons.logout, size: 18, color: Colors.red),
+                                SizedBox(width: 8),
+                                Text('Sair', style: TextStyle(fontSize: 13)),
+                              ],
+                            ),
+                          ),
+                      ],
+                      onSelected: (value) async {
+                        if (value == 'perfil') {
+                          final resultado = await Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => const PerfilUsuarioView(),
+                            ),
+                          );
+                          if (resultado == true && widget.onPerfilUpdated != null) {
+                            widget.onPerfilUpdated!();
+                            _carregarPerfilUsuario();
+                          }
+                        } else if (value == 'logout') {
+                          widget.onLogout?.call();
+                        }
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+                        child: CircleAvatar(
+                          radius: 14,
+                          backgroundColor: iconColor.withValues(alpha: 0.2),
+                          child: Text(
+                            (AuthServiceSimples().getUserName() ?? 'U').isNotEmpty
+                                ? (AuthServiceSimples().getUserName() ?? 'U').substring(0, 1).toUpperCase()
+                                : 'U',
+                            style: TextStyle(
+                              color: iconColor,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+
+                const SizedBox(width: 8),
+
+                // Centro: Seletor de Período + Controles Contextuais
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    InkWell(
+                      onTap: () async {
+                        final picked = await showTFDateRangePicker(
+                          context: context,
+                          initialDateRange: DateTimeRange(start: widget.startDate, end: widget.endDate),
+                          firstDate: DateTime(2020),
+                          lastDate: DateTime(2030),
+                        );
+                        if (picked != null) {
+                          widget.onDateRangeChanged(picked.start, picked.end);
+                        }
+                      },
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(8),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.08),
+                              blurRadius: 3,
+                              offset: const Offset(0, 1),
+                            ),
+                          ],
+                        ),
                         child: Row(
+                          mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.person, size: 18, color: Colors.blue),
-                            SizedBox(width: 8),
-                            Text('Meu Perfil', style: TextStyle(fontSize: 12)),
+                            const Icon(Icons.calendar_today, size: 14, color: Colors.black87),
+                            const SizedBox(width: 6),
+                            Text(
+                              '${_formatShortDate(widget.startDate)} - ${_formatShortDate(widget.endDate)}',
+                              style: const TextStyle(fontSize: 12, color: Colors.black87, fontWeight: FontWeight.w600),
+                            ),
                           ],
                         ),
                       ),
-                      if (widget.onLogout != null)
-                        const PopupMenuItem(
-                          value: 'logout',
-                          child: Row(
-                            children: [
-                              Icon(Icons.logout, size: 18, color: Colors.red),
-                              SizedBox(width: 8),
-                              Text('Sair', style: TextStyle(fontSize: 12)),
-                            ],
-                          ),
-                        ),
-                    ],
-                    onSelected: (value) async {
-                      if (value == 'perfil') {
-                        final resultado = await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => const PerfilUsuarioView(),
-                          ),
-                        );
-                        if (resultado == true && widget.onPerfilUpdated != null) {
-                          widget.onPerfilUpdated!();
-                          _carregarPerfilUsuario();
-                        }
-                      } else if (value == 'logout') {
-                        widget.onLogout?.call();
-                      }
-                    },
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        CircleAvatar(
-                          radius: 11,
-                          backgroundColor: textColor,
-                          child: Icon(Icons.person, size: 13, color: barBackground),
-                        ),
-                        const SizedBox(width: 6),
-                        ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 120),
-                          child: Text(
-                            AuthServiceSimples().getUserName() ?? 'Usuário',
-                            style: TextStyle(color: textColor, fontSize: 12, fontWeight: FontWeight.w600),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
                     ),
-                  ),
-                ],
-              ),
-              Expanded(
-                child: Center(
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      InkWell(
-                        onTap: () async {
-                          final picked = await showDateRangePicker(
-                            context: context,
-                            initialDateRange: DateTimeRange(start: widget.startDate, end: widget.endDate),
-                            firstDate: DateTime(2020),
-                            lastDate: DateTime(2030),
-                            locale: const Locale('pt', 'BR'),
-                          );
-                          if (picked != null) {
-                            widget.onDateRangeChanged(picked.start, picked.end);
-                          }
-                        },
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.calendar_today, size: 15, color: Colors.black87),
-                              const SizedBox(width: 6),
-                              Text(
-                                '${_formatShortDate(widget.startDate)}-${_formatShortDate(widget.endDate)}',
-                                style: const TextStyle(fontSize: 12, color: Colors.black87),
+                    if (widget.isAtividadesScreen == true && widget.onRefreshAtividades != null) ...[
+                      const SizedBox(width: 6),
+                      Tooltip(
+                        message: 'Atualizar dados',
+                        child: widget.isAtividadesRefreshing
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : IconButton(
+                                icon: Icon(Icons.refresh, size: 19, color: iconColor),
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                                onPressed: () => widget.onRefreshAtividades?.call(),
                               ),
-                            ],
-                          ),
+                      ),
+                    ],
+                    if (widget.isAtividadesScreen == true &&
+                        widget.showGantt == true &&
+                        widget.onGanttScaleChanged != null &&
+                        widget.ganttScale != null) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: DropdownButton<GanttScale>(
+                          value: widget.ganttScale == GanttScale.hourly
+                              ? GanttScale.daily
+                              : widget.ganttScale,
+                          isDense: true,
+                          underline: const SizedBox.shrink(),
+                          dropdownColor: Colors.white,
+                          icon: const Icon(Icons.arrow_drop_down, size: 18, color: Colors.black87),
+                          style: const TextStyle(fontSize: 11, color: Colors.black87, fontWeight: FontWeight.w600),
+                          items: [
+                            DropdownMenuItem(
+                              value: GanttScale.daily,
+                              child: Text('Dia', style: TextStyle(color: Colors.grey[900], fontSize: 12)),
+                            ),
+                            DropdownMenuItem(
+                              value: GanttScale.weekly,
+                              child: Text('Sem', style: TextStyle(color: Colors.grey[900], fontSize: 12)),
+                            ),
+                            DropdownMenuItem(
+                              value: GanttScale.biweekly,
+                              child: Text('Quin', style: TextStyle(color: Colors.grey[900], fontSize: 12)),
+                            ),
+                            DropdownMenuItem(
+                              value: GanttScale.monthly,
+                              child: Text('Mês', style: TextStyle(color: Colors.grey[900], fontSize: 12)),
+                            ),
+                            DropdownMenuItem(
+                              value: GanttScale.quarterly,
+                              child: Text('Trim', style: TextStyle(color: Colors.grey[900], fontSize: 12)),
+                            ),
+                            DropdownMenuItem(
+                              value: GanttScale.semiAnnual,
+                              child: Text('Semest', style: TextStyle(color: Colors.grey[900], fontSize: 12)),
+                            ),
+                          ],
+                          onChanged: (v) {
+                            if (v != null) widget.onGanttScaleChanged!(v);
+                          },
                         ),
                       ),
-                      if (widget.isAtividadesScreen == true && widget.onRefreshAtividades != null) ...[
-                        const SizedBox(width: 6),
-                        Tooltip(
-                          message: 'Atualizar dados',
-                          child: widget.isAtividadesRefreshing
-                              ? const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
-                                )
-                              : IconButton(
-                                  icon: const Icon(Icons.refresh, size: 18),
-                                  padding: EdgeInsets.zero,
-                                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-                                  onPressed: () => widget.onRefreshAtividades?.call(),
-                                ),
-                        ),
-                      ],
-                      if (widget.isAtividadesScreen == true &&
-                          widget.showGantt == true &&
-                          widget.onGanttScaleChanged != null &&
-                          widget.ganttScale != null) ...[
-                        const SizedBox(width: 6),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: DropdownButton<GanttScale>(
-                            // Desativar opção de Hora no header: se vier selecionada, cair para Diário
-                            value: widget.ganttScale == GanttScale.hourly
-                                ? GanttScale.daily
-                                : widget.ganttScale,
-                            isDense: true,
-                            underline: const SizedBox.shrink(),
-                            dropdownColor: Colors.white,
-                            icon: const Icon(Icons.arrow_drop_down, size: 18, color: Color.fromARGB(221, 252, 252, 252)),
-                            style: const TextStyle(fontSize: 11, color: Color.fromARGB(221, 255, 255, 255), fontWeight: FontWeight.w500),
-                            items: [
-                              DropdownMenuItem(
-                                value: GanttScale.daily,
-                                child: Text('Dia', style: TextStyle(color: Colors.grey[900], fontSize: 12)),
-                              ),
-                              DropdownMenuItem(
-                                value: GanttScale.weekly,
-                                child: Text('Sem', style: TextStyle(color: Colors.grey[900], fontSize: 12)),
-                              ),
-                              DropdownMenuItem(
-                                value: GanttScale.biweekly,
-                                child: Text('Quin', style: TextStyle(color: Colors.grey[900], fontSize: 12)),
-                              ),
-                              DropdownMenuItem(
-                                value: GanttScale.monthly,
-                                child: Text('Mês', style: TextStyle(color: Colors.grey[900], fontSize: 12)),
-                              ),
-                              DropdownMenuItem(
-                                value: GanttScale.quarterly,
-                                child: Text('Trim', style: TextStyle(color: Colors.grey[900], fontSize: 12)),
-                              ),
-                              DropdownMenuItem(
-                                value: GanttScale.semiAnnual,
-                                child: Text('Semest', style: TextStyle(color: Colors.grey[900], fontSize: 12)),
-                              ),
-                            ],
-                            onChanged: (v) {
-                              if (v != null) widget.onGanttScaleChanged!(v);
-                            },
-                          ),
-                        ),
-                        // removido: toggle de horas (agora controlado via dropdown "Hora")
-                      ],
                     ],
-                  ),
+                  ],
                 ),
-              ),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (widget.isConflictFilterActive)
-                    IconButton(
-                      icon: const Icon(Icons.filter_alt_off, color: Colors.red, size: 20),
-                      onPressed: widget.onClearConflictFilter,
-                      tooltip: 'Limpar Filtro',
-                      padding: const EdgeInsets.symmetric(horizontal: 2),
-                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+
+                const SizedBox(width: 8),
+
+                // Direita: Ações Ráridas (Conflitos, Criar, Chat, Config)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (widget.isConflictFilterActive)
+                      IconButton(
+                        icon: const Icon(Icons.filter_alt_off, color: Colors.redAccent, size: 20),
+                        onPressed: widget.onClearConflictFilter,
+                        tooltip: 'Limpar Filtro',
+                        padding: const EdgeInsets.symmetric(horizontal: 2),
+                        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                      ),
+                    if (widget.canEditTasks)
+                      IconButton(
+                        icon: Icon(Icons.add_circle, color: iconColor, size: 22),
+                        onPressed: widget.onCreate,
+                        tooltip: 'Criar Tarefa',
+                        padding: const EdgeInsets.symmetric(horizontal: 2),
+                        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                      ),
+                    const SizedBox(width: 2),
+                    ListenableBuilder(
+                      listenable: UnreadChatManager(),
+                      builder: (context, _) {
+                        final unread = UnreadChatManager().isInitialized
+                            ? UnreadChatManager().totalUnread
+                            : widget.unreadChatCount;
+                        return Badge(
+                          isLabelVisible: unread > 0,
+                          label: Text(
+                            unread > 99 ? '99+' : '$unread',
+                            style: const TextStyle(fontSize: 9, color: Colors.white),
+                          ),
+                          backgroundColor: Colors.red,
+                          child: IconButton(
+                            icon: Icon(Icons.chat_bubble_outline, color: iconColor, size: 20),
+                            onPressed: widget.onChat,
+                            tooltip: 'Chat',
+                            padding: const EdgeInsets.symmetric(horizontal: 2),
+                            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                          ),
+                        );
+                      },
                     ),
-                  IconButton(
-                    icon: Icon(Icons.add, color: iconColor, size: 20),
-                    onPressed: widget.canEditTasks ? widget.onCreate : null,
-                    tooltip: 'Criar',
-                    padding: const EdgeInsets.symmetric(horizontal: 2),
-                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                  ),
-                  const SizedBox(width: 6),
-                  Badge(
-                    isLabelVisible: widget.unreadChatCount > 0,
-                    label: Text(
-                      widget.unreadChatCount > 99 ? '99+' : '${widget.unreadChatCount}',
-                      style: const TextStyle(fontSize: 9, color: Colors.white),
-                    ),
-                    backgroundColor: Colors.red,
-                    child: IconButton(
-                      icon: Icon(Icons.chat, color: iconColor, size: 20),
-                      onPressed: widget.onChat,
-                      tooltip: 'Chat',
-                      padding: const EdgeInsets.symmetric(horizontal: 2),
-                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  if (widget.canEditTasks)
-                    IconButton(
-                      icon: Icon(Icons.settings, color: iconColor, size: 20),
-                      onPressed: widget.onConfig,
-                      tooltip: 'Configurações',
-                      padding: const EdgeInsets.symmetric(horizontal: 2),
-                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                    ),
-                ],
-              ),
-            ],
+                    if (widget.canEditTasks) ...[
+                      const SizedBox(width: 2),
+                      IconButton(
+                        icon: Icon(Icons.settings, color: iconColor, size: 20),
+                        onPressed: widget.onConfig,
+                        tooltip: 'Configurações',
+                        padding: const EdgeInsets.symmetric(horizontal: 2),
+                        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                      ),
+                    ],
+                    const SizedBox(width: 2),
+                    _buildDownloadMobileButton(iconColor, isMobile: true),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -699,12 +726,11 @@ class _HeaderBarState extends State<HeaderBar> {
           InkWell(
             onTap: () async {
               // Mostrar date range picker
-              final DateTimeRange? picked = await showDateRangePicker(
+              final DateTimeRange? picked = await showTFDateRangePicker(
                 context: context,
                 initialDateRange: DateTimeRange(start: widget.startDate, end: widget.endDate),
                 firstDate: DateTime(2020),
                 lastDate: DateTime(2030),
-                locale: const Locale('pt', 'BR'),
               );
               if (picked != null) {
                 widget.onDateRangeChanged(picked.start, picked.end);
@@ -754,18 +780,26 @@ class _HeaderBarState extends State<HeaderBar> {
                 ),
               ),
             ),
-          Badge(
-            isLabelVisible: widget.unreadChatCount > 0,
-            label: Text(
-              widget.unreadChatCount > 99 ? '99+' : '${widget.unreadChatCount}',
-              style: const TextStyle(fontSize: 10, color: Colors.white),
-            ),
-            backgroundColor: Colors.red,
-            child: IconButton(
-              icon: Icon(Icons.chat, color: iconColor),
-              onPressed: widget.onChat,
-              tooltip: 'Chat',
-            ),
+          ListenableBuilder(
+            listenable: UnreadChatManager(),
+            builder: (context, _) {
+              final unread = UnreadChatManager().isInitialized
+                  ? UnreadChatManager().totalUnread
+                  : widget.unreadChatCount;
+              return Badge(
+                isLabelVisible: unread > 0,
+                label: Text(
+                  unread > 99 ? '99+' : '$unread',
+                  style: const TextStyle(fontSize: 10, color: Colors.white),
+                ),
+                backgroundColor: Colors.red,
+                child: IconButton(
+                  icon: Icon(Icons.chat, color: iconColor),
+                  onPressed: widget.onChat,
+                  tooltip: 'Chat',
+                ),
+              );
+            },
           ),
           if (widget.canEditTasks)
             IconButton(
@@ -773,7 +807,9 @@ class _HeaderBarState extends State<HeaderBar> {
               onPressed: widget.onConfig,
               tooltip: 'Configurações',
             ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 4),
+          // Botão para instalar no celular via QR Code (Android / iOS)
+          _buildDownloadMobileButton(iconColor),
           const SizedBox(width: 8),
           // Menu do usuário com perfil e logout
           PopupMenuButton<String>(
@@ -883,6 +919,20 @@ class _HeaderBarState extends State<HeaderBar> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildDownloadMobileButton(Color iconColor, {bool isMobile = false}) {
+    return IconButton(
+      tooltip: 'Instalar no Celular (QR Codes Android e iOS)',
+      icon: Icon(
+        Icons.install_mobile_rounded,
+        color: iconColor,
+        size: isMobile ? 20 : 22,
+      ),
+      padding: isMobile ? const EdgeInsets.symmetric(horizontal: 2) : const EdgeInsets.all(8),
+      constraints: isMobile ? const BoxConstraints(minWidth: 36, minHeight: 36) : const BoxConstraints(),
+      onPressed: () => AppDownloadQrDialog.show(context),
     );
   }
 }

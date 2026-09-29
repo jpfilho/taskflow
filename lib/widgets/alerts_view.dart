@@ -2,10 +2,11 @@ import 'package:flutter/material.dart';
 import '../models/task.dart';
 import '../services/task_service.dart';
 import '../utils/responsive.dart';
+import '../design_system/taskflow_design_system.dart';
 
 class AlertsView extends StatelessWidget {
   final TaskService taskService;
-  final List<Task>? filteredTasks; // Tarefas já filtradas (opcional)
+  final List<Task>? filteredTasks;
 
   const AlertsView({
     super.key,
@@ -17,82 +18,83 @@ class AlertsView extends StatelessWidget {
   Widget build(BuildContext context) {
     final isMobile = Responsive.isMobile(context);
 
-    // Se filteredTasks foi fornecido, usar diretamente
     if (filteredTasks != null) {
       final tasks = filteredTasks!;
       final alerts = _generateAlerts(tasks);
-      return SingleChildScrollView(
-        padding: EdgeInsets.all(isMobile ? 12 : 20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _buildHeader('Alertas e Notificações', isMobile, tasks),
-            const SizedBox(height: 20),
-            _buildAlertSummary(alerts, isMobile),
-            const SizedBox(height: 24),
-            _buildSectionTitle('⚠️ Alertas Críticos', isMobile, Colors.red),
-            const SizedBox(height: 12),
-            _buildAlertsList(alerts['critical'] as List<Alert>, isMobile, Colors.red),
-            const SizedBox(height: 24),
-            _buildSectionTitle('⚠️ Avisos Importantes', isMobile, Colors.orange),
-            const SizedBox(height: 12),
-            _buildAlertsList(alerts['warnings'] as List<Alert>, isMobile, Colors.orange),
-            const SizedBox(height: 24),
-            _buildSectionTitle('ℹ️ Informações', isMobile, Colors.blue),
-            const SizedBox(height: 12),
-            _buildAlertsList(alerts['info'] as List<Alert>, isMobile, Colors.blue),
-          ],
-        ),
-      );
+      return _buildContent(context, tasks, alerts, isMobile);
     }
 
     return FutureBuilder<List<Task>>(
       future: taskService.getAllTasks(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
+          return const Center(child: TFLoading(message: 'Carregando alertas...'));
         }
         if (snapshot.hasError) {
-          return Center(child: Text('Erro: ${snapshot.error}'));
+          return Center(
+            child: TFEmptyState(
+              icon: Icons.error_outline,
+              title: 'Erro ao carregar alertas',
+              description: '${snapshot.error}',
+            ),
+          );
         }
         final tasks = snapshot.data ?? [];
         final alerts = _generateAlerts(tasks);
+        return _buildContent(context, tasks, alerts, isMobile);
+      },
+    );
+  }
+
+  Widget _buildContent(
+    BuildContext context,
+    List<Task> tasks,
+    Map<String, dynamic> alerts,
+    bool isMobile,
+  ) {
+    final colors = context.tfColors;
+
+    final critical = alerts['critical'] as List<Alert>;
+    final warnings = alerts['warnings'] as List<Alert>;
+    final info = alerts['info'] as List<Alert>;
 
     return SingleChildScrollView(
       padding: EdgeInsets.all(isMobile ? 12 : 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _buildHeader('Alertas e Notificações', isMobile, tasks),
+          _buildHeader(context, 'Alertas e Notificações', isMobile, tasks),
           const SizedBox(height: 20),
-          _buildAlertSummary(alerts, isMobile),
+          _buildAlertSummary(context, alerts, isMobile),
           const SizedBox(height: 24),
-          _buildSectionTitle('⚠️ Alertas Críticos', isMobile, Colors.red),
+          _buildSectionTitle(context, 'Alertas Críticos', isMobile, colors.danger, Icons.error_outline),
           const SizedBox(height: 12),
-          _buildAlertsList(alerts['critical'] as List<Alert>, isMobile, Colors.red),
+          _buildAlertsList(context, critical, isMobile, colors.danger),
           const SizedBox(height: 24),
-          _buildSectionTitle('⚠️ Avisos Importantes', isMobile, Colors.orange),
+          _buildSectionTitle(context, 'Avisos Importantes', isMobile, colors.warning, Icons.warning_amber_rounded),
           const SizedBox(height: 12),
-          _buildAlertsList(alerts['warnings'] as List<Alert>, isMobile, Colors.orange),
+          _buildAlertsList(context, warnings, isMobile, colors.warning),
           const SizedBox(height: 24),
-          _buildSectionTitle('ℹ️ Informações', isMobile, Colors.blue),
+          _buildSectionTitle(context, 'Informações', isMobile, colors.info, Icons.info_outline),
           const SizedBox(height: 12),
-          _buildAlertsList(alerts['info'] as List<Alert>, isMobile, Colors.blue),
+          _buildAlertsList(context, info, isMobile, colors.info),
         ],
       ),
     );
-      },
-    );
   }
 
-  Widget _buildHeader(String title, bool isMobile, List<Task> tasks) {
+  Widget _buildHeader(BuildContext context, String title, bool isMobile, List<Task> tasks) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final criticalCount = (_generateAlerts(tasks)['critical'] as List).length;
+
     return Row(
       children: [
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: const Color(0xFF1E3A5F),
-            borderRadius: BorderRadius.circular(12),
+            color: colors.primary,
+            borderRadius: BorderRadius.circular(TFRadius.r12),
           ),
           child: const Icon(Icons.notifications_active, color: Colors.white, size: 28),
         ),
@@ -100,110 +102,75 @@ class AlertsView extends StatelessWidget {
         Expanded(
           child: Text(
             title,
-            style: TextStyle(
-              fontSize: isMobile ? 22 : 28,
-              fontWeight: FontWeight.bold,
-              color: const Color(0xFF1E3A5F),
-            ),
+            style: isMobile ? typography.sectionTitle : typography.pageTitle,
           ),
         ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: Colors.red,
-            borderRadius: BorderRadius.circular(20),
+        if (criticalCount > 0)
+          TFStatusBadge(
+            label: '$criticalCount crítico(s)',
+            severity: TFStatusSeverity.danger,
           ),
-          child: Text(
-            '${(_generateAlerts(tasks)['critical'] as List).length}',
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-          ),
-        ),
       ],
     );
   }
 
-  Widget _buildAlertSummary(Map<String, dynamic> alerts, bool isMobile) {
+  Widget _buildAlertSummary(BuildContext context, Map<String, dynamic> alerts, bool isMobile) {
+    final colors = context.tfColors;
+
+    final criticalCount = (alerts['critical'] as List).length;
+    final warningsCount = (alerts['warnings'] as List).length;
+    final infoCount = (alerts['info'] as List).length;
+    final totalCount = criticalCount + warningsCount + infoCount;
+
     return GridView.count(
       crossAxisCount: isMobile ? 2 : 4,
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       mainAxisSpacing: 12,
       crossAxisSpacing: 12,
-      childAspectRatio: isMobile ? 1.2 : 1.4,
+      childAspectRatio: isMobile ? 1.3 : 1.5,
       children: [
-        _buildSummaryCard(
-          'Críticos',
-          (alerts['critical'] as List).length.toString(),
-          Icons.error,
-          Colors.red,
-          isMobile,
-        ),
-        _buildSummaryCard(
-          'Avisos',
-          (alerts['warnings'] as List).length.toString(),
-          Icons.warning,
-          Colors.orange,
-          isMobile,
-        ),
-        _buildSummaryCard(
-          'Informações',
-          (alerts['info'] as List).length.toString(),
-          Icons.info,
-          Colors.blue,
-          isMobile,
-        ),
-        _buildSummaryCard(
-          'Total',
-          ((alerts['critical'] as List).length + 
-           (alerts['warnings'] as List).length + 
-           (alerts['info'] as List).length).toString(),
-          Icons.notifications,
-          Colors.purple,
-          isMobile,
-        ),
+        _buildSummaryCard(context, 'Críticos', criticalCount.toString(), Icons.error, colors.danger, isMobile),
+        _buildSummaryCard(context, 'Avisos', warningsCount.toString(), Icons.warning, colors.warning, isMobile),
+        _buildSummaryCard(context, 'Informações', infoCount.toString(), Icons.info, colors.info, isMobile),
+        _buildSummaryCard(context, 'Total', totalCount.toString(), Icons.notifications, colors.primary, isMobile),
       ],
     );
   }
 
-  Widget _buildSummaryCard(String title, String value, IconData icon, Color color, bool isMobile) {
-    return Card(
-      elevation: 3,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12),
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [color.withOpacity(0.1), color.withOpacity(0.05)],
-          ),
-        ),
+  Widget _buildSummaryCard(
+    BuildContext context,
+    String title,
+    String value,
+    IconData icon,
+    Color color,
+    bool isMobile,
+  ) {
+    final typography = context.tfTypography;
+    final colors = context.tfColors;
+
+    return TFCard(
+      child: Padding(
         padding: EdgeInsets.all(isMobile ? 12 : 16),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, color: color, size: isMobile ? 28 : 36),
-            const SizedBox(height: 8),
+            Icon(icon, color: color, size: isMobile ? 24 : 32),
+            const SizedBox(height: 6),
             Text(
               value,
-              style: TextStyle(
-                fontSize: isMobile ? 22 : 28,
-                fontWeight: FontWeight.bold,
+              style: (isMobile ? typography.sectionTitle : typography.display).copyWith(
                 color: color,
+                fontWeight: FontWeight.bold,
               ),
             ),
-            const SizedBox(height: 4),
-            Flexible(
-              child: Text(
-                title,
-                style: TextStyle(
-                  fontSize: isMobile ? 10 : 12,
-                  color: Colors.grey[700],
-                ),
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
+            const SizedBox(height: 2),
+            Text(
+              title,
+              style: typography.caption.copyWith(color: colors.textSecondary),
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ],
         ),
@@ -211,40 +178,39 @@ class AlertsView extends StatelessWidget {
     );
   }
 
-  Widget _buildSectionTitle(String title, bool isMobile, Color color) {
+  Widget _buildSectionTitle(
+    BuildContext context,
+    String title,
+    bool isMobile,
+    Color color,
+    IconData icon,
+  ) {
+    final typography = context.tfTypography;
+
     return Row(
       children: [
-        Container(
-          width: 4,
-          height: 24,
-          decoration: BoxDecoration(
-            color: color,
-            borderRadius: BorderRadius.circular(2),
-          ),
-        ),
-        const SizedBox(width: 12),
+        Icon(icon, color: color, size: isMobile ? 20 : 24),
+        const SizedBox(width: 8),
         Text(
           title,
-          style: TextStyle(
-            fontSize: isMobile ? 18 : 22,
-            fontWeight: FontWeight.bold,
-            color: color,
-          ),
+          style: isMobile ? typography.cardTitle : typography.sectionTitle,
         ),
       ],
     );
   }
 
-  Widget _buildAlertsList(List<Alert> alerts, bool isMobile, Color color) {
+  Widget _buildAlertsList(
+    BuildContext context,
+    List<Alert> alerts,
+    bool isMobile,
+    Color color,
+  ) {
     if (alerts.isEmpty) {
-      return Card(
+      return const TFCard(
         child: Padding(
-          padding: const EdgeInsets.all(20),
+          padding: EdgeInsets.all(16),
           child: Center(
-            child: Text(
-              'Nenhum alerta nesta categoria',
-              style: TextStyle(color: Colors.grey[600]),
-            ),
+            child: Text('Nenhum alerta nesta categoria'),
           ),
         ),
       );
@@ -252,105 +218,94 @@ class AlertsView extends StatelessWidget {
 
     return Column(
       children: alerts.map((alert) {
-        return _buildAlertCard(alert, isMobile, color);
+        return _buildAlertCard(context, alert, isMobile, color);
       }).toList(),
     );
   }
 
-  Widget _buildAlertCard(Alert alert, bool isMobile, Color color) {
-    return Card(
-      elevation: 2,
-      margin: const EdgeInsets.only(bottom: 12),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: color.withOpacity(0.3), width: 2),
-      ),
-      child: Padding(
-        padding: EdgeInsets.all(isMobile ? 12 : 16),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: color.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(10),
+  Widget _buildAlertCard(
+    BuildContext context,
+    Alert alert,
+    bool isMobile,
+    Color color,
+  ) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: TFCard(
+        child: Padding(
+          padding: EdgeInsets.all(isMobile ? 12 : 16),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(TFRadius.r8),
+                ),
+                child: Icon(alert.icon, color: color, size: isMobile ? 20 : 24),
               ),
-              child: Icon(alert.icon, color: color, size: isMobile ? 24 : 28),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    alert.title,
-                    style: TextStyle(
-                      fontSize: isMobile ? 15 : 17,
-                      fontWeight: FontWeight.bold,
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      alert.title,
+                      style: typography.cardTitle.copyWith(fontWeight: FontWeight.bold),
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    alert.message,
-                    style: TextStyle(
-                      fontSize: isMobile ? 12 : 14,
-                      color: Colors.grey[700],
+                    const SizedBox(height: 4),
+                    Text(
+                      alert.message,
+                      style: typography.bodyMedium.copyWith(color: colors.textSecondary),
                     ),
-                  ),
-                  if (alert.task != null) ...[
-                    const SizedBox(height: 8),
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.grey[100],
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.assignment, size: 16, color: Colors.grey[600]),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              alert.task!.tarefa,
-                              style: TextStyle(
-                                fontSize: isMobile ? 11 : 12,
-                                color: Colors.grey[700],
+                    if (alert.task != null) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: colors.surfaceSecondary,
+                          borderRadius: BorderRadius.circular(TFRadius.r4),
+                          border: Border.all(color: colors.borderSubtle),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.assignment_outlined, size: 14, color: colors.textSecondary),
+                            const SizedBox(width: 6),
+                            Flexible(
+                              child: Text(
+                                alert.task!.tarefa,
+                                style: typography.caption.copyWith(color: colors.textSecondary),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
                             ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    if (alert.date != null) ...[
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Icon(Icons.calendar_today_outlined, size: 12, color: colors.textSecondary),
+                          const SizedBox(width: 4),
+                          Text(
+                            alert.date!,
+                            style: typography.caption.copyWith(color: colors.textSecondary),
                           ),
                         ],
                       ),
-                    ),
+                    ],
                   ],
-                  if (alert.date != null) ...[
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Icon(Icons.calendar_today, size: 14, color: Colors.grey[600]),
-                        const SizedBox(width: 4),
-                        Text(
-                          alert.date!,
-                          style: TextStyle(
-                            fontSize: isMobile ? 11 : 12,
-                            color: Colors.grey[600],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ],
+                ),
               ),
-            ),
-            IconButton(
-              icon: const Icon(Icons.close),
-              onPressed: () {
-                // Marcar como lido
-              },
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -363,7 +318,6 @@ class AlertsView extends StatelessWidget {
     final info = <Alert>[];
 
     for (var task in tasks) {
-      // Atividades atrasadas
       if (task.dataFim.isBefore(now) && task.status != 'CONC') {
         final daysLate = now.difference(task.dataFim).inDays;
         critical.add(Alert(
@@ -375,7 +329,6 @@ class AlertsView extends StatelessWidget {
         ));
       }
 
-      // Manutenções preventivas próximas (7 dias)
       if (task.tipo == 'PMP' && task.status == 'PROG') {
         final daysUntil = task.dataInicio.difference(now).inDays;
         if (daysUntil <= 7 && daysUntil >= 0) {
@@ -389,7 +342,6 @@ class AlertsView extends StatelessWidget {
         }
       }
 
-      // Atividades sem executor
       if (task.executor.isEmpty || task.executor == '-N/A-') {
         warnings.add(Alert(
           title: 'Atividade sem Executor',
@@ -399,7 +351,6 @@ class AlertsView extends StatelessWidget {
         ));
       }
 
-      // Atividades sem frota quando necessário
       if (task.tipo == 'PMP' && (task.frota.isEmpty || task.frota == '-N/A-')) {
         info.add(Alert(
           title: 'Frota não especificada',
@@ -410,7 +361,6 @@ class AlertsView extends StatelessWidget {
       }
     }
 
-    // Alertas gerais
     final totalAtrasadas = tasks.where((t) => t.dataFim.isBefore(now) && t.status != 'CONC').length;
     if (totalAtrasadas > 0) {
       critical.insert(0, Alert(
@@ -443,7 +393,3 @@ class Alert {
     this.date,
   });
 }
-
-
-
-

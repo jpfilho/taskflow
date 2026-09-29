@@ -1,5 +1,13 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import '../../../../design_system/components/buttons/tf_button.dart';
+import '../../../../design_system/components/buttons/tf_icon_button.dart';
+import '../../../../design_system/components/dialogs/tf_modal_dialog.dart';
+import '../../../../design_system/components/feedback/tf_empty_state.dart';
+import '../../../../design_system/components/feedback/tf_loading.dart';
+import '../../../../design_system/components/layout/tf_page_header.dart';
+import '../../../../design_system/foundations/tf_icons.dart';
+import '../../../../design_system/theme/taskflow_theme_extension.dart';
 import '../../../../services/auth_service_simples.dart';
 import '../../../../services/connectivity_service.dart';
 import '../../../../widgets/sync_status_widget.dart';
@@ -7,11 +15,12 @@ import '../../application/controllers/gallery_controller.dart';
 import '../../data/models/media_image.dart';
 import '../widgets/filter_bar.dart';
 import '../widgets/album_group_list.dart';
+import '../widgets/media_grid.dart';
 import 'detail_page.dart';
+import 'status_album_list_view.dart';
 import 'upload_page.dart';
 
 class MediaAlbumsGalleryPage extends StatefulWidget {
-  /// Filtros iniciais (ex.: ao abrir a partir da tela de Ordens por local/sala).
   final String? initialLocalId;
   final String? initialRoomId;
 
@@ -26,7 +35,6 @@ class MediaAlbumsGalleryPage extends StatefulWidget {
 }
 
 class _MediaAlbumsGalleryPageState extends State<MediaAlbumsGalleryPage> {
-
   late final GalleryController _controller;
   final ScrollController _scrollController = ScrollController();
   late final TextEditingController _searchController;
@@ -49,7 +57,6 @@ class _MediaAlbumsGalleryPageState extends State<MediaAlbumsGalleryPage> {
       }
     });
 
-    // Carregar referências; se houver filtros iniciais, aplicar após carregar e abrir filtrado
     final hasInitialFilters = widget.initialLocalId != null || widget.initialRoomId != null;
     if (hasInitialFilters) {
       _controller.loadReferences().then((_) async {
@@ -62,7 +69,6 @@ class _MediaAlbumsGalleryPageState extends State<MediaAlbumsGalleryPage> {
       _controller.loadImages(refresh: true);
     }
 
-    // Scroll listener para infinite scroll
     _scrollController.addListener(_onScroll);
   }
 
@@ -78,22 +84,20 @@ class _MediaAlbumsGalleryPageState extends State<MediaAlbumsGalleryPage> {
   }
 
   void _onControllerChanged() {
-    // Sincronizar campo de busca quando filtros são limpos (ex.: botão Limpar)
     if (_controller.searchQuery.isEmpty && _searchController.text.isNotEmpty) {
       _searchController.text = '';
-      _searchController.selection = TextSelection.collapsed(offset: 0);
+      _searchController.selection = const TextSelection.collapsed(offset: 0);
     }
     setState(() {});
   }
 
-  /// Texto com perfil do usuário: Regional X - Divisao Y - Segmento Z.
   String _userProfileSubtitle() {
     final usuario = AuthServiceSimples().currentUser;
-    if (usuario == null) return ' - Regional — - Divisao — - Segmento —';
+    if (usuario == null) return 'Organização e arquivo visual das operações.';
     final r = usuario.regionais.isEmpty ? '—' : usuario.regionais.join(', ');
     final d = usuario.divisoes.isEmpty ? '—' : usuario.divisoes.join(', ');
     final s = usuario.segmentos.isEmpty ? '—' : usuario.segmentos.join(', ');
-    return ' - Regional $r - Divisao $d - Segmento $s';
+    return 'Regional: $r • Divisão: $d • Segmento: $s';
   }
 
   void _onScroll() {
@@ -110,7 +114,6 @@ class _MediaAlbumsGalleryPageState extends State<MediaAlbumsGalleryPage> {
         builder: (context) => DetailPage(imageId: image.id),
       ),
     ).then((_) {
-      // Recarregar após voltar (pode ter sido editada/deletada)
       _controller.loadImages(refresh: true);
     });
   }
@@ -121,132 +124,70 @@ class _MediaAlbumsGalleryPageState extends State<MediaAlbumsGalleryPage> {
         builder: (context) => const UploadPage(),
       ),
     ).then((_) {
-      // Recarregar após upload
       _controller.loadImages(refresh: true);
     });
   }
 
-  static double _responsivePadding(BuildContext context) {
-    final w = MediaQuery.of(context).size.width;
-    if (w < 600) return 12;
-    if (w < 1024) return 20;
-    return 32;
+  void _navigateToStatusList() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => const StatusAlbumListView(),
+      ),
+    ).then((_) {
+      _controller.loadReferences();
+    });
   }
 
-  static double _responsiveSpacing(BuildContext context) {
-    final w = MediaQuery.of(context).size.width;
-    if (w < 600) return 16;
-    if (w < 1024) return 20;
-    return 32;
+  Future<void> _handleDelete(MediaImage image) async {
+    final confirmed = await TFModalDialog.confirm(
+      context: context,
+      title: 'Excluir Imagem',
+      message: 'Tem certeza que deseja excluir permanentemente esta imagem do álbum?',
+      confirmLabel: 'Excluir',
+      isDestructive: true,
+    );
+
+    if (confirmed == true) {
+      await _controller.deleteImage(image.id);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final width = MediaQuery.of(context).size.width;
-    final isMobile = width < 600;
-    final isTablet = width >= 600 && width < 1024;
-    final padding = _responsivePadding(context);
-    final spacing = _responsiveSpacing(context);
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
 
     return Scaffold(
-      backgroundColor: isDark ? const Color(0xFF0f172a) : const Color(0xFFf8fafc),
+      backgroundColor: colors.background,
       body: SafeArea(
-        child: Padding(
-          padding: EdgeInsets.all(padding),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (!_isConnected)
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  margin: const EdgeInsets.only(bottom: 12),
-                  decoration: BoxDecoration(
-                    color: Colors.orange[100],
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.cloud_off, color: Colors.orange[800], size: 18),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Offline: exibindo dados já carregados. Conecte-se para sincronizar novos álbuns.',
-                          style: TextStyle(color: Colors.orange[900], fontSize: 13, fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                      const SyncStatusWidget(),
-                    ],
-                  ),
+        child: Column(
+          children: [
+            TFPageHeader(
+              title: 'Álbuns de Mídia & Evidências',
+              subtitle: _userProfileSubtitle(),
+              primaryAction: TFButton(
+                label: 'Adicionar Fotos',
+                leadingIcon: TFIcons.add,
+                onPressed: _navigateToUpload,
+              ),
+              secondaryActions: [
+                TFButton(
+                  label: 'Status',
+                  variant: TFButtonVariant.secondary,
+                  leadingIcon: Icons.tune_rounded,
+                  onPressed: _navigateToStatusList,
                 ),
-              // Header (mobile sem título para economizar espaço; desktop/tablet com título)
-              isMobile
-                  ? Row(
-                      children: [
-                        Expanded(
-                          child: _buildSearchField(context, theme, isDark),
-                        ),
-                        const SizedBox(width: 8),
-                        ElevatedButton.icon(
-                          onPressed: _navigateToUpload,
-                          icon: const Icon(Icons.add, size: 20),
-                          label: const Text('Adicionar'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF1e40af),
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                            elevation: 0,
-                          ),
-                        ),
-                      ],
-                    )
-                  : Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Flexible(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Álbuns de Imagens${_userProfileSubtitle()}',
-                                style: theme.textTheme.headlineSmall?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                  color: isDark ? Colors.white : const Color(0xFF0f172a),
-                                  letterSpacing: -0.5,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Row(
-                          children: [
-                            SizedBox(
-                              width: isTablet ? 240 : 320,
-                              child: _buildSearchField(context, theme, isDark),
-                            ),
-                            const SizedBox(width: 12),
-                            ElevatedButton.icon(
-                              onPressed: _navigateToUpload,
-                              icon: const Icon(Icons.add, size: 20),
-                              label: const Text('Adicionar'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFF1e40af),
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                                elevation: 0,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-              SizedBox(height: spacing),
-              // Barra de filtros (mesmo controller da busca para não reordenar texto)
-              FilterBar(
+                TFIconButton(
+                  icon: TFIcons.refresh,
+                  tooltip: 'Atualizar Galeria',
+                  onPressed: () => _controller.loadImages(refresh: true),
+                ),
+                const SyncStatusWidget(),
+              ],
+            ),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: spacing.md, vertical: spacing.xs),
+              child: FilterBar(
                 searchQuery: _controller.searchQuery,
                 searchController: _searchController,
                 onSearchChanged: _controller.setSearchQuery,
@@ -271,115 +212,64 @@ class _MediaAlbumsGalleryPageState extends State<MediaAlbumsGalleryPage> {
                 currentResults: _controller.images.length,
                 totalResults: _controller.totalImages,
               ),
-              SizedBox(height: padding),
-              // Conteúdo
-              Expanded(
-                child: _controller.error != null
-                ? Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.error_outline,
-                          size: 48,
-                          color: theme.colorScheme.error,
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          _controller.error!,
-                          style: theme.textTheme.bodyLarge?.copyWith(
-                            color: theme.colorScheme.error,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(height: 16),
-                        ElevatedButton(
-                          onPressed: () => _controller.loadImages(refresh: true),
-                          child: const Text('Tentar novamente'),
-                        ),
-                      ],
-                    ),
-                  )
-                : _controller.isLoading && _controller.images.isEmpty
-                    ? const Center(child: CircularProgressIndicator())
-                    : AlbumGroupList(
-                        groupedImages: _controller.getGroupedImagesByLocal(),
-                        onImageTap: _navigateToDetail,
-                        scrollController: _scrollController,
-                        onLoadMore: _controller.hasMore
-                            ? () => _controller.loadMore()
-                            : null,
-                        onLoadRoomImages: _controller.loadImagesForRoom,
-                        hasMore: _controller.hasMore,
-                        isLoading: _controller.isLoading,
-                        isLoadingRoom: _controller.isLoadingRoom,
-                        onImageDelete: (image) async {
-                          final confirmed = await showDialog<bool>(
-                            context: context,
-                            builder: (context) => AlertDialog(
-                              title: const Text('Confirmar exclusão'),
-                              content: const Text(
-                                'Tem certeza que deseja excluir esta imagem?',
-                              ),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.pop(context, false),
-                                  child: const Text('Cancelar'),
-                                ),
-                                TextButton(
-                                  onPressed: () => Navigator.pop(context, true),
-                                  style: TextButton.styleFrom(
-                                    foregroundColor: theme.colorScheme.error,
-                                  ),
-                                  child: const Text('Excluir'),
-                                ),
-                              ],
-                            ),
-                          );
-
-                          if (confirmed == true) {
-                            await _controller.deleteImage(image.id);
-                          }
-                        },
-                      ),
+            ),
+            Expanded(
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: spacing.md),
+                child: _buildContent(context),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
-      floatingActionButton: null,
     );
   }
 
-  Widget _buildSearchField(BuildContext context, ThemeData theme, bool isDark) {
-    return Container(
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1e293b) : Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-        ),
-      ),
-      child: TextField(
-        controller: _searchController,
-        decoration: InputDecoration(
-          hintText: 'Buscar por título, descrição ou tags...',
-          hintStyle: TextStyle(
-            color: isDark ? Colors.grey[500] : Colors.grey[400],
+  Widget _buildContent(BuildContext context) {
+    if (_controller.error != null) {
+      return Center(
+        child: TFEmptyState(
+          title: 'Erro ao carregar galeria',
+          description: _controller.error!,
+          icon: TFIcons.warning,
+          action: TFButton(
+            label: 'Tentar Novamente',
+            leadingIcon: TFIcons.refresh,
+            onPressed: () => _controller.loadImages(refresh: true),
           ),
-          prefixIcon: Icon(
-            Icons.search,
-            color: isDark ? Colors.grey[400] : Colors.grey[500],
-            size: 20,
-          ),
-          border: InputBorder.none,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         ),
-        style: TextStyle(
-          color: isDark ? Colors.white : const Color(0xFF0f172a),
-        ),
-        onChanged: _controller.setSearchQuery,
-      ),
+      );
+    }
+
+    if (_controller.isLoading && _controller.images.isEmpty) {
+      return const Center(child: TFLoading(message: 'Carregando álbuns e imagens...'));
+    }
+
+    if (_controller.viewModeIndex == 0) {
+      // 0 = Grid Geral
+      return MediaGrid(
+        images: _controller.images,
+        onImageTap: _navigateToDetail,
+        onImageDelete: _handleDelete,
+        scrollController: _scrollController,
+        onLoadMore: _controller.hasMore ? () => _controller.loadMore() : null,
+        onAddNew: _navigateToUpload,
+        hasMore: _controller.hasMore,
+        isLoading: _controller.isLoading,
+      );
+    }
+
+    // 1 = Por Álbuns / Salas
+    return AlbumGroupList(
+      groupedImages: _controller.getGroupedImagesByLocal(),
+      onImageTap: _navigateToDetail,
+      onImageDelete: _handleDelete,
+      scrollController: _scrollController,
+      onLoadMore: _controller.hasMore ? () => _controller.loadMore() : null,
+      onLoadRoomImages: _controller.loadImagesForRoom,
+      hasMore: _controller.hasMore,
+      isLoading: _controller.isLoading,
+      isLoadingRoom: _controller.isLoadingRoom,
     );
   }
 }

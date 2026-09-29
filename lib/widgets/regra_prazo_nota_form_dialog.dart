@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import '../design_system/taskflow_design_system.dart';
 import '../models/regra_prazo_nota.dart';
 import '../models/segmento.dart';
 import '../services/segmento_service.dart';
@@ -22,13 +22,13 @@ class _RegraPrazoNotaFormDialogState extends State<RegraPrazoNotaFormDialog> {
   late TextEditingController _descricaoController;
   String? _selectedPrioridade;
   String? _selectedDataReferencia;
-  Set<String> _selectedSegmentoIds = {}; // Set de IDs de segmentos selecionados. Se vazio = todos os segmentos
+  Set<String> _selectedSegmentoIds = {};
   bool _ativo = true;
+  bool _isSaving = false;
   List<Segmento> _segmentos = [];
   bool _isLoadingSegmentos = true;
   final SegmentoService _segmentoService = SegmentoService();
 
-  // Opções de prioridade
   final List<String> _prioridades = [
     'Alta',
     'Baixa',
@@ -39,7 +39,6 @@ class _RegraPrazoNotaFormDialogState extends State<RegraPrazoNotaFormDialog> {
     'Urgência',
   ];
 
-  // Opções de data de referência
   final List<Map<String, String>> _dataReferencias = [
     {'value': 'criacao', 'label': 'Data de Criação'},
     {'value': 'inicio_desejado', 'label': 'Início da Avaria'},
@@ -56,7 +55,7 @@ class _RegraPrazoNotaFormDialogState extends State<RegraPrazoNotaFormDialog> {
     );
     _selectedPrioridade = widget.regra?.prioridade;
     _selectedDataReferencia = widget.regra?.dataReferencia;
-    _selectedSegmentoIds = widget.regra?.segmentoIds.toSet() ?? {}; // Set de IDs selecionados
+    _selectedSegmentoIds = widget.regra?.segmentoIds.toSet() ?? {};
     _ativo = widget.regra?.ativo ?? true;
     _loadSegmentos();
   }
@@ -64,15 +63,18 @@ class _RegraPrazoNotaFormDialogState extends State<RegraPrazoNotaFormDialog> {
   Future<void> _loadSegmentos() async {
     try {
       final segmentos = await _segmentoService.getAllSegmentos();
-      setState(() {
-        _segmentos = segmentos;
-        _isLoadingSegmentos = false;
-      });
+      if (mounted) {
+        setState(() {
+          _segmentos = segmentos;
+          _isLoadingSegmentos = false;
+        });
+      }
     } catch (e) {
-      print('Erro ao carregar segmentos: $e');
-      setState(() {
-        _isLoadingSegmentos = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoadingSegmentos = false;
+        });
+      }
     }
   }
 
@@ -84,6 +86,8 @@ class _RegraPrazoNotaFormDialogState extends State<RegraPrazoNotaFormDialog> {
   }
 
   void _save() {
+    if (_isSaving) return;
+
     if (_formKey.currentState!.validate()) {
       if (_selectedPrioridade == null) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -105,12 +109,14 @@ class _RegraPrazoNotaFormDialogState extends State<RegraPrazoNotaFormDialog> {
         return;
       }
 
+      setState(() => _isSaving = true);
+
       final regra = RegraPrazoNota(
         id: widget.regra?.id ?? '',
         prioridade: _selectedPrioridade!,
         diasPrazo: int.parse(_diasPrazoController.text.trim()),
         dataReferencia: _selectedDataReferencia!,
-        segmentoIds: _selectedSegmentoIds.toList(), // Lista de IDs selecionados. Se vazia = todos os segmentos
+        segmentoIds: _selectedSegmentoIds.toList(),
         ativo: _ativo,
         descricao: _descricaoController.text.trim().isEmpty 
             ? null 
@@ -126,177 +132,183 @@ class _RegraPrazoNotaFormDialogState extends State<RegraPrazoNotaFormDialog> {
   @override
   Widget build(BuildContext context) {
     final isEditing = widget.regra != null;
+    final spacing = context.tfSpacing;
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
 
-    return AlertDialog(
-      title: Text(isEditing ? 'Editar Regra de Prazo' : 'Nova Regra de Prazo'),
-      content: Form(
+    return TFFormDialog(
+      title: isEditing ? 'Editar Regra de Prazo' : 'Nova Regra de Prazo',
+      subtitle: 'Defina os prazos regulamentares para atendimento de notas.',
+      saveLabel: isEditing ? 'Salvar Alterações' : 'Criar Regra',
+      isSaving: _isSaving,
+      onSave: _save,
+      onCancel: () => Navigator.of(context).pop(),
+      child: Form(
         key: _formKey,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              DropdownButtonFormField<String>(
-                initialValue: _selectedPrioridade,
-                decoration: const InputDecoration(
-                  labelText: 'Prioridade *',
-                  border: OutlineInputBorder(),
-                ),
-                items: _prioridades.map((prioridade) {
-                  return DropdownMenuItem(
-                    value: prioridade,
-                    child: Text(prioridade),
-                  );
-                }).toList(),
-                onChanged: (value) {
-                  setState(() {
-                    _selectedPrioridade = value;
-                  });
-                },
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Selecione uma prioridade';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _diasPrazoController,
-                decoration: const InputDecoration(
-                  labelText: 'Dias de Prazo *',
-                  border: OutlineInputBorder(),
-                  hintText: 'Ex: 5, 10, 30',
-                  helperText: 'Quantidade de dias para conclusão',
-                ),
-                keyboardType: TextInputType.number,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Informe a quantidade de dias';
-                  }
-                  final dias = int.tryParse(value);
-                  if (dias == null || dias <= 0) {
-                    return 'Dias deve ser um número maior que zero';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-              DropdownButtonFormField<String>(
-                initialValue: _selectedDataReferencia,
-                decoration: InputDecoration(
-                  labelText: 'Data de Referência *',
-                  border: const OutlineInputBorder(),
-                  helperText: _selectedDataReferencia == 'inicio_desejado'
-                      ? 'Usa o campo "Início da Avaria" da nota SAP para calcular o prazo'
-                      : _selectedDataReferencia == 'criacao'
-                          ? 'Usa a data de criação da nota SAP para calcular o prazo'
-                          : 'Selecione a data base para cálculo do prazo',
-                ),
-                items: _dataReferencias.map((item) {
-                  return DropdownMenuItem(
-                    value: item['value'],
-                    child: Text(item['label']!),
-                  );
-                }).toList(),
-                onChanged: (value) {
-                  setState(() {
-                    _selectedDataReferencia = value;
-                  });
-                },
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Selecione a data de referência';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-              _isLoadingSegmentos
-                  ? const CircularProgressIndicator()
-                  : ExpansionTile(
-                      title: const Text('Segmentos'),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TFDropdown<String>(
+              label: 'Prioridade',
+              isRequired: true,
+              value: _selectedPrioridade,
+              items: _prioridades,
+              displayText: (p) => p,
+              onChanged: (value) {
+                setState(() {
+                  _selectedPrioridade = value;
+                });
+              },
+              validator: (value) {
+                if (value == null || value.isEmpty) {
+                  return 'Selecione uma prioridade';
+                }
+                return null;
+              },
+            ),
+            SizedBox(height: spacing.md),
+            TFTextField(
+              controller: _diasPrazoController,
+              label: 'Dias de Prazo',
+              hint: 'Ex: 5, 10, 30',
+              helperText: 'Quantidade de dias para conclusão',
+              required: true,
+              keyboardType: TextInputType.number,
+              validator: (value) {
+                if (value == null || value.trim().isEmpty) {
+                  return 'Informe a quantidade de dias';
+                }
+                final dias = int.tryParse(value.trim());
+                if (dias == null || dias <= 0) {
+                  return 'Dias deve ser um número maior que zero';
+                }
+                return null;
+              },
+            ),
+            SizedBox(height: spacing.md),
+            TFDropdown<String>(
+              label: 'Data de Referência',
+              isRequired: true,
+              value: _selectedDataReferencia,
+              items: _dataReferencias.map((d) => d['value']!).toList(),
+              displayText: (val) {
+                final match = _dataReferencias.firstWhere(
+                  (d) => d['value'] == val,
+                  orElse: () => {'label': val},
+                );
+                return match['label']!;
+              },
+              onChanged: (value) {
+                setState(() {
+                  _selectedDataReferencia = value;
+                });
+              },
+              validator: (value) {
+                if (value == null || value.isEmpty) {
+                  return 'Selecione a data de referência';
+                }
+                return null;
+              },
+            ),
+            SizedBox(height: spacing.md),
+            _isLoadingSegmentos
+                ? const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(16.0),
+                      child: TFLoading(
+                        mode: TFLoadingMode.section,
+                        message: 'Carregando segmentos...',
+                      ),
+                    ),
+                  )
+                : TFCard(
+                    child: Material(
+                      color: Colors.transparent,
+                      child: ExpansionTile(
+                      tilePadding: EdgeInsets.symmetric(horizontal: spacing.sm),
+                      title: Text(
+                        'Segmentos Aplicáveis',
+                        style: typography.bodyMedium.copyWith(
+                          fontWeight: FontWeight.w600,
+                          color: colors.textPrimary,
+                        ),
+                      ),
                       subtitle: Text(
                         _selectedSegmentoIds.isEmpty
-                            ? 'Todos os segmentos'
+                            ? 'Todos os segmentos (regra ampla)'
                             : '${_selectedSegmentoIds.length} segmento(s) selecionado(s)',
-                      ),
-                      initiallyExpanded: false,
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                          child: Column(
-                            children: [
-                              CheckboxListTile(
-                                title: const Text('Todos os Segmentos'),
-                                value: _selectedSegmentoIds.isEmpty,
-                                onChanged: (value) {
-                                  setState(() {
-                                    if (value == true) {
-                                      _selectedSegmentoIds.clear();
-                                    }
-                                  });
-                                },
-                                controlAffinity: ListTileControlAffinity.leading,
-                              ),
-                              const Divider(),
-                              ..._segmentos.map((segmento) {
-                                final isSelected = _selectedSegmentoIds.contains(segmento.id);
-                                return CheckboxListTile(
-                                  title: Text(segmento.segmento),
-                                  value: isSelected,
-                                  onChanged: (value) {
-                                    setState(() {
-                                      if (value == true) {
-                                        _selectedSegmentoIds.add(segmento.id);
-                                      } else {
-                                        _selectedSegmentoIds.remove(segmento.id);
-                                      }
-                                    });
-                                  },
-                                  controlAffinity: ListTileControlAffinity.leading,
-                                );
-                              }),
-                            ],
-                          ),
+                        style: typography.bodySmall.copyWith(
+                          color: _selectedSegmentoIds.isEmpty
+                              ? colors.primary
+                              : colors.textSecondary,
                         ),
+                      ),
+                      children: [
+                        CheckboxListTile(
+                          title: Text(
+                            'Todos os Segmentos',
+                            style: typography.bodyMedium.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          value: _selectedSegmentoIds.isEmpty,
+                          activeColor: colors.primary,
+                          onChanged: (value) {
+                            setState(() {
+                              if (value == true) {
+                                _selectedSegmentoIds.clear();
+                              }
+                            });
+                          },
+                          controlAffinity: ListTileControlAffinity.leading,
+                        ),
+                        const Divider(height: 1),
+                        ..._segmentos.map((segmento) {
+                          final isSelected = _selectedSegmentoIds.contains(segmento.id);
+                          return CheckboxListTile(
+                            title: Text(
+                              segmento.segmento,
+                              style: typography.bodyMedium,
+                            ),
+                            value: isSelected,
+                            activeColor: colors.primary,
+                            onChanged: (value) {
+                              setState(() {
+                                if (value == true) {
+                                  _selectedSegmentoIds.add(segmento.id);
+                                } else {
+                                  _selectedSegmentoIds.remove(segmento.id);
+                                }
+                              });
+                            },
+                            controlAffinity: ListTileControlAffinity.leading,
+                          );
+                        }),
                       ],
                     ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _descricaoController,
-                decoration: const InputDecoration(
-                  labelText: 'Descrição',
-                  border: OutlineInputBorder(),
-                  hintText: 'Descrição opcional da regra',
+                  ),
                 ),
-                maxLines: 3,
-              ),
-              const SizedBox(height: 16),
-              SwitchListTile(
-                title: const Text('Regra Ativa'),
-                subtitle: const Text('Se desativada, a regra não será aplicada'),
-                value: _ativo,
-                onChanged: (value) {
-                  setState(() {
-                    _ativo = value;
-                  });
-                },
-              ),
-            ],
-          ),
+            SizedBox(height: spacing.md),
+            TFTextField(
+              controller: _descricaoController,
+              label: 'Descrição',
+              hint: 'Descrição opcional da regra',
+              maxLines: 3,
+            ),
+            SizedBox(height: spacing.md),
+            TFSwitch(
+              value: _ativo,
+              label: 'Regra Ativa',
+              description: 'Se desativada, a regra não será aplicada no cálculo de prazos',
+              onChanged: (value) {
+                setState(() {
+                  _ativo = value;
+                });
+              },
+            ),
+          ],
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancelar'),
-        ),
-        ElevatedButton(
-          onPressed: _save,
-          child: Text(isEditing ? 'Salvar' : 'Criar'),
-        ),
-      ],
     );
   }
 }

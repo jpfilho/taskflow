@@ -960,6 +960,7 @@ class _PEXFormDialogState extends State<PEXFormDialog> with SingleTickerProvider
       popupProps: PopupProps.menu(
         showSearchBox: true,
         searchFieldProps: TextFieldProps(
+          autofocus: true,
           decoration: InputDecoration(
             hintText: hintText ?? 'Digite para buscar...',
             border: OutlineInputBorder(
@@ -1635,6 +1636,8 @@ class _PEXFormDialogState extends State<PEXFormDialog> with SingleTickerProvider
           sis: sisDisponiveis,
           title: 'Selecionar SI',
           taskTarefa: widget.task.tarefa,
+          taskLocal: widget.task.locais.isNotEmpty ? widget.task.locais.first : null,
+          taskLocais: widget.task.locais,
         ),
       );
       

@@ -137,6 +137,11 @@ class SyncService {
         final queueId = item['id'] as int;
         final retryCount = (item['retry_count'] as int?) ?? 0;
 
+        // Limpar campos locais e preparar timestamps
+        data.remove('sync_status');
+        data.remove('last_synced');
+        _convertTimestamps(data);
+
         bool success = false;
 
         switch (operation) {
@@ -250,7 +255,6 @@ class SyncService {
         
         for (var record in response) {
           final recordMap = Map<String, dynamic>.from(record);
-          final recordId = recordMap['id'] as String;
 
           _convertDateTimesToTimestamps(recordMap);
           _sanitizeMapForSqlite(recordMap);
@@ -331,7 +335,9 @@ class SyncService {
     final timestampFields = [
       'data_inicio', 'data_fim', 'data_criacao', 'data_atualizacao',
       'created_at', 'updated_at', 'data_upload', 'dia', 'mes', 'ano',
-      'data_prevista_lancamento', 'data_lancamento', 'concluido_em', 'reaberto_em'
+      'data_prevista_lancamento', 'data_lancamento', 'concluido_em', 'reaberto_em',
+      'data_inicio_prevista', 'data_fim_prevista', 'data_inicio_real', 'data_fim_real',
+      'data_prevista', 'data_real', 'data_identificacao', 'data_limite', 'prazo'
     ];
 
     for (var field in timestampFields) {
@@ -347,7 +353,9 @@ class SyncService {
     final dateFields = [
       'data_inicio', 'data_fim', 'data_criacao', 'data_atualizacao',
       'created_at', 'updated_at', 'data_upload',
-      'data_prevista_lancamento', 'data_lancamento', 'concluido_em', 'reaberto_em'
+      'data_prevista_lancamento', 'data_lancamento', 'concluido_em', 'reaberto_em',
+      'data_inicio_prevista', 'data_fim_prevista', 'data_inicio_real', 'data_fim_real',
+      'data_prevista', 'data_real', 'data_identificacao', 'data_limite', 'prazo'
     ];
 
     for (var field in dateFields) {
@@ -356,7 +364,7 @@ class SyncService {
           final dateTime = DateTime.parse(map[field] as String);
           map[field] = dateTime.millisecondsSinceEpoch;
         } catch (e) {
-          // Ignorar campos que não são datas válidas
+          // Ignorar se não puder converter
         }
       }
     }
@@ -381,9 +389,14 @@ class SyncService {
   }
 
   // Adicionar operação à fila de sincronização
-  Future<void> queueOperation(String tableName, String operation, String recordId, Map<String, dynamic> data) async {
+  Future<void> queueOperation(String tableName, String operation, String recordId, Map<String, dynamic> originalData) async {
     if (_connectivity.isConnected) {
       // Tentar sincronizar imediatamente
+      final data = Map<String, dynamic>.from(originalData);
+      data.remove('sync_status');
+      data.remove('last_synced');
+      _convertTimestamps(data);
+
       bool success = false;
       switch (operation) {
         case 'insert':
@@ -398,12 +411,12 @@ class SyncService {
       }
 
       if (!success) {
-        // Se falhar, adicionar à fila
-        await _localDb.addToSyncQueue(tableName, operation, recordId, data);
+        // Se falhar, adicionar à fila usando os dados originais
+        await _localDb.addToSyncQueue(tableName, operation, recordId, originalData);
       }
     } else {
       // Se offline, adicionar à fila
-      await _localDb.addToSyncQueue(tableName, operation, recordId, data);
+      await _localDb.addToSyncQueue(tableName, operation, recordId, originalData);
     }
   }
 

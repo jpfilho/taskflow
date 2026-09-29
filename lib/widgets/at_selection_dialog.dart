@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/at.dart';
 import '../utils/responsive.dart';
+import '../utils/clipboard_helper.dart';
 
 class ATSelectionDialog extends StatefulWidget {
   final List<AT> ats;
@@ -219,6 +220,7 @@ class _ATSelectionDialogState extends State<ATSelectionDialog> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     TextField(
+                      autofocus: true,
                       decoration: const InputDecoration(
                         hintText: 'Pesquisar...',
                         prefixIcon: Icon(Icons.search),
@@ -286,11 +288,16 @@ class _ATSelectionDialogState extends State<ATSelectionDialog> {
   Widget build(BuildContext context) {
     final isMobile = Responsive.isMobile(context);
 
+    final screenWidth = MediaQuery.of(context).size.width;
+    final screenHeight = MediaQuery.of(context).size.height;
+
     return Dialog(
-      insetPadding: const EdgeInsets.all(16),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      clipBehavior: Clip.antiAlias,
       child: SizedBox(
-        width: isMobile ? double.infinity : 900,
-        height: isMobile ? double.infinity : 700,
+        width: isMobile ? double.infinity : (screenWidth * 0.95).clamp(900.0, 1400.0),
+        height: isMobile ? double.infinity : (screenHeight * 0.90).clamp(600.0, 850.0),
         child: Column(
           children: [
             // Header
@@ -347,6 +354,7 @@ class _ATSelectionDialogState extends State<ATSelectionDialog> {
                 children: [
                   // Campo de pesquisa
                   TextField(
+                    autofocus: true,
                     decoration: InputDecoration(
                       hintText: 'Pesquisar at, texto breve, local, objeto...',
                       prefixIcon: const Icon(Icons.search),
@@ -582,18 +590,13 @@ class _ATSelectionDialogState extends State<ATSelectionDialog> {
   }
 
   Future<void> _copiarAT(String texto) async {
-    try {
-      await Clipboard.setData(ClipboardData(text: texto));
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('AT copiada!'), duration: Duration(seconds: 1)),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Não foi possível copiar: $e'), backgroundColor: Colors.red, duration: const Duration(seconds: 3)),
-      );
-    }
+    await ClipboardHelper.copyAndNotify(
+      context,
+      texto,
+      successMessage: 'AT copiada!',
+      errorMessage: 'Não foi possível copiar a AT.',
+      duration: const Duration(seconds: 1),
+    );
   }
 
   Widget _buildViewButton(IconData icon, String mode) {
@@ -862,30 +865,43 @@ class _ATSelectionDialogState extends State<ATSelectionDialog> {
   }
 
   Widget _buildTableView() {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
+    return Scrollbar(
+      controller: _scrollController,
+      thumbVisibility: true,
       child: SingleChildScrollView(
         controller: _scrollController,
-        child: DataTable(
-          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
-          columns: const [
-            DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Local', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('AT', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Tipo', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Texto Breve', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Edificação', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Data Início', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Data Fim', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Status Usuário', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Centro Trabalho', style: TextStyle(fontWeight: FontWeight.bold))),
-          ],
-          rows: [
-            ..._displayedATs.map((at) {
-            final isSelected = _selectedATIds.contains(at.id);
-            return DataRow(
-              selected: isSelected,
-              cells: [
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              minWidth: MediaQuery.of(context).size.width * 0.85,
+            ),
+            child: DataTable(
+              columnSpacing: 18,
+              horizontalMargin: 12,
+              headingRowHeight: 38,
+              dataRowMinHeight: 32,
+              dataRowMaxHeight: 40,
+              headingRowColor: WidgetStateProperty.all(const Color(0xFFF1F5F9)),
+              columns: const [
+                DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Local', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('AT', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Tipo', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Texto Breve', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Edificação', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Data Início', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Data Fim', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Status Usuário', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Centro Trabalho', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+              ],
+              rows: [
+                ..._displayedATs.map((at) {
+                final isSelected = _selectedATIds.contains(at.id);
+                return DataRow(
+                  selected: isSelected,
+                  onSelectChanged: (_) => _toggleATSelection(at.id),
+                  cells: [
                 DataCell(
                   Container(
                     padding: const EdgeInsets.symmetric(
@@ -971,7 +987,6 @@ class _ATSelectionDialogState extends State<ATSelectionDialog> {
                 DataCell(Text(at.statusUsuario ?? '-')),
                 DataCell(Text(at.cntrTrab ?? '-')),
               ],
-              onSelectChanged: (_) => _toggleATSelection(at.id),
             );
             }),
             if (_displayedATs.length < _filteredATs.length)
@@ -988,6 +1003,8 @@ class _ATSelectionDialogState extends State<ATSelectionDialog> {
           ],
         ),
       ),
+    ),
+    ),
     );
   }
 

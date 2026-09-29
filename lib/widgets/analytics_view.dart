@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
+import '../design_system/taskflow_design_system.dart';
 import '../models/task.dart';
 import '../services/task_service.dart';
-import '../utils/responsive.dart';
 
 class AnalyticsView extends StatelessWidget {
   final TaskService taskService;
-  final List<Task>? filteredTasks; // Tarefas já filtradas (opcional)
+  final List<Task>? filteredTasks;
 
   const AnalyticsView({
     super.key,
@@ -13,7 +13,6 @@ class AnalyticsView extends StatelessWidget {
     this.filteredTasks,
   });
 
-  // Calcular estatísticas a partir de uma lista de tarefas (mesma lógica do Dashboard)
   Map<String, dynamic> _calculateStatsFromTasks(List<Task> tasks) {
     final now = DateTime.now();
     int total = tasks.length;
@@ -21,8 +20,21 @@ class AnalyticsView extends StatelessWidget {
     int concluidas = 0;
     int programadas = 0;
 
+    final porStatus = <String, int>{};
+    final porTipo = <String, int>{};
+    final porRegional = <String, int>{};
+
     for (var task in tasks) {
-      final status = task.status.toLowerCase() ?? '';
+      final status = task.status.toLowerCase();
+      final statusKey = task.status.isEmpty ? 'Sem Status' : task.status;
+      porStatus[statusKey] = (porStatus[statusKey] ?? 0) + 1;
+
+      final tipoKey = task.tipo.isEmpty ? 'Sem Tipo' : task.tipo;
+      porTipo[tipoKey] = (porTipo[tipoKey] ?? 0) + 1;
+
+      final regKey = task.regional.isEmpty ? 'Sem Regional' : task.regional;
+      porRegional[regKey] = (porRegional[regKey] ?? 0) + 1;
+
       if (status.contains('conclu') || status.contains('finaliz')) {
         concluidas++;
       } else if (status.contains('andamento') || status.contains('exec')) {
@@ -37,159 +49,244 @@ class AnalyticsView extends StatelessWidget {
       'emAndamento': emAndamento,
       'concluidas': concluidas,
       'programadas': programadas,
+      'porStatus': porStatus,
+      'porTipo': porTipo,
+      'porRegional': porRegional,
     };
   }
 
-
   @override
   Widget build(BuildContext context) {
-    final isMobile = Responsive.isMobile(context);
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
 
-    // Se filteredTasks foi fornecido, calcular estatísticas a partir delas
     if (filteredTasks != null) {
       final stats = _calculateStatsFromTasks(filteredTasks!);
-      return SingleChildScrollView(
-        padding: EdgeInsets.all(isMobile ? 12 : 20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _buildHeader('Análises e Gráficos', isMobile),
-            const SizedBox(height: 20),
-            _buildChartCard('Distribuição por Status', _buildStatusChart(stats, isMobile), isMobile),
-            const SizedBox(height: 16),
-            _buildChartCard('Atividades por Tipo', _buildTypeChart(stats, isMobile), isMobile),
-            const SizedBox(height: 16),
-            _buildChartCard('Atividades por Regional', _buildRegionalChart(stats, isMobile), isMobile),
-            const SizedBox(height: 16),
-            _buildPerformanceMetrics(stats, isMobile),
-          ],
+      return Scaffold(
+        backgroundColor: colors.background,
+        body: SafeArea(
+          child: Column(
+            children: [
+              const TFPageHeader(
+                title: 'Análises e Gráficos',
+                subtitle: 'Distribuição analítica de atividades por status, tipo e regional.',
+              ),
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: EdgeInsets.all(spacing.md),
+                  child: _buildBody(context, stats),
+                ),
+              ),
+            ],
+          ),
         ),
       );
     }
 
-    return FutureBuilder<Map<String, dynamic>>(
-      future: taskService.getStatistics(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        if (snapshot.hasError) {
-          return Center(child: Text('Erro: ${snapshot.error}'));
-        }
-        final stats = snapshot.data ?? {};
-
-        return SingleChildScrollView(
-          padding: EdgeInsets.all(isMobile ? 12 : 20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _buildHeader('Análises e Gráficos', isMobile),
-              const SizedBox(height: 20),
-              _buildChartCard('Distribuição por Status', _buildStatusChart(stats, isMobile), isMobile),
-              const SizedBox(height: 16),
-              _buildChartCard('Atividades por Tipo', _buildTypeChart(stats, isMobile), isMobile),
-              const SizedBox(height: 16),
-              _buildChartCard('Atividades por Regional', _buildRegionalChart(stats, isMobile), isMobile),
-              const SizedBox(height: 16),
-              _buildPerformanceMetrics(stats, isMobile),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildHeader(String title, bool isMobile) {
-    return Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1E3A5F),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: const Icon(Icons.analytics, color: Colors.white, size: 28),
-        ),
-        const SizedBox(width: 16),
-        Expanded(
-          child: Text(
-            title,
-            style: TextStyle(
-              fontSize: isMobile ? 22 : 28,
-              fontWeight: FontWeight.bold,
-              color: const Color(0xFF1E3A5F),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildChartCard(String title, Widget chart, bool isMobile) {
-    return Card(
-      elevation: 3,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: EdgeInsets.all(isMobile ? 16 : 20),
+    return Scaffold(
+      backgroundColor: colors.background,
+      body: SafeArea(
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              title,
-              style: TextStyle(
-                fontSize: isMobile ? 16 : 18,
-                fontWeight: FontWeight.bold,
-                color: const Color(0xFF1E3A5F),
+            const TFPageHeader(
+              title: 'Análises e Gráficos',
+              subtitle: 'Distribuição analítica de atividades por status, tipo e regional.',
+            ),
+            Expanded(
+              child: FutureBuilder<Map<String, dynamic>>(
+                future: taskService.getStatistics(),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: TFLoading(message: 'Carregando análises estatísticas...'));
+                  }
+                  if (snapshot.hasError) {
+                    return Center(
+                      child: TFEmptyState(
+                        icon: Icons.error_outline_rounded,
+                        title: 'Erro ao carregar estatísticas',
+                        description: '${snapshot.error}',
+                      ),
+                    );
+                  }
+
+                  if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                    return const Center(
+                      child: TFEmptyState(
+                        icon: Icons.inbox_outlined,
+                        title: 'Nenhum dado disponível',
+                        description: 'Não há dados para exibir as estatísticas no momento.',
+                      ),
+                    );
+                  }
+
+                  final stats = snapshot.data ?? {};
+
+                  return SingleChildScrollView(
+                    padding: EdgeInsets.all(spacing.md),
+                    child: _buildBody(context, stats),
+                  );
+                },
               ),
             ),
-            const SizedBox(height: 16),
-            chart,
           ],
         ),
       ),
     );
   }
 
-  Widget _buildStatusChart(Map<String, dynamic> stats, bool isMobile) {
-    final porStatus = stats['porStatus'] as Map<String, int>;
-    final total = stats['total'] as int;
-    
+  Widget _buildBody(BuildContext context, Map<String, dynamic> stats) {
+    final spacing = context.tfSpacing;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildPerformanceMetrics(context, stats),
+        SizedBox(height: spacing.md),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final isDesktop = constraints.maxWidth >= TFBreakpoints.md;
+
+            if (isDesktop) {
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: _buildChartCard(
+                      context,
+                      'Distribuição por Status',
+                      Icons.pie_chart_outline_rounded,
+                      _buildStatusChart(context, stats),
+                    ),
+                  ),
+                  SizedBox(width: spacing.md),
+                  Expanded(
+                    child: _buildChartCard(
+                      context,
+                      'Atividades por Tipo',
+                      Icons.bar_chart_rounded,
+                      _buildTypeChart(context, stats),
+                    ),
+                  ),
+                ],
+              );
+            }
+
+            return Column(
+              children: [
+                _buildChartCard(
+                  context,
+                  'Distribuição por Status',
+                  Icons.pie_chart_outline_rounded,
+                  _buildStatusChart(context, stats),
+                ),
+                SizedBox(height: spacing.md),
+                _buildChartCard(
+                  context,
+                  'Atividades por Tipo',
+                  Icons.bar_chart_rounded,
+                  _buildTypeChart(context, stats),
+                ),
+              ],
+            );
+          },
+        ),
+        SizedBox(height: spacing.md),
+        _buildChartCard(
+          context,
+          'Atividades por Regional',
+          Icons.map_outlined,
+          _buildRegionalChart(context, stats),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildChartCard(
+    BuildContext context,
+    String title,
+    IconData icon,
+    Widget chart,
+  ) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final spacing = context.tfSpacing;
+
+    return TFCard(
+      padding: EdgeInsets.all(spacing.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: colors.primary, size: 20),
+              SizedBox(width: spacing.sm),
+              Text(
+                title,
+                style: typography.sectionTitle.copyWith(
+                  color: colors.textPrimary,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: spacing.md),
+          chart,
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatusChart(BuildContext context, Map<String, dynamic> stats) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final spacing = context.tfSpacing;
+
+    final porStatus = (stats['porStatus'] as Map<String, dynamic>?)?.map((k, v) => MapEntry(k, v as int)) ?? <String, int>{};
+    final total = stats['total'] as int? ?? 0;
+
+    if (porStatus.isEmpty) {
+      return Center(
+        child: Text('Sem dados de status', style: typography.caption.copyWith(color: colors.textSecondary)),
+      );
+    }
+
     return Column(
       children: porStatus.entries.map((entry) {
         final percentage = total > 0 ? (entry.value / total * 100) : 0.0;
+        final barColor = _getStatusColor(context, entry.key);
+
         return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
+          padding: EdgeInsets.symmetric(vertical: spacing.xs),
           child: Row(
             children: [
               SizedBox(
-                width: isMobile ? 60 : 80,
+                width: 90,
                 child: Text(
                   entry.key,
-                  style: TextStyle(fontSize: isMobile ? 12 : 14),
+                  style: typography.bodySmall.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: colors.textPrimary,
+                  ),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
               Expanded(
                 child: Stack(
                   children: [
                     ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: TFRadius.borderRadiusSm,
                       child: LinearProgressIndicator(
                         value: percentage / 100,
-                        minHeight: isMobile ? 24 : 32,
-                        backgroundColor: Colors.grey[200],
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          entry.key == 'ANDA' ? Colors.orange :
-                          entry.key == 'CONC' ? Colors.green :
-                          Colors.blue,
-                        ),
+                        minHeight: 24,
+                        backgroundColor: colors.surfaceSecondary,
+                        valueColor: AlwaysStoppedAnimation<Color>(barColor),
                       ),
                     ),
                     Positioned.fill(
                       child: Center(
                         child: Text(
                           '${entry.value} (${percentage.toStringAsFixed(1)}%)',
-                          style: TextStyle(
-                            fontSize: isMobile ? 11 : 12,
+                          style: typography.caption.copyWith(
                             fontWeight: FontWeight.bold,
                             color: Colors.white,
                           ),
@@ -206,45 +303,57 @@ class AnalyticsView extends StatelessWidget {
     );
   }
 
-  Widget _buildTypeChart(Map<String, dynamic> stats, bool isMobile) {
-    final porTipo = stats['porTipo'] as Map<String, int>;
+  Widget _buildTypeChart(BuildContext context, Map<String, dynamic> stats) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final spacing = context.tfSpacing;
+
+    final porTipo = (stats['porTipo'] as Map<String, dynamic>?)?.map((k, v) => MapEntry(k, v as int)) ?? <String, int>{};
     final maxValue = porTipo.values.isEmpty ? 1 : porTipo.values.reduce((a, b) => a > b ? a : b);
+
+    if (porTipo.isEmpty) {
+      return Center(
+        child: Text('Sem dados de tipo', style: typography.caption.copyWith(color: colors.textSecondary)),
+      );
+    }
 
     return Column(
       children: porTipo.entries.map((entry) {
         final percentage = maxValue > 0 ? (entry.value / maxValue) : 0.0;
+        final barColor = _getTypeColor(context, entry.key);
+
         return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 6),
+          padding: EdgeInsets.symmetric(vertical: spacing.xs),
           child: Row(
             children: [
               Expanded(
+                flex: 2,
                 child: Text(
                   entry.key,
-                  style: TextStyle(fontSize: isMobile ? 12 : 14),
+                  style: typography.bodySmall.copyWith(color: colors.textPrimary),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
               Expanded(
-                flex: 2,
+                flex: 3,
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: TFRadius.borderRadiusSm,
                   child: LinearProgressIndicator(
                     value: percentage,
-                    minHeight: isMobile ? 20 : 24,
-                    backgroundColor: Colors.grey[200],
-                    valueColor: AlwaysStoppedAnimation<Color>(
-                      _getTypeColor(entry.key),
-                    ),
+                    minHeight: 18,
+                    backgroundColor: colors.surfaceSecondary,
+                    valueColor: AlwaysStoppedAnimation<Color>(barColor),
                   ),
                 ),
               ),
-              const SizedBox(width: 12),
+              SizedBox(width: spacing.sm),
               SizedBox(
-                width: isMobile ? 40 : 50,
+                width: 45,
                 child: Text(
                   entry.value.toString(),
-                  style: TextStyle(
-                    fontSize: isMobile ? 12 : 14,
+                  style: typography.bodySmall.copyWith(
                     fontWeight: FontWeight.bold,
+                    color: colors.textPrimary,
                   ),
                   textAlign: TextAlign.right,
                 ),
@@ -256,39 +365,50 @@ class AnalyticsView extends StatelessWidget {
     );
   }
 
-  Widget _buildRegionalChart(Map<String, dynamic> stats, bool isMobile) {
-    final porRegional = stats['porRegional'] as Map<String, int>;
-    
+  Widget _buildRegionalChart(BuildContext context, Map<String, dynamic> stats) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final spacing = context.tfSpacing;
+
+    final porRegional = (stats['porRegional'] as Map<String, dynamic>?)?.map((k, v) => MapEntry(k, v as int)) ?? <String, int>{};
+
+    if (porRegional.isEmpty) {
+      return Center(
+        child: Text('Sem dados de regional', style: typography.caption.copyWith(color: colors.textSecondary)),
+      );
+    }
+
     return Wrap(
-      spacing: 12,
-      runSpacing: 12,
+      spacing: spacing.sm,
+      runSpacing: spacing.sm,
       children: porRegional.entries.map((entry) {
+        final itemColor = _getTypeColor(context, entry.key);
+
         return Container(
-          padding: const EdgeInsets.all(16),
+          padding: EdgeInsets.symmetric(horizontal: spacing.md, vertical: spacing.sm),
           decoration: BoxDecoration(
-            color: _getTypeColor(entry.key).withOpacity(0.1),
-            borderRadius: BorderRadius.circular(12),
+            color: itemColor.withValues(alpha: 0.1),
+            borderRadius: TFRadius.borderRadiusMd,
             border: Border.all(
-              color: _getTypeColor(entry.key).withOpacity(0.3),
-              width: 2,
+              color: itemColor.withValues(alpha: 0.25),
             ),
           ),
           child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
               Text(
                 entry.value.toString(),
-                style: TextStyle(
-                  fontSize: isMobile ? 24 : 32,
+                style: typography.sectionTitle.copyWith(
                   fontWeight: FontWeight.bold,
-                  color: _getTypeColor(entry.key),
+                  color: itemColor,
                 ),
               ),
-              const SizedBox(height: 4),
+              SizedBox(height: spacing.xxs),
               Text(
                 entry.key,
-                style: TextStyle(
-                  fontSize: isMobile ? 12 : 14,
-                  color: Colors.grey[700],
+                style: typography.caption.copyWith(
+                  color: colors.textPrimary,
+                  fontWeight: FontWeight.w600,
                 ),
                 textAlign: TextAlign.center,
               ),
@@ -299,104 +419,138 @@ class AnalyticsView extends StatelessWidget {
     );
   }
 
-  Widget _buildPerformanceMetrics(Map<String, dynamic> stats, bool isMobile) {
-    final total = stats['total'] as int;
-    final concluidas = stats['concluidas'] as int;
-    final emAndamento = stats['emAndamento'] as int;
+  Widget _buildPerformanceMetrics(BuildContext context, Map<String, dynamic> stats) {
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+
+    final total = stats['total'] as int? ?? 0;
+    final concluidas = stats['concluidas'] as int? ?? 0;
+    final emAndamento = stats['emAndamento'] as int? ?? 0;
+    final programadas = stats['programadas'] as int? ?? 0;
     final taxaConclusao = total > 0 ? (concluidas / total * 100) : 0.0;
 
-    return Card(
-      elevation: 3,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: EdgeInsets.all(isMobile ? 16 : 20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isDesktop = constraints.maxWidth >= TFBreakpoints.md;
+        final isTablet = constraints.maxWidth >= TFBreakpoints.sm && !isDesktop;
+        final crossAxisCount = isDesktop ? 4 : (isTablet ? 2 : 2);
+
+        return GridView.count(
+          crossAxisCount: crossAxisCount,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          mainAxisSpacing: spacing.sm,
+          crossAxisSpacing: spacing.sm,
+          childAspectRatio: isDesktop ? 1.8 : 1.4,
           children: [
-            Text(
-              'Métricas de Performance',
-              style: TextStyle(
-                fontSize: isMobile ? 16 : 18,
-                fontWeight: FontWeight.bold,
-                color: const Color(0xFF1E3A5F),
-              ),
+            _buildMetricCard(
+              context,
+              'Total de Atividades',
+              total.toString(),
+              Icons.assignment_rounded,
+              colors.primary,
             ),
-            const SizedBox(height: 20),
-            Row(
-              children: [
-                Expanded(
-                  child: _buildMetricCard(
-                    'Taxa de Conclusão',
-                    '${taxaConclusao.toStringAsFixed(1)}%',
-                    Icons.check_circle,
-                    Colors.green,
-                    isMobile,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _buildMetricCard(
-                    'Em Andamento',
-                    emAndamento.toString(),
-                    Icons.schedule,
-                    Colors.orange,
-                    isMobile,
-                  ),
-                ),
-              ],
+            _buildMetricCard(
+              context,
+              'Taxa de Conclusão',
+              '${taxaConclusao.toStringAsFixed(1)}%',
+              Icons.check_circle_rounded,
+              colors.success,
+            ),
+            _buildMetricCard(
+              context,
+              'Em Andamento',
+              emAndamento.toString(),
+              Icons.schedule_rounded,
+              colors.warning,
+            ),
+            _buildMetricCard(
+              context,
+              'Programadas',
+              programadas.toString(),
+              Icons.event_rounded,
+              colors.info,
             ),
           ],
-        ),
-      ),
+        );
+      },
     );
   }
 
-  Widget _buildMetricCard(String title, String value, IconData icon, Color color, bool isMobile) {
-    return Container(
-      padding: EdgeInsets.all(isMobile ? 12 : 16),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
+  Widget _buildMetricCard(
+    BuildContext context,
+    String title,
+    String value,
+    IconData icon,
+    Color color,
+  ) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final spacing = context.tfSpacing;
+
+    return TFCard(
+      padding: EdgeInsets.all(spacing.md),
+      child: Row(
         children: [
-          Icon(icon, color: color, size: isMobile ? 28 : 32),
-          const SizedBox(height: 8),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: isMobile ? 20 : 24,
-              fontWeight: FontWeight.bold,
-              color: color,
+          Container(
+            padding: EdgeInsets.all(spacing.sm),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.12),
+              borderRadius: TFRadius.borderRadiusMd,
             ),
+            child: Icon(icon, color: color, size: 22),
           ),
-          const SizedBox(height: 4),
-          Text(
-            title,
-            style: TextStyle(
-              fontSize: isMobile ? 11 : 12,
-              color: Colors.grey[700],
+          SizedBox(width: spacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  value,
+                  style: typography.sectionTitle.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: colors.textPrimary,
+                  ),
+                ),
+                Text(
+                  title,
+                  style: typography.caption.copyWith(color: colors.textSecondary),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
             ),
-            textAlign: TextAlign.center,
           ),
         ],
       ),
     );
   }
 
-  Color _getTypeColor(String type) {
-    final colors = [
-      Colors.blue,
-      Colors.green,
-      Colors.orange,
-      Colors.purple,
-      Colors.teal,
-      Colors.red,
-      Colors.cyan,
+  Color _getStatusColor(BuildContext context, String status) {
+    final colors = context.tfColors;
+    final upper = status.toUpperCase();
+
+    if (upper.contains('CONC') || upper.contains('FINALIZ')) return colors.success;
+    if (upper.contains('ANDA') || upper.contains('EXEC')) return colors.warning;
+    if (upper.contains('PROG') || upper.contains('PLAN')) return colors.primary;
+    if (upper.contains('CANC') || upper.contains('ATRAS')) return colors.danger;
+    return colors.info;
+  }
+
+  Color _getTypeColor(BuildContext context, String type) {
+    final colors = context.tfColors;
+    final palette = [
+      colors.primary,
+      colors.success,
+      colors.warning,
+      colors.info,
+      colors.danger,
     ];
-    return colors[type.hashCode % colors.length];
+    return palette[type.hashCode.abs() % palette.length];
   }
 }
+
 
 
 

@@ -28,6 +28,7 @@ lib/config/**keys*.dart
 test_db.dart
 test_locais.dart
 test_notas.dart
+test/test_storage_upload.dart
 .agents/
 scratch/
 .DS_Store

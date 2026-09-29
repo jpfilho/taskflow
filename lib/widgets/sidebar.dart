@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../utils/responsive.dart';
 import '../services/theme_service.dart';
+import '../services/melhorias_bugs_service.dart';
 import '../providers/theme_provider.dart';
 import 'dart:async';
 
@@ -13,6 +14,7 @@ class Sidebar extends StatefulWidget {
   final bool isRoot; // Indica se o usuário é root
   final bool showGtd; // Módulo GTD (root ou jpfilho@axia.com.br)
   final bool showGtdAndSupressao; // GTD e Supressão de Vegetação (root ou jpfilho@axia.com.br)
+  final double? customWidth; // Largura customizada opcional (ex: preencher Drawer)
 
   const Sidebar({
     super.key,
@@ -24,6 +26,7 @@ class Sidebar extends StatefulWidget {
     this.isRoot = false,
     this.showGtd = false,
     this.showGtdAndSupressao = false,
+    this.customWidth,
   });
 
   @override
@@ -32,13 +35,35 @@ class Sidebar extends StatefulWidget {
 
 class _SidebarState extends State<Sidebar> {
   int get selectedIndex => widget.selectedIndex ?? 0;
+  int _melhoriasBugsCount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMelhoriasBugsBadge();
+  }
+
+  @override
+  void didUpdateWidget(covariant Sidebar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _loadMelhoriasBugsBadge();
+  }
+
+  Future<void> _loadMelhoriasBugsBadge() async {
+    try {
+      final emAberto = await MelhoriasBugsService().countAbertos();
+      if (mounted) {
+        setState(() => _melhoriasBugsCount = emAberto);
+      }
+    } catch (_) {}
+  }
 
   @override
   Widget build(BuildContext context) {
     final isMobile = Responsive.isMobile(context);
     final collapsedWidth = isMobile ? 50.0 : 60.0;
     final expandedWidth = isMobile ? 200.0 : 240.0;
-    final currentWidth = widget.isExpanded ? expandedWidth : collapsedWidth;
+    final currentWidth = widget.customWidth ?? (widget.isExpanded ? expandedWidth : collapsedWidth);
     final iconSize = isMobile ? 20.0 : 24.0;
     final buttonHeight = isMobile ? 32.0 : 36.0;
     final iconContainerSize = isMobile ? 36.0 : 44.0;
@@ -233,7 +258,18 @@ class _SidebarState extends State<Sidebar> {
                     endIndent: isMobile ? 8 : 12,
                     color: iconColor.withOpacity(0.2),
                   ),
-                  _buildSidebarIcon(Icons.bug_report, 26, 'Melhorias e Bugs', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
+                  // _buildSidebarIcon(Icons.account_tree, 29, 'Projetos', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
+                  _buildSidebarIcon(
+                    Icons.bug_report,
+                    26,
+                    'Melhorias e Bugs',
+                    isMobile,
+                    iconSize,
+                    iconContainerSize,
+                    iconColor,
+                    selectedColor,
+                    badgeCount: _melhoriasBugsCount,
+                  ),
                   // _buildSidebarIcon(Icons.smart_toy, 28, 'Assistentes IA', isMobile, iconSize, iconContainerSize, iconColor, selectedColor),
                 ],
               ),
@@ -248,13 +284,75 @@ class _SidebarState extends State<Sidebar> {
     );
   }
 
-  Widget _buildSidebarIcon(IconData icon, int index, String tooltip, bool isMobile, double iconSize, double containerSize, Color iconColor, Color selectedColor) {
+  Widget _buildSidebarIcon(
+    IconData icon,
+    int index,
+    String tooltip,
+    bool isMobile,
+    double iconSize,
+    double containerSize,
+    Color iconColor,
+    Color selectedColor, {
+    int? badgeCount,
+  }) {
     final isSelected = selectedIndex == index;
+    final hasBadge = badgeCount != null && badgeCount > 0;
+
+    Widget iconWidget = Icon(
+      icon,
+      color: isSelected ? iconColor : iconColor.withValues(alpha: 0.7),
+      size: iconSize,
+    );
+
+    if (hasBadge && !widget.isExpanded) {
+      iconWidget = Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.center,
+        children: [
+          iconWidget,
+          Positioned(
+            right: -8,
+            top: -6,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1.5),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEF4444),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.white, width: 1),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Colors.black26,
+                    blurRadius: 2,
+                    offset: Offset(0, 1),
+                  ),
+                ],
+              ),
+              constraints: const BoxConstraints(
+                minWidth: 16,
+                minHeight: 16,
+              ),
+              child: Center(
+                child: Text(
+                  badgeCount > 99 ? '99+' : badgeCount.toString(),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 9,
+                    fontWeight: FontWeight.bold,
+                    height: 1,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
     return Container(
       margin: EdgeInsets.only(bottom: isMobile ? 4 : 8),
       child: Tooltip(
         message: tooltip,
-          child: InkWell(
+        child: InkWell(
           onTap: () {
             widget.onItemSelected?.call(index);
           },
@@ -269,7 +367,7 @@ class _SidebarState extends State<Sidebar> {
                   : Colors.transparent,
               borderRadius: BorderRadius.circular(8),
               border: isSelected
-                  ? Border.all(color: iconColor.withOpacity(0.3), width: 1)
+                  ? Border.all(color: iconColor.withValues(alpha: 0.3), width: 1)
                   : null,
             ),
             child: widget.isExpanded
@@ -279,15 +377,15 @@ class _SidebarState extends State<Sidebar> {
                     children: [
                       Icon(
                         icon,
-                        color: isSelected ? iconColor : iconColor.withOpacity(0.7),
+                        color: isSelected ? iconColor : iconColor.withValues(alpha: 0.7),
                         size: iconSize,
                       ),
                       const SizedBox(width: 12),
-                      Flexible(
+                      Expanded(
                         child: Text(
                           tooltip,
                           style: TextStyle(
-                            color: isSelected ? iconColor : iconColor.withOpacity(0.8),
+                            color: isSelected ? iconColor : iconColor.withValues(alpha: 0.8),
                             fontSize: isMobile ? 11 : 12,
                             fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
                           ),
@@ -295,15 +393,32 @@ class _SidebarState extends State<Sidebar> {
                           maxLines: 1,
                         ),
                       ),
+                      if (hasBadge)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFEF4444),
+                            borderRadius: BorderRadius.circular(10),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Colors.black12,
+                                blurRadius: 2,
+                                offset: Offset(0, 1),
+                              ),
+                            ],
+                          ),
+                          child: Text(
+                            badgeCount > 99 ? '99+' : badgeCount.toString(),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
                     ],
                   )
-                : Center(
-                    child: Icon(
-                      icon,
-                      color: isSelected ? iconColor : iconColor.withOpacity(0.7),
-                      size: iconSize,
-                    ),
-                  ),
+                : Center(child: iconWidget),
           ),
         ),
       ),

@@ -1,17 +1,8 @@
 import 'package:flutter/material.dart';
+import '../design_system/taskflow_design_system.dart';
 import '../models/executor.dart';
-import '../models/regional.dart';
-import '../models/divisao.dart';
-import '../models/segmento.dart';
-import '../models/funcao.dart';
 import '../services/executor_service.dart';
-import '../services/regional_service.dart';
-import '../services/divisao_service.dart';
-import '../services/segmento_service.dart';
-import '../services/funcao_service.dart';
 import 'executor_form_dialog.dart';
-import 'multi_select_filter_dialog.dart';
-import '../utils/responsive.dart';
 
 class ExecutorListView extends StatefulWidget {
   const ExecutorListView({super.key});
@@ -22,74 +13,104 @@ class ExecutorListView extends StatefulWidget {
 
 class _ExecutorListViewState extends State<ExecutorListView> {
   final ExecutorService _executorService = ExecutorService();
-  final RegionalService _regionalService = RegionalService();
-  final DivisaoService _divisaoService = DivisaoService();
-  final SegmentoService _segmentoService = SegmentoService();
-  final FuncaoService _funcaoService = FuncaoService();
-
   List<Executor> _executores = [];
   List<Executor> _filteredExecutores = [];
   bool _isLoading = true;
   final TextEditingController _searchController = TextEditingController();
-  bool _isTableView = false; // false = lista (cards), true = tabela
-  final ScrollController _horizontalTableScrollController = ScrollController();
+  int _currentPage = 1;
+  final int _itemsPerPage = 10;
 
-  // Filtros (multiseleção com pesquisa)
-  List<Regional> _regionais = [];
-  List<Divisao> _divisoes = [];
-  List<Segmento> _segmentos = [];
-  List<Funcao> _funcoes = [];
-  List<String> _regionaisTotais = [];
-  List<String> _divisoesTotais = [];
-  List<String> _segmentosTotais = [];
-  List<String> _funcoesTotais = [];
-  Set<String> _selectedRegional = {};
-  Set<String> _selectedDivisao = {};
-  Set<String> _selectedSegmento = {};
-  Set<String> _selectedFuncao = {};
-  bool _isLoadingFilterOptions = true;
+  // Filtros multiescolha por coluna
+  Set<String> _selectedEmpresas = {};
+  Set<String> _selectedFuncoes = {};
+  Set<String> _selectedDivisoes = {};
+  Set<String> _selectedSegmentos = {};
+
+  bool get _hasActiveFilters =>
+      _selectedEmpresas.isNotEmpty ||
+      _selectedFuncoes.isNotEmpty ||
+      _selectedDivisoes.isNotEmpty ||
+      _selectedSegmentos.isNotEmpty ||
+      _searchController.text.trim().isNotEmpty;
+
+  void _clearAllFilters() {
+    setState(() {
+      _selectedEmpresas.clear();
+      _selectedFuncoes.clear();
+      _selectedDivisoes.clear();
+      _selectedSegmentos.clear();
+      _searchController.clear();
+      _currentPage = 1;
+      _filteredExecutores = _applyFilter(_executores);
+    });
+  }
+
+  List<String> _getUniqueEmpresas() {
+    return _executores
+        .map((e) => e.empresa?.trim() ?? '')
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+  }
+
+  List<String> _getUniqueFuncoes() {
+    return _executores
+        .map((e) => e.funcao?.trim() ?? '')
+        .where((f) => f.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+  }
+
+  List<String> _getUniqueDivisoes() {
+    return _executores
+        .map((e) => e.divisao?.trim() ?? '')
+        .where((d) => d.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+  }
+
+  List<String> _getUniqueSegmentos() {
+    final segs = <String>{};
+    for (final e in _executores) {
+      for (final s in e.segmentos) {
+        if (s.trim().isNotEmpty) segs.add(s.trim());
+      }
+    }
+    return segs.toList()..sort();
+  }
 
   @override
   void initState() {
     super.initState();
     _loadExecutores();
-    _loadFilterOptions();
     _searchController.addListener(_onSearchChanged);
-    // No desktop, tabela é o padrão
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && Responsive.isDesktop(context)) {
-        setState(() {
-          _isTableView = true;
-        });
-      }
-    });
   }
 
   @override
   void dispose() {
     _searchController.dispose();
-    _horizontalTableScrollController.dispose();
     super.dispose();
   }
 
   Future<void> _loadExecutores() async {
-    setState(() {
-      _isLoading = true;
-    });
+    setState(() => _isLoading = true);
 
     try {
       final executores = await _executorService.getAllExecutores();
-      setState(() {
-        _executores = executores;
-        _filteredExecutores = _applyAllFilters();
-        _isLoading = false;
-      });
-    } catch (e) {
-      print('Erro ao carregar executores: $e');
-      setState(() {
-        _isLoading = false;
-      });
       if (mounted) {
+        setState(() {
+          _executores = executores;
+          _filteredExecutores = _applyFilter(executores);
+          _isLoading = false;
+          _currentPage = 1;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Erro ao carregar executores: $e'),
@@ -100,94 +121,63 @@ class _ExecutorListViewState extends State<ExecutorListView> {
     }
   }
 
-  Future<void> _loadFilterOptions() async {
-    try {
-      final results = await Future.wait([
-        _regionalService.getAllRegionais(),
-        _divisaoService.getAllDivisoes(),
-        _segmentoService.getAllSegmentos(),
-        _funcaoService.getAllFuncoes(),
-      ]);
-      if (!mounted) return;
-      setState(() {
-        _regionais = results[0] as List<Regional>;
-        _divisoes = results[1] as List<Divisao>;
-        _segmentos = results[2] as List<Segmento>;
-        _funcoes = results[3] as List<Funcao>;
-        _regionaisTotais = _regionais.map((r) => r.regional).toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-        _divisoesTotais = _divisoes.map((d) => d.divisao).toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-        _segmentosTotais = _segmentos.map((s) => s.segmento).toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-        _funcoesTotais = _funcoes.map((f) => f.funcao).toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-        _isLoadingFilterOptions = false;
-        _filteredExecutores = _applyAllFilters();
-      });
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _isLoadingFilterOptions = false;
-          _filteredExecutores = _applyAllFilters();
-        });
-      }
-    }
-  }
-
-  List<Executor> _applyAllFilters() {
-    List<Executor> result = _executores;
-
-    // Filtro por Regional: executor deve estar em uma divisão cuja regional está selecionada
-    if (_selectedRegional.isNotEmpty) {
-      final regionalIds = _regionais.where((r) => _selectedRegional.contains(r.regional)).map((r) => r.id).toSet();
-      final divisaoIds = _divisoes.where((d) => regionalIds.contains(d.regionalId)).map((d) => d.id).toSet();
-      result = result.where((e) => e.divisaoId != null && divisaoIds.contains(e.divisaoId)).toList();
-    }
-
-    // Filtro por Divisão
-    if (_selectedDivisao.isNotEmpty) {
-      final divisaoIds = _divisoes.where((d) => _selectedDivisao.contains(d.divisao)).map((d) => d.id).toSet();
-      result = result.where((e) => e.divisaoId != null && divisaoIds.contains(e.divisaoId)).toList();
-    }
-
-    // Filtro por Segmento
-    if (_selectedSegmento.isNotEmpty) {
-      final segmentoIds = _segmentos.where((s) => _selectedSegmento.contains(s.segmento)).map((s) => s.id).toSet();
-      result = result.where((e) => e.segmentoIds.any((id) => segmentoIds.contains(id))).toList();
-    }
-
-    // Filtro por Função
-    if (_selectedFuncao.isNotEmpty) {
-      final funcaoIds = _funcoes.where((f) => _selectedFuncao.contains(f.funcao)).map((f) => f.id).toSet();
-      result = result.where((e) => e.funcaoId != null && funcaoIds.contains(e.funcaoId)).toList();
-    }
-
-    // Filtro por texto (busca)
+  List<Executor> _applyFilter(List<Executor> list) {
     final query = _searchController.text.toLowerCase().trim();
-    if (query.isNotEmpty) {
-      result = result.where((executor) {
-        return executor.nome.toLowerCase().contains(query) ||
+
+    return list.where((executor) {
+      final empresaStr = executor.empresa?.trim() ?? '';
+      final funcaoStr = executor.funcao?.trim() ?? '';
+      final divisaoStr = executor.divisao?.trim() ?? '';
+
+      // Filtros multiescolha
+      if (_selectedEmpresas.isNotEmpty && !_selectedEmpresas.contains(empresaStr)) {
+        return false;
+      }
+      if (_selectedFuncoes.isNotEmpty && !_selectedFuncoes.contains(funcaoStr)) {
+        return false;
+      }
+      if (_selectedDivisoes.isNotEmpty && !_selectedDivisoes.contains(divisaoStr)) {
+        return false;
+      }
+      if (_selectedSegmentos.isNotEmpty &&
+          !executor.segmentos.any((s) => _selectedSegmentos.contains(s.trim()))) {
+        return false;
+      }
+
+      // Busca por texto
+      if (query.isNotEmpty) {
+        final matches = executor.nome.toLowerCase().contains(query) ||
             (executor.nomeCompleto?.toLowerCase().contains(query) ?? false) ||
             (executor.matricula?.toLowerCase().contains(query) ?? false) ||
             (executor.login?.toLowerCase().contains(query) ?? false) ||
-            (executor.empresa?.toLowerCase().contains(query) ?? false) ||
-            (executor.funcao?.toLowerCase().contains(query) ?? false) ||
-            (executor.divisao?.toLowerCase().contains(query) ?? false) ||
+            empresaStr.toLowerCase().contains(query) ||
+            funcaoStr.toLowerCase().contains(query) ||
+            divisaoStr.toLowerCase().contains(query) ||
             executor.segmentos.any((s) => s.toLowerCase().contains(query));
-      }).toList();
-    }
+        if (!matches) return false;
+      }
 
-    return result;
+      return true;
+    }).toList();
   }
 
   void _onSearchChanged() {
     setState(() {
-      _filteredExecutores = _applyAllFilters();
+      _currentPage = 1;
+      _filteredExecutores = _applyFilter(_executores);
     });
   }
 
-  void _onFilterChanged() {
-    setState(() {
-      _filteredExecutores = _applyAllFilters();
-    });
+  List<Executor> get _paginatedExecutores {
+    final startIndex = (_currentPage - 1) * _itemsPerPage;
+    if (startIndex >= _filteredExecutores.length) return [];
+    final endIndex = (startIndex + _itemsPerPage < _filteredExecutores.length)
+        ? startIndex + _itemsPerPage
+        : _filteredExecutores.length;
+    return _filteredExecutores.sublist(startIndex, endIndex);
   }
+
+  int get _totalPages => (_filteredExecutores.length / _itemsPerPage).ceil().clamp(1, 9999);
 
   Future<void> _createExecutor() async {
     final result = await showDialog<Executor>(
@@ -221,7 +211,6 @@ class _ExecutorListViewState extends State<ExecutorListView> {
   }
 
   Future<void> _duplicateExecutor(Executor executor) async {
-    // Criar cópia com nome modificado
     final duplicated = executor.copyWith(
       id: '',
       nome: '${executor.nome} (Cópia)',
@@ -258,7 +247,6 @@ class _ExecutorListViewState extends State<ExecutorListView> {
   }
 
   Future<void> _editExecutor(Executor executor) async {
-    // Buscar executor atualizado do banco para garantir dados completos
     final executorAtualizado = await _executorService.getExecutorById(executor.id);
     if (executorAtualizado == null) {
       if (mounted) {
@@ -271,6 +259,8 @@ class _ExecutorListViewState extends State<ExecutorListView> {
       }
       return;
     }
+
+    if (!mounted) return;
 
     final result = await showDialog<Executor>(
       context: context,
@@ -303,46 +293,27 @@ class _ExecutorListViewState extends State<ExecutorListView> {
   }
 
   Future<void> _deleteExecutor(Executor executor) async {
-    final confirm = await showDialog<bool>(
+    final confirmed = await TFModalDialog.confirm(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Confirmar exclusão'),
-        content: Text('Deseja realmente excluir o executor "${executor.nome}"?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Excluir', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
+      title: 'Confirmar Exclusão',
+      message: 'Deseja realmente excluir o executor "${executor.nome}"?\n\n'
+          'Matrícula: ${executor.matricula ?? "Não informada"}\n'
+          'Função: ${executor.funcao ?? "Geral"}',
+      confirmLabel: 'Excluir',
+      isDestructive: true,
     );
 
-    if (confirm == true) {
+    if (confirmed == true) {
       try {
-        final success = await _executorService.deleteExecutor(executor.id);
-        if (success) {
-          await _loadExecutores();
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Executor excluído com sucesso!'),
-                backgroundColor: Colors.green,
-              ),
-            );
-          }
-        } else {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Erro ao excluir executor'),
-                backgroundColor: Colors.red,
-              ),
-            );
-          }
+        await _executorService.deleteExecutor(executor.id);
+        await _loadExecutores();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Executor excluído com sucesso!'),
+              backgroundColor: Colors.green,
+            ),
+          );
         }
       } catch (e) {
         if (mounted) {
@@ -359,561 +330,431 @@ class _ExecutorListViewState extends State<ExecutorListView> {
 
   @override
   Widget build(BuildContext context) {
+    final spacing = context.tfSpacing;
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final isDesktop = MediaQuery.of(context).size.width >= 768;
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Cadastro de Executores'),
-        actions: [
-          // Toggle de visualização
-          IconButton(
-            icon: Icon(_isTableView ? Icons.view_list : Icons.table_chart),
-            onPressed: () {
-              setState(() {
-                _isTableView = !_isTableView;
-              });
-            },
-            tooltip: _isTableView ? 'Visualização em Lista' : 'Visualização em Tabela',
-          ),
-          IconButton(
-            icon: const Icon(Icons.add),
-            onPressed: _createExecutor,
-            tooltip: 'Adicionar Executor',
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          // Barra de busca
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: TextField(
-              controller: _searchController,
-              onChanged: (_) => _onSearchChanged(),
-              decoration: InputDecoration(
-                hintText: 'Buscar por nome, matrícula, login, empresa, função...',
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: _searchController.text.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(Icons.clear),
-                        onPressed: () {
-                          _searchController.clear();
-                          _onSearchChanged();
-                        },
-                      )
-                    : null,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
+      backgroundColor: colors.background,
+      body: SafeArea(
+        child: Padding(
+          padding: EdgeInsets.all(spacing.lg),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TFPageHeader(
+                title: 'Executores',
+                subtitle: 'Gestão cadastral de técnicos, operadores e lideranças',
+                onBack: () => Navigator.of(context).maybePop(),
+                primaryAction: TFButton(
+                  label: 'Novo Executor',
+                  leadingIcon: TFIcons.add,
+                  onPressed: _createExecutor,
                 ),
-              ),
-            ),
-          ),
-          // Filtros: Regional, Divisão, Segmento, Função (multiseleção com pesquisa)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 0),
-            child: _buildFiltersRow(),
-          ),
-          // Lista ou Tabela de executores
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _filteredExecutores.isEmpty
-                    ? const Center(
-                        child: Text('Nenhum executor encontrado'),
-                      )
-                    : _isTableView
-                        ? _buildTableView()
-                        : _buildListView(),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildFiltersRow() {
-    final isMobile = Responsive.isMobile(context);
-    if (_isLoadingFilterOptions) {
-      return const SizedBox(
-        height: 48,
-        child: Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))),
-      );
-    }
-    if (isMobile) {
-      return LayoutBuilder(
-        builder: (context, constraints) {
-          return SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: ConstrainedBox(
-              constraints: BoxConstraints(minWidth: constraints.maxWidth),
-              child: IntrinsicHeight(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _buildMultiSelectFilterField('REGIONAL', _regionaisTotais, _selectedRegional, (v) {
-                      setState(() {
-                        _selectedRegional = v;
-                        _onFilterChanged();
-                      });
-                    }, isMobile: true),
-                    const SizedBox(width: 8),
-                    _buildMultiSelectFilterField('DIVISÃO', _divisoesTotais, _selectedDivisao, (v) {
-                      setState(() {
-                        _selectedDivisao = v;
-                        _onFilterChanged();
-                      });
-                    }, isMobile: true),
-                    const SizedBox(width: 8),
-                    _buildMultiSelectFilterField('SEGMENTO', _segmentosTotais, _selectedSegmento, (v) {
-                      setState(() {
-                        _selectedSegmento = v;
-                        _onFilterChanged();
-                      });
-                    }, isMobile: true),
-                    const SizedBox(width: 8),
-                    _buildMultiSelectFilterField('FUNÇÃO', _funcoesTotais, _selectedFuncao, (v) {
-                      setState(() {
-                        _selectedFuncao = v;
-                        _onFilterChanged();
-                      });
-                    }, isMobile: true),
-                  ],
-                ),
-              ),
-            ),
-          );
-        },
-      );
-    }
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.grey[200],
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.grey[350]!),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: _buildMultiSelectFilterField('REGIONAL', _regionaisTotais, _selectedRegional, (v) {
-              setState(() {
-                _selectedRegional = v;
-                _onFilterChanged();
-              });
-            }, isMobile: false),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: _buildMultiSelectFilterField('DIVISÃO', _divisoesTotais, _selectedDivisao, (v) {
-              setState(() {
-                _selectedDivisao = v;
-                _onFilterChanged();
-              });
-            }, isMobile: false),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: _buildMultiSelectFilterField('SEGMENTO', _segmentosTotais, _selectedSegmento, (v) {
-              setState(() {
-                _selectedSegmento = v;
-                _onFilterChanged();
-              });
-            }, isMobile: false),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: _buildMultiSelectFilterField('FUNÇÃO', _funcoesTotais, _selectedFuncao, (v) {
-              setState(() {
-                _selectedFuncao = v;
-                _onFilterChanged();
-              });
-            }, isMobile: false),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMultiSelectFilterField(
-    String label,
-    List<String> options,
-    Set<String> selectedValues,
-    ValueChanged<Set<String>> onChanged, {
-    bool isMobile = false,
-  }) {
-    final hasSelection = selectedValues.isNotEmpty;
-    final horizontalPad = isMobile ? 8.0 : 12.0;
-    final verticalPad = isMobile ? 6.0 : 8.0;
-    final fontSize = isMobile ? 11.0 : 12.0;
-    final labelSize = isMobile ? 9.0 : 10.0;
-    return Container(
-      constraints: isMobile ? const BoxConstraints(minWidth: 100) : null,
-      padding: EdgeInsets.symmetric(horizontal: horizontalPad, vertical: verticalPad),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(
-          color: hasSelection ? Colors.blue : Colors.grey[350]!,
-          width: isMobile ? 1 : 1.2,
-        ),
-      ),
-      child: InkWell(
-        onTap: () {
-          showDialog(
-            context: context,
-            builder: (ctx) => MultiSelectFilterDialog(
-              title: label,
-              options: options,
-              selectedValues: selectedValues,
-              onSelectionChanged: (newValues) {
-                onChanged(newValues);
-              },
-              searchHint: 'Pesquisar...',
-            ),
-          );
-        },
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    label,
-                    style: TextStyle(
-                      fontSize: labelSize,
-                      color: Colors.grey[700],
-                      fontWeight: FontWeight.w600,
-                      height: 1.1,
-                    ),
-                  ),
-                  SizedBox(height: isMobile ? 2 : 4),
-                  Text(
-                    selectedValues.isEmpty
-                        ? 'Todos'
-                        : selectedValues.length == 1
-                            ? selectedValues.first
-                            : '${selectedValues.length} selecionado(s)',
-                    style: TextStyle(
-                      fontSize: fontSize,
-                      color: selectedValues.isEmpty ? Colors.grey[600]! : Colors.black87,
-                      height: 1.2,
-                    ),
-                    overflow: TextOverflow.ellipsis,
+                secondaryActions: [
+                  TFIconButton(
+                    icon: TFIcons.refresh,
+                    tooltip: 'Atualizar',
+                    variant: TFIconButtonVariant.standard,
+                    onPressed: _loadExecutores,
                   ),
                 ],
               ),
-            ),
-            Icon(
-              Icons.arrow_drop_down,
-              color: Colors.grey[600],
-              size: isMobile ? 20 : 24,
+              SizedBox(height: spacing.sm),
+              Row(
+                children: [
+                  Expanded(
+                    child: TFTextField(
+                      controller: _searchController,
+                      hint: 'Buscar por nome, matrícula, login, função, empresa ou divisão...',
+                      prefixIcon: const Icon(Icons.search),
+                    ),
+                  ),
+                  if (_hasActiveFilters) ...[
+                    SizedBox(width: spacing.sm),
+                    TFButton(
+                      label: 'Limpar Filtros',
+                      variant: TFButtonVariant.secondary,
+                      leadingIcon: Icons.filter_alt_off,
+                      onPressed: _clearAllFilters,
+                    ),
+                  ],
+                ],
+              ),
+              SizedBox(height: spacing.sm),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 170,
+                      child: TFMultiSelectFilterField(
+                        label: 'Empresa',
+                        selectedValues: _selectedEmpresas,
+                        options: _getUniqueEmpresas(),
+                        isCompact: true,
+                        onChanged: (values) {
+                          setState(() {
+                            _selectedEmpresas = values;
+                            _currentPage = 1;
+                            _filteredExecutores = _applyFilter(_executores);
+                          });
+                        },
+                      ),
+                    ),
+                    SizedBox(width: spacing.sm),
+                    SizedBox(
+                      width: 170,
+                      child: TFMultiSelectFilterField(
+                        label: 'Função',
+                        selectedValues: _selectedFuncoes,
+                        options: _getUniqueFuncoes(),
+                        isCompact: true,
+                        onChanged: (values) {
+                          setState(() {
+                            _selectedFuncoes = values;
+                            _currentPage = 1;
+                            _filteredExecutores = _applyFilter(_executores);
+                          });
+                        },
+                      ),
+                    ),
+                    SizedBox(width: spacing.sm),
+                    SizedBox(
+                      width: 170,
+                      child: TFMultiSelectFilterField(
+                        label: 'Divisão',
+                        selectedValues: _selectedDivisoes,
+                        options: _getUniqueDivisoes(),
+                        isCompact: true,
+                        onChanged: (values) {
+                          setState(() {
+                            _selectedDivisoes = values;
+                            _currentPage = 1;
+                            _filteredExecutores = _applyFilter(_executores);
+                          });
+                        },
+                      ),
+                    ),
+                    SizedBox(width: spacing.sm),
+                    SizedBox(
+                      width: 170,
+                      child: TFMultiSelectFilterField(
+                        label: 'Segmento',
+                        selectedValues: _selectedSegmentos,
+                        options: _getUniqueSegmentos(),
+                        isCompact: true,
+                        onChanged: (values) {
+                          setState(() {
+                            _selectedSegmentos = values;
+                            _currentPage = 1;
+                            _filteredExecutores = _applyFilter(_executores);
+                          });
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(height: spacing.md),
+            Expanded(
+              child: _isLoading
+                  ? const Center(
+                      child: TFLoading(
+                        mode: TFLoadingMode.section,
+                        message: 'Carregando executores...',
+                      ),
+                    )
+                  : _filteredExecutores.isEmpty
+                      ? TFEmptyState(
+                          icon: TFIcons.search,
+                          title: _executores.isEmpty
+                              ? 'Nenhum executor cadastrado'
+                              : 'Nenhum executor encontrado',
+                          description: _executores.isEmpty
+                              ? 'Cadastre o primeiro colaborador para atribuição de tarefas e equipes.'
+                              : 'Tente refinar sua busca.',
+                          action: _executores.isEmpty
+                              ? TFButton(
+                                  label: 'Cadastrar Primeiro Executor',
+                                  leadingIcon: TFIcons.add,
+                                  onPressed: _createExecutor,
+                                )
+                              : TFButton(
+                                  label: 'Limpar Busca',
+                                  variant: TFButtonVariant.secondary,
+                                  onPressed: () => _searchController.clear(),
+                                ),
+                        )
+                      : Padding(
+                          padding: EdgeInsets.symmetric(horizontal: spacing.md),
+                          child: Column(
+                            children: [
+                              Expanded(
+                                child: isDesktop
+                                    ? _buildTableView()
+                                    : _buildCardsView(),
+                              ),
+                              if (_totalPages > 1) ...[
+                                SizedBox(height: spacing.sm),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(
+                                      'Página $_currentPage de $_totalPages (${_filteredExecutores.length} executores)',
+                                      style: typography.bodySmall.copyWith(
+                                        color: colors.textSecondary,
+                                      ),
+                                    ),
+                                    Row(
+                                      children: [
+                                        TFIconButton(
+                                          icon: Icons.chevron_left,
+                                          tooltip: 'Página anterior',
+                                          variant: TFIconButtonVariant.standard,
+                                          onPressed: _currentPage > 1
+                                              ? () => setState(() => _currentPage--)
+                                              : null,
+                                        ),
+                                        SizedBox(width: spacing.xs),
+                                        TFIconButton(
+                                          icon: Icons.chevron_right,
+                                          tooltip: 'Próxima página',
+                                          variant: TFIconButtonVariant.standard,
+                                          onPressed: _currentPage < _totalPages
+                                              ? () => setState(() => _currentPage++)
+                                              : null,
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                                SizedBox(height: spacing.sm),
+                              ],
+                            ],
+                          ),
+                        ),
             ),
           ],
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 
-  Widget _buildListView() {
-    return ListView.builder(
-                        itemCount: _filteredExecutores.length,
-                        itemBuilder: (context, index) {
-                          final executor = _filteredExecutores[index];
-                          return Card(
-                            margin: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 8,
-                            ),
-                            child: ListTile(
-                              title: Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      executor.nomeCompleto ?? executor.nome,
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: executor.ativo
-                                            ? Colors.black
-                                            : Colors.grey,
-                                      ),
-                                    ),
-                                  ),
-                                  if (executor.matricula != null)
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 8,
-                                        vertical: 4,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Colors.blue[100],
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                      child: Text(
-                                        executor.matricula!,
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.blue[800],
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ),
-                                ],
-                              ),
-                              subtitle: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  if (executor.nomeCompleto != null &&
-                                      executor.nomeCompleto != executor.nome)
-                                    Text('Nome: ${executor.nome}'),
-                                  if (executor.login != null)
-                                    Text('Login: ${executor.login}'),
-                                  if (executor.empresa != null)
-                                    Text('Empresa: ${executor.empresa}'),
-                                  if (executor.funcao != null)
-                                    Text('Função: ${executor.funcao}'),
-                                  if (executor.divisao != null)
-                                    Text('Divisão: ${executor.divisao}'),
-                                  if (executor.segmentos.isNotEmpty)
-                                    Text('Segmentos: ${executor.segmentos.join(", ")}'),
-                                  if (executor.ramal != null ||
-                                      executor.telefone != null)
-                                    Row(
-                                      children: [
-                                        if (executor.ramal != null)
-                                          Text('Ramal: ${executor.ramal}'),
-                                        if (executor.ramal != null &&
-                                            executor.telefone != null)
-                                          const Text(' | '),
-                                        if (executor.telefone != null)
-                                          Text('Tel: ${executor.telefone}'),
-                                      ],
-                                    ),
-                                  const SizedBox(height: 4),
-                                  Row(
-                                    children: [
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 8,
-                                          vertical: 4,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: executor.ativo
-                                              ? Colors.green[100]
-                                              : Colors.red[100],
-                                          borderRadius: BorderRadius.circular(12),
-                                        ),
-                                        child: Text(
-                                          executor.ativo ? 'Ativo' : 'Inativo',
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            color: executor.ativo
-                                                ? Colors.green[800]
-                                                : Colors.red[800],
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                              trailing: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  IconButton(
-                                    icon: const Icon(Icons.edit),
-                                    onPressed: () => _editExecutor(executor),
-                                    tooltip: 'Editar',
-                                  ),
-                                  IconButton(
-                                    icon: const Icon(Icons.copy),
-                                    color: Colors.orange,
-                                    onPressed: () => _duplicateExecutor(executor),
-                                    tooltip: 'Duplicar',
-                                  ),
-                                  IconButton(
-                                    icon: const Icon(Icons.delete),
-                                    onPressed: () => _deleteExecutor(executor),
-                                    tooltip: 'Excluir',
-                                    color: Colors.red,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          );
-                        },
-                      );
-  }
+  Widget _buildCardsView() {
+    final items = _paginatedExecutores;
+    final spacing = context.tfSpacing;
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
 
-  Widget _buildTableView() {
-    return Scrollbar(
-      controller: _horizontalTableScrollController,
-      thumbVisibility: true,
-      child: SingleChildScrollView(
-        controller: _horizontalTableScrollController,
-        scrollDirection: Axis.horizontal,
-        child: SingleChildScrollView(
-          scrollDirection: Axis.vertical,
-          child: DataTable(
-            headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
-            columns: const [
-              DataColumn(label: Text('Ações', style: TextStyle(fontWeight: FontWeight.bold))),
-              DataColumn(label: Text('Nome', style: TextStyle(fontWeight: FontWeight.bold))),
-              DataColumn(label: Text('Nome Completo', style: TextStyle(fontWeight: FontWeight.bold))),
-              DataColumn(label: Text('Matrícula', style: TextStyle(fontWeight: FontWeight.bold))),
-              DataColumn(label: Text('Login', style: TextStyle(fontWeight: FontWeight.bold))),
-              DataColumn(label: Text('Empresa', style: TextStyle(fontWeight: FontWeight.bold))),
-              DataColumn(label: Text('Função', style: TextStyle(fontWeight: FontWeight.bold))),
-              DataColumn(label: Text('Divisão', style: TextStyle(fontWeight: FontWeight.bold))),
-              DataColumn(label: Text('Segmentos', style: TextStyle(fontWeight: FontWeight.bold))),
-              DataColumn(label: Text('Ramal', style: TextStyle(fontWeight: FontWeight.bold))),
-              DataColumn(label: Text('Telefone', style: TextStyle(fontWeight: FontWeight.bold))),
-              DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold))),
-            ],
-            rows: _filteredExecutores.map((executor) {
-              return DataRow(
-                color: WidgetStateProperty.resolveWith<Color?>(
-                  (Set<WidgetState> states) {
-                    if (!executor.ativo) {
-                      return Colors.grey[100];
-                    }
-                    return null;
-                  },
-                ),
-                cells: [
-                  DataCell(
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          icon: const Icon(Icons.edit, size: 20),
-                          onPressed: () => _editExecutor(executor),
-                          tooltip: 'Editar',
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.copy, size: 20, color: Colors.orange),
-                          onPressed: () => _duplicateExecutor(executor),
-                          tooltip: 'Duplicar',
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.delete, size: 20, color: Colors.red),
-                          onPressed: () => _deleteExecutor(executor),
-                          tooltip: 'Excluir',
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(),
-                        ),
-                      ],
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      executor.nome,
-                      style: TextStyle(
-                        fontWeight: FontWeight.w500,
-                        color: executor.ativo ? Colors.black : Colors.grey,
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      executor.nomeCompleto ?? '-',
-                      style: TextStyle(
-                        color: executor.ativo ? Colors.black : Colors.grey,
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      executor.matricula ?? '-',
-                      style: TextStyle(
-                        color: executor.ativo ? Colors.black : Colors.grey,
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      executor.login ?? '-',
-                      style: TextStyle(
-                        color: executor.ativo ? Colors.black : Colors.grey,
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      executor.empresa ?? '-',
-                      style: TextStyle(
-                        color: executor.ativo ? Colors.black : Colors.grey,
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      executor.funcao ?? '-',
-                      style: TextStyle(
-                        color: executor.ativo ? Colors.black : Colors.grey,
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      executor.divisao ?? '-',
-                      style: TextStyle(
-                        color: executor.ativo ? Colors.black : Colors.grey,
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      executor.segmentos.isEmpty ? '-' : executor.segmentos.join(', '),
-                      style: TextStyle(
-                        color: executor.ativo ? Colors.black : Colors.grey,
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      executor.ramal ?? '-',
-                      style: TextStyle(
-                        color: executor.ativo ? Colors.black : Colors.grey,
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      executor.telefone ?? '-',
-                      style: TextStyle(
-                        color: executor.ativo ? Colors.black : Colors.grey,
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: executor.ativo ? Colors.green[100] : Colors.red[100],
-                        borderRadius: BorderRadius.circular(12),
-                      ),
+    return ListView.separated(
+      itemCount: items.length,
+      separatorBuilder: (_, __) => SizedBox(height: spacing.sm),
+      itemBuilder: (context, index) {
+        final executor = items[index];
+        return TFCard(
+          child: Padding(
+            padding: EdgeInsets.all(spacing.sm),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
                       child: Text(
-                        executor.ativo ? 'Ativo' : 'Inativo',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: executor.ativo ? Colors.green[800] : Colors.red[800],
-                          fontWeight: FontWeight.bold,
+                        executor.nome,
+                        style: typography.cardTitle.copyWith(
+                          color: colors.textPrimary,
                         ),
                       ),
+                    ),
+                    TFStatusBadge(
+                      label: executor.ativo ? 'Ativo' : 'Inativo',
+                      severity: executor.ativo
+                          ? TFStatusSeverity.success
+                          : TFStatusSeverity.neutral,
+                      compact: true,
+                    ),
+                  ],
+                ),
+                SizedBox(height: spacing.xs),
+                Text(
+                  'Função: ${executor.funcao ?? "-"} • Matrícula: ${executor.matricula ?? "-"}',
+                  style: typography.bodyMedium.copyWith(
+                    color: colors.textPrimary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                SizedBox(height: spacing.xs),
+                Text(
+                  'Divisão: ${executor.divisao ?? "-"} | Empresa: ${executor.empresa ?? "-"}',
+                  style: typography.bodySmall.copyWith(
+                    color: colors.textSecondary,
+                  ),
+                ),
+                if (executor.segmentos.isNotEmpty) ...[
+                  SizedBox(height: spacing.xs),
+                  Text(
+                    'Segmentos: ${executor.segmentos.join(", ")}',
+                    style: typography.bodySmall.copyWith(
+                      color: colors.textSecondary,
                     ),
                   ),
                 ],
-              );
-            }).toList(),
+                SizedBox(height: spacing.sm),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TFIconButton(
+                      icon: Icons.copy_rounded,
+                      tooltip: 'Duplicar executor',
+                      variant: TFIconButtonVariant.subtle,
+                      onPressed: () => _duplicateExecutor(executor),
+                    ),
+                    SizedBox(width: spacing.xs),
+                    TFIconButton(
+                      icon: TFIcons.edit,
+                      tooltip: 'Editar',
+                      variant: TFIconButtonVariant.standard,
+                      onPressed: () => _editExecutor(executor),
+                    ),
+                    SizedBox(width: spacing.xs),
+                    TFIconButton(
+                      icon: TFIcons.delete,
+                      tooltip: 'Excluir',
+                      variant: TFIconButtonVariant.subtle,
+                      onPressed: () => _deleteExecutor(executor),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildTableView() {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
+    return TFDataTable<Executor>(
+      items: _paginatedExecutores,
+      columns: [
+        TFDataColumn<Executor>.text(
+          id: 'nome',
+          title: 'Nome',
+          cellBuilder: (context, executor) => Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                executor.nome,
+                style: typography.bodyMedium.copyWith(
+                  color: colors.textPrimary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              if (executor.nomeCompleto != null && executor.nomeCompleto!.isNotEmpty)
+                Text(
+                  executor.nomeCompleto!,
+                  style: typography.bodySmall.copyWith(
+                    color: colors.textSecondary,
+                  ),
+                ),
+            ],
           ),
         ),
-      ),
+        TFDataColumn<Executor>.text(
+          id: 'matricula',
+          title: 'Matrícula',
+          width: 120,
+          cellBuilder: (context, executor) => Text(
+            executor.matricula ?? '-',
+            style: typography.bodyMedium.copyWith(
+              color: colors.textPrimary,
+            ),
+          ),
+        ),
+        TFDataColumn<Executor>.text(
+          id: 'funcao',
+          title: 'Função',
+          width: 150,
+          cellBuilder: (context, executor) => Text(
+            executor.funcao ?? '-',
+            style: typography.bodyMedium.copyWith(
+              color: colors.textSecondary,
+            ),
+          ),
+        ),
+        TFDataColumn<Executor>.text(
+          id: 'divisao',
+          title: 'Divisão',
+          width: 140,
+          cellBuilder: (context, executor) => Text(
+            executor.divisao ?? '-',
+            style: typography.bodyMedium.copyWith(
+              color: colors.textSecondary,
+            ),
+          ),
+        ),
+        TFDataColumn<Executor>.text(
+          id: 'empresa',
+          title: 'Empresa',
+          width: 140,
+          cellBuilder: (context, executor) => Text(
+            executor.empresa ?? '-',
+            style: typography.bodyMedium.copyWith(
+              color: colors.textSecondary,
+            ),
+          ),
+        ),
+        TFDataColumn<Executor>(
+          id: 'status',
+          label: const Text('Status'),
+          width: 110,
+          cellBuilder: (context, executor) => TFStatusBadge(
+            label: executor.ativo ? 'Ativo' : 'Inativo',
+            severity: executor.ativo
+                ? TFStatusSeverity.success
+                : TFStatusSeverity.neutral,
+            compact: true,
+          ),
+        ),
+        TFDataColumn<Executor>(
+          id: 'acoes',
+          label: const Text('Ações'),
+          width: 160,
+          alignment: Alignment.centerRight,
+          cellBuilder: (context, executor) => Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TFIconButton(
+                icon: Icons.copy_rounded,
+                tooltip: 'Duplicar',
+                variant: TFIconButtonVariant.subtle,
+                onPressed: () => _duplicateExecutor(executor),
+              ),
+              TFIconButton(
+                icon: TFIcons.edit,
+                tooltip: 'Editar',
+                variant: TFIconButtonVariant.standard,
+                onPressed: () => _editExecutor(executor),
+              ),
+              TFIconButton(
+                icon: TFIcons.delete,
+                tooltip: 'Excluir',
+                variant: TFIconButtonVariant.subtle,
+                onPressed: () => _deleteExecutor(executor),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
-

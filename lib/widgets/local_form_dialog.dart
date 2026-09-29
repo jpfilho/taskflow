@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../design_system/taskflow_design_system.dart';
 import '../models/local.dart';
 import '../models/regional.dart';
 import '../models/divisao.dart';
@@ -6,7 +7,6 @@ import '../models/segmento.dart';
 import '../services/regional_service.dart';
 import '../services/divisao_service.dart';
 import '../services/segmento_service.dart';
-import 'form_dialog_helpers.dart';
 
 class LocalFormDialog extends StatefulWidget {
   final Local? local;
@@ -35,6 +35,7 @@ class _LocalFormDialogState extends State<LocalFormDialog> {
   List<Segmento> _segmentos = [];
   
   bool _isLoading = true;
+  bool _isSaving = false;
   
   // Flags de associação
   bool _paraTodaRegional = false;
@@ -137,6 +138,8 @@ class _LocalFormDialogState extends State<LocalFormDialog> {
         return;
       }
 
+      setState(() => _isSaving = true);
+
       final local = Local(
         id: widget.local?.id ?? '',
         local: _localController.text.trim(),
@@ -166,277 +169,127 @@ class _LocalFormDialogState extends State<LocalFormDialog> {
   @override
   Widget build(BuildContext context) {
     final isEditing = widget.local != null;
-    final brightness = Theme.of(context).brightness;
-    final isDark = brightness == Brightness.dark;
+    final spacing = context.tfSpacing;
+    final typography = context.tfTypography;
+    final colors = context.tfColors;
 
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.all(16),
-      elevation: 0,
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 512),
-        decoration: BoxDecoration(
-          color: isDark ? const Color(0xFF1e293b) : Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-            width: 1,
-          ),
-        ),
+    return TFFormDialog(
+      title: isEditing ? 'Editar Local' : 'Novo Local',
+      subtitle: 'Atualize as informações do local e suas associações operacionais.',
+      saveLabel: isEditing ? 'Salvar Alterações' : 'Criar Local',
+      isSaving: _isSaving,
+      onSave: _save,
+      onCancel: () => Navigator.of(context).pop(),
+      child: Form(
+        key: _formKey,
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
-            Padding(
-              padding: const EdgeInsets.fromLTRB(32, 32, 32, 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    isEditing ? 'Editar Local' : 'Novo Local',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w600,
-                      color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Atualize as informações do local e suas associações.',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
-                    ),
-                  ),
-                ],
+            TFTextField(
+              label: 'Local',
+              controller: _localController,
+              required: true,
+              hint: 'Ex: Subestação Centro, Almoxarifado Central',
+              validator: (value) {
+                if (value == null || value.trim().isEmpty) {
+                  return 'Campo obrigatório';
+                }
+                return null;
+              },
+            ),
+            SizedBox(height: spacing.md),
+            TFTextField(
+              label: 'Descrição',
+              controller: _descricaoController,
+              hint: 'Descrição do local e pontos de referência',
+              maxLines: 2,
+            ),
+            SizedBox(height: spacing.md),
+            TFTextField(
+              label: 'Local de Instalação SAP',
+              controller: _localInstalacaoSapController,
+              hint: 'Ex: BR-SE-01-TR01',
+            ),
+            SizedBox(height: spacing.lg),
+            Text(
+              'Escopo de Associação',
+              style: typography.bodyMedium.copyWith(
+                color: colors.textPrimary,
+                fontWeight: FontWeight.w600,
               ),
             ),
-
-            // Content
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                child: Form(
-                  key: _formKey,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      FloatingLabelTextField(
-                        label: 'Local *',
-                        controller: _localController,
-                        isDark: isDark,
-                        validator: (value) {
-                          if (value == null || value.trim().isEmpty) {
-                            return 'Campo obrigatório';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 24),
-                      FloatingLabelTextField(
-                        label: 'Descrição',
-                        controller: _descricaoController,
-                        isDark: isDark,
-                        maxLines: 2,
-                        textCapitalization: TextCapitalization.sentences,
-                      ),
-                      const SizedBox(height: 24),
-                      FloatingLabelTextField(
-                        label: 'Local da Instalação SAP',
-                        controller: _localInstalacaoSapController,
-                        isDark: isDark,
-                        textCapitalization: TextCapitalization.characters,
-                      ),
-                      const SizedBox(height: 32),
-                      Text(
-                        'Associações',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: isDark ? const Color(0xFFcbd5e1) : const Color(0xFF334155),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Container(
-                        decoration: BoxDecoration(
-                          color: isDark ? const Color(0xFF1e293b).withOpacity(0.5) : const Color(0xFFf8fafc),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: isDark ? const Color(0xFF334155).withOpacity(0.5) : const Color(0xFFe2e8f0),
-                          ),
-                        ),
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          children: [
-                            CheckboxListTile(
-                              title: Text(
-                                'Para Toda Regional',
-                                style: TextStyle(
-                                  color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                                ),
-                              ),
-                              subtitle: Text(
-                                'Aplica-se a todas as regionais',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
-                                ),
-                              ),
-                              value: _paraTodaRegional,
-                              activeColor: const Color(0xFF3b82f6),
-                              onChanged: (value) {
-                                setState(() {
-                                  _paraTodaRegional = value ?? false;
-                                  if (_paraTodaRegional) {
-                                    _selectedRegional = null;
-                                  }
-                                });
-                              },
-                              controlAffinity: ListTileControlAffinity.leading,
-                            ),
-                            CheckboxListTile(
-                              title: Text(
-                                'Para Toda Divisão',
-                                style: TextStyle(
-                                  color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                                ),
-                              ),
-                              subtitle: Text(
-                                'Aplica-se a todas as divisões',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
-                                ),
-                              ),
-                              value: _paraTodaDivisao,
-                              activeColor: const Color(0xFF3b82f6),
-                              onChanged: (value) {
-                                setState(() {
-                                  _paraTodaDivisao = value ?? false;
-                                  if (_paraTodaDivisao) {
-                                    _selectedDivisao = null;
-                                  }
-                                });
-                              },
-                              controlAffinity: ListTileControlAffinity.leading,
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 24),
-                      Text(
-                        'Associações Específicas',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: isDark ? const Color(0xFFcbd5e1) : const Color(0xFF334155),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      _isLoading
-                          ? const Center(child: CircularProgressIndicator())
-                          : Column(
-                              children: [
-                                FloatingLabelDropdown<Regional>(
-                                  label: 'Regional Específica',
-                                  value: _selectedRegional,
-                                  items: _regionais,
-                                  isLoading: false,
-                                  displayText: (regional) => _getRegionalDisplayText(regional),
-                                  onChanged: (value) {
-                                    setState(() {
-                                      _selectedRegional = value;
-                                    });
-                                  },
-                                  isDark: isDark,
-                                ),
-                                const SizedBox(height: 24),
-                                FloatingLabelDropdown<Divisao>(
-                                  label: 'Divisão Específica',
-                                  value: _selectedDivisao,
-                                  items: _divisoes,
-                                  isLoading: false,
-                                  displayText: (divisao) => '${divisao.divisao} - ${divisao.regional}',
-                                  onChanged: (value) {
-                                    setState(() {
-                                      _selectedDivisao = value;
-                                    });
-                                  },
-                                  isDark: isDark,
-                                ),
-                                const SizedBox(height: 24),
-                                FloatingLabelDropdown<Segmento>(
-                                  label: 'Segmento Específico',
-                                  value: _selectedSegmento,
-                                  items: _segmentos,
-                                  isLoading: false,
-                                  displayText: (segmento) => segmento.segmento,
-                                  onChanged: (value) {
-                                    setState(() {
-                                      _selectedSegmento = value;
-                                    });
-                                  },
-                                  isDark: isDark,
-                                ),
-                              ],
-                            ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-
-            // Footer com botões
+            SizedBox(height: spacing.xs),
             Container(
-              padding: const EdgeInsets.all(32),
               decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF0f172a).withOpacity(0.5) : const Color(0xFFf8fafc),
-                border: Border(
-                  top: BorderSide(
-                    color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                    width: 1,
-                  ),
-                ),
+                color: colors.surface,
+                borderRadius: BorderRadius.circular(TFRadius.r12),
+                border: Border.all(color: colors.borderSubtle),
               ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
+              padding: EdgeInsets.all(spacing.sm),
+              child: Column(
                 children: [
-                  TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
-                    ),
-                    child: Text(
-                      'Cancelar',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                        color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF475569),
-                      ),
-                    ),
+                  TFSwitch(
+                    label: 'Para Toda Regional',
+                    description: 'Disponível em todas as regionais cadastradas',
+                    value: _paraTodaRegional,
+                    onChanged: (val) {
+                      setState(() {
+                        _paraTodaRegional = val;
+                        if (_paraTodaRegional) _selectedRegional = null;
+                      });
+                    },
                   ),
-                  const SizedBox(width: 12),
-                  ElevatedButton(
-                    onPressed: _save,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF3b82f6),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 10),
-                      elevation: 2,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                    child: Text(
-                      isEditing ? 'Salvar Alterações' : 'Criar Local',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
+                  Divider(height: spacing.md, color: colors.borderSubtle),
+                  TFSwitch(
+                    label: 'Para Toda Divisão',
+                    description: 'Disponível em todas as divisões operacionais',
+                    value: _paraTodaDivisao,
+                    onChanged: (val) {
+                      setState(() {
+                        _paraTodaDivisao = val;
+                        if (_paraTodaDivisao) _selectedDivisao = null;
+                      });
+                    },
                   ),
                 ],
               ),
+            ),
+            SizedBox(height: spacing.lg),
+            Text(
+              'Associações Específicas',
+              style: typography.bodyMedium.copyWith(
+                color: colors.textPrimary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            SizedBox(height: spacing.xs),
+            TFDropdown<Regional>(
+              label: 'Regional Específica',
+              value: _selectedRegional,
+              items: _regionais,
+              isLoading: _isLoading,
+              enabled: !_paraTodaRegional,
+              displayText: (regional) => _getRegionalDisplayText(regional),
+              onChanged: (value) => setState(() => _selectedRegional = value),
+            ),
+            SizedBox(height: spacing.md),
+            TFDropdown<Divisao>(
+              label: 'Divisão Específica',
+              value: _selectedDivisao,
+              items: _divisoes,
+              isLoading: _isLoading,
+              enabled: !_paraTodaDivisao,
+              displayText: (divisao) => '${divisao.divisao} - ${divisao.regional}',
+              onChanged: (value) => setState(() => _selectedDivisao = value),
+            ),
+            SizedBox(height: spacing.md),
+            TFDropdown<Segmento>(
+              label: 'Segmento Específico',
+              value: _selectedSegmento,
+              items: _segmentos,
+              isLoading: _isLoading,
+              displayText: (segmento) => segmento.segmento,
+              onChanged: (value) => setState(() => _selectedSegmento = value),
             ),
           ],
         ),

@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import '../../data/models/status_album.dart';
-import '../../data/repositories/status_album_repository.dart';
+import '../../../../design_system/taskflow_design_system.dart';
 import '../../../../widgets/color_picker_dialog.dart';
-import '../../../../widgets/form_dialog_helpers.dart';
 
+/// Diálogo modal TFDS para criação e edição de Status de Álbum.
 class StatusAlbumFormDialog extends StatefulWidget {
   final StatusAlbum? statusAlbum;
 
@@ -23,9 +23,8 @@ class _StatusAlbumFormDialogState extends State<StatusAlbumFormDialog> {
   late TextEditingController _corFundoController;
   late TextEditingController _corTextoController;
   late TextEditingController _ordemController;
-  final StatusAlbumRepository _repository = StatusAlbumRepository();
   bool _ativo = true;
-  Color _selectedBackgroundColor = Colors.blue;
+  Color _selectedBackgroundColor = TFPrimitiveColors.blue600;
   Color _selectedTextColor = Colors.white;
 
   @override
@@ -40,9 +39,9 @@ class _StatusAlbumFormDialogState extends State<StatusAlbumFormDialog> {
     final corFundoHex = widget.statusAlbum?.corFundo;
     _corFundoController = TextEditingController(text: corFundoHex ?? '');
     if (corFundoHex != null && corFundoHex.isNotEmpty) {
-      _selectedBackgroundColor = _hexToColor(corFundoHex) ?? Colors.blue;
+      _selectedBackgroundColor = _hexToColor(corFundoHex) ?? TFPrimitiveColors.blue600;
     }
-    
+
     final corTextoHex = widget.statusAlbum?.corTexto;
     _corTextoController = TextEditingController(text: corTextoHex ?? '');
     if (corTextoHex != null && corTextoHex.isNotEmpty) {
@@ -50,7 +49,7 @@ class _StatusAlbumFormDialogState extends State<StatusAlbumFormDialog> {
     } else {
       _corTextoController.text = '#FFFFFF';
     }
-    
+
     _ordemController = TextEditingController(
       text: widget.statusAlbum?.ordem.toString() ?? '0',
     );
@@ -68,7 +67,7 @@ class _StatusAlbumFormDialogState extends State<StatusAlbumFormDialog> {
   }
 
   String _colorToHex(Color color) {
-    return '#${color.value.toRadixString(16).substring(2).toUpperCase()}';
+    return '#${(color.toARGB32() & 0x00FFFFFF).toRadixString(16).padLeft(6, '0').toUpperCase()}';
   }
 
   Color? _hexToColor(String hex) {
@@ -118,7 +117,7 @@ class _StatusAlbumFormDialogState extends State<StatusAlbumFormDialog> {
       final corFundoHex = _corFundoController.text.trim();
       final corTextoHex = _corTextoController.text.trim();
       final ordem = int.tryParse(_ordemController.text.trim()) ?? 0;
-      
+
       final statusAlbum = StatusAlbum(
         id: widget.statusAlbum?.id ?? '',
         nome: _nomeController.text.trim(),
@@ -138,200 +137,181 @@ class _StatusAlbumFormDialogState extends State<StatusAlbumFormDialog> {
   @override
   Widget build(BuildContext context) {
     final isEditing = widget.statusAlbum != null;
-    final brightness = Theme.of(context).brightness;
-    final isDark = brightness == Brightness.dark;
-    final width = MediaQuery.of(context).size.width;
-    final isMobile = width < 600;
-    final dialogPadding = isMobile ? 12.0 : 16.0;
-    final maxWidth = isMobile ? width * 0.96 : 512.0;
-    final contentPadding = isMobile ? 16.0 : 32.0;
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final spacing = context.tfSpacing;
 
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      insetPadding: EdgeInsets.all(dialogPadding),
-      elevation: 0,
-      child: Container(
-        constraints: BoxConstraints(maxWidth: maxWidth),
-        decoration: BoxDecoration(
-          color: isDark ? const Color(0xFF1e293b) : Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-            width: 1,
+    return TFFormDialog(
+      title: isEditing ? 'Editar Status de Álbum' : 'Novo Status de Álbum',
+      subtitle: 'Configure o status e suas cores de exibição.',
+      onCancel: () => Navigator.of(context).pop(),
+      onSave: _save,
+      saveLabel: isEditing ? 'Salvar Alterações' : 'Criar Status',
+      maxWidth: 520,
+      formKey: _formKey,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TFTextField(
+            label: 'Nome *',
+            controller: _nomeController,
+            hint: 'Ex: Aprovado, Pendente, etc.',
+            validator: (value) {
+              if (value == null || value.trim().isEmpty) {
+                return 'Campo obrigatório';
+              }
+              return null;
+            },
           ),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Header
-            Padding(
-              padding: EdgeInsets.fromLTRB(contentPadding, contentPadding, contentPadding, 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    isEditing ? 'Editar Status de Álbum' : 'Novo Status de Álbum',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w600,
-                      color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Configure o status e suas cores de exibição.',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
-                    ),
-                  ),
-                ],
-              ),
+          SizedBox(height: spacing.md),
+          TFTextField(
+            label: 'Descrição',
+            controller: _descricaoController,
+            hint: 'Descrição opcional do status',
+            maxLines: 3,
+          ),
+          SizedBox(height: spacing.md),
+          // Seletor de Cor de Fundo
+          _buildColorPickerRow(
+            label: 'Cor de Fundo',
+            color: _selectedBackgroundColor,
+            hexValue: _corFundoController.text.isEmpty ? 'Não definida' : _corFundoController.text,
+            onTap: _showBackgroundColorPicker,
+            colors: colors,
+            typography: typography,
+            spacing: spacing,
+          ),
+          SizedBox(height: spacing.md),
+          // Seletor de Cor do Texto
+          _buildColorPickerRow(
+            label: 'Cor do Texto',
+            color: _selectedTextColor,
+            hexValue: _corTextoController.text,
+            onTap: _showTextColorPicker,
+            colors: colors,
+            typography: typography,
+            spacing: spacing,
+          ),
+          SizedBox(height: spacing.md),
+          TFTextField(
+            label: 'Ordem',
+            controller: _ordemController,
+            keyboardType: TextInputType.number,
+            hint: '0',
+            validator: (value) {
+              if (value != null && value.trim().isNotEmpty) {
+                final ordem = int.tryParse(value.trim());
+                if (ordem == null || ordem < 0) {
+                  return 'Ordem deve ser um número positivo';
+                }
+              }
+              return null;
+            },
+          ),
+          SizedBox(height: spacing.md),
+          // Switch de Ativo
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: spacing.md, vertical: spacing.sm),
+            decoration: BoxDecoration(
+              color: colors.surfaceSecondary.withValues(alpha: 0.3),
+              borderRadius: TFRadius.borderRadiusMd,
+              border: Border.all(color: colors.borderDefault),
             ),
-
-            // Content
-            Flexible(
-              child: SingleChildScrollView(
-                padding: EdgeInsets.symmetric(horizontal: contentPadding, vertical: 16),
-                child: Form(
-                  key: _formKey,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      FloatingLabelTextField(
-                        label: 'Nome *',
-                        controller: _nomeController,
-                        isDark: isDark,
-                        validator: (value) {
-                          if (value == null || value.trim().isEmpty) {
-                            return 'Campo obrigatório';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 24),
-                      FloatingLabelTextField(
-                        label: 'Descrição',
-                        controller: _descricaoController,
-                        isDark: isDark,
-                        maxLines: 3,
-                      ),
-                      const SizedBox(height: 24),
-                      ColorPickerField(
-                        label: 'Cor de Fundo',
-                        color: _selectedBackgroundColor,
-                        colorHex: _corFundoController.text.isEmpty ? 'Não definida' : _corFundoController.text,
-                        isDark: isDark,
-                        onTap: _showBackgroundColorPicker,
-                        icon: Icons.color_lens,
-                      ),
-                      const SizedBox(height: 24),
-                      ColorPickerField(
-                        label: 'Cor do Texto',
-                        color: _selectedTextColor,
-                        colorHex: _corTextoController.text,
-                        isDark: isDark,
-                        onTap: _showTextColorPicker,
-                        icon: Icons.format_color_text,
-                      ),
-                      const SizedBox(height: 24),
-                      FloatingLabelTextField(
-                        label: 'Ordem',
-                        controller: _ordemController,
-                        isDark: isDark,
-                        keyboardType: TextInputType.number,
-                        validator: (value) {
-                          if (value != null && value.trim().isNotEmpty) {
-                            final ordem = int.tryParse(value.trim());
-                            if (ordem == null || ordem < 0) {
-                              return 'Ordem deve ser um número positivo';
-                            }
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 24),
-                      Container(
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        decoration: BoxDecoration(
-                          border: Border.all(
-                            color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-                          ),
-                          borderRadius: BorderRadius.circular(8),
+                      Text(
+                        'Status Ativo',
+                        style: typography.bodyMedium.copyWith(
+                          color: colors.textPrimary,
+                          fontWeight: FontWeight.w600,
                         ),
-                        child: SwitchListTile(
-                          title: Text(
-                            'Ativo',
-                            style: TextStyle(
-                              color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                            ),
-                          ),
-                          value: _ativo,
-                          activeThumbColor: const Color(0xFF3b82f6),
-                          onChanged: (value) {
-                            setState(() {
-                              _ativo = value;
-                            });
-                          },
+                      ),
+                      Text(
+                        'Status inativos não aparecem na seleção',
+                        style: typography.bodySmall.copyWith(
+                          color: colors.textSecondary,
                         ),
                       ),
                     ],
                   ),
                 ),
+                SizedBox(width: spacing.sm),
+                Switch.adaptive(
+                  value: _ativo,
+                  activeTrackColor: colors.primary,
+                  onChanged: (value) {
+                    setState(() {
+                      _ativo = value;
+                    });
+                  },
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildColorPickerRow({
+    required String label,
+    required Color color,
+    required String hexValue,
+    required VoidCallback onTap,
+    required dynamic colors,
+    required dynamic typography,
+    required dynamic spacing,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: TFRadius.borderRadiusMd,
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: spacing.md, vertical: spacing.sm),
+        decoration: BoxDecoration(
+          color: colors.surface,
+          borderRadius: TFRadius.borderRadiusMd,
+          border: Border.all(color: colors.borderDefault),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: color,
+                borderRadius: TFRadius.borderRadiusSm,
+                border: Border.all(color: colors.borderDefault),
               ),
             ),
-
-            // Footer com botões
-            Container(
-              padding: const EdgeInsets.all(32),
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF0f172a).withOpacity(0.5) : const Color(0xFFf8fafc),
-                border: Border(
-                  top: BorderSide(
-                    color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                    width: 1,
-                  ),
-                ),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
+            SizedBox(width: spacing.sm),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
-                    ),
-                    child: Text(
-                      'Cancelar',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                        color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF475569),
-                      ),
+                  Text(
+                    label,
+                    style: typography.labelMedium.copyWith(
+                      color: colors.textPrimary,
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  ElevatedButton(
-                    onPressed: _save,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF3b82f6),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 10),
-                      elevation: 2,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                    child: Text(
-                      isEditing ? 'Salvar Alterações' : 'Criar Status',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
+                  Text(
+                    hexValue,
+                    style: typography.bodySmall.copyWith(
+                      color: colors.textSecondary,
                     ),
                   ),
                 ],
               ),
+            ),
+            Icon(
+              TFIcons.edit,
+              size: 18,
+              color: colors.textSecondary,
             ),
           ],
         ),

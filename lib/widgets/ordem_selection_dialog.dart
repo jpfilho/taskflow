@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/ordem.dart';
 import '../utils/responsive.dart';
+import '../utils/clipboard_helper.dart';
 import 'multi_select_filter_dialog.dart';
 
 class OrdemSelectionDialog extends StatefulWidget {
@@ -214,18 +215,13 @@ class _OrdemSelectionDialogState extends State<OrdemSelectionDialog> {
   }
 
   Future<void> _copiarOrdem(String texto) async {
-    try {
-      await Clipboard.setData(ClipboardData(text: texto));
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Ordem copiada!'), duration: Duration(seconds: 1)),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Não foi possível copiar: $e'), backgroundColor: Colors.red, duration: const Duration(seconds: 3)),
-      );
-    }
+    await ClipboardHelper.copyAndNotify(
+      context,
+      texto,
+      successMessage: 'Ordem copiada!',
+      errorMessage: 'Não foi possível copiar a ordem.',
+      duration: const Duration(seconds: 1),
+    );
   }
 
   Widget _buildPrazoWithDateBadge(Ordem ordem) {
@@ -308,11 +304,16 @@ class _OrdemSelectionDialogState extends State<OrdemSelectionDialog> {
     _filterSala.removeWhere((s) => !_getUniqueSalas().contains(s));
     _filterOrdem.removeWhere((o) => !_getUniqueOrdens().contains(o));
 
+    final screenWidth = MediaQuery.of(context).size.width;
+    final screenHeight = MediaQuery.of(context).size.height;
+
     return Dialog(
-      insetPadding: const EdgeInsets.all(16),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      clipBehavior: Clip.antiAlias,
       child: SizedBox(
-        width: isMobile ? double.infinity : 1100,
-        height: isMobile ? double.infinity : 700,
+        width: isMobile ? double.infinity : (screenWidth * 0.95).clamp(900.0, 1400.0),
+        height: isMobile ? double.infinity : (screenHeight * 0.90).clamp(600.0, 850.0),
         child: Column(
           children: [
             // Header
@@ -373,6 +374,7 @@ class _OrdemSelectionDialogState extends State<OrdemSelectionDialog> {
                       Expanded(
                         flex: 3,
                         child: TextField(
+                    autofocus: true,
                     decoration: InputDecoration(
                       hintText: 'Pesquisar ordem, texto breve, local, objeto...',
                       prefixIcon: const Icon(Icons.search),
@@ -1008,35 +1010,43 @@ class _OrdemSelectionDialogState extends State<OrdemSelectionDialog> {
   }
 
   Widget _buildTableView() {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
+    return Scrollbar(
+      controller: _scrollController,
+      thumbVisibility: true,
       child: SingleChildScrollView(
         controller: _scrollController,
-        child: DataTable(
-          columnSpacing: 35,
-          horizontalMargin: 8,
-          headingRowHeight: 38,
-          dataRowMinHeight: 26,
-          dataRowMaxHeight: 42,
-          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
-          columns: const [
-            DataColumn(label: Text('Local', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-            DataColumn(label: Text('Tipo', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-            DataColumn(label: Text('Ordem', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-            DataColumn(label: Text('Sala', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-            DataColumn(label: Text('Texto Breve', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-            DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-            DataColumn(label: Text('Tolerância', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-            DataColumn(label: Text('Início Base', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-            DataColumn(label: Text('Fim Base', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-            DataColumn(label: Text('GPM', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-          ],
-          rows: [
-            ..._displayedOrdens.map((ordem) {
-            final isSelected = _selectedOrdemIds.contains(ordem.id);
-            return DataRow(
-              selected: isSelected,
-              cells: [
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              minWidth: MediaQuery.of(context).size.width * 0.85,
+            ),
+            child: DataTable(
+              columnSpacing: 18,
+              horizontalMargin: 12,
+              headingRowHeight: 38,
+              dataRowMinHeight: 32,
+              dataRowMaxHeight: 40,
+              headingRowColor: WidgetStateProperty.all(const Color(0xFFF1F5F9)),
+              columns: const [
+                DataColumn(label: Text('Local', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Tipo', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Ordem', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Sala', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Texto Breve', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Tolerância', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Início Base', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Fim Base', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('GPM', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+              ],
+              rows: [
+                ..._displayedOrdens.map((ordem) {
+                final isSelected = _selectedOrdemIds.contains(ordem.id);
+                return DataRow(
+                  selected: isSelected,
+                  onSelectChanged: (_) => _toggleOrdemSelection(ordem.id),
+                  cells: [
                 // 1. Local
                 DataCell(
                   SizedBox(
@@ -1148,7 +1158,6 @@ class _OrdemSelectionDialogState extends State<OrdemSelectionDialog> {
                   ),
                 ),
               ],
-              onSelectChanged: (_) => _toggleOrdemSelection(ordem.id),
             );
             }),
             if (_displayedOrdens.length < _filteredOrdens.length)
@@ -1165,6 +1174,8 @@ class _OrdemSelectionDialogState extends State<OrdemSelectionDialog> {
           ],
         ),
       ),
+    ),
+    ),
     );
   }
 

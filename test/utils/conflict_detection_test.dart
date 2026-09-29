@@ -5,8 +5,6 @@ import 'package:task2026/utils/conflict_detection.dart';
 /// Testes da lógica de conflito de agenda (checklist obrigatório).
 /// Garante: regra de ouro executorPeriods, só EXECUCAO, status excluídos, locais distintos.
 void main() {
-  late Task task;
-
   Task mkTask({
     required String id,
     String status = 'PROG',

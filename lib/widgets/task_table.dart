@@ -20,6 +20,8 @@ import '../models/si.dart';
 import 'chat_view.dart';
 import '../utils/responsive.dart';
 import '../features/warnings/warnings.dart';
+import '../design_system/taskflow_design_system.dart';
+import '../utils/clipboard_helper.dart';
 
 class TaskTable extends StatefulWidget {
   final List<Task> tasks;
@@ -160,36 +162,45 @@ class _TaskTableState extends State<TaskTable> {
     super.dispose();
   }
 
-  // Carregar todas as subtarefas automaticamente
+  // Carregar subtarefas sob demanda (apenas se allSubtasksExpanded for true ou se já estiverem em _expandedTasks)
   Future<void> _loadAllSubtasks() async {
     if (widget.taskService == null) return;
+    final bool expandAll = widget.allSubtasksExpanded ?? false;
+    if (!expandAll && _expandedTasks.isEmpty) return;
 
     try {
-      // Identificar tarefas principais que podem ter subtarefas
-      final mainTasks = widget.tasks.where((t) => t.parentId == null).toList();
+      final tasksToLoad = widget.tasks
+          .where((t) => t.parentId == null && (expandAll || _expandedTasks.contains(t.id)))
+          .where((t) => !_loadedSubtasks.containsKey(t.id))
+          .toList();
 
-      // Carregar subtarefas para cada tarefa principal
-      for (var mainTask in mainTasks) {
-        if (!_loadedSubtasks.containsKey(mainTask.id)) {
-          try {
-            final subtasks = await widget.taskService!.getSubtasks(mainTask.id);
-            if (subtasks.isNotEmpty && mounted) {
-              setState(() {
-                _loadedSubtasks[mainTask.id] = subtasks;
-                // Por padrão, subtarefas começam colapsadas
-                // Só expandir se _allSubtasksExpanded for true
-                if (widget.allSubtasksExpanded ?? false) {
-                  _expandedTasks.add(mainTask.id);
-                }
-              });
+      if (tasksToLoad.isEmpty) return;
+
+      final Map<String, List<Task>> newSubtasks = {};
+      final Set<String> newExpanded = {};
+
+      for (var mainTask in tasksToLoad) {
+        try {
+          final subtasks = await widget.taskService!.getSubtasks(mainTask.id);
+          if (subtasks.isNotEmpty) {
+            newSubtasks[mainTask.id] = subtasks;
+            if (expandAll) {
+              newExpanded.add(mainTask.id);
             }
-          } catch (e) {
-            print('Erro ao carregar subtarefas de ${mainTask.id}: $e');
           }
+        } catch (e) {
+          debugPrint('Erro ao carregar subtarefas de ${mainTask.id}: $e');
         }
       }
+
+      if (mounted && newSubtasks.isNotEmpty) {
+        setState(() {
+          _loadedSubtasks.addAll(newSubtasks);
+          _expandedTasks.addAll(newExpanded);
+        });
+      }
     } catch (e) {
-      print('Erro ao carregar subtarefas: $e');
+      debugPrint('Erro ao carregar subtarefas: $e');
     }
   }
 
@@ -284,7 +295,7 @@ class _TaskTableState extends State<TaskTable> {
   void _startEmptyTimer() {
     _emptyTimer?.cancel();
     _showEmptyMessage = false;
-    _emptyTimer = Timer(const Duration(seconds: 15), () {
+    _emptyTimer = Timer(const Duration(seconds: 2), () {
       if (mounted && widget.tasks.isEmpty && !widget.isLoading) {
         setState(() {
           _showEmptyMessage = true;
@@ -358,17 +369,6 @@ class _TaskTableState extends State<TaskTable> {
         if (frotasCountMap[task.id] != null && frotasCountMap[task.id]! > 0) {
           if (task.frota.isNotEmpty && task.frota != '-N/A-') {
             frotasNomesMap[task.id] = task.frota;
-          } else {
-            try {
-              final frotaNome = await _frotaService.getFrotaNomePorTarefa(
-                task.id,
-              );
-              if (frotaNome != null) {
-                frotasNomesMap[task.id] = frotaNome;
-              }
-            } catch (_) {
-              // Silenciar falha de rede pontual para não interromper a atualização das contagens
-            }
           }
         }
       }
@@ -758,24 +758,18 @@ class _TaskTableState extends State<TaskTable> {
   Widget build(BuildContext context) {
     final isMobile = Responsive.isMobile(context);
 
+    final colors = context.tfColors;
     final hierarchicalTasks = _buildHierarchicalTasks();
+    print('📋 [DEBUG-TASK-TABLE] build: widget.tasks=${widget.tasks.length}, isLoading=${widget.isLoading}, hierarchicalTasks=${hierarchicalTasks.length}, showEmpty=$_showEmptyMessage');
 
     if (hierarchicalTasks.isEmpty) {
+      print('⚠️ [DEBUG-TASK-TABLE] hierarchicalTasks está VAZIO! Exibindo loading? (${!_showEmptyMessage || widget.isLoading})');
       if (!_showEmptyMessage || widget.isLoading) {
-        return Center(
+        return const Center(
           child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: const [
-                SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-                SizedBox(height: 8),
-                Text('Carregando tarefas...'),
-              ],
+            padding: EdgeInsets.all(20),
+            child: TFLoading(
+              message: 'Carregando tarefas...',
             ),
           ),
         );
@@ -783,7 +777,11 @@ class _TaskTableState extends State<TaskTable> {
         return const Center(
           child: Padding(
             padding: EdgeInsets.all(20),
-            child: Text('Nenhuma tarefa encontrada'),
+            child: TFEmptyState(
+              icon: Icons.assignment_outlined,
+              title: 'Nenhuma tarefa encontrada',
+              description: 'Nenhuma tarefa corresponde aos filtros aplicados.',
+            ),
           ),
         );
       }
@@ -792,7 +790,7 @@ class _TaskTableState extends State<TaskTable> {
     // Em qualquer dispositivo: faixa superior fixa (mesma altura da linha de mês do Gantt)
     // para o cabeçalho da tabela e o cabeçalho dos dias do Gantt iniciarem e terminarem na mesma altura.
     return Container(
-      decoration: BoxDecoration(border: Border.all(color: Colors.grey[300]!)),
+      decoration: BoxDecoration(border: Border.all(color: colors.borderSubtle)),
       child: Column(
         children: [
           SizedBox(height: Responsive.kActivitiesHeaderTopHeight),
@@ -803,11 +801,11 @@ class _TaskTableState extends State<TaskTable> {
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [Colors.blue[700]!, Colors.blue[600]!],
+                colors: [colors.primary, colors.primary.withValues(alpha: 0.85)],
               ),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.1),
+                  color: Colors.black.withValues(alpha: 0.1),
                   blurRadius: 2,
                   offset: const Offset(0, 2),
                 ),
@@ -1538,6 +1536,9 @@ class _TaskTableState extends State<TaskTable> {
       return SizedBox(height: _getStatusLegendHeight());
     }
 
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
     return Container(
       height:
           50, // Altura fixa de 50px para alinhar com o cabeçalho de dias do Gantt
@@ -1546,8 +1547,8 @@ class _TaskTableState extends State<TaskTable> {
         vertical: isMobile ? 6 : 8,
       ),
       decoration: BoxDecoration(
-        color: Colors.grey[50],
-        border: Border(bottom: BorderSide(color: Colors.grey[300]!, width: 1)),
+        color: colors.surfaceSecondary,
+        border: Border(bottom: BorderSide(color: colors.borderSubtle, width: 1)),
       ),
       child: Row(
         children: [
@@ -1565,15 +1566,15 @@ class _TaskTableState extends State<TaskTable> {
                       decoration: BoxDecoration(
                         color: status.color,
                         shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 1.5),
+                        border: Border.all(color: colors.surface, width: 1.5),
                       ),
                     ),
                     const SizedBox(width: 4),
                     Text(
                       status.status,
-                      style: TextStyle(
+                      style: typography.caption.copyWith(
                         fontSize: isMobile ? 10 : 11,
-                        color: Colors.grey[700],
+                        color: colors.textSecondary,
                       ),
                     ),
                   ],
@@ -1586,7 +1587,7 @@ class _TaskTableState extends State<TaskTable> {
             icon: Icon(
               _allSubtasksExpanded ? Icons.unfold_less : Icons.unfold_more,
               size: isMobile ? 18 : 20,
-              color: Colors.grey[700],
+              color: colors.textSecondary,
             ),
             tooltip: _allSubtasksExpanded
                 ? 'Colapsar todas as subtarefas'
@@ -1601,14 +1602,16 @@ class _TaskTableState extends State<TaskTable> {
   }
 
   Widget _buildToggleButton(bool isMobile) {
+    final colors = context.tfColors;
+
     return Container(
       padding: EdgeInsets.symmetric(
         horizontal: isMobile ? 8 : 12,
         vertical: isMobile ? 6 : 8,
       ),
       decoration: BoxDecoration(
-        color: Colors.grey[50],
-        border: Border(bottom: BorderSide(color: Colors.grey[300]!, width: 1)),
+        color: colors.surfaceSecondary,
+        border: Border(bottom: BorderSide(color: colors.borderSubtle, width: 1)),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.end,
@@ -1617,7 +1620,7 @@ class _TaskTableState extends State<TaskTable> {
             icon: Icon(
               _allSubtasksExpanded ? Icons.unfold_less : Icons.unfold_more,
               size: isMobile ? 18 : 20,
-              color: Colors.grey[700],
+              color: colors.textSecondary,
             ),
             tooltip: _allSubtasksExpanded
                 ? 'Colapsar todas as subtarefas'
@@ -2476,25 +2479,13 @@ class _TaskTableState extends State<TaskTable> {
     String texto,
     String mensagemSucesso,
   ) async {
-    try {
-      await Clipboard.setData(ClipboardData(text: texto));
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(mensagemSucesso),
-          duration: const Duration(seconds: 1),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Não foi possível copiar: $e'),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 3),
-        ),
-      );
-    }
+    await ClipboardHelper.copyAndNotify(
+      context,
+      texto,
+      successMessage: mensagemSucesso,
+      errorMessage: 'Não foi possível copiar o texto.',
+      duration: const Duration(seconds: 1),
+    );
   }
 
   Widget _buildNotaSAPCard(NotaSAP nota, int index) {
@@ -2598,10 +2589,37 @@ class _TaskTableState extends State<TaskTable> {
                     ],
                   ),
                   const SizedBox(height: 8),
-                  // Status do usuário, Sala e Prazo na mesma linha (desktop) ou separados (mobile)
+                  // Status do sistema, Status do usuário, Sala e Prazo na mesma linha (desktop) ou separados (mobile)
                   if (Responsive.isDesktop(context))
-                    Row(
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
+                        // Status do sistema
+                        if (nota.statusSistema != null &&
+                            nota.statusSistema!.isNotEmpty)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: _getStatusSistemaColor(nota.statusSistema).withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(
+                                color: _getStatusSistemaColor(nota.statusSistema).withOpacity(0.4),
+                              ),
+                            ),
+                            child: Text(
+                              nota.statusSistema!,
+                              style: TextStyle(
+                                color: _getStatusSistemaColor(nota.statusSistema),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
                         // Status do usuário
                         if (nota.statusUsuario != null &&
                             nota.statusUsuario!.isNotEmpty)
@@ -2626,10 +2644,7 @@ class _TaskTableState extends State<TaskTable> {
                             ),
                           ),
                         // Sala
-                        if (nota.sala != null && nota.sala!.isNotEmpty) ...[
-                          if (nota.statusUsuario != null &&
-                              nota.statusUsuario!.isNotEmpty)
-                            const SizedBox(width: 8),
+                        if (nota.sala != null && nota.sala!.isNotEmpty)
                           Container(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 8,
@@ -2659,51 +2674,73 @@ class _TaskTableState extends State<TaskTable> {
                               ],
                             ),
                           ),
-                        ],
                         // Prazo
                         if (nota.dataVencimento != null &&
-                            nota.diasRestantes != null) ...[
-                          if ((nota.statusUsuario != null &&
-                                  nota.statusUsuario!.isNotEmpty) ||
-                              (nota.sala != null && nota.sala!.isNotEmpty))
-                            const SizedBox(width: 8),
+                            nota.diasRestantes != null)
                           _buildPrazoBadgeNota(nota),
-                        ],
                       ],
                     )
                   else
-                    // Mobile: Status, Sala e Prazo em linhas separadas
+                    // Mobile: Status, Sala e Prazo
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Status do usuário
-                        if (nota.statusUsuario != null &&
-                            nota.statusUsuario!.isNotEmpty)
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: _getStatusUsuarioColor(nota.statusUsuario),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(
-                              nota.statusUsuario!,
-                              style: TextStyle(
-                                color: _getStatusUsuarioTextColor(
-                                  nota.statusUsuario,
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 4,
+                          children: [
+                            // Status do sistema
+                            if (nota.statusSistema != null &&
+                                nota.statusSistema!.isNotEmpty)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
                                 ),
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
+                                decoration: BoxDecoration(
+                                  color: _getStatusSistemaColor(nota.statusSistema).withOpacity(0.12),
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(
+                                    color: _getStatusSistemaColor(nota.statusSistema).withOpacity(0.4),
+                                  ),
+                                ),
+                                child: Text(
+                                  nota.statusSistema!,
+                                  style: TextStyle(
+                                    color: _getStatusSistemaColor(nota.statusSistema),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
                               ),
-                            ),
-                          ),
+                            // Status do usuário
+                            if (nota.statusUsuario != null &&
+                                nota.statusUsuario!.isNotEmpty)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: _getStatusUsuarioColor(nota.statusUsuario),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text(
+                                  nota.statusUsuario!,
+                                  style: TextStyle(
+                                    color: _getStatusUsuarioTextColor(
+                                      nota.statusUsuario,
+                                    ),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
                         // Sala
                         if (nota.sala != null && nota.sala!.isNotEmpty) ...[
-                          if (nota.statusUsuario != null &&
-                              nota.statusUsuario!.isNotEmpty)
-                            const SizedBox(height: 6),
+                          const SizedBox(height: 6),
                           Container(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 8,
@@ -2737,10 +2774,7 @@ class _TaskTableState extends State<TaskTable> {
                         // Prazo
                         if (nota.dataVencimento != null &&
                             nota.diasRestantes != null) ...[
-                          if ((nota.statusUsuario != null &&
-                                  nota.statusUsuario!.isNotEmpty) ||
-                              (nota.sala != null && nota.sala!.isNotEmpty))
-                            const SizedBox(height: 6),
+                          const SizedBox(height: 6),
                           _buildPrazoBadgeNota(nota),
                         ],
                       ],
@@ -2868,6 +2902,15 @@ class _TaskTableState extends State<TaskTable> {
     return Colors.white;
   }
 
+  Color _getStatusSistemaColor(String? statusSistema) {
+    if (statusSistema == null || statusSistema.isEmpty) return Colors.grey;
+    final status = statusSistema.toUpperCase();
+    if (status.contains('MSPR')) return Colors.orange;
+    if (status.contains('MSPN')) return Colors.blue;
+    if (status.contains('MECE') || status.contains('CONC')) return Colors.green;
+    return const Color(0xFF1E3A5F);
+  }
+
   void _mostrarDialogOrdens(List<Ordem> ordens, Task task) {
     showDialog(
       context: context,
@@ -2955,6 +2998,18 @@ class _TaskTableState extends State<TaskTable> {
   }
 
   Widget _buildOrdemCard(Ordem ordem, int index) {
+    final statusSis = ordem.statusSistema?.trim();
+    final statusUsu = ordem.statusUsuario?.trim();
+    final sala = ordem.sala?.trim();
+    final descricao = (ordem.textoBreve?.trim().isNotEmpty == true)
+        ? ordem.textoBreve!.trim()
+        : ordem.denominacaoObjeto?.trim();
+    final local = (ordem.localInstalacao?.trim().isNotEmpty == true)
+        ? ordem.localInstalacao!.trim()
+        : (ordem.denominacaoLocalInstalacao?.trim().isNotEmpty == true
+            ? ordem.denominacaoLocalInstalacao!.trim()
+            : ordem.local?.trim());
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
@@ -2962,72 +3017,190 @@ class _TaskTableState extends State<TaskTable> {
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.08),
+            color: Colors.black.withOpacity(0.06),
             blurRadius: 8,
             offset: const Offset(0, 2),
           ),
         ],
-        border: Border.all(color: Colors.orange.withOpacity(0.2)),
+        border: Border.all(color: Colors.orange.withOpacity(0.25)),
       ),
       child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        childrenPadding: EdgeInsets.zero,
         leading: Container(
-          padding: const EdgeInsets.all(8),
+          width: 36,
+          height: 36,
+          alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: Colors.orange.withOpacity(0.1),
+            color: Colors.orange.withOpacity(0.12),
             borderRadius: BorderRadius.circular(8),
           ),
-          child: const Icon(Icons.list_alt, color: Colors.orange, size: 20),
+          child: const Icon(Icons.receipt_long_outlined, color: Colors.orange, size: 20),
         ),
-        title: Row(
-          children: [
-            Expanded(
-              child: Text(
-                'Ordem: ${ordem.ordem}',
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
+        title: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Row(
+            children: [
+              Expanded(
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      'Ordem: ${ordem.ordem}',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                        color: Color(0xFFE65100),
+                      ),
+                    ),
+                    if (ordem.tipo != null && ordem.tipo!.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.grey[200],
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          ordem.tipo!,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.grey[800],
+                          ),
+                        ),
+                      ),
+                    if (statusSis != null && statusSis.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: _getStatusSistemaColor(statusSis).withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: _getStatusSistemaColor(statusSis).withOpacity(0.4),
+                          ),
+                        ),
+                        child: Text(
+                          statusSis,
+                          style: TextStyle(
+                            color: _getStatusSistemaColor(statusSis),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    if (statusUsu != null && statusUsu.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: _getStatusUsuarioColor(statusUsu),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          statusUsu,
+                          style: TextStyle(
+                            color: _getStatusUsuarioTextColor(statusUsu),
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    if (sala != null && sala.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.indigo.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.indigo.withOpacity(0.25)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.meeting_room_outlined, size: 13, color: Colors.indigo),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Sala: $sala',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.indigo,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (descricao != null && descricao.isNotEmpty)
+                      Text(
+                        descricao,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey[850],
+                        ),
+                      ),
+                    if (local != null && local.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.grey[100],
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.grey[300]!),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.location_on_outlined, size: 13, color: Colors.grey[700]),
+                            const SizedBox(width: 4),
+                            Text(
+                              local,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                                color: Colors.grey[700],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
                 ),
               ),
-            ),
-            IconButton(
-              icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(),
-              onPressed: () =>
-                  _copiarParaAreaTransferencia(ordem.ordem, 'Ordem copiada!'),
-              tooltip: 'Copiar ordem',
-            ),
-          ],
+              IconButton(
+                icon: const Icon(Icons.copy_rounded, size: 18, color: Colors.blue),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                onPressed: () => _copiarParaAreaTransferencia(ordem.ordem, 'Ordem copiada!'),
+                tooltip: 'Copiar ordem',
+              ),
+            ],
+          ),
         ),
-        subtitle: ordem.tipo != null ? Text('Tipo: ${ordem.tipo}') : null,
         children: [
           Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                const Divider(height: 1),
+                const SizedBox(height: 12),
                 _buildInfoRowModern('Tipo', ordem.tipo),
                 _buildInfoRowModern('Status Sistema', ordem.statusSistema),
                 _buildInfoRowModern('Status Usuário', ordem.statusUsuario),
                 _buildInfoRowModern('Texto Breve', ordem.textoBreve),
-                _buildInfoRowModern(
-                  'Denominação Local',
-                  ordem.denominacaoLocalInstalacao,
-                ),
-                _buildInfoRowModern(
-                  'Denominação Objeto',
-                  ordem.denominacaoObjeto,
-                ),
+                _buildInfoRowModern('Denominação Local', ordem.denominacaoLocalInstalacao),
+                _buildInfoRowModern('Denominação Objeto', ordem.denominacaoObjeto),
                 _buildInfoRowModern('Local Instalação', ordem.localInstalacao),
+                _buildInfoRowModern('Sala', ordem.sala),
+                _buildInfoRowModern('Local', ordem.local),
                 _buildInfoRowModern('Código SI', ordem.codigoSI),
                 _buildInfoRowModern('GPM', ordem.gpm),
                 if (ordem.inicioBase != null)
-                  _buildInfoRowModern(
-                    'Início Base',
-                    _formatDate(ordem.inicioBase!),
-                  ),
+                  _buildInfoRowModern('Início Base', _formatDate(ordem.inicioBase!)),
                 if (ordem.fimBase != null)
                   _buildInfoRowModern('Fim Base', _formatDate(ordem.fimBase!)),
+                if (ordem.tolerancia != null)
+                  _buildInfoRowModern('Tolerância', _formatDate(ordem.tolerancia!)),
               ],
             ),
           ),
@@ -3746,13 +3919,15 @@ class _TaskTableState extends State<TaskTable> {
     TextOverflow overflow = TextOverflow.ellipsis,
     FontWeight? fontWeight,
   }) {
+    final colors = context.tfColors;
+
     final cellWidget = Container(
       padding: EdgeInsets.symmetric(
         horizontal: isMobile ? 3 : 6,
         vertical: isMobile ? 4 : 8,
       ),
       decoration: BoxDecoration(
-        border: Border(right: BorderSide(color: Colors.grey[300]!, width: 0.5)),
+        border: Border(right: BorderSide(color: colors.borderSubtle, width: 0.5)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -3763,7 +3938,7 @@ class _TaskTableState extends State<TaskTable> {
               child: Icon(
                 icon,
                 size: isMobile ? 12 : 14,
-                color: iconColor ?? Colors.grey[600],
+                color: iconColor ?? colors.textMuted,
               ),
             ),
           Flexible(
@@ -3772,8 +3947,8 @@ class _TaskTableState extends State<TaskTable> {
               style: TextStyle(
                 fontSize: isMobile ? 9 : 10,
                 color: hasColoredBackground
-                    ? (isSubtask ? Colors.grey[700] : Colors.grey[800])
-                    : (isSubtask ? Colors.black87 : Colors.black87),
+                    ? (isSubtask ? colors.textSecondary : colors.textPrimary)
+                    : (isSubtask ? colors.textSecondary : colors.textPrimary),
                 fontStyle: isSubtask ? FontStyle.italic : FontStyle.normal,
                 fontWeight: fontWeight,
               ),

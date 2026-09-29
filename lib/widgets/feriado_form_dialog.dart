@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
+import '../design_system/taskflow_design_system.dart';
 import '../models/feriado.dart';
 import '../models/local.dart';
 import '../services/feriado_service.dart';
 import '../services/local_service.dart';
-import 'form_dialog_helpers.dart';
 
 class FeriadoFormDialog extends StatefulWidget {
   final Feriado? feriado;
@@ -26,7 +26,7 @@ class _FeriadoFormDialogState extends State<FeriadoFormDialog> {
 
   DateTime? _selectedDate;
   final _descricaoController = TextEditingController();
-  String? _selectedTipo;
+  String _selectedTipo = 'NACIONAL';
   final _paisController = TextEditingController(text: 'Brasil');
   final _estadoController = TextEditingController();
   final _cidadeController = TextEditingController();
@@ -35,6 +35,7 @@ class _FeriadoFormDialogState extends State<FeriadoFormDialog> {
   final List<String> _tipos = ['NACIONAL', 'ESTADUAL', 'MUNICIPAL', 'EVENTO'];
 
   bool _isLoadingLocais = true;
+  bool _isSaving = false;
   List<Local> _locaisPermitidos = [];
   List<Local> _todosLocais = [];
   Set<String> _locaisSelecionados = {};
@@ -54,22 +55,21 @@ class _FeriadoFormDialogState extends State<FeriadoFormDialog> {
       _paisController.text = 'Brasil';
     }
     _loadLocais();
+    _searchController.addListener(() => setState(() {}));
   }
 
   Future<void> _loadLocais() async {
     final locaisPermitidos = await _feriadoService.getLocaisPermitidosParaUsuarioAtual();
     final todosLocais = await _localService.getAllLocais();
     
+    if (!mounted) return;
     setState(() {
       _locaisPermitidos = locaisPermitidos;
       _todosLocais = todosLocais;
       
       if (widget.feriado != null) {
         _locaisSelecionados = widget.feriado!.localIds.toSet();
-        // Se for edição de um feriado nacional já existente, garante que ele use a lista completa de locais
-        // mas mantém a seleção original do banco.
       } else {
-        // Se for novo e nacional, seleciona todos. Se não, seleciona os permitidos.
         if (_selectedTipo == 'NACIONAL') {
           _locaisSelecionados = todosLocais.map((l) => l.id).toSet();
         } else {
@@ -106,17 +106,15 @@ class _FeriadoFormDialogState extends State<FeriadoFormDialog> {
   }
 
   void _onTipoChanged(String? tipo) {
+    if (tipo == null) return;
     setState(() {
       _selectedTipo = tipo;
       if (tipo == 'NACIONAL') {
         _estadoController.clear();
         _cidadeController.clear();
-        // Quando muda para nacional, seleciona todos os locais do banco
         _locaisSelecionados = _todosLocais.map((l) => l.id).toSet();
       } else if (tipo == 'ESTADUAL') {
         _cidadeController.clear();
-        // Se mudou de nacional para outro, volta para os permitidos (opcional, mas seguro)
-        // _locaisSelecionados = _locaisPermitidos.map((l) => l.id).toSet();
       }
     });
   }
@@ -147,23 +145,9 @@ class _FeriadoFormDialogState extends State<FeriadoFormDialog> {
       return;
     }
 
-    if (_selectedTipo == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Por favor, selecione o tipo de feriado')),
-      );
-      return;
-    }
-
     if (_locaisSelecionados.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Por favor, selecione pelo menos um local aplicável')),
-      );
-      return;
-    }
-
-    if (_selectedTipo == 'NACIONAL' && _paisController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('País é obrigatório para feriado nacional')),
       );
       return;
     }
@@ -186,13 +170,14 @@ class _FeriadoFormDialogState extends State<FeriadoFormDialog> {
       return;
     }
 
+    setState(() => _isSaving = true);
     try {
       final now = DateTime.now();
       final feriado = Feriado(
         id: widget.feriado?.id ?? '',
         data: _selectedDate!,
         descricao: _descricaoController.text.trim(),
-        tipo: _selectedTipo!,
+        tipo: _selectedTipo,
         pais: _paisController.text.trim().isEmpty ? null : _paisController.text.trim(),
         estado: _estadoController.text.trim().isEmpty ? null : _estadoController.text.trim(),
         cidade: _cidadeController.text.trim().isEmpty ? null : _cidadeController.text.trim(),
@@ -222,6 +207,7 @@ class _FeriadoFormDialogState extends State<FeriadoFormDialog> {
       }
     } catch (e) {
       if (mounted) {
+        setState(() => _isSaving = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Erro ao salvar feriado: $e'),
@@ -235,363 +221,203 @@ class _FeriadoFormDialogState extends State<FeriadoFormDialog> {
   @override
   Widget build(BuildContext context) {
     final isEditing = widget.feriado != null;
-    final brightness = Theme.of(context).brightness;
-    final isDark = brightness == Brightness.dark;
+    final spacing = context.tfSpacing;
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final filteredLocais = _getFilteredLocais();
 
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.all(16),
-      elevation: 0,
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 512),
-        decoration: BoxDecoration(
-          color: isDark ? const Color(0xFF1e293b) : Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-            width: 1,
-          ),
-        ),
+    final formattedDate = _selectedDate == null
+        ? 'Selecione a data'
+        : '${_selectedDate!.day.toString().padLeft(2, '0')}/${_selectedDate!.month.toString().padLeft(2, '0')}/${_selectedDate!.year}';
+
+    return TFFormDialog(
+      title: isEditing ? 'Editar Feriado' : 'Novo Feriado',
+      subtitle: 'Atualize as datas e as localidades com vigência de feriado.',
+      saveLabel: isEditing ? 'Salvar Alterações' : 'Criar Feriado',
+      isSaving: _isSaving,
+      onSave: _save,
+      onCancel: () => Navigator.of(context).pop(),
+      child: Form(
+        key: _formKey,
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
-            Padding(
-              padding: const EdgeInsets.fromLTRB(32, 32, 32, 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    isEditing ? 'Editar Feriado' : 'Novo Feriado',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w600,
-                      color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
+            InkWell(
+              onTap: () => _selectDate(context),
+              borderRadius: BorderRadius.circular(TFRadius.r8),
+              child: Container(
+                padding: EdgeInsets.symmetric(horizontal: spacing.md, vertical: spacing.sm),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(TFRadius.r8),
+                  border: Border.all(color: colors.borderSubtle),
+                  color: colors.surface,
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.calendar_today_rounded, size: 20, color: colors.primary),
+                    SizedBox(width: spacing.sm),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Data do Feriado *',
+                          style: typography.bodySmall.copyWith(color: colors.textSecondary),
+                        ),
+                        Text(
+                          formattedDate,
+                          style: typography.bodyMedium.copyWith(
+                            color: colors.textPrimary,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Atualize as informações do feriado.',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
-
-            // Content
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                child: Form(
-                  key: _formKey,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      InkWell(
-                        onTap: () => _selectDate(context),
-                        borderRadius: BorderRadius.circular(8),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                          decoration: BoxDecoration(
-                            border: Border.all(
-                              color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
+            SizedBox(height: spacing.md),
+            TFTextField(
+              label: 'Descrição do Feriado',
+              controller: _descricaoController,
+              required: true,
+              hint: 'Ex: Confraternização Universal, Aniversário da Cidade',
+              validator: (val) {
+                if (val == null || val.trim().isEmpty) return 'Campo obrigatório';
+                return null;
+              },
+            ),
+            SizedBox(height: spacing.md),
+            TFDropdown<String>(
+              label: 'Tipo de Feriado',
+              isRequired: true,
+              value: _selectedTipo,
+              items: _tipos,
+              displayText: (t) => t,
+              onChanged: _onTipoChanged,
+            ),
+            SizedBox(height: spacing.md),
+            TFTextField(
+              label: 'País',
+              controller: _paisController,
+              hint: 'Brasil',
+            ),
+            if (_selectedTipo == 'ESTADUAL' || _selectedTipo == 'MUNICIPAL') ...[
+              SizedBox(height: spacing.md),
+              TFTextField(
+                label: 'Estado (UF)',
+                controller: _estadoController,
+                required: true,
+                hint: 'Ex: SP, RJ, MG',
+              ),
+            ],
+            if (_selectedTipo == 'MUNICIPAL') ...[
+              SizedBox(height: spacing.md),
+              TFTextField(
+                label: 'Cidade',
+                controller: _cidadeController,
+                required: true,
+                hint: 'Ex: São Paulo, Campinas',
+              ),
+            ],
+            SizedBox(height: spacing.lg),
+            Text(
+              'Locais Aplicáveis (${_locaisSelecionados.length} selecionados)',
+              style: typography.bodyMedium.copyWith(
+                color: colors.textPrimary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            SizedBox(height: spacing.xs),
+            TFTextField(
+              label: 'Filtrar Locais',
+              controller: _searchController,
+              hint: 'Buscar local por nome, regional ou divisão...',
+            ),
+            SizedBox(height: spacing.xs),
+            Container(
+              constraints: const BoxConstraints(maxHeight: 200),
+              decoration: BoxDecoration(
+                color: colors.surface,
+                borderRadius: BorderRadius.circular(TFRadius.r12),
+                border: Border.all(color: colors.borderSubtle),
+              ),
+              child: _isLoadingLocais
+                  ? const Center(child: Padding(
+                      padding: EdgeInsets.all(12),
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ))
+                  : filteredLocais.isEmpty
+                      ? Padding(
+                          padding: EdgeInsets.all(spacing.md),
+                          child: Center(
+                            child: Text(
+                              'Nenhum local encontrado',
+                              style: typography.bodySmall.copyWith(color: colors.textSecondary),
                             ),
-                            borderRadius: BorderRadius.circular(8),
                           ),
-                          child: Row(
-                            children: [
-                              Text(
-                                'Data *',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w500,
-                                  color: const Color(0xFF3b82f6),
-                                ),
-                              ),
-                              const Spacer(),
-                              Text(
-                                _selectedDate != null
-                                    ? '${_selectedDate!.day.toString().padLeft(2, '0')}/${_selectedDate!.month.toString().padLeft(2, '0')}/${_selectedDate!.year}'
-                                    : 'Selecione uma data',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: isDark ? const Color(0xFFcbd5e1) : const Color(0xFF475569),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Icon(
-                                Icons.calendar_today,
-                                color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
-                                size: 20,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 24),
-                      FloatingLabelTextField(
-                        label: 'Descrição *',
-                        controller: _descricaoController,
-                        isDark: isDark,
-                        validator: (value) {
-                          if (value == null || value.trim().isEmpty) {
-                            return 'Por favor, informe a descrição';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 24),
-                      FloatingLabelDropdown<String>(
-                        label: 'Tipo *',
-                        value: _selectedTipo,
-                        items: _tipos,
-                        isLoading: false,
-                        displayText: (tipo) => tipo,
-                        onChanged: _onTipoChanged,
-                        isDark: isDark,
-                        validator: (value) {
-                          if (value == null) {
-                            return 'Por favor, selecione o tipo';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 24),
-                      FloatingLabelTextField(
-                        label: 'País *',
-                        controller: _paisController,
-                        isDark: isDark,
-                        validator: (value) {
-                          if (_selectedTipo != null && 
-                              (_selectedTipo == 'NACIONAL' || 
-                               _selectedTipo == 'ESTADUAL' || 
-                               _selectedTipo == 'MUNICIPAL')) {
-                            if (value == null || value.trim().isEmpty) {
-                              return 'País é obrigatório';
-                            }
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 24),
-                      FloatingLabelTextField(
-                        label: 'Estado',
-                        controller: _estadoController,
-                        isDark: isDark,
-                        validator: (value) {
-                          if (_selectedTipo == 'ESTADUAL' || _selectedTipo == 'MUNICIPAL') {
-                            if (value == null || value.trim().isEmpty) {
-                              return 'Estado é obrigatório';
-                            }
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 24),
-                      FloatingLabelTextField(
-                        label: 'Cidade',
-                        controller: _cidadeController,
-                        isDark: isDark,
-                        validator: (value) {
-                          if (_selectedTipo == 'MUNICIPAL') {
-                            if (value == null || value.trim().isEmpty) {
-                              return 'Cidade é obrigatória';
-                            }
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 24),
-                      Text(
-                        'Locais Aplicáveis *',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                          color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      if (_isLoadingLocais)
-                        const Center(child: CircularProgressIndicator())
-                      else
-                        Container(
-                          height: 350, // Aumentado para acomodar a busca
-                          decoration: BoxDecoration(
-                            border: Border.all(
-                              color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-                            ),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Column(
-                            children: [
-                              // Campo de Busca
-                              Padding(
-                                padding: const EdgeInsets.all(8.0),
-                                child: TextField(
-                                  controller: _searchController,
-                                  onChanged: (val) => setState(() {}),
-                                  decoration: InputDecoration(
-                                    hintText: 'Pesquisar local...',
-                                    prefixIcon: const Icon(Icons.search, size: 20),
-                                    isDense: true,
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    suffixIcon: _searchController.text.isNotEmpty 
-                                      ? IconButton(
-                                          icon: const Icon(Icons.clear, size: 20),
-                                          onPressed: () {
-                                            _searchController.clear();
-                                            setState(() {});
-                                          },
-                                        ) 
-                                      : null,
-                                  ),
-                                ),
-                              ),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                                decoration: BoxDecoration(
-                                  color: isDark ? const Color(0xFF334155) : const Color(0xFFf8fafc),
-                                  border: Border(
-                                    top: BorderSide(
-                                      color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-                                    ),
-                                    bottom: BorderSide(
-                                      color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-                                    ),
-                                  ),
-                                ),
+                        )
+                      : ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: filteredLocais.length,
+                          separatorBuilder: (_, __) => Divider(height: 1, color: colors.borderSubtle),
+                          itemBuilder: (context, index) {
+                            final local = filteredLocais[index];
+                            final isSelected = _locaisSelecionados.contains(local.id);
+                            return InkWell(
+                              onTap: () {
+                                setState(() {
+                                  if (isSelected) {
+                                    _locaisSelecionados.remove(local.id);
+                                  } else {
+                                    _locaisSelecionados.add(local.id);
+                                  }
+                                });
+                              },
+                              child: Padding(
+                                padding: EdgeInsets.symmetric(horizontal: spacing.sm, vertical: spacing.xs),
                                 child: Row(
                                   children: [
-                                    Builder(
-                                      builder: (context) {
-                                        final filtered = _getFilteredLocais();
-                                        final allSelected = filtered.isNotEmpty && 
-                                            filtered.every((l) => _locaisSelecionados.contains(l.id));
-                                        final someSelected = filtered.any((l) => _locaisSelecionados.contains(l.id)) && !allSelected;
-                                        
-                                        return Checkbox(
-                                          value: allSelected,
-                                          tristate: someSelected,
-                                          onChanged: (val) {
-                                            setState(() {
-                                              if (val == true) {
-                                                for (var l in filtered) {
-                                                  _locaisSelecionados.add(l.id);
-                                                }
-                                              } else {
-                                                for (var l in filtered) {
-                                                  _locaisSelecionados.remove(l.id);
-                                                }
-                                              }
-                                            });
-                                          },
-                                        );
-                                      }
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            local.local,
+                                            style: typography.bodyMedium.copyWith(
+                                              color: colors.textPrimary,
+                                              fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                                            ),
+                                          ),
+                                          Text(
+                                            '${local.regional} • ${local.divisao} • ${local.segmento}',
+                                            style: typography.bodySmall.copyWith(color: colors.textSecondary),
+                                          ),
+                                        ],
+                                      ),
                                     ),
-                                    const Text('Selecionar Filtrados'),
+                                    Checkbox(
+                                      value: isSelected,
+                                      activeColor: colors.primary,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(TFRadius.r4),
+                                      ),
+                                      onChanged: (val) {
+                                        setState(() {
+                                          if (val == true) {
+                                            _locaisSelecionados.add(local.id);
+                                          } else {
+                                            _locaisSelecionados.remove(local.id);
+                                          }
+                                        });
+                                      },
+                                    ),
                                   ],
                                 ),
                               ),
-                              Expanded(
-                                child: Builder(
-                                  builder: (context) {
-                                    final filtered = _getFilteredLocais();
-                                    if (filtered.isEmpty) {
-                                      return const Center(
-                                        child: Text('Nenhum local encontrado'),
-                                      );
-                                    }
-                                    return ListView.builder(
-                                      itemCount: filtered.length,
-                                      itemBuilder: (context, index) {
-                                        final local = filtered[index];
-                                        return CheckboxListTile(
-                                          title: Text(local.local),
-                                          subtitle: Text(
-                                            '${local.regional}${local.divisao.isNotEmpty ? ' / ${local.divisao}' : ''}${local.segmento.isNotEmpty ? ' / ${local.segmento}' : ''}',
-                                            style: const TextStyle(fontSize: 11),
-                                          ),
-                                          value: _locaisSelecionados.contains(local.id),
-                                          onChanged: (val) {
-                                            setState(() {
-                                              if (val == true) {
-                                                _locaisSelecionados.add(local.id);
-                                              } else {
-                                                _locaisSelecionados.remove(local.id);
-                                              }
-                                            });
-                                          },
-                                        );
-                                      },
-                                    );
-                                  }
-                                ),
-                              ),
-                            ],
-                          ),
+                            );
+                          },
                         ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-
-            // Footer com botões
-            Container(
-              padding: const EdgeInsets.all(32),
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF0f172a).withOpacity(0.5) : const Color(0xFFf8fafc),
-                border: Border(
-                  top: BorderSide(
-                    color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                    width: 1,
-                  ),
-                ),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
-                    ),
-                    child: Text(
-                      'Cancelar',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                        color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF475569),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  ElevatedButton(
-                    onPressed: _save,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF3b82f6),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 10),
-                      elevation: 2,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                    child: Text(
-                      isEditing ? 'Salvar Alterações' : 'Criar Feriado',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
             ),
           ],
         ),

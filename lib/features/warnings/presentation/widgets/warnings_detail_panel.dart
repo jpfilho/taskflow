@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import '../../data/models/task_warning.dart';
+import '../../../../utils/clipboard_helper.dart';
 import 'warning_severity_theme.dart';
 import '../../../../utils/conflict_detection.dart';
 import '../../../../models/task.dart';
@@ -336,14 +336,13 @@ class WarningsDetailPanel extends StatelessWidget {
                 ),
                 if (taskTarefaLabel.isNotEmpty) ...[
                   const SizedBox(height: 4),
-                  Text(
+                  SelectableText(
                     taskTarefaLabel,
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                       fontWeight: FontWeight.w500,
+                      height: 1.3,
                     ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
                   ),
                 ],
               ],
@@ -782,12 +781,11 @@ class _DetailRowState extends State<_DetailRow> {
                     duration: const Duration(milliseconds: 150),
                     child: IconButton(
                       onPressed: () {
-                        Clipboard.setData(ClipboardData(text: widget.value));
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Copiado'),
-                            duration: Duration(seconds: 1),
-                          ),
+                        ClipboardHelper.copyAndNotify(
+                          context,
+                          widget.value,
+                          successMessage: 'Copiado',
+                          duration: const Duration(seconds: 1),
                         );
                       },
                       icon: Icon(

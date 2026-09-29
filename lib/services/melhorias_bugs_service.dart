@@ -1,7 +1,10 @@
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
+import '../config/supabase_config.dart';
 import '../models/versao.dart';
 import '../models/melhoria_bug.dart';
+import 'auth_service_simples.dart';
+import 'connectivity_service.dart';
 import 'local_database_service.dart';
 import 'sync_service.dart';
 
@@ -24,6 +27,17 @@ class MelhoriasBugsService {
       'versoes_local',
       orderBy: 'ordem ASC, data_prevista_lancamento ASC',
     );
+    if (rows.isEmpty && ConnectivityService().isConnected) {
+      try {
+        final res = await SupabaseConfig.client
+            .from('versoes')
+            .select()
+            .order('ordem', ascending: true);
+        return (res as List)
+            .map((m) => Versao.fromMap(Map<String, dynamic>.from(m)))
+            .toList();
+      } catch (_) {}
+    }
     return rows.map((m) => Versao.fromMap(Map<String, dynamic>.from(m))).toList();
   }
 
@@ -70,6 +84,19 @@ class MelhoriasBugsService {
       );
       _syncService.queueOperation('versoes', 'update', id, versao.toSupabaseMap());
     }
+
+    if (ConnectivityService().isConnected) {
+      try {
+        await SupabaseConfig.client.from('versoes').upsert(versao.toSupabaseMap());
+        await db.update(
+          'versoes_local',
+          {'sync_status': 'synced', 'last_synced': DateTime.now().millisecondsSinceEpoch},
+          where: 'id = ?',
+          whereArgs: [id],
+        );
+      } catch (_) {}
+    }
+
     _syncService.markHasLocalChanges();
     return versao;
   }
@@ -78,10 +105,39 @@ class MelhoriasBugsService {
     final db = await _localDb.database;
     await db.delete('versoes_local', where: 'id = ?', whereArgs: [id]);
     _syncService.queueOperation('versoes', 'delete', id, {'id': id});
+    if (ConnectivityService().isConnected) {
+      try {
+        await SupabaseConfig.client.from('versoes').delete().eq('id', id);
+      } catch (_) {}
+    }
     _syncService.markHasLocalChanges();
   }
 
   // ---------- Melhorias e Bugs ----------
+
+  Future<int> countAbertos() async {
+    try {
+      final db = await _localDb.database;
+      final result = await db.rawQuery(
+        "SELECT COUNT(*) as total FROM melhorias_bugs_local WHERE status NOT IN ('CONCLUIDO', 'REJEITADO', 'DUPLICADO')"
+      );
+      final countLocal = Sqflite.firstIntValue(result) ?? 0;
+      if (countLocal > 0) return countLocal;
+
+      // Fallback ao Supabase caso o banco local ainda não tenha sincronizado
+      try {
+        final res = await SupabaseConfig.client
+            .from('melhorias_bugs')
+            .select('id')
+            .not('status', 'in', '("CONCLUIDO","REJEITADO","DUPLICADO")');
+        return (res as List).length;
+      } catch (_) {
+        return countLocal;
+      }
+    } catch (_) {
+      return 0;
+    }
+  }
 
   Future<List<MelhoriaBug>> getMelhoriasBugs({
     String? versaoId,
@@ -118,6 +174,21 @@ class MelhoriasBugsService {
       whereArgs: whereArgs,
       orderBy: 'created_at DESC',
     );
+    if (rows.isEmpty && ConnectivityService().isConnected) {
+      try {
+        dynamic query = SupabaseConfig.client.from('melhorias_bugs').select();
+        if (versaoId != null) query = query.eq('versao_id', versaoId);
+        if (status != null) query = query.eq('status', status);
+        if (tipo != null) query = query.eq('tipo', tipo);
+        if (ativosApenas) {
+          query = query.not('status', 'in', '("CONCLUIDO","REJEITADO","DUPLICADO")');
+        }
+        final res = await query.order('created_at', ascending: false);
+        return (res as List)
+            .map((m) => MelhoriaBug.fromMap(Map<String, dynamic>.from(m)))
+            .toList();
+      } catch (_) {}
+    }
     return rows.map((m) => MelhoriaBug.fromMap(Map<String, dynamic>.from(m))).toList();
   }
 
@@ -133,12 +204,36 @@ class MelhoriasBugsService {
     return MelhoriaBug.fromMap(Map<String, dynamic>.from(rows.first));
   }
 
+  String? _resolveCurrentUser() {
+    try {
+      final usuario = AuthServiceSimples().currentUser;
+      if (usuario != null) {
+        if (usuario.nome != null && usuario.nome!.trim().isNotEmpty) {
+          return usuario.nome!.trim();
+        }
+        if (usuario.email.trim().isNotEmpty) {
+          return usuario.email.trim();
+        }
+      }
+      final supaEmail = SupabaseConfig.client.auth.currentUser?.email;
+      if (supaEmail != null && supaEmail.trim().isNotEmpty) {
+        return supaEmail.trim();
+      }
+    } catch (_) {}
+    return null;
+  }
+
   Future<MelhoriaBug> saveMelhoriaBug(MelhoriaBug mb) async {
     final db = await _localDb.database;
     final id = mb.id.isEmpty ? _uuid.v4() : mb.id;
     final now = DateTime.now();
+    final autor = (mb.createdBy != null && mb.createdBy!.isNotEmpty)
+        ? mb.createdBy
+        : _resolveCurrentUser();
+
     MelhoriaBug atual = mb.copyWith(
       id: id,
+      createdBy: autor,
       updatedAt: now,
       createdAt: mb.createdAt ?? now,
     );
@@ -170,6 +265,21 @@ class MelhoriasBugsService {
       );
       _syncService.queueOperation('melhorias_bugs', 'update', id, atual.toSupabaseMap());
     }
+
+    if (ConnectivityService().isConnected) {
+      try {
+        await SupabaseConfig.client.from('melhorias_bugs').upsert(atual.toSupabaseMap());
+        await db.update(
+          'melhorias_bugs_local',
+          {'sync_status': 'synced', 'last_synced': DateTime.now().millisecondsSinceEpoch},
+          where: 'id = ?',
+          whereArgs: [id],
+        );
+      } catch (e) {
+        print('⚠️ Sync imediato de melhorias_bugs falhou, fila cuidará: $e');
+      }
+    }
+
     _syncService.markHasLocalChanges();
     return atual;
   }
@@ -178,6 +288,11 @@ class MelhoriasBugsService {
     final db = await _localDb.database;
     await db.delete('melhorias_bugs_local', where: 'id = ?', whereArgs: [id]);
     _syncService.queueOperation('melhorias_bugs', 'delete', id, {'id': id});
+    if (ConnectivityService().isConnected) {
+      try {
+        await SupabaseConfig.client.from('melhorias_bugs').delete().eq('id', id);
+      } catch (_) {}
+    }
     _syncService.markHasLocalChanges();
   }
 

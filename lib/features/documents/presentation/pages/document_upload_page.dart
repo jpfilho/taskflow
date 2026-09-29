@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
-
+import '../../../../design_system/components/buttons/tf_button.dart';
+import '../../../../design_system/components/cards/tf_card.dart';
+import '../../../../design_system/components/inputs/tf_text_field.dart';
+import '../../../../design_system/components/layout/tf_page_header.dart';
+import '../../../../design_system/foundations/tf_icons.dart';
+import '../../../../design_system/foundations/tf_radius.dart';
+import '../../../../design_system/theme/taskflow_theme_extension.dart';
 import '../../application/controllers/upload_controller.dart';
 import '../../data/repositories/supabase_documents_repository.dart';
 import '../../../../services/auth_service_simples.dart';
 
-/// Página simples para upload. Integração com file picker deve ser
-/// adicionada conforme plataforma (web/mobile/desktop). Por enquanto,
-/// permite injetar um arquivo dummy para testar fluxo end-to-end.
 class DocumentUploadPage extends StatefulWidget {
   final SupabaseDocumentsRepository repository;
 
@@ -97,162 +100,228 @@ class _DocumentUploadPageState extends State<DocumentUploadPage> {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+    final typography = context.tfTypography;
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Upload de Documentos'),
-      ),
-      body: Container(
-        color: Colors.grey.shade100,
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 900),
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  Card(
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    elevation: 0,
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          TextField(
-                            controller: titleController,
-                            decoration: const InputDecoration(
-                              labelText: 'Título (prefixo opcional)',
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          TextField(
-                            controller: tagsController,
-                            decoration: const InputDecoration(
-                              labelText: 'Tags (separadas por vírgula)',
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          _buildPerfilInfo(),
-                          const SizedBox(height: 12),
-                          Row(
+      backgroundColor: colors.background,
+      body: SafeArea(
+        child: Column(
+          children: [
+            TFPageHeader(
+              title: 'Upload de Documentos',
+              subtitle: 'Envie novos arquivos técnicos com metadados automáticos e tags organizacionais.',
+              secondaryActions: [
+                TFButton(
+                  label: 'Voltar',
+                  variant: TFButtonVariant.secondary,
+                  leadingIcon: Icons.arrow_back_rounded,
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+              ],
+            ),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: EdgeInsets.all(spacing.md),
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 900),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        TFCard(
+                          padding: EdgeInsets.all(spacing.md),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              ElevatedButton.icon(
-                                onPressed: uploading ? null : _pickFiles,
-                                icon: const Icon(Icons.attach_file),
-                                label: const Text('Selecionar arquivos'),
-                                style: ElevatedButton.styleFrom(
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              Text(
+                                'Parâmetros do Documento',
+                                style: typography.sectionTitle.copyWith(color: colors.textPrimary),
+                              ),
+                              SizedBox(height: spacing.sm),
+                              TFTextField(
+                                controller: titleController,
+                                label: 'Título / Prefixo (opcional)',
+                                hint: 'Ex: Manual Operacional SE Alpha',
+                              ),
+                              SizedBox(height: spacing.sm),
+                              TFTextField(
+                                controller: tagsController,
+                                label: 'Tags (separadas por vírgula)',
+                                hint: 'Ex: Manutenção, 2026, Procedimento',
+                              ),
+                              SizedBox(height: spacing.md),
+                              Text(
+                                'Contexto Organizacional Herdado',
+                                style: typography.bodySmall.copyWith(
+                                  color: colors.textSecondary,
+                                  fontWeight: FontWeight.w600,
                                 ),
                               ),
-                              const SizedBox(width: 12),
-                              ElevatedButton.icon(
-                                onPressed: uploading ? null : _upload,
-                                icon: const Icon(Icons.cloud_upload),
-                                label: const Text('Enviar'),
-                                style: ElevatedButton.styleFrom(
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              SizedBox(height: spacing.xs),
+                              _buildPerfilInfo(context),
+                              SizedBox(height: spacing.md),
+                              Row(
+                                children: [
+                                  TFButton(
+                                    label: 'Selecionar Arquivos',
+                                    leadingIcon: TFIcons.add,
+                                    variant: TFButtonVariant.secondary,
+                                    onPressed: uploading ? null : _pickFiles,
+                                  ),
+                                  SizedBox(width: spacing.sm),
+                                  TFButton(
+                                    label: uploading ? 'Enviando...' : 'Iniciar Envio',
+                                    leadingIcon: Icons.cloud_upload_rounded,
+                                    onPressed: uploading ? null : _upload,
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                        SizedBox(height: spacing.md),
+                        TFCard(
+                          padding: EdgeInsets.all(spacing.md),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Fila de Upload',
+                                style: typography.sectionTitle.copyWith(color: colors.textPrimary),
+                              ),
+                              SizedBox(height: spacing.sm),
+                              SizedBox(
+                                height: 260,
+                                child: AnimatedBuilder(
+                                  animation: controller,
+                                  builder: (context, _) {
+                                    final items = controller.uploads;
+                                    if (items.isEmpty) {
+                                      return Center(
+                                        child: Text(
+                                          'Nenhum arquivo adicionado à fila.',
+                                          style: typography.bodySmall.copyWith(color: colors.textSecondary),
+                                        ),
+                                      );
+                                    }
+                                    return ListView.separated(
+                                      itemCount: items.length,
+                                      separatorBuilder: (_, __) => Divider(color: colors.borderSubtle, height: 1),
+                                      itemBuilder: (context, index) {
+                                        final item = items[index];
+                                        return Padding(
+                                          padding: EdgeInsets.symmetric(vertical: spacing.xs),
+                                          child: Row(
+                                            children: [
+                                              Icon(Icons.insert_drive_file_rounded, color: colors.primary, size: 24),
+                                              SizedBox(width: spacing.sm),
+                                              Expanded(
+                                                child: Column(
+                                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                                  children: [
+                                                    Text(
+                                                      item.fileName,
+                                                      style: typography.bodyMedium.copyWith(
+                                                        color: colors.textPrimary,
+                                                        fontWeight: FontWeight.w600,
+                                                      ),
+                                                    ),
+                                                    SizedBox(height: spacing.xxs),
+                                                    ClipRRect(
+                                                      borderRadius: TFRadius.borderRadiusFull,
+                                                      child: LinearProgressIndicator(
+                                                        value: item.progress,
+                                                        minHeight: 6,
+                                                        backgroundColor: colors.borderSubtle,
+                                                        valueColor: AlwaysStoppedAnimation<Color>(
+                                                          item.error != null ? colors.danger : colors.primary,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    if (item.error != null) ...[
+                                                      SizedBox(height: spacing.xxs),
+                                                      Text(
+                                                        item.error.toString(),
+                                                        style: typography.caption.copyWith(color: colors.danger),
+                                                      ),
+                                                    ],
+                                                  ],
+                                                ),
+                                              ),
+                                              SizedBox(width: spacing.sm),
+                                              if (item.created != null)
+                                                Icon(TFIcons.success, color: colors.success, size: 22)
+                                              else if (item.error != null)
+                                                Icon(TFIcons.warning, color: colors.danger, size: 22),
+                                            ],
+                                          ),
+                                        );
+                                      },
+                                    );
+                                  },
                                 ),
                               ),
                             ],
                           ),
-                          const SizedBox(height: 8),
-                          const Text(
-                            'IDs herdados do perfil (primeiro da lista). Bucket público.',
-                            style: TextStyle(fontSize: 12, color: Colors.grey),
-                          ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  Card(
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    elevation: 0,
-                    child: SizedBox(
-                      height: 280,
-                      child: AnimatedBuilder(
-                        animation: controller,
-                        builder: (context, _) {
-                          final items = controller.uploads;
-                          if (items.isEmpty) {
-                            return const Center(child: Text('Nenhum arquivo na fila'));
-                          }
-                          return ListView.builder(
-                            itemCount: items.length,
-                            itemBuilder: (context, index) {
-                              final item = items[index];
-                              return ListTile(
-                                title: Text(item.fileName),
-                                subtitle: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    LinearProgressIndicator(
-                                      value: item.progress,
-                                      minHeight: 6,
-                                    ),
-                                    if (item.error != null) ...[
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        item.error.toString(),
-                                        style: const TextStyle(color: Colors.red, fontSize: 12),
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                                trailing: item.created != null
-                                    ? const Icon(Icons.check, color: Colors.green)
-                                    : item.error != null
-                                        ? const Icon(Icons.error, color: Colors.red)
-                                        : null,
-                              );
-                            },
-                          );
-                        },
-                      ),
-                    ),
-                  ),
-                ],
+                ),
               ),
             ),
-          ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildPerfilInfo() {
+  Widget _buildPerfilInfo(BuildContext context) {
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+    final typography = context.tfTypography;
+
     final chips = <Widget>[];
     if (_regionalId != null) {
-      chips.add(Chip(
-        label: Text('Regional: ${_regionalNome ?? _regionalId}'),
-        visualDensity: VisualDensity.compact,
-        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      ));
+      chips.add(_badgeChip(context, 'Regional: ${_regionalNome ?? _regionalId}'));
     }
     if (_divisaoId != null) {
-      chips.add(Chip(
-        label: Text('Divisão: ${_divisaoNome ?? _divisaoId}'),
-        visualDensity: VisualDensity.compact,
-        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      ));
+      chips.add(_badgeChip(context, 'Divisão: ${_divisaoNome ?? _divisaoId}'));
     }
     if (_localId != null) {
-      chips.add(Chip(
-        label: Text('Local: ${_localNome ?? _localId}'),
-        visualDensity: VisualDensity.compact,
-        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      ));
+      chips.add(_badgeChip(context, 'Local: ${_localNome ?? _localId}'));
     }
     if (chips.isEmpty) {
-      return const Text(
-        'Perfil: sem regional/divisão/local configurados. Configure o perfil do usuário no backend.',
-        style: TextStyle(fontSize: 12, color: Colors.grey),
+      return Text(
+        'Perfil: sem regional/divisão/local configurados.',
+        style: typography.caption.copyWith(color: colors.textSecondary),
       );
     }
     return Wrap(
-      spacing: 8,
-      runSpacing: -6,
+      spacing: spacing.xs,
+      runSpacing: spacing.xxs,
       children: chips,
+    );
+  }
+
+  Widget _badgeChip(BuildContext context, String label) {
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+    final typography = context.tfTypography;
+
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: spacing.sm, vertical: spacing.xxs),
+      decoration: BoxDecoration(
+        color: colors.surfaceSecondary,
+        borderRadius: TFRadius.borderRadiusSm,
+        border: Border.all(color: colors.borderSubtle),
+      ),
+      child: Text(
+        label,
+        style: typography.caption.copyWith(color: colors.textSecondary),
+      ),
     );
   }
 }

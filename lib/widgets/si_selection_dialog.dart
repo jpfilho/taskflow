@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/si.dart';
 import '../utils/responsive.dart';
+import '../utils/clipboard_helper.dart';
 import 'multi_select_filter_dialog.dart';
 import '../services/si_service.dart';
 
@@ -11,6 +12,7 @@ class SISelectionDialog extends StatefulWidget {
   final String title;
   final String? taskTarefa; // Nome da tarefa para contexto
   final String? taskLocal; // Local da tarefa para pré-filtrar
+  final List<String>? taskLocais; // Lista de locais da tarefa para pré-filtrar
 
   const SISelectionDialog({
     super.key,
@@ -18,6 +20,7 @@ class SISelectionDialog extends StatefulWidget {
     this.title = 'Selecionar SI',
     this.taskTarefa,
     this.taskLocal,
+    this.taskLocais,
   });
 
   @override
@@ -41,9 +44,35 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
   @override
   void initState() {
     super.initState();
-    if (widget.taskLocal != null && widget.taskLocal!.trim().isNotEmpty) {
-      _filterLocal = {widget.taskLocal!.trim()};
+    final locaisAlvo = <String>{};
+    if (widget.taskLocais != null && widget.taskLocais!.isNotEmpty) {
+      for (final l in widget.taskLocais!) {
+        if (l.trim().isNotEmpty) locaisAlvo.add(l.trim());
+      }
+    } else if (widget.taskLocal != null && widget.taskLocal!.trim().isNotEmpty) {
+      for (final part in widget.taskLocal!.split(',')) {
+        final p = part.trim();
+        if (p.isNotEmpty) locaisAlvo.add(p);
+      }
     }
+
+    if (locaisAlvo.isNotEmpty) {
+      final uniqueLocais = _getUniqueLocais();
+      for (final alvo in locaisAlvo) {
+        final alvoLower = alvo.toLowerCase();
+        final matches = uniqueLocais.where((ul) {
+          final ulLower = ul.toLowerCase();
+          return ulLower == alvoLower || ulLower.contains(alvoLower) || alvoLower.contains(ulLower);
+        }).toList();
+
+        if (matches.isNotEmpty) {
+          _filterLocal.addAll(matches);
+        } else {
+          _filterLocal.add(alvo);
+        }
+      }
+    }
+
     _filteredSIs = widget.sis;
     _applyFilters();
     _scrollController.addListener(_onScroll);
@@ -194,11 +223,16 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
   Widget build(BuildContext context) {
     final isMobile = Responsive.isMobile(context);
 
+    final screenWidth = MediaQuery.of(context).size.width;
+    final screenHeight = MediaQuery.of(context).size.height;
+
     return Dialog(
-      insetPadding: const EdgeInsets.all(16),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      clipBehavior: Clip.antiAlias,
       child: SizedBox(
-        width: isMobile ? double.infinity : 1100,
-        height: isMobile ? double.infinity : 700,
+        width: isMobile ? double.infinity : (screenWidth * 0.95).clamp(900.0, 1400.0),
+        height: isMobile ? double.infinity : (screenHeight * 0.90).clamp(600.0, 850.0),
         child: Column(
           children: [
             // Header
@@ -653,18 +687,13 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
   }
 
   Future<void> _copiarSI(String texto) async {
-    try {
-      await Clipboard.setData(ClipboardData(text: texto));
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('SI copiada!'), duration: Duration(seconds: 1)),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Não foi possível copiar: $e'), backgroundColor: Colors.red, duration: const Duration(seconds: 3)),
-      );
-    }
+    await ClipboardHelper.copyAndNotify(
+      context,
+      texto,
+      successMessage: 'SI copiada!',
+      errorMessage: 'Não foi possível copiar a SI.',
+      duration: const Duration(seconds: 1),
+    );
   }
 
   Widget _buildMultiSelect({
@@ -1019,118 +1048,130 @@ class _SISelectionDialogState extends State<SISelectionDialog> {
 
   Widget _buildTableView() {
     return Scrollbar(
-      controller: _horizontalScrollController,
+      controller: _scrollController,
       thumbVisibility: true,
       child: SingleChildScrollView(
-        controller: _horizontalScrollController,
-        scrollDirection: Axis.horizontal,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          minWidth: MediaQuery.of(context).size.width * 0.8,
-        ),
-        child: DataTable(
-          headingRowColor: WidgetStateProperty.all(Colors.grey[100]),
-          columns: const [
-            DataColumn(label: Text('')),
-            DataColumn(label: Text('Status')),
-            DataColumn(label: Text('Local')),
-            DataColumn(label: Text('SI')),
-            DataColumn(label: Text('Tipo')),
-            DataColumn(label: Text('Texto Breve')),
-            DataColumn(label: Text('Centro Trabalho')),
-            DataColumn(label: Text('Data Início')),
-            DataColumn(label: Text('Data Fim')),
-            DataColumn(label: Text('Status Usuário')),
-            DataColumn(label: Text('CEN')),
-            DataColumn(label: Text('AT')),
-          ],
-          rows: [
-            for (var si in _displayedSIs)
-              DataRow(
-                selected: _selectedSIIds.contains(si.id),
-                onSelectChanged: (_) => _toggleSISelection(si.id),
-                cells: [
-                  DataCell(
-                    Checkbox(
-                      value: _selectedSIIds.contains(si.id),
-                      onChanged: (_) => _toggleSISelection(si.id),
-                    ),
-                  ),
-                  DataCell(
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: _getStatusColor(si.statusUsuario),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        _statusUsuarioShort(si.statusUsuario),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
+        controller: _scrollController,
+        child: SingleChildScrollView(
+          controller: _horizontalScrollController,
+          scrollDirection: Axis.horizontal,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              minWidth: MediaQuery.of(context).size.width * 0.85,
+            ),
+            child: DataTable(
+              columnSpacing: 16,
+              horizontalMargin: 12,
+              headingRowHeight: 38,
+              dataRowMinHeight: 32,
+              dataRowMaxHeight: 40,
+              headingRowColor: WidgetStateProperty.all(const Color(0xFFF1F5F9)),
+              columns: const [
+                DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Local', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('SI', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Tipo', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Texto Breve', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Centro Trabalho', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Data Início', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Data Fim', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Status Usuário', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('CEN', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('AT', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+              ],
+              rows: [
+                for (var si in _displayedSIs)
+                  DataRow(
+                    selected: _selectedSIIds.contains(si.id),
+                    onSelectChanged: (_) => _toggleSISelection(si.id),
+                    cells: [
+                      // 1. Status
+                      DataCell(
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: _getStatusColor(si.statusUsuario),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            _statusUsuarioShort(si.statusUsuario),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
                         ),
                       ),
-                    ),
-                  ),
-                  DataCell(Text(
-                    (si.local != null && si.local!.isNotEmpty)
-                        ? si.local!
-                        : (si.localInstalacao ?? ''),
-                    style: const TextStyle(fontSize: 12),
-                  )),
-                  DataCell(
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          si.solicitacao,
-                          style: const TextStyle(fontWeight: FontWeight.bold),
+                      // 2. Local
+                      DataCell(Text(
+                        (si.local != null && si.local!.isNotEmpty)
+                            ? si.local!
+                            : (si.localInstalacao ?? ''),
+                        style: const TextStyle(fontSize: 11),
+                      )),
+                      // 3. SI
+                      DataCell(
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              si.solicitacao,
+                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
+                            ),
+                            const SizedBox(width: 4),
+                            InkWell(
+                              onTap: () => _copiarSI(si.solicitacao),
+                              child: const Icon(Icons.copy, size: 13, color: Colors.blue),
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 4),
-                        InkWell(
-                          onTap: () => _copiarSI(si.solicitacao),
-                          child: const Icon(Icons.copy, size: 14, color: Colors.blue),
+                      ),
+                      // 4. Tipo
+                      DataCell(
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.grey[200],
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            si.tipo ?? '-',
+                            style: const TextStyle(fontSize: 11),
+                          ),
                         ),
-                      ],
-                    ),
-                  ),
-                  DataCell(
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: Colors.grey[200],
-                        borderRadius: BorderRadius.circular(4),
                       ),
-                      child: Text(
-                        si.tipo ?? '-',
-                        style: const TextStyle(fontSize: 12),
+                      // 5. Texto Breve
+                      DataCell(
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 220),
+                          child: Text(
+                            si.textoBreve ?? '-',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 11),
+                          ),
+                        ),
                       ),
-                    ),
+                      // 6. Centro Trabalho
+                      DataCell(Text(si.cntrTrab ?? '-', style: const TextStyle(fontSize: 11))),
+                      // 7. Data Início
+                      DataCell(Text(si.dataInicio != null ? _formatDate(si.dataInicio!) : '-', style: const TextStyle(fontSize: 11))),
+                      // 8. Data Fim
+                      DataCell(Text(si.dataFim != null ? _formatDate(si.dataFim!) : '-', style: const TextStyle(fontSize: 11))),
+                      // 9. Status Usuário
+                      DataCell(Text(si.statusUsuario ?? '-', style: const TextStyle(fontSize: 11))),
+                      // 10. CEN
+                      DataCell(Text(si.cen ?? '-', style: const TextStyle(fontSize: 11))),
+                      // 11. AT
+                      DataCell(Text(si.atribAT ?? '-', style: const TextStyle(fontSize: 11))),
+                    ],
                   ),
-                  DataCell(
-                    SizedBox(
-                      width: 250,
-                      child: Text(
-                        si.textoBreve ?? '-',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                    ),
-                  ),
-                  DataCell(Text(si.cntrTrab ?? '-', style: const TextStyle(fontSize: 12))),
-                  DataCell(Text(si.dataInicio != null ? _formatDate(si.dataInicio!) : '-', style: const TextStyle(fontSize: 12))),
-                  DataCell(Text(si.dataFim != null ? _formatDate(si.dataFim!) : '-', style: const TextStyle(fontSize: 12))),
-                  DataCell(Text(si.statusUsuario ?? '-', style: const TextStyle(fontSize: 12))),
-                  DataCell(Text(si.cen ?? '-', style: const TextStyle(fontSize: 12))),
-                  DataCell(Text(si.atribAT ?? '-', style: const TextStyle(fontSize: 12))),
-                ],
-              ),
-          ],
+              ],
+            ),
+          ),
         ),
       ),
-    ),
     );
   }
 

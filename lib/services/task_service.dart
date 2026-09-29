@@ -1050,13 +1050,24 @@ class TaskService {
     if (statusFinal != statusValido) {
       // Debug removido
     }
-    map['regional'] = task.regional.isNotEmpty ? task.regional : '';
-    map['divisao'] = task.divisao.isNotEmpty ? task.divisao : '';
-    map['local'] = task.locais.isNotEmpty ? task.locais.join(', ') : '';
-    map['executor'] = task.executores.isNotEmpty
+    // Truncamento preventivo para colunas legadas VARCHAR do Supabase
+    String truncateVarchar(String val, int maxLen) {
+      final t = val.trim();
+      return t.length <= maxLen ? t : t.substring(0, maxLen);
+    }
+
+    final executoresStr = task.executores.isNotEmpty
         ? task.executores.join(', ')
         : (task.executor.isNotEmpty ? task.executor : '');
-    map['coordenador'] = task.coordenador.isNotEmpty ? task.coordenador : '';
+    final locaisStr = task.locais.isNotEmpty ? task.locais.join(', ') : '';
+    final frotasStr = task.frota.isNotEmpty && task.frota != '-N/A-' ? task.frota : '';
+
+    map['regional'] = truncateVarchar(task.regional.isNotEmpty ? task.regional : '', 95);
+    map['divisao'] = truncateVarchar(task.divisao.isNotEmpty ? task.divisao : '', 95);
+    map['local'] = truncateVarchar(locaisStr, 195);
+    map['executor'] = truncateVarchar(executoresStr, 195);
+    map['frota'] = truncateVarchar(frotasStr, 95);
+    map['coordenador'] = truncateVarchar(task.coordenador.isNotEmpty ? task.coordenador : '', 195);
 
     // Usar IDs se disponíveis
     if (task.statusId != null && task.statusId!.isNotEmpty) {
@@ -1827,6 +1838,8 @@ class TaskService {
   void _clearCache() {
     _cachedTasks = null;
     _lastFetchTime = null;
+    _lastFilterDateStart = null;
+    _lastFilterDateEnd = null;
     _logDebug('🧹 Cache de tarefas em memória invalidado');
   }
   /// Busca tarefas que cruzam o intervalo de datas especificado.
@@ -3133,8 +3146,9 @@ class TaskService {
       // debug silenciado
       // debug silenciado
 
+      print('👤 [DEBUG-PERFIL] Filtrando perfil para ${usuario.email}: regionais=${usuario.regionalIds.length}, divisoes=${usuario.divisaoIds.length}, segmentos=${usuario.segmentoIds.length} | total tarefas recebidas: ${tasks.length}');
+
       // Filtrar tarefas baseado no perfil do usuário
-      // Debug removido
       final tarefasFiltradas = tasks.where((task) {
         bool passaRegional = true;
         bool passaDivisao = true;
@@ -3169,10 +3183,13 @@ class TaskService {
         return passa;
       }).toList();
 
-      // Debug removido
+      print('👤 [DEBUG-PERFIL] Filtragem concluída: ${tarefasFiltradas.length} tarefas passaram no perfil.');
+      if (tarefasFiltradas.isEmpty && tasks.isNotEmpty) {
+        print('⚠️ [DEBUG-PERFIL] ATENÇÃO: Todas as ${tasks.length} tarefas foram descartadas pelo perfil! Primeira tarefa rejeitada: regionalId=${tasks.first.regionalId}, divisaoId=${tasks.first.divisaoId}, segmentoId=${tasks.first.segmentoId}');
+      }
       return tarefasFiltradas;
-    } catch (e) {
-      print('Erro ao aplicar filtros de perfil: $e');
+    } catch (e, stack) {
+      print('❌ [DEBUG-PERFIL] Erro ao aplicar filtros de perfil: $e\n$stack');
       return []; // Em caso de erro, não retornar nenhuma tarefa por segurança
     }
   }
@@ -3219,6 +3236,8 @@ class TaskService {
 
     final shouldUseLocal =
         (!_useSupabase || cacheFresh || !isConnected) && !dateRangeChanged;
+
+    print('🔍 [DEBUG-TASK-SERVICE] filterTasks: isConnected=$isConnected, shouldUseLocal=$shouldUseLocal, useSupabase=$_useSupabase, dateRangeChanged=$dateRangeChanged, periodo: ${dataInicioMin?.toIso8601String()} -> ${dataFimMax?.toIso8601String()}');
 
     if (shouldUseLocal) {
       // Sempre recarregar do banco local para garantir dados cacheados
@@ -3510,6 +3529,7 @@ class TaskService {
         final querySw = Stopwatch()..start();
         response = await query.order('data_inicio');
         querySw.stop();
+        print('⏱ [DEBUG-TASK-SERVICE] Query Supabase concluída em ${querySw.elapsedMilliseconds}ms | rows=${(response as List).length}');
         _logDebug('⏱ [filterTasks] Query Supabase concluída em ${querySw.elapsedMilliseconds}ms');
       } catch (e) {
         print('⚠️ Erro ao filtrar tarefas com joins: $e');
@@ -3722,12 +3742,12 @@ class TaskService {
 
       // Os locais já foram preenchidos pelo join aninhado 'tasks_locais(locais(id, local))' no _taskFromMap
       final tasksWithLocais = tasks;
+      print('📦 [DEBUG-TASK-SERVICE] Tarefas base montadas antes de filtros de perfil: ${tasksWithLocais.length}');
 
       // Aplicar filtros de perfil do usuário
       final tasksFiltradas = await _aplicarFiltrosPerfil(tasksWithLocais);
+      print('👤 [DEBUG-TASK-SERVICE] Tarefas finais após filtros de perfil: ${tasksFiltradas.length}');
 
-      // OTIMIZAÇÃO CRÍTICA: Removido loop de salvamento síncrono no banco local (causava 16s de atraso)
-      // O salvamento agora deve ser feito em lote ou em background se necessário
       procSw.stop();
       PerformanceMonitor.stop('TaskService.filterTasks');
       return tasksFiltradas;

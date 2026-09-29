@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../design_system/taskflow_design_system.dart';
 import '../models/divisao.dart';
 import '../services/divisao_service.dart';
 import 'divisao_form_dialog.dart';
@@ -15,9 +16,80 @@ class _DivisaoListViewState extends State<DivisaoListView> {
   List<Divisao> _divisoes = [];
   List<Divisao> _filteredDivisoes = [];
   bool _isLoading = true;
+  bool _isTableView = true;
   final TextEditingController _searchController = TextEditingController();
   int _currentPage = 1;
   final int _itemsPerPage = 10;
+
+  // Filtros multiescolha por coluna
+  Set<String> _selectedRegionais = {};
+  Set<String> _selectedSegmentos = {};
+
+  bool get _hasActiveFilters =>
+      _selectedRegionais.isNotEmpty ||
+      _selectedSegmentos.isNotEmpty ||
+      _searchController.text.trim().isNotEmpty;
+
+  void _clearAllFilters() {
+    setState(() {
+      _selectedRegionais.clear();
+      _selectedSegmentos.clear();
+      _searchController.clear();
+      _currentPage = 1;
+      _filteredDivisoes = _applyFilter(_divisoes);
+    });
+  }
+
+  List<String> _getUniqueRegionais() {
+    final regs = <String>{};
+    for (final d in _divisoes) {
+      if (d.regional.trim().isNotEmpty) regs.add(d.regional.trim());
+      for (final r in d.regionais) {
+        if (r.trim().isNotEmpty) regs.add(r.trim());
+      }
+    }
+    return regs.toList()..sort();
+  }
+
+  List<String> _getUniqueSegmentos() {
+    final segs = <String>{};
+    for (final d in _divisoes) {
+      for (final s in d.segmentos) {
+        if (s.trim().isNotEmpty) segs.add(s.trim());
+      }
+    }
+    return segs.toList()..sort();
+  }
+
+  List<Divisao> _applyFilter(List<Divisao> list) {
+    final query = _searchController.text.trim().toLowerCase();
+
+    return list.where((d) {
+      // Filtro de Regional
+      if (_selectedRegionais.isNotEmpty) {
+        final matchesReg = _selectedRegionais.contains(d.regional.trim()) ||
+            d.regionais.any((r) => _selectedRegionais.contains(r.trim()));
+        if (!matchesReg) return false;
+      }
+
+      // Filtro de Segmentos
+      if (_selectedSegmentos.isNotEmpty) {
+        final matchesSeg = d.segmentos.any((s) => _selectedSegmentos.contains(s.trim()));
+        if (!matchesSeg) return false;
+      }
+
+      // Busca por texto
+      if (query.isNotEmpty) {
+        final matchDiv = d.divisao.toLowerCase().contains(query);
+        final matchReg = d.regional.toLowerCase().contains(query) ||
+            d.regionais.any((r) => r.toLowerCase().contains(query));
+        final matchSeg = d.segmentos.any((s) => s.toLowerCase().contains(query));
+        if (!matchDiv && !matchReg && !matchSeg) return false;
+      }
+
+      return true;
+    }).toList();
+  }
 
   @override
   void initState() {
@@ -41,9 +113,9 @@ class _DivisaoListViewState extends State<DivisaoListView> {
       final divisoes = await _divisaoService.getAllDivisoes();
       setState(() {
         _divisoes = divisoes;
-        _filteredDivisoes = divisoes;
+        _filteredDivisoes = _applyFilter(divisoes);
         _isLoading = false;
-        _currentPage = 1; // Resetar página ao recarregar
+        _currentPage = 1;
       });
     } catch (e) {
       print('Erro ao carregar divisões: $e');
@@ -62,27 +134,10 @@ class _DivisaoListViewState extends State<DivisaoListView> {
   }
 
   void _onSearchChanged() {
-    final query = _searchController.text.trim();
-    if (query.isEmpty) {
-      setState(() {
-        _filteredDivisoes = _divisoes;
-        _currentPage = 1;
-      });
-    } else {
-      _searchDivisoes(query);
-    }
-  }
-
-  Future<void> _searchDivisoes(String query) async {
-    try {
-      final results = await _divisaoService.searchDivisoes(query);
-      setState(() {
-        _filteredDivisoes = results;
-        _currentPage = 1;
-      });
-    } catch (e) {
-      print('Erro ao buscar divisões: $e');
-    }
+    setState(() {
+      _currentPage = 1;
+      _filteredDivisoes = _applyFilter(_divisoes);
+    });
   }
 
   List<Divisao> get _paginatedDivisoes {
@@ -99,76 +154,85 @@ class _DivisaoListViewState extends State<DivisaoListView> {
   int get _totalPages => (_filteredDivisoes.length / _itemsPerPage).ceil();
 
   Future<void> _createDivisao() async {
-    try {
-      final result = await showDialog<Map<String, dynamic>>(
-        context: context,
-        barrierDismissible: true,
-        barrierColor: Colors.black54,
-        builder: (context) {
-          try {
-            return const DivisaoFormDialog();
-          } catch (e, stackTrace) {
-            print('❌ Erro ao construir DivisaoFormDialog: $e');
-            print('❌ Stack trace: $stackTrace');
-            return AlertDialog(
-              title: const Text('Erro'),
-              content: Text('Erro ao abrir formulário: $e'),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Fechar'),
-                ),
-              ],
-            );
-          }
-        },
-      );
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) => const DivisaoFormDialog(),
+    );
 
-      if (result != null && result['divisao'] != null) {
-        try {
-          final divisao = result['divisao'] as Divisao;
-          final telegramChatIds = result['telegram_chat_ids'] as Map<String, String>?;
-          
-          final created = await _divisaoService.createDivisao(divisao, telegramChatIds: telegramChatIds);
-          if (created != null) {
-            await _loadDivisoes();
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(telegramChatIds != null && telegramChatIds.isNotEmpty
-                      ? 'Divisão criada e Chat IDs do Telegram cadastrados com sucesso!'
-                      : 'Divisão criada com sucesso!'),
-                  backgroundColor: Colors.green,
-                ),
-              );
-            }
-          }
-        } catch (e) {
-          print('❌ Erro ao criar divisão (UI): $e');
+    if (result != null && result['divisao'] != null) {
+      try {
+        final divisao = result['divisao'] as Divisao;
+        final telegramChatIds = result['telegram_chat_ids'] as Map<String, String>?;
+
+        final created = await _divisaoService.createDivisao(divisao, telegramChatIds: telegramChatIds);
+        if (created != null) {
+          await _loadDivisoes();
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text(
-                  e.toString().replaceFirst('Exception: ', '').replaceFirst('PostgrestException: ', ''),
-                ),
-                backgroundColor: Colors.red,
-                duration: const Duration(seconds: 5),
+                content: Text(telegramChatIds != null && telegramChatIds.isNotEmpty
+                    ? 'Divisão criada e Chat IDs do Telegram cadastrados com sucesso!'
+                    : 'Divisão criada com sucesso!'),
+                backgroundColor: Colors.green,
               ),
             );
           }
         }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                e.toString().replaceFirst('Exception: ', '').replaceFirst('PostgrestException: ', ''),
+              ),
+              backgroundColor: Colors.red,
+              duration: const Duration(seconds: 5),
+            ),
+          );
+        }
       }
-    } catch (e, stackTrace) {
-      print('❌ Erro ao abrir diálogo de divisão: $e');
-      print('❌ Stack trace: $stackTrace');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Erro ao abrir formulário: ${e.toString()}'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 5),
-          ),
-        );
+    }
+  }
+
+  Future<void> _editDivisao(Divisao divisao) async {
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) => DivisaoFormDialog(divisao: divisao),
+    );
+
+    if (result != null && result['divisao'] != null) {
+      try {
+        final divisaoResult = result['divisao'] as Divisao;
+        final telegramChatIds = result['telegram_chat_ids'] as Map<String, String>?;
+
+        final updated = await _divisaoService.updateDivisao(divisao.id, divisaoResult, telegramChatIds: telegramChatIds);
+        if (updated != null) {
+          await _loadDivisoes();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(telegramChatIds != null && telegramChatIds.isNotEmpty
+                    ? 'Divisão atualizada e Chat IDs do Telegram cadastrados com sucesso!'
+                    : 'Divisão atualizada com sucesso!'),
+                backgroundColor: Colors.green,
+              ),
+            );
+          }
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                e.toString().replaceFirst('Exception: ', '').replaceFirst('PostgrestException: ', ''),
+              ),
+              backgroundColor: Colors.red,
+              duration: const Duration(seconds: 5),
+            ),
+          );
+        }
       }
     }
   }
@@ -182,7 +246,6 @@ class _DivisaoListViewState extends State<DivisaoListView> {
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
       barrierDismissible: true,
-      barrierColor: Colors.black54,
       builder: (context) => DivisaoFormDialog(divisao: duplicated),
     );
 
@@ -190,7 +253,7 @@ class _DivisaoListViewState extends State<DivisaoListView> {
       try {
         final divisaoResult = result['divisao'] as Divisao;
         final telegramChatIds = result['telegram_chat_ids'] as Map<String, String>?;
-        
+
         final created = await _divisaoService.createDivisao(divisaoResult, telegramChatIds: telegramChatIds);
         if (created != null) {
           await _loadDivisoes();
@@ -198,7 +261,7 @@ class _DivisaoListViewState extends State<DivisaoListView> {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(telegramChatIds != null && telegramChatIds.isNotEmpty
-                    ? 'Divisão duplicada e Chat IDs do Telegram cadastrados com sucesso!'
+                    ? 'Divisão duplicada e Chat IDs cadastrados!'
                     : 'Divisão duplicada com sucesso!'),
                 backgroundColor: Colors.green,
               ),
@@ -219,74 +282,16 @@ class _DivisaoListViewState extends State<DivisaoListView> {
     }
   }
 
-  Future<void> _editDivisao(Divisao divisao) async {
-    final result = await showDialog<Map<String, dynamic>>(
-      context: context,
-      barrierDismissible: true,
-      barrierColor: Colors.black54,
-      builder: (context) => DivisaoFormDialog(divisao: divisao),
-    );
-
-    if (result != null && result['divisao'] != null) {
-      try {
-        final divisaoResult = result['divisao'] as Divisao;
-        final telegramChatIds = result['telegram_chat_ids'] as Map<String, String>?;
-        
-        final updated = await _divisaoService.updateDivisao(divisao.id, divisaoResult, telegramChatIds: telegramChatIds);
-        if (updated != null) {
-          await _loadDivisoes();
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(telegramChatIds != null && telegramChatIds.isNotEmpty
-                    ? 'Divisão atualizada e Chat IDs do Telegram cadastrados com sucesso!'
-                    : 'Divisão atualizada com sucesso!'),
-                backgroundColor: Colors.green,
-              ),
-            );
-          }
-        }
-      } catch (e, stackTrace) {
-        print('❌ Erro ao atualizar divisão (UI): $e');
-        print('❌ Stack trace: $stackTrace');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                e.toString().replaceFirst('Exception: ', '').replaceFirst('PostgrestException: ', ''),
-              ),
-              backgroundColor: Colors.red,
-              duration: const Duration(seconds: 5),
-            ),
-          );
-        }
-      }
-    }
-  }
-
   Future<void> _deleteDivisao(Divisao divisao) async {
-    final confirm = await showDialog<bool>(
+    final confirm = await TFModalDialog.confirm(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Confirmar Exclusão'),
-        content: Text(
-          'Deseja realmente excluir a divisão:\n\n'
-          'Divisão: ${divisao.divisao}\n'
+      title: 'Confirmar exclusão',
+      message: 'Deseja realmente excluir a divisão "${divisao.divisao}"?\n\n'
           'Regional: ${divisao.regional}\n'
           'Segmentos: ${divisao.segmentos.isEmpty ? "Nenhum" : divisao.segmentos.join(", ")}',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Excluir'),
-          ),
-        ],
-      ),
+      confirmLabel: 'Excluir',
+      cancelLabel: 'Cancelar',
+      isDestructive: true,
     );
 
     if (confirm == true) {
@@ -305,7 +310,7 @@ class _DivisaoListViewState extends State<DivisaoListView> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Erro ao excluir divisão'),
+              content: Text('Erro ao excluir divisão.'),
               backgroundColor: Colors.red,
             ),
           );
@@ -316,420 +321,390 @@ class _DivisaoListViewState extends State<DivisaoListView> {
 
   @override
   Widget build(BuildContext context) {
-    final brightness = Theme.of(context).brightness;
-    final isDark = brightness == Brightness.dark;
-    
+    final isMobile = TFBreakpoints.isMobile(context);
+    final spacing = context.tfSpacing;
+    final colors = context.tfColors;
+
     return Scaffold(
-      backgroundColor: isDark ? const Color(0xFF0f172a) : const Color(0xFFf1f5f9),
+      backgroundColor: colors.background,
       body: SafeArea(
-        child: Column(
-          children: [
-            // Header moderno
-            Container(
-              padding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF1e293b) : Colors.white,
-                border: Border(
-                  bottom: BorderSide(
-                    color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                    width: 1,
-                  ),
+        child: Padding(
+          padding: EdgeInsets.all(isMobile ? spacing.sm : spacing.base),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TFPageHeader(
+                title: 'Cadastro de Divisões',
+                subtitle: 'Gerenciamento operacional de divisões, regionais e segmentos',
+                onBack: () => Navigator.of(context).pop(),
+                primaryAction: TFButton(
+                  label: 'Nova Divisão',
+                  leadingIcon: TFIcons.add,
+                  onPressed: _createDivisao,
                 ),
-              ),
-              child: Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.arrow_back),
-                    onPressed: () => Navigator.of(context).pop(),
-                    color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
+                secondaryActions: [
+                  TFIconButton(
+                    icon: _isTableView ? Icons.view_list_rounded : Icons.table_chart_rounded,
+                    tooltip: _isTableView ? 'Visualizar em Lista' : 'Visualizar em Tabela',
+                    variant: TFIconButtonVariant.subtle,
+                    onPressed: () {
+                      setState(() {
+                        _isTableView = !_isTableView;
+                      });
+                    },
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Cadastro de Divisões',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w600,
-                        color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                      ),
-                    ),
-                  ),
-                  ElevatedButton.icon(
-                    onPressed: _createDivisao,
-                    icon: const Icon(Icons.add, size: 20),
-                    label: const Text('+ Nova Divisão'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF3b82f6),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      elevation: 0,
-                    ),
+                  TFIconButton(
+                    icon: TFIcons.refresh,
+                    tooltip: 'Recarregar divisões',
+                    variant: TFIconButtonVariant.subtle,
+                    onPressed: _loadDivisoes,
                   ),
                 ],
               ),
-            ),
-            
-            // Barra de busca
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF1e293b) : Colors.white,
-                border: Border(
-                  bottom: BorderSide(
-                    color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                    width: 1,
+              SizedBox(height: spacing.sm),
+              Row(
+                children: [
+                  Expanded(
+                    child: TFTextField(
+                      controller: _searchController,
+                      hint: 'Buscar por divisão, regional ou segmento...',
+                      prefixIcon: Icon(TFIcons.search, size: 18, color: colors.textSecondary),
+                    ),
                   ),
-                ),
+                  if (_hasActiveFilters) ...[
+                    SizedBox(width: spacing.sm),
+                    TFButton(
+                      label: 'Limpar Filtros',
+                      variant: TFButtonVariant.secondary,
+                      leadingIcon: Icons.filter_alt_off,
+                      onPressed: _clearAllFilters,
+                    ),
+                  ],
+                ],
               ),
-              child: TextField(
-                controller: _searchController,
-                decoration: InputDecoration(
-                  hintText: 'Buscar por divisão, regional ou segmento...',
-                  prefixIcon: Icon(
-                    Icons.search,
-                    color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
-                  ),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: BorderSide(
-                      color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-                    ),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: BorderSide(
-                      color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-                    ),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: const BorderSide(
-                      color: Color(0xFF3b82f6),
-                      width: 2,
-                    ),
-                  ),
-                  filled: true,
-                  fillColor: isDark ? const Color(0xFF0f172a) : const Color(0xFFf8fafc),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                ),
-                style: TextStyle(
-                  color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                ),
-              ),
-            ),
-            
-            // Tabela
-            Expanded(
-              child: _isLoading
-                  ? Center(
-                      child: CircularProgressIndicator(
-                        color: const Color(0xFF3b82f6),
+              SizedBox(height: spacing.sm),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 170,
+                      child: TFMultiSelectFilterField(
+                        label: 'Regional',
+                        selectedValues: _selectedRegionais,
+                        options: _getUniqueRegionais(),
+                        isCompact: true,
+                        onChanged: (values) {
+                          setState(() {
+                            _selectedRegionais = values;
+                            _currentPage = 1;
+                            _filteredDivisoes = _applyFilter(_divisoes);
+                          });
+                        },
                       ),
-                    )
-                  : _filteredDivisoes.isEmpty
-                      ? Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.business_outlined,
-                                size: 64,
-                                color: isDark ? const Color(0xFF475569) : const Color(0xFF94a3b8),
-                              ),
-                              const SizedBox(height: 16),
-                              Text(
-                                _divisoes.isEmpty
-                                    ? 'Nenhuma divisão cadastrada'
-                                    : 'Nenhuma divisão encontrada',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
-                                ),
-                              ),
-                              if (_divisoes.isEmpty) ...[
-                                const SizedBox(height: 16),
-                                ElevatedButton.icon(
-                                  onPressed: _createDivisao,
-                                  icon: const Icon(Icons.add),
-                                  label: const Text('Criar Primeira Divisão'),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: const Color(0xFF3b82f6),
-                                    foregroundColor: Colors.white,
+                    ),
+                    SizedBox(width: spacing.sm),
+                    SizedBox(
+                      width: 170,
+                      child: TFMultiSelectFilterField(
+                        label: 'Segmento',
+                        selectedValues: _selectedSegmentos,
+                        options: _getUniqueSegmentos(),
+                        isCompact: true,
+                        onChanged: (values) {
+                          setState(() {
+                            _selectedSegmentos = values;
+                            _currentPage = 1;
+                            _filteredDivisoes = _applyFilter(_divisoes);
+                          });
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(height: spacing.base),
+              Expanded(
+                child: _isLoading
+                    ? const TFLoading(
+                        mode: TFLoadingMode.section,
+                        message: 'Carregando divisões...',
+                      )
+                    : _filteredDivisoes.isEmpty
+                        ? TFEmptyState(
+                            icon: TFIcons.search,
+                            title: _divisoes.isEmpty
+                                ? 'Nenhuma divisão cadastrada'
+                                : 'Nenhuma divisão encontrada',
+                            description: _divisoes.isEmpty
+                                ? 'Cadastre a primeira divisão operacional para começar.'
+                                : 'Tente buscar por outro termo ou limpe o campo de busca.',
+                            action: _divisoes.isEmpty
+                                ? TFButton(
+                                    label: 'Cadastrar Primeira Divisão',
+                                    leadingIcon: TFIcons.add,
+                                    onPressed: _createDivisao,
+                                  )
+                                : TFButton(
+                                    label: 'Limpar Busca',
+                                    variant: TFButtonVariant.secondary,
+                                    onPressed: () => _searchController.clear(),
                                   ),
-                                ),
-                              ],
-                            ],
-                          ),
-                        )
-                      : Container(
-                          margin: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: isDark ? const Color(0xFF1e293b) : Colors.white,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                              width: 1,
-                            ),
-                          ),
-                          child: Column(
-                            children: [
-                              // Cabeçalho da tabela
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                decoration: BoxDecoration(
-                                  color: isDark ? const Color(0xFF0f172a) : const Color(0xFFf8fafc),
-                                  borderRadius: const BorderRadius.only(
-                                    topLeft: Radius.circular(12),
-                                    topRight: Radius.circular(12),
-                                  ),
-                                  border: Border(
-                                    bottom: BorderSide(
-                                      color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                                      width: 1,
-                                    ),
-                                  ),
-                                ),
-                                child: Row(
-                                  children: [
-                                    Expanded(
-                                      flex: 2,
-                                      child: Text(
-                                        'Divisão',
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600,
-                                          color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                                        ),
-                                      ),
-                                    ),
-                                    Expanded(
-                                      flex: 2,
-                                      child: Text(
-                                        'Regional',
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600,
-                                          color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                                        ),
-                                      ),
-                                    ),
-                                    Expanded(
-                                      flex: 3,
-                                      child: Text(
-                                        'Segmentos',
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600,
-                                          color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                                        ),
-                                      ),
-                                    ),
-                                    SizedBox(
-                                      width: 120,
-                                      child: Text(
-                                        'Ações',
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600,
-                                          color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              
-                              // Corpo da tabela
-                              Expanded(
-                                child: ListView.separated(
-                                  itemCount: _paginatedDivisoes.length,
-                                  separatorBuilder: (context, index) => Divider(
-                                    height: 1,
-                                    thickness: 1,
-                                    color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                                  ),
-                                  itemBuilder: (context, index) {
-                                    final divisao = _paginatedDivisoes[index];
-                                    return InkWell(
-                                      onTap: () => _editDivisao(divisao),
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                                        child: Row(
-                                          children: [
-                                            Expanded(
-                                              flex: 2,
-                                              child: Text(
-                                                divisao.divisao,
-                                                style: TextStyle(
-                                                  fontSize: 14,
-                                                  fontWeight: FontWeight.w500,
-                                                  color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                                                ),
-                                              ),
-                                            ),
-                                            Expanded(
-                                              flex: 2,
-                                              child: Text(
-                                                divisao.regional.isNotEmpty ? divisao.regional : '-',
-                                                style: TextStyle(
-                                                  fontSize: 14,
-                                                  color: isDark ? const Color(0xFFcbd5e1) : const Color(0xFF475569),
-                                                ),
-                                              ),
-                                            ),
-                                            Expanded(
-                                              flex: 3,
-                                              child: Text(
-                                                divisao.segmentos.isEmpty
-                                                    ? 'Nenhum'
-                                                    : divisao.segmentos.join(', '),
-                                                style: TextStyle(
-                                                  fontSize: 14,
-                                                  color: isDark ? const Color(0xFFcbd5e1) : const Color(0xFF475569),
-                                                ),
-                                                maxLines: 2,
-                                                overflow: TextOverflow.ellipsis,
-                                              ),
-                                            ),
-                                            SizedBox(
-                                              width: 120,
-                                              child: Row(
-                                                mainAxisAlignment: MainAxisAlignment.end,
-                                                children: [
-                                                  IconButton(
-                                                    icon: const Icon(Icons.edit, size: 20),
-                                                    color: const Color(0xFF3b82f6),
-                                                    onPressed: () => _editDivisao(divisao),
-                                                    tooltip: 'Editar',
-                                                    padding: EdgeInsets.zero,
-                                                    constraints: const BoxConstraints(),
-                                                  ),
-                                                  const SizedBox(width: 8),
-                                                  IconButton(
-                                                    icon: const Icon(Icons.copy, size: 20),
-                                                    color: const Color(0xFFf97316),
-                                                    onPressed: () => _duplicateDivisao(divisao),
-                                                    tooltip: 'Duplicar',
-                                                    padding: EdgeInsets.zero,
-                                                    constraints: const BoxConstraints(),
-                                                  ),
-                                                  const SizedBox(width: 8),
-                                                  IconButton(
-                                                    icon: const Icon(Icons.delete, size: 20),
-                                                    color: const Color(0xFFef4444),
-                                                    onPressed: () => _deleteDivisao(divisao),
-                                                    tooltip: 'Excluir',
-                                                    padding: EdgeInsets.zero,
-                                                    constraints: const BoxConstraints(),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                ),
-                              ),
-                              
-                              // Rodapé com paginação
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                decoration: BoxDecoration(
-                                  color: isDark ? const Color(0xFF0f172a) : const Color(0xFFf8fafc),
-                                  borderRadius: const BorderRadius.only(
-                                    bottomLeft: Radius.circular(12),
-                                    bottomRight: Radius.circular(12),
-                                  ),
-                                  border: Border(
-                                    top: BorderSide(
-                                      color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                                      width: 1,
-                                    ),
-                                  ),
-                                ),
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Text(
-                                      'Mostrando ${_paginatedDivisoes.length} de ${_filteredDivisoes.length} divisões',
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
-                                      ),
-                                    ),
-                                    Row(
-                                      children: [
-                                        TextButton(
-                                          onPressed: _currentPage > 1
-                                              ? () {
-                                                  setState(() {
-                                                    _currentPage--;
-                                                  });
-                                                }
-                                              : null,
-                                          style: TextButton.styleFrom(
-                                            foregroundColor: _currentPage > 1
-                                                ? (isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b))
-                                                : (isDark ? const Color(0xFF475569) : const Color(0xFF94a3b8)),
-                                          ),
-                                          child: const Text('Anterior'),
-                                        ),
-                                        Container(
-                                          margin: const EdgeInsets.symmetric(horizontal: 8),
-                                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                          decoration: BoxDecoration(
-                                            color: const Color(0xFF3b82f6),
-                                            borderRadius: BorderRadius.circular(6),
-                                          ),
-                                          child: Text(
-                                            '$_currentPage',
-                                            style: const TextStyle(
-                                              color: Colors.white,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
-                                        ),
-                                        TextButton(
-                                          onPressed: _currentPage < _totalPages
-                                              ? () {
-                                                  setState(() {
-                                                    _currentPage++;
-                                                  });
-                                                }
-                                              : null,
-                                          style: TextButton.styleFrom(
-                                            foregroundColor: _currentPage < _totalPages
-                                                ? (isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b))
-                                                : (isDark ? const Color(0xFF475569) : const Color(0xFF94a3b8)),
-                                          ),
-                                          child: const Text('Próximo'),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-            ),
-          ],
+                          )
+                        : (isMobile || !_isTableView)
+                            ? _buildMobileList()
+                            : _buildDesktopTable(),
+              ),
+              if (_totalPages > 1 && !_isLoading && _filteredDivisoes.isNotEmpty)
+                _buildPagination(),
+            ],
+          ),
         ),
       ),
-      // Botão de configurações no canto inferior direito
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          // TODO: Abrir configurações
-        },
-        backgroundColor: isDark ? const Color(0xFF1e293b) : Colors.white,
-        foregroundColor: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-        elevation: 4,
-        child: const Icon(Icons.settings),
+    );
+  }
+
+  Widget _buildDesktopTable() {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
+    return TFDataTable<Divisao>(
+      items: _paginatedDivisoes,
+      zebra: true,
+      columns: [
+        TFDataColumn<Divisao>.text(
+          id: 'divisao',
+          title: 'Divisão',
+          cellBuilder: (context, divisao) => Text(
+            divisao.divisao,
+            style: typography.bodyMedium.copyWith(
+              color: colors.textPrimary,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+        TFDataColumn<Divisao>(
+          id: 'regional',
+          label: const Text('Regionais'),
+          cellBuilder: (context, divisao) => divisao.regionais.isEmpty
+              ? Text(
+                  divisao.regional.isEmpty ? '-' : divisao.regional,
+                  style: typography.bodyMedium.copyWith(color: colors.textSecondary),
+                )
+              : Wrap(
+                  spacing: 4,
+                  runSpacing: 4,
+                  children: divisao.regionais
+                      .map((reg) => TFStatusBadge(
+                            label: reg,
+                            severity: TFStatusSeverity.info,
+                            compact: true,
+                          ))
+                      .toList(),
+                ),
+        ),
+        TFDataColumn<Divisao>(
+          id: 'segmentos',
+          label: const Text('Segmentos'),
+          cellBuilder: (context, divisao) => divisao.segmentos.isEmpty
+              ? Text('-', style: typography.bodySmall.copyWith(color: colors.textMuted))
+              : Wrap(
+                  spacing: 4,
+                  runSpacing: 4,
+                  children: divisao.segmentos
+                      .map((seg) => TFStatusBadge(
+                            label: seg,
+                            severity: TFStatusSeverity.neutral,
+                            compact: true,
+                          ))
+                      .toList(),
+                ),
+        ),
+        TFDataColumn<Divisao>(
+          id: 'acoes',
+          label: const Text('Ações'),
+          width: 160,
+          alignment: Alignment.centerRight,
+          cellBuilder: (context, divisao) => Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TFIconButton(
+                icon: TFIcons.edit,
+                tooltip: 'Editar divisão',
+                variant: TFIconButtonVariant.standard,
+                onPressed: () => _editDivisao(divisao),
+              ),
+              TFIconButton(
+                icon: Icons.copy_rounded,
+                tooltip: 'Duplicar divisão',
+                variant: TFIconButtonVariant.subtle,
+                onPressed: () => _duplicateDivisao(divisao),
+              ),
+              TFIconButton(
+                icon: TFIcons.delete,
+                tooltip: 'Excluir divisão',
+                variant: TFIconButtonVariant.danger,
+                onPressed: () => _deleteDivisao(divisao),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMobileList() {
+    final spacing = context.tfSpacing;
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
+    return ListView.separated(
+      itemCount: _paginatedDivisoes.length,
+      separatorBuilder: (_, __) => SizedBox(height: spacing.sm),
+      itemBuilder: (context, index) {
+        final divisao = _paginatedDivisoes[index];
+        return TFCard(
+          variant: TFCardVariant.defaultCard,
+          padding: EdgeInsets.symmetric(horizontal: spacing.base, vertical: spacing.sm),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      divisao.divisao,
+                      style: typography.cardTitle.copyWith(color: colors.textPrimary),
+                    ),
+                  ),
+                  if (divisao.regionais.isNotEmpty)
+                    Wrap(
+                      spacing: 4,
+                      runSpacing: 4,
+                      children: divisao.regionais
+                          .map((reg) => TFStatusBadge(
+                                label: reg,
+                                severity: TFStatusSeverity.info,
+                                compact: true,
+                              ))
+                          .toList(),
+                    )
+                  else if (divisao.regional.isNotEmpty)
+                    TFStatusBadge(
+                      label: divisao.regional,
+                      severity: TFStatusSeverity.info,
+                      compact: true,
+                    ),
+                ],
+              ),
+              if (divisao.segmentos.isNotEmpty) ...[
+                SizedBox(height: spacing.xs),
+                Wrap(
+                  spacing: 4,
+                  runSpacing: 4,
+                  children: divisao.segmentos
+                      .map((seg) => TFStatusBadge(
+                            label: seg,
+                            severity: TFStatusSeverity.neutral,
+                            compact: true,
+                          ))
+                      .toList(),
+                ),
+              ],
+              SizedBox(height: spacing.sm),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TFButton(
+                    label: 'Editar',
+                    leadingIcon: TFIcons.edit,
+                    variant: TFButtonVariant.secondary,
+                    onPressed: () => _editDivisao(divisao),
+                  ),
+                  SizedBox(width: spacing.xs),
+                  TFIconButton(
+                    icon: Icons.copy_rounded,
+                    tooltip: 'Duplicar',
+                    variant: TFIconButtonVariant.subtle,
+                    onPressed: () => _duplicateDivisao(divisao),
+                  ),
+                  TFIconButton(
+                    icon: TFIcons.delete,
+                    tooltip: 'Excluir',
+                    variant: TFIconButtonVariant.danger,
+                    onPressed: () => _deleteDivisao(divisao),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildPagination() {
+    final spacing = context.tfSpacing;
+
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: spacing.base,
+        vertical: spacing.sm,
+      ),
+      decoration: BoxDecoration(
+        color: context.tfColors.surface,
+        border: Border(
+          top: BorderSide(color: context.tfColors.borderSubtle, width: 1),
+        ),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            'Mostrando ${_paginatedDivisoes.length} de ${_filteredDivisoes.length} divisões',
+            style: context.tfTypography.bodySmall.copyWith(
+              color: context.tfColors.textSecondary,
+            ),
+          ),
+          Row(
+            children: [
+              TFButton(
+                label: 'Anterior',
+                variant: TFButtonVariant.ghost,
+                onPressed: _currentPage > 1
+                    ? () => setState(() => _currentPage--)
+                    : null,
+              ),
+              SizedBox(width: spacing.xs),
+              Container(
+                padding: EdgeInsets.symmetric(
+                  horizontal: spacing.sm,
+                  vertical: spacing.xs,
+                ),
+                decoration: BoxDecoration(
+                  color: context.tfColors.primary,
+                  borderRadius: BorderRadius.circular(TFRadius.r8),
+                ),
+                child: Text(
+                  '$_currentPage',
+                  style: context.tfTypography.bodySmall.copyWith(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              SizedBox(width: spacing.xs),
+              TFButton(
+                label: 'Próximo',
+                variant: TFButtonVariant.ghost,
+                onPressed: _currentPage < _totalPages
+                    ? () => setState(() => _currentPage++)
+                    : null,
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

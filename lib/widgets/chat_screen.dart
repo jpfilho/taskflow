@@ -7,6 +7,9 @@ import '../services/chat_service.dart';
 import '../services/auth_service_simples.dart';
 import '../services/anexo_service.dart';
 import '../models/anexo.dart';
+import '../services/unread_chat_manager.dart';
+import '../models/task.dart';
+import '../services/task_service.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:image_picker/image_picker.dart';
@@ -99,11 +102,18 @@ class _ChatScreenState extends State<ChatScreen> {
   Map<String, Map<String, dynamic>> _itemFeedbacks = {};
   
   late final ChatFeedbackRepositoryImpl _feedbackRepo = ChatFeedbackRepositoryImpl(LocalDatabaseService());
+  final TaskService _taskService = TaskService();
+  final AnexoService _anexoService = AnexoService();
+
+  // Contexto da Tarefa (Observações e Anexos)
+  Task? _tarefaAssociada;
+  List<Anexo> _anexosTarefa = [];
+  bool _carregandoContextoTarefa = false;
+  bool _contextoExpandido = false;
 
   // Listas de opções
   List<Map<String, dynamic>> _notasDisponiveis = [];
   List<Map<String, dynamic>> _ordensDisponiveis = [];
-  bool _carregandoNotasOrdens = false;
   String? _taskId; // ID da tarefa (obtido do grupo)
 
   final SupabaseClient _supabase = SupabaseConfig.client;
@@ -111,6 +121,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    UnreadChatManager().setActiveChat(widget.grupoId);
     _loadMensagens();
     _setupRealtimeSubscription();
     _carregarNotasEOrdens();
@@ -125,7 +136,21 @@ class _ChatScreenState extends State<ChatScreen> {
     _editController.dispose();
     _recordingTimer?.cancel();
     _audioRecorder.dispose();
+    final manager = UnreadChatManager();
+    if (manager.activeChatGrupoId == widget.grupoId) {
+      manager.clearActiveChat();
+    }
     super.dispose();
+  }
+
+  Future<void> _marcarMensagensComoLidas() async {
+    try {
+      await _chatService.marcarMensagensComoLidasPorGrupo(widget.grupoId);
+      UnreadChatManager().markGroupAsReadLocal(widget.grupoId);
+    } catch (e) {
+      debugPrint('⚠️ [ChatScreen] Erro ao persistir leitura: $e. Reconciliando com o Supabase...');
+      UnreadChatManager().refreshAll(force: true);
+    }
   }
 
   Future<void> _loadMensagens() async {
@@ -156,8 +181,8 @@ class _ChatScreenState extends State<ChatScreen> {
         _scrollToBottom();
       });
 
-      // Marcar todas as mensagens como lidas (fire-and-forget)
-      _chatService.marcarMensagensComoLidasPorGrupo(widget.grupoId);
+      // Marcar todas as mensagens como lidas com atualização local e reconciliação em caso de erro
+      _marcarMensagensComoLidas();
     } catch (e) {
       print('Erro ao carregar mensagens: $e');
       setState(() => _isLoading = false);
@@ -194,8 +219,8 @@ class _ChatScreenState extends State<ChatScreen> {
           });
           _scrollToBottom();
 
-          // Marcar mensagens como lidas (fire-and-forget)
-          _chatService.marcarMensagensComoLidasPorGrupo(widget.grupoId);
+          // Marcar mensagens como lidas com atualização no manager
+          _marcarMensagensComoLidas();
         });
   }
 
@@ -213,10 +238,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _carregarNotasEOrdens() async {
     try {
-      setState(() {
-        _carregandoNotasOrdens = true;
-      });
-
       // 1. Obter grupo para pegar tarefa_id
       final grupoResponse = await _supabase
           .from('grupos_chat')
@@ -232,6 +253,9 @@ class _ChatScreenState extends State<ChatScreen> {
       }
 
       _taskId = grupoResponse['tarefa_id'] as String;
+
+      // Carregar contexto da tarefa (Observações e Anexos)
+      _carregarContextoTarefa();
 
       // Tentar carregar rascunho de feedbacks
       try {
@@ -324,13 +348,677 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     } catch (e) {
       print('❌ [Chat] Erro ao carregar notas/ordens: $e');
-    } finally {
+    }
+  }
+
+  /// Carrega a tarefa associada e seus anexos oficiais
+  Future<void> _carregarContextoTarefa() async {
+    if (_taskId == null) return;
+    setState(() {
+      _carregandoContextoTarefa = true;
+    });
+
+    try {
+      final taskFuture = _taskService.getTaskById(_taskId!);
+      final anexosFuture = _anexoService.getAnexosByTaskId(_taskId!);
+
+      final results = await Future.wait([taskFuture, anexosFuture]);
       if (mounted) {
         setState(() {
-          _carregandoNotasOrdens = false;
+          _tarefaAssociada = results[0] as Task?;
+          _anexosTarefa = results[1] as List<Anexo>;
+          _carregandoContextoTarefa = false;
+        });
+        print('✅ [Chat] Contexto carregado: Tarefa ${_tarefaAssociada?.tarefa} com ${_anexosTarefa.length} anexos');
+      }
+    } catch (e) {
+      print('⚠️ [Chat] Erro ao carregar contexto da tarefa: $e');
+      if (mounted) {
+        setState(() {
+          _carregandoContextoTarefa = false;
         });
       }
     }
+  }
+
+  void _abrirImagemVisualizacao(String url, String titulo) {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.black,
+        insetPadding: EdgeInsets.zero,
+        child: Stack(
+          children: [
+            Center(
+              child: InteractiveViewer(
+                minScale: 0.5,
+                maxScale: 4.0,
+                child: CachedNetworkImage(
+                  imageUrl: url,
+                  placeholder: (context, url) => const Center(
+                    child: CircularProgressIndicator(color: Colors.white),
+                  ),
+                  errorWidget: (context, url, error) => const Center(
+                    child: Icon(Icons.broken_image, color: Colors.white, size: 48),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              top: 40,
+              left: 16,
+              right: 16,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      titulo,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white, size: 28),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _abrirAnexoArquivo(Anexo anexo) async {
+    final url = _anexoService.getPublicUrl(anexo);
+    if (anexo.tipoArquivo == 'imagem') {
+      _abrirImagemVisualizacao(url, anexo.nomeArquivo);
+      return;
+    }
+
+    try {
+      final uri = Uri.parse(url);
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Não foi possível abrir o anexo: ${anexo.nomeArquivo}'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Erro ao abrir anexo: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  Widget _buildActivityContextBanner(BuildContext context) {
+    if (_carregandoContextoTarefa && _tarefaAssociada == null) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        color: Colors.blue.withOpacity(0.06),
+        child: const Row(
+          children: [
+            SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            SizedBox(width: 8),
+            Text(
+              'Carregando contexto da atividade...',
+              style: TextStyle(fontSize: 12, color: Colors.black54),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (_tarefaAssociada == null) return const SizedBox.shrink();
+
+    final hasObservacoes = _tarefaAssociada!.observacoes != null &&
+        _tarefaAssociada!.observacoes!.trim().isNotEmpty;
+    final hasAnexos = _anexosTarefa.isNotEmpty;
+
+    if (!hasObservacoes && !hasAnexos) return const SizedBox.shrink();
+
+    final observacoesTexto = _tarefaAssociada!.observacoes?.trim() ?? '';
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeInOut,
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E2830) : const Color(0xFFF7F9FC),
+        border: Border(
+          bottom: BorderSide(
+            color: isDark ? Colors.white12 : Colors.blueGrey.withOpacity(0.15),
+            width: 1,
+          ),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Cabeçalho do Banner
+          InkWell(
+            onTap: () => setState(() => _contextoExpandido = !_contextoExpandido),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(5),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF075E54).withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Icon(
+                      Icons.assignment_outlined,
+                      size: 16,
+                      color: Color(0xFF075E54),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Row(
+                      children: [
+                        const Text(
+                          'Contexto da Atividade',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF075E54),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        if (hasObservacoes)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.amber.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.notes, size: 12, color: Colors.amber),
+                                SizedBox(width: 2),
+                                Text(
+                                  'Observações',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.amber,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        if (hasAnexos) ...[
+                          const SizedBox(width: 4),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.blue.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.attach_file, size: 12, color: Colors.blue),
+                                const SizedBox(width: 2),
+                                Text(
+                                  '${_anexosTarefa.length}',
+                                  style: const TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.blue,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  // Botão recarregar
+                  IconButton(
+                    icon: const Icon(Icons.refresh, size: 16),
+                    tooltip: 'Atualizar Observações e Anexos',
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    onPressed: _carregarContextoTarefa,
+                  ),
+                  const SizedBox(width: 6),
+                  Icon(
+                    _contextoExpandido
+                        ? Icons.keyboard_arrow_up
+                        : Icons.keyboard_arrow_down,
+                    size: 20,
+                    color: Colors.grey[700],
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // Modo recolhido: Exibição compacta em uma linha
+          if (!_contextoExpandido)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+              child: Row(
+                children: [
+                  if (hasObservacoes)
+                    Expanded(
+                      child: Text(
+                        '📝 $observacoesTexto',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: isDark ? Colors.white70 : Colors.black87,
+                          fontStyle: FontStyle.italic,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  if (!hasObservacoes && hasAnexos)
+                    Expanded(
+                      child: Text(
+                        '📎 ${_anexosTarefa.length} anexo(s) disponível(is)',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: isDark ? Colors.white70 : Colors.black87,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  TextButton(
+                    onPressed: () => _mostrarBottomSheetContextoTarefa(context),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text(
+                      'Ver tudo',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+          // Modo expandido: Painel com Observações completas e Miniaturas de Anexos
+          if (_contextoExpandido) ...[
+            Container(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Bloco de Observações
+                  if (hasObservacoes) ...[
+                    Container(
+                      width: double.infinity,
+                      constraints: const BoxConstraints(maxHeight: 120),
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: isDark ? const Color(0xFF141E24) : Colors.white,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: Colors.amber.withOpacity(0.35),
+                          width: 1,
+                        ),
+                      ),
+                      child: SingleChildScrollView(
+                        child: SelectableText(
+                          observacoesTexto,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: isDark ? Colors.white : Colors.black87,
+                            height: 1.35,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+
+                  // Bloco de Anexos da Atividade
+                  if (hasAnexos) ...[
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Anexos da Atividade (${_anexosTarefa.length})',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: isDark ? Colors.white70 : Colors.black87,
+                          ),
+                        ),
+                        GestureDetector(
+                          onTap: () => _mostrarBottomSheetContextoTarefa(context),
+                          child: const Text(
+                            'Abrir galeria',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.blue,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    SizedBox(
+                      height: 72,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: _anexosTarefa.length,
+                        separatorBuilder: (_, __) => const SizedBox(width: 8),
+                        itemBuilder: (context, index) {
+                          final anexo = _anexosTarefa[index];
+                          final url = _anexoService.getPublicUrl(anexo);
+                          final isImagem = anexo.tipoArquivo == 'imagem';
+
+                          return InkWell(
+                            onTap: () => _abrirAnexoArquivo(anexo),
+                            borderRadius: BorderRadius.circular(8),
+                            child: Container(
+                              width: 72,
+                              height: 72,
+                              decoration: BoxDecoration(
+                                color: isDark ? Colors.black26 : Colors.white,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: isDark ? Colors.white24 : Colors.grey[300]!,
+                                ),
+                              ),
+                              clipBehavior: Clip.antiAlias,
+                              child: isImagem
+                                  ? CachedNetworkImage(
+                                      imageUrl: url,
+                                      fit: BoxFit.cover,
+                                      placeholder: (_, __) => const Center(
+                                        child: SizedBox(
+                                          width: 16,
+                                          height: 16,
+                                          child: CircularProgressIndicator(strokeWidth: 2),
+                                        ),
+                                      ),
+                                      errorWidget: (_, __, ___) => const Icon(
+                                        Icons.broken_image,
+                                        size: 24,
+                                        color: Colors.grey,
+                                      ),
+                                    )
+                                  : Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Icon(
+                                          anexo.tipoArquivo == 'pdf'
+                                              ? Icons.picture_as_pdf
+                                              : Icons.insert_drive_file,
+                                          color: anexo.tipoArquivo == 'pdf'
+                                              ? Colors.red
+                                              : Colors.blueGrey,
+                                          size: 26,
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Padding(
+                                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                                          child: Text(
+                                            anexo.nomeArquivo,
+                                            style: const TextStyle(fontSize: 9),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            textAlign: TextAlign.center,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  void _mostrarBottomSheetContextoTarefa(BuildContext context) {
+    if (_tarefaAssociada == null) return;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: isDark ? const Color(0xFF1E2830) : Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.65,
+          minChildSize: 0.4,
+          maxChildSize: 0.9,
+          expand: false,
+          builder: (context, scrollController) {
+            final task = _tarefaAssociada!;
+            final hasObs = task.observacoes != null && task.observacoes!.trim().isNotEmpty;
+
+            return SingleChildScrollView(
+              controller: scrollController,
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.grey[400],
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      const Icon(Icons.assignment, color: Color(0xFF075E54), size: 24),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          task.tarefa,
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    children: [
+                      if (task.status.isNotEmpty)
+                        Chip(
+                          label: Text(
+                            task.status,
+                            style: const TextStyle(fontSize: 11, color: Colors.white),
+                          ),
+                          backgroundColor: const Color(0xFF075E54),
+                          padding: EdgeInsets.zero,
+                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                      if (task.coordenador.isNotEmpty)
+                        Chip(
+                          avatar: const Icon(Icons.person, size: 14),
+                          label: Text(
+                            'Coord: ${task.coordenador}',
+                            style: const TextStyle(fontSize: 11),
+                          ),
+                          padding: EdgeInsets.zero,
+                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                      if (task.locais.isNotEmpty)
+                        Chip(
+                          avatar: const Icon(Icons.location_on, size: 14),
+                          label: Text(
+                            task.locais.join(', '),
+                            style: const TextStyle(fontSize: 11),
+                          ),
+                          padding: EdgeInsets.zero,
+                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                    ],
+                  ),
+                  const Divider(height: 24),
+                  const Text(
+                    'Observações da Atividade',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: isDark ? const Color(0xFF141E24) : const Color(0xFFF9F9F9),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.amber.withOpacity(0.4)),
+                    ),
+                    child: hasObs
+                        ? SelectableText(
+                            task.observacoes!,
+                            style: const TextStyle(fontSize: 14, height: 1.4),
+                          )
+                        : Text(
+                            'Nenhuma observação registrada para esta atividade.',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.grey[600],
+                              fontStyle: FontStyle.italic,
+                            ),
+                          ),
+                  ),
+                  const SizedBox(height: 20),
+                  Text(
+                    'Anexos da Atividade (${_anexosTarefa.length})',
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  if (_anexosTarefa.isEmpty)
+                    Text(
+                      'Nenhum anexo cadastrado para esta atividade.',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.grey[600],
+                        fontStyle: FontStyle.italic,
+                      ),
+                    )
+                  else
+                    ListView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: _anexosTarefa.length,
+                      itemBuilder: (context, index) {
+                        final anexo = _anexosTarefa[index];
+                        final url = _anexoService.getPublicUrl(anexo);
+                        final isImagem = anexo.tipoArquivo == 'imagem';
+
+                        return ListTile(
+                          contentPadding: const EdgeInsets.symmetric(vertical: 4),
+                          leading: Container(
+                            width: 48,
+                            height: 48,
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: Colors.grey[300]!),
+                            ),
+                            clipBehavior: Clip.antiAlias,
+                            child: isImagem
+                                ? CachedNetworkImage(
+                                    imageUrl: url,
+                                    fit: BoxFit.cover,
+                                  )
+                                : Icon(
+                                    anexo.tipoArquivo == 'pdf'
+                                        ? Icons.picture_as_pdf
+                                        : Icons.insert_drive_file,
+                                    color: anexo.tipoArquivo == 'pdf'
+                                        ? Colors.red
+                                        : Colors.blueGrey,
+                                  ),
+                          ),
+                          title: Text(
+                            anexo.nomeArquivo,
+                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Text(
+                            _formatarTamanhoBytes(anexo.tamanhoBytes),
+                            style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                          ),
+                          trailing: IconButton(
+                            icon: const Icon(Icons.open_in_new, size: 20),
+                            tooltip: 'Abrir Anexo',
+                            onPressed: () => _abrirAnexoArquivo(anexo),
+                          ),
+                        );
+                      },
+                    ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  String _formatarTamanhoBytes(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
 
   // ========== WIDGETS DE TAG ==========
@@ -2754,6 +3442,16 @@ class _ChatScreenState extends State<ChatScreen> {
                 );
               },
             ),
+            if (_taskId != null)
+              IconButton(
+                icon: Badge(
+                  isLabelVisible: _anexosTarefa.isNotEmpty,
+                  label: Text('${_anexosTarefa.length}'),
+                  child: const Icon(Icons.assignment_outlined),
+                ),
+                tooltip: 'Observações & Anexos da Atividade',
+                onPressed: () => _mostrarBottomSheetContextoTarefa(context),
+              ),
             IconButton(
               icon: const Icon(Icons.more_vert),
               onPressed: () {
@@ -2764,6 +3462,9 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
         body: Column(
           children: [
+            // Contexto da Atividade (Observações e Anexos)
+            if (_taskId != null)
+              _buildActivityContextBanner(context),
             // Lista de mensagens
             Expanded(
               child: Container(

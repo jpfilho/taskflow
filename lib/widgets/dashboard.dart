@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../design_system/taskflow_design_system.dart';
 import '../models/task.dart';
 import '../services/task_service.dart';
 import '../utils/responsive.dart';
@@ -194,17 +195,17 @@ class Dashboard extends StatelessWidget {
         future: loadStatusColors(),
         builder: (context, colorSnap) {
           final statusColors = colorSnap.data ?? {};
-      return SingleChildScrollView(
-        padding: EdgeInsets.all(isMobile ? 8 : 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
+          return SingleChildScrollView(
+            padding: EdgeInsets.all(isMobile ? TFSpacing.s8 : TFSpacing.s16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
                 _buildSummaryCards(context, stats, isMobile, statusColors),
-            const SizedBox(height: 16),
+                const SizedBox(height: TFSpacing.s16),
                 _buildDetailedStats(context, stats, isMobile),
-          ],
-        ),
-      );
+              ],
+            ),
+          );
         },
       );
     }
@@ -214,23 +215,11 @@ class Dashboard extends StatelessWidget {
     final tasksToUse = filteredTasks ?? [];
     
     if (tasksToUse.isEmpty && filteredTasks == null) {
-      // Se não há tarefas filtradas e não foram fornecidas, mostrar mensagem
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.info_outline, size: 48, color: Colors.grey[400]),
-            const SizedBox(height: 16),
-            Text(
-              'Nenhuma tarefa disponível',
-              style: TextStyle(color: Colors.grey[600], fontSize: 16),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Aplique filtros para ver as estatísticas',
-              style: TextStyle(color: Colors.grey[500], fontSize: 14),
-            ),
-          ],
+      return const Center(
+        child: TFEmptyState(
+          icon: Icons.info_outline,
+          title: 'Nenhuma tarefa disponível',
+          description: 'Aplique filtros para ver as estatísticas.',
         ),
       );
     }
@@ -241,6 +230,7 @@ class Dashboard extends StatelessWidget {
   }
 
   Widget _buildSummaryCards(BuildContext context, Map<String, dynamic> stats, bool isMobile, Map<String, Color> statusColors) {
+    final colors = context.tfColors;
     Color resolve(String code, Color fallback) => statusColors[code.toUpperCase()] ?? fallback;
 
     // Função auxiliar para converter dinamicamente para List<Task> com proteção
@@ -251,7 +241,6 @@ class Dashboard extends StatelessWidget {
         try {
           return v.whereType<Task>().toList();
         } catch (e) {
-          print('⚠️ Erro ao converter lista de tarefas: $e');
           return <Task>[];
         }
       }
@@ -280,42 +269,47 @@ class Dashboard extends StatelessWidget {
 
     final cards = <Widget>[
       _buildStatCard(
+        context,
         'Total',
         stats['total'].toString(),
         Icons.assignment,
-        Colors.blue,
+        colors.primary,
         isMobile,
         onTap: () => _showTaskList(context, 'Todas as tarefas', listaTotal),
       ),
       _buildStatCard(
+        context,
         'Em Andamento',
         stats['emAndamento'].toString(),
         Icons.schedule,
-        resolve('ANDA', Colors.orange),
+        resolve('ANDA', colors.warning),
         isMobile,
         onTap: () => _showTaskList(context, 'Em andamento', listaEmAndamento),
       ),
       _buildStatCard(
+        context,
         'Concluídas',
         stats['concluidas'].toString(),
         Icons.check_circle,
-        resolve('CONC', resolve('RPAR', Colors.green)),
+        resolve('CONC', resolve('RPAR', colors.success)),
         isMobile,
         onTap: () => _showTaskList(context, 'Concluídas', listaConcluidas),
       ),
       _buildStatCard(
+        context,
         'Programadas',
         stats['programadas'].toString(),
         Icons.event,
-        resolve('PROG', Colors.purple),
+        resolve('PROG', colors.info),
         isMobile,
         onTap: () => _showTaskList(context, 'Programadas', listaProgramadas),
       ),
       _buildStatCard(
+        context,
         'Canceladas',
         stats['canceladas'].toString(),
         Icons.cancel,
-        resolve('CANC', Colors.redAccent),
+        resolve('CANC', colors.danger),
         isMobile,
         onTap: () => _showTaskList(context, 'Canceladas', listaCanceladas),
       ),
@@ -331,14 +325,21 @@ class Dashboard extends StatelessWidget {
       ),
     ];
 
-    return GridView.count(
-      crossAxisCount: isMobile ? 2 : 6,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      mainAxisSpacing: 12,
-      crossAxisSpacing: 12,
-      childAspectRatio: isMobile ? 1.2 : 1.5,
-      children: cards,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final crossAxisCount = constraints.maxWidth < TFBreakpoints.sm
+            ? 2
+            : (constraints.maxWidth < TFBreakpoints.lg ? 3 : 6);
+        return GridView.count(
+          crossAxisCount: crossAxisCount,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          mainAxisSpacing: TFSpacing.s8,
+          crossAxisSpacing: TFSpacing.s8,
+          childAspectRatio: isMobile ? 1.3 : 1.5,
+          children: cards,
+        );
+      },
     );
   }
 
@@ -352,8 +353,10 @@ class Dashboard extends StatelessWidget {
     required Map<String, List<TaskWarning>> effectiveWarnings,
     required List<Task> listaTotal,
   }) {
-    final color = tasksWithWarnings > 0 ? Colors.orange : Colors.grey;
+    final colors = context.tfColors;
+    final color = tasksWithWarnings > 0 ? colors.warning : colors.textSecondary;
     return _buildStatCard(
+      context,
       'Alertas Ativos',
       tasksWithWarnings.toString(),
       Icons.warning_amber_rounded,
@@ -368,93 +371,76 @@ class Dashboard extends StatelessWidget {
     );
   }
 
-  Widget _buildStatCard(String title, String value, IconData icon, Color color, bool isMobile, {VoidCallback? onTap, String? subtitle}) {
-    final content = Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            color.withOpacity(0.14),
-            color.withOpacity(0.04),
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(18),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.06),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      padding: EdgeInsets.all(isMobile ? 12 : 16),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
+  Widget _buildStatCard(
+    BuildContext context,
+    String title,
+    String value,
+    IconData icon,
+    Color color,
+    bool isMobile, {
+    VoidCallback? onTap,
+    String? subtitle,
+  }) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
+    final content = TFCard(
+      padding: EdgeInsets.all(isMobile ? TFSpacing.s8 : TFSpacing.s12),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
           Container(
-            width: isMobile ? 34 : 40,
-            height: isMobile ? 34 : 40,
+            width: isMobile ? 32 : 38,
+            height: isMobile ? 32 : 38,
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.9),
+              color: color.withValues(alpha: 0.12),
               shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.05),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
-                ),
-              ],
             ),
-            child: Icon(icon, color: color, size: isMobile ? 20 : 24),
+            child: Icon(icon, color: color, size: isMobile ? 18 : 22),
           ),
-          const SizedBox(height: 10),
-            Text(
-              value,
-              style: TextStyle(
-              fontSize: isMobile ? 22 : 30,
+          const SizedBox(height: TFSpacing.s4),
+          Text(
+            value,
+            style: typography.cardTitle.copyWith(
+              fontSize: isMobile ? 20 : 26,
               fontWeight: FontWeight.w800,
-                color: color,
-              ),
+              color: color,
             ),
-          const SizedBox(height: 6),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            title,
+            style: typography.caption.copyWith(
+              color: colors.textSecondary,
+              fontWeight: FontWeight.w600,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          if (subtitle != null) ...[
+            const SizedBox(height: 4),
             Text(
-              title,
-              style: TextStyle(
-              fontSize: isMobile ? 11 : 13,
-              fontWeight: FontWeight.w500,
-              color: const Color(0xFF6B7280),
+              subtitle,
+              style: typography.caption.copyWith(
+                fontSize: isMobile ? 9 : 10,
+                color: colors.textMuted,
               ),
               textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
             ),
-            if (subtitle != null) ...[
-              const SizedBox(height: 4),
-              Text(
-                subtitle,
-                style: TextStyle(
-                  fontSize: isMobile ? 9 : 10,
-                  color: Colors.grey[600],
-                ),
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
           ],
-        ),
+        ],
+      ),
     );
 
     if (onTap == null) {
       return content;
     }
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(18),
-        onTap: onTap,
-        child: content,
-      ),
+    return InkWell(
+      borderRadius: BorderRadius.circular(TFRadius.r8),
+      onTap: onTap,
+      child: content,
     );
   }
 
@@ -493,7 +479,6 @@ class Dashboard extends StatelessWidget {
         try {
           return v.whereType<Task>().toList();
         } catch (e) {
-          print('⚠️ Erro ao converter lista de tarefas: $e');
           return <Task>[];
         }
       }
@@ -508,27 +493,29 @@ class Dashboard extends StatelessWidget {
     final listaCanceladas = asTaskList(stats['listaCanceladas']);
 
     final cardWidth = isMobile ? double.infinity : 420.0;
+    final colors = context.tfColors;
 
     return Wrap(
-      spacing: 16,
-      runSpacing: 16,
+      spacing: TFSpacing.s12,
+      runSpacing: TFSpacing.s12,
       children: [
         _buildSectionCard(
+          context,
           'Alertas rápidos',
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const SizedBox(height: 4),
               Wrap(
-                spacing: 12,
-                runSpacing: 12,
+                spacing: TFSpacing.s8,
+                runSpacing: TFSpacing.s8,
                 children: [
-                  _buildChipInfo('Atrasadas', atrasadas, Colors.red, () => _showTaskList(context, 'Atrasadas', listaAtrasadas)),
-                  _buildChipInfo('Vencem hoje', venceHoje, Colors.orange, () => _showTaskList(context, 'Vencem hoje', listaVenceHoje)),
-                  _buildChipInfo('Sem executor', semExecutor, Colors.purple, () => _showTaskList(context, 'Sem executor', listaSemExecutor)),
-                  _buildChipInfo('Sem local', semLocal, Colors.blueGrey, () => _showTaskList(context, 'Sem local', listaSemLocal)),
-                  _buildChipInfo('Sem coordenador', semCoordenador, Colors.teal, () => _showTaskList(context, 'Sem coordenador', listaSemCoordenador)),
-                  _buildChipInfo('Duração média (dias)', mediaDuracao.toStringAsFixed(1), Colors.indigo, null),
+                  _buildChipInfo(context, 'Atrasadas', atrasadas, colors.danger, () => _showTaskList(context, 'Atrasadas', listaAtrasadas)),
+                  _buildChipInfo(context, 'Vencem hoje', venceHoje, colors.warning, () => _showTaskList(context, 'Vencem hoje', listaVenceHoje)),
+                  _buildChipInfo(context, 'Sem executor', semExecutor, colors.info, () => _showTaskList(context, 'Sem executor', listaSemExecutor)),
+                  _buildChipInfo(context, 'Sem local', semLocal, colors.textSecondary, () => _showTaskList(context, 'Sem local', listaSemLocal)),
+                  _buildChipInfo(context, 'Sem coordenador', semCoordenador, colors.primary, () => _showTaskList(context, 'Sem coordenador', listaSemCoordenador)),
+                  _buildChipInfo(context, 'Duração média (dias)', mediaDuracao.toStringAsFixed(1), colors.primary, null),
                 ],
               ),
             ],
@@ -537,50 +524,58 @@ class Dashboard extends StatelessWidget {
           width: cardWidth,
         ),
         _buildSectionCard(
+          context,
           'Distribuição por Status',
-          _buildStatusDistribution(porStatus, total, isMobile),
+          _buildStatusDistribution(context, porStatus, total, isMobile),
           isMobile,
           width: cardWidth,
         ),
         _buildSectionCard(
+          context,
           'Distribuição por Tipo',
           _buildTypeDistribution(context, porTipo, isMobile),
           isMobile,
           width: cardWidth,
         ),
         _buildSectionCard(
+          context,
           'Distribuição por Regional',
-          _buildRegionalDistribution(porRegional, isMobile),
+          _buildRegionalDistribution(context, porRegional, isMobile),
           isMobile,
           width: cardWidth,
         ),
         _buildSectionCard(
+          context,
           'Top Executores',
-          _buildTopList(porExecutor, isMobile, maxItems: 5),
+          _buildTopList(context, porExecutor, isMobile, maxItems: 5),
           isMobile,
           width: cardWidth,
         ),
         _buildSectionCard(
+          context,
           'Top Locais',
-          _buildTopList(porLocal, isMobile, maxItems: 5),
+          _buildTopList(context, porLocal, isMobile, maxItems: 5),
           isMobile,
           width: cardWidth,
         ),
         _buildSectionCard(
+          context,
           'Distribuição por Coordenador',
-          _buildTopList(porCoordenador, isMobile, maxItems: 8),
+          _buildTopList(context, porCoordenador, isMobile, maxItems: 8),
           isMobile,
           width: cardWidth,
         ),
         _buildSectionCard(
+          context,
           'Canceladas',
-          _buildTaskPreviewList(listaCanceladas, isMobile),
+          _buildTaskPreviewList(context, listaCanceladas, isMobile),
           isMobile,
           width: cardWidth,
         ),
         _buildSectionCard(
+          context,
           'Produtividade & Eficiência',
-          _buildProductivityIndicators(stats, isMobile),
+          _buildProductivityIndicators(context, stats, isMobile),
           isMobile,
           width: cardWidth,
         ),
@@ -588,36 +583,31 @@ class Dashboard extends StatelessWidget {
     );
   }
 
-  Widget _buildChipInfo(String label, Object value, Color color, VoidCallback? onTap) {
+  Widget _buildChipInfo(BuildContext context, String label, Object value, Color color, VoidCallback? onTap) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
     final chip = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: TFSpacing.s8, vertical: TFSpacing.s4),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.withOpacity(0.2)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(TFRadius.rFull),
+        border: Border.all(color: color.withValues(alpha: 0.24)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            width: 10,
-            height: 10,
-            margin: const EdgeInsets.only(right: 8),
+            width: 8,
+            height: 8,
+            margin: const EdgeInsets.only(right: 6),
             decoration: BoxDecoration(color: color, shape: BoxShape.circle),
           ),
           Text(
             '$label: $value',
-            style: TextStyle(
-              color: color.withOpacity(0.95),
+            style: typography.caption.copyWith(
+              color: colors.textPrimary,
               fontWeight: FontWeight.w700,
-              letterSpacing: 0.1,
             ),
           ),
         ],
@@ -626,19 +616,17 @@ class Dashboard extends StatelessWidget {
 
     if (onTap == null) return chip;
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(16),
-        onTap: onTap,
-        child: chip,
-      ),
+    return InkWell(
+      borderRadius: BorderRadius.circular(TFRadius.rFull),
+      onTap: onTap,
+      child: chip,
     );
   }
 
   void _showTaskList(BuildContext context, String title, List<Task> tasks) {
-    // Proteção: limitar número de tarefas exibidas para evitar crash
-    final maxTasks = 500; // Limite razoável para evitar problemas de performance
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final maxTasks = 500;
     final tasksToShow = tasks.length > maxTasks ? tasks.take(maxTasks).toList() : tasks;
     final hasMore = tasks.length > maxTasks;
     
@@ -658,28 +646,29 @@ class Dashboard extends StatelessWidget {
             Color resolveStatusColor(String status) {
               final key = status.toUpperCase();
               if (mapCorStatus.containsKey(key)) return mapCorStatus[key]!;
-              if (key.contains('CONC') || key.contains('RPAR')) return Colors.green;
-              if (key.contains('ANDA')) return Colors.orange;
-              if (key.contains('PROG')) return Colors.purple;
-              if (key.contains('CANC')) return Colors.redAccent;
-              return Colors.blueGrey;
+              if (key.contains('CONC') || key.contains('RPAR')) return colors.success;
+              if (key.contains('ANDA')) return colors.warning;
+              if (key.contains('PROG')) return colors.info;
+              if (key.contains('CANC')) return colors.danger;
+              return colors.textSecondary;
             }
 
             return AlertDialog(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+              backgroundColor: colors.surface,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(TFRadius.r12)),
               title: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
                     title,
-                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 18),
+                    style: typography.sectionTitle,
                   ),
                   if (hasMore)
                     Padding(
                       padding: const EdgeInsets.only(top: 4),
                       child: Text(
                         'Mostrando $maxTasks de ${tasks.length} tarefas',
-                        style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                        style: typography.caption.copyWith(color: colors.textSecondary),
                       ),
                     ),
                 ],
@@ -691,12 +680,12 @@ class Dashboard extends StatelessWidget {
                     ? Center(
                         child: Text(
                           'Nenhuma tarefa encontrada.',
-                          style: TextStyle(color: Colors.grey[600], fontSize: 13),
+                          style: typography.bodySmall.copyWith(color: colors.textSecondary),
                         ),
                       )
                     : ListView.separated(
                         itemCount: tasksToShow.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 10),
+                        separatorBuilder: (_, __) => const SizedBox(height: TFSpacing.s4),
                         itemBuilder: (context, index) {
                           final t = tasksToShow[index];
                           final status = t.status.isNotEmpty ? t.status : '—';
@@ -704,18 +693,11 @@ class Dashboard extends StatelessWidget {
 
                           return Container(
                             decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(14),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withOpacity(0.05),
-                                  blurRadius: 10,
-                                  offset: const Offset(0, 4),
-                                ),
-                              ],
-                              border: Border.all(color: Colors.grey.withOpacity(0.12)),
+                              color: colors.surfaceSecondary,
+                              borderRadius: BorderRadius.circular(TFRadius.r8),
+                              border: Border.all(color: colors.borderSubtle),
                             ),
-                            padding: const EdgeInsets.all(12),
+                            padding: const EdgeInsets.all(TFSpacing.s8),
                             child: Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
@@ -733,31 +715,34 @@ class Dashboard extends StatelessWidget {
                                         t.tarefa,
                                         maxLines: 2,
                                         overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+                                        style: typography.bodyMedium.copyWith(fontWeight: FontWeight.w700),
                                       ),
                                       const SizedBox(height: 4),
                                       Wrap(
                                         spacing: 8,
                                         runSpacing: 6,
                                         children: [
-                                          _buildTag('Status', status, statusColor),
+                                          _buildTag(context, 'Status', status, statusColor),
                                           _buildTag(
+                                            context,
                                             'Executor',
                                             t.executores.isNotEmpty
                                                 ? t.executores.join(', ')
                                                 : (t.executor.isNotEmpty ? t.executor : '—'),
-                                            Colors.indigo,
+                                            colors.primary,
                                             wrap: true,
                                           ),
                                           _buildTag(
+                                            context,
                                             'Início',
                                             '${t.dataInicio.day}/${t.dataInicio.month}/${t.dataInicio.year}',
-                                            Colors.blueGrey,
+                                            colors.textSecondary,
                                           ),
                                           _buildTag(
+                                            context,
                                             'Fim',
                                             '${t.dataFim.day}/${t.dataFim.month}/${t.dataFim.year}',
-                                            Colors.blueGrey,
+                                            colors.textSecondary,
                                           ),
                                         ],
                                       ),
@@ -770,11 +755,12 @@ class Dashboard extends StatelessWidget {
                         },
                       ),
               ),
-              actionsPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              actionsPadding: const EdgeInsets.symmetric(horizontal: TFSpacing.s12, vertical: TFSpacing.s8),
               actions: [
-                TextButton(
+                TFButton(
+                  label: 'Fechar',
+                  variant: TFButtonVariant.secondary,
                   onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Fechar'),
                 ),
               ],
             );
@@ -789,6 +775,8 @@ class Dashboard extends StatelessWidget {
     Map<String, List<TaskWarning>> effectiveWarnings,
     List<Task> listaTotal,
   ) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
     final tasksById = {for (final t in listaTotal) t.id: t};
     final entries = effectiveWarnings.entries
         .where((e) => e.value.isNotEmpty)
@@ -802,6 +790,7 @@ class Dashboard extends StatelessWidget {
         context: context,
         isScrollControlled: true,
         useSafeArea: true,
+        backgroundColor: colors.surface,
         builder: (ctx) => DraggableScrollableSheet(
           initialChildSize: 0.6,
           minChildSize: 0.3,
@@ -819,12 +808,13 @@ class Dashboard extends StatelessWidget {
       showDialog(
         context: context,
         builder: (ctx) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          backgroundColor: colors.surface,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(TFRadius.r12)),
           title: Row(
             children: [
-              Icon(Icons.warning_amber_rounded, color: Colors.orange[700]),
+              Icon(Icons.warning_amber_rounded, color: colors.warning),
               const SizedBox(width: 10),
-              const Text('Alertas Ativos'),
+              Text('Alertas Ativos', style: typography.sectionTitle),
             ],
           ),
           content: SizedBox(
@@ -838,9 +828,10 @@ class Dashboard extends StatelessWidget {
             ),
           ),
           actions: [
-            TextButton(
+            TFButton(
+              label: 'Fechar',
+              variant: TFButtonVariant.secondary,
               onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Fechar'),
             ),
           ],
         ),
@@ -854,6 +845,9 @@ class Dashboard extends StatelessWidget {
     required Map<String, Task> tasksById,
     VoidCallback? onClose,
   }) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -864,10 +858,10 @@ class Dashboard extends StatelessWidget {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                IconButton(
-                  icon: const Icon(Icons.close),
-                  onPressed: onClose,
+                TFIconButton(
+                  icon: Icons.close,
                   tooltip: 'Fechar',
+                  onPressed: onClose,
                 ),
               ],
             ),
@@ -882,20 +876,20 @@ class Dashboard extends StatelessWidget {
               final label = task?.tarefa ?? taskId;
               final maxSev = WarningSeverityTheme.maxSeverity(warnings);
               final color = WarningSeverityTheme.colorForSeverity(maxSev);
-              return Card(
-                margin: const EdgeInsets.only(bottom: 8),
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  side: BorderSide(color: color.withOpacity(0.4)),
+              return Container(
+                margin: const EdgeInsets.only(bottom: TFSpacing.s4),
+                decoration: BoxDecoration(
+                  color: colors.surfaceSecondary,
+                  borderRadius: BorderRadius.circular(TFRadius.r8),
+                  border: Border.all(color: color.withValues(alpha: 0.4)),
                 ),
                 child: ListTile(
                   leading: Container(
                     width: 36,
                     height: 36,
                     decoration: BoxDecoration(
-                      color: color.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(8),
+                      color: color.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(TFRadius.r4),
                     ),
                     child: Center(
                       child: Text(
@@ -908,11 +902,11 @@ class Dashboard extends StatelessWidget {
                     label,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                    style: typography.bodyMedium.copyWith(fontWeight: FontWeight.w600),
                   ),
                   subtitle: Text(
                     '${warnings.length} alerta(s) · ${WarningSeverityTheme.labelForSeverity(maxSev)}',
-                    style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                    style: typography.caption.copyWith(color: colors.textSecondary),
                   ),
                   onTap: () {
                     showWarningsPanel(
@@ -942,7 +936,10 @@ class Dashboard extends StatelessWidget {
     }
   }
 
-  Widget _buildProductivityIndicators(Map<String, dynamic> stats, bool isMobile) {
+  Widget _buildProductivityIndicators(BuildContext context, Map<String, dynamic> stats, bool isMobile) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
     double asDouble(dynamic v) {
       if (v is num) return v.toDouble();
       return 0.0;
@@ -957,10 +954,10 @@ class Dashboard extends StatelessWidget {
 
     Widget buildItem(String title, String value, Color color, IconData icon) {
       return Container(
-        padding: EdgeInsets.all(isMobile ? 10 : 12),
+        padding: EdgeInsets.all(isMobile ? TFSpacing.s4 : TFSpacing.s8),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.08),
-          borderRadius: BorderRadius.circular(10),
+          color: color.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(TFRadius.r8),
         ),
         child: Row(
           children: [
@@ -972,12 +969,12 @@ class Dashboard extends StatelessWidget {
                 children: [
                   Text(
                     title,
-                    style: TextStyle(fontSize: isMobile ? 11 : 12, fontWeight: FontWeight.w600, color: color),
+                    style: typography.caption.copyWith(fontWeight: FontWeight.w600, color: color),
                   ),
                   const SizedBox(height: 2),
                   Text(
                     value,
-                    style: TextStyle(fontSize: isMobile ? 13 : 15, fontWeight: FontWeight.bold),
+                    style: typography.cardTitle.copyWith(fontSize: isMobile ? 13 : 15, fontWeight: FontWeight.bold),
                   ),
                 ],
               ),
@@ -991,28 +988,31 @@ class Dashboard extends StatelessWidget {
       children: [
         Row(
           children: [
-            Expanded(child: buildItem('Taxa de conclusão', '${(taxaConclusao * 100).toStringAsFixed(1)}%', Colors.green, Icons.trending_up)),
+            Expanded(child: buildItem('Taxa de conclusão', '${(taxaConclusao * 100).toStringAsFixed(1)}%', colors.success, Icons.trending_up)),
             const SizedBox(width: 8),
-            Expanded(child: buildItem('Produtividade/dia', prodDia.toStringAsFixed(2), Colors.blue, Icons.bar_chart)),
+            Expanded(child: buildItem('Produtividade/dia', prodDia.toStringAsFixed(2), colors.primary, Icons.bar_chart)),
           ],
         ),
         const SizedBox(height: 8),
         Row(
           children: [
-            Expanded(child: buildItem('Eficiência (CONC / CONC+ATR)', '${(eficiencia * 100).toStringAsFixed(1)}%', Colors.indigo, Icons.speed)),
+            Expanded(child: buildItem('Eficiência (CONC / CONC+ATR)', '${(eficiencia * 100).toStringAsFixed(1)}%', colors.info, Icons.speed)),
             const SizedBox(width: 8),
-            Expanded(child: buildItem('Atraso médio (dias)', atrasoMedio.toStringAsFixed(1), Colors.redAccent, Icons.timer)),
+            Expanded(child: buildItem('Atraso médio (dias)', atrasoMedio.toStringAsFixed(1), colors.danger, Icons.timer)),
           ],
         ),
       ],
     );
   }
 
-  Widget _buildTaskPreviewList(List<Task> tasks, bool isMobile) {
+  Widget _buildTaskPreviewList(BuildContext context, List<Task> tasks, bool isMobile) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
     if (tasks.isEmpty) {
       return Text(
         'Nenhuma tarefa',
-        style: TextStyle(color: Colors.grey[600], fontSize: isMobile ? 12 : 13),
+        style: typography.bodySmall.copyWith(color: colors.textSecondary),
       );
     }
     return Column(
@@ -1026,13 +1026,13 @@ class Dashboard extends StatelessWidget {
                   t.tarefa,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: isMobile ? 12 : 13),
+                  style: typography.bodySmall.copyWith(fontWeight: FontWeight.w600),
                 ),
               ),
               const SizedBox(width: 8),
               Text(
                 t.status.isNotEmpty ? t.status : '—',
-                style: TextStyle(color: Colors.grey[700], fontSize: isMobile ? 11 : 12),
+                style: typography.caption.copyWith(color: colors.textSecondary),
               ),
             ],
           ),
@@ -1041,14 +1041,17 @@ class Dashboard extends StatelessWidget {
     );
   }
 
-  Widget _buildTag(String label, String value, Color color, {bool wrap = false}) {
+  Widget _buildTag(BuildContext context, String label, String value, Color color, {bool wrap = false}) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
     return Container(
-      constraints: const BoxConstraints(minHeight: 32),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      constraints: const BoxConstraints(minHeight: 28),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.2)),
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(TFRadius.r4),
+        border: Border.all(color: color.withValues(alpha: 0.2)),
       ),
       child: wrap
           ? RichText(
@@ -1056,18 +1059,16 @@ class Dashboard extends StatelessWidget {
                 children: [
                   TextSpan(
                     text: '$label: ',
-                    style: TextStyle(
-                      fontSize: 11,
+                    style: typography.caption.copyWith(
                       fontWeight: FontWeight.w700,
-                      color: color.withOpacity(0.9),
+                      color: color,
                     ),
                   ),
                   TextSpan(
                     text: value,
-                    style: const TextStyle(
-                      fontSize: 11,
+                    style: typography.caption.copyWith(
                       fontWeight: FontWeight.w600,
-                      color: Color(0xFF1E3A5F),
+                      color: colors.textPrimary,
                     ),
                   ),
                 ],
@@ -1080,18 +1081,16 @@ class Dashboard extends StatelessWidget {
               children: [
                 Text(
                   '$label: ',
-                  style: TextStyle(
-                    fontSize: 11,
+                  style: typography.caption.copyWith(
                     fontWeight: FontWeight.w700,
-                    color: color.withOpacity(0.9),
+                    color: color,
                   ),
                 ),
                 Text(
                   value,
-                  style: const TextStyle(
-                    fontSize: 11,
+                  style: typography.caption.copyWith(
                     fontWeight: FontWeight.w600,
-                    color: Color(0xFF1E3A5F),
+                    color: colors.textPrimary,
                   ),
                 ),
               ],
@@ -1099,41 +1098,31 @@ class Dashboard extends StatelessWidget {
     );
   }
 
-  Widget _buildSectionCard(String title, Widget child, bool isMobile, {double? width}) {
+  Widget _buildSectionCard(BuildContext context, String title, Widget child, bool isMobile, {double? width}) {
     return SizedBox(
       width: width ?? (isMobile ? double.infinity : 480.0),
-      child: Container(
-        decoration: BoxDecoration(
-          color: const Color(0xFFF6F7FB),
-          borderRadius: BorderRadius.circular(18),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.05),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
-            ),
+      child: TFCard(
+        padding: EdgeInsets.all(isMobile ? TFSpacing.s8 : TFSpacing.s12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildSectionTitle(context, title, isMobile),
+            const SizedBox(height: TFSpacing.s8),
+            child,
           ],
-        ),
-        child: Padding(
-          padding: EdgeInsets.all(isMobile ? 14 : 18),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildSectionTitle(title, isMobile),
-              const SizedBox(height: 10),
-              child,
-            ],
-          ),
         ),
       ),
     );
   }
 
-  Widget _buildTopList(Map<String, int> data, bool isMobile, {int maxItems = 5}) {
+  Widget _buildTopList(BuildContext context, Map<String, int> data, bool isMobile, {int maxItems = 5}) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
     if (data.isEmpty) {
       return Text(
         'Nenhum dado disponível',
-        style: TextStyle(color: Colors.grey[600], fontSize: isMobile ? 12 : 13),
+        style: typography.bodySmall.copyWith(color: colors.textSecondary),
       );
     }
     final entries = data.entries.toList()
@@ -1151,10 +1140,7 @@ class Dashboard extends StatelessWidget {
               Expanded(
                 child: Text(
                   e.key,
-                  style: TextStyle(
-                    fontSize: isMobile ? 12 : 13,
-                    color: Colors.black87,
-                  ),
+                  style: typography.bodySmall,
                   overflow: TextOverflow.ellipsis,
                   maxLines: 1,
                 ),
@@ -1165,22 +1151,19 @@ class Dashboard extends StatelessWidget {
                 child: Text(
                   e.value.toString(),
                   textAlign: TextAlign.right,
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: isMobile ? 12 : 13,
-                  ),
+                  style: typography.bodySmall.copyWith(fontWeight: FontWeight.bold),
                 ),
               ),
               const SizedBox(width: 8),
               Expanded(
                 flex: 2,
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
+                  borderRadius: BorderRadius.circular(TFRadius.rFull),
                   child: LinearProgressIndicator(
                     value: pct,
                     minHeight: 8,
-                    backgroundColor: Colors.grey[200],
-                    valueColor: AlwaysStoppedAnimation<Color>(Colors.blueAccent),
+                    backgroundColor: colors.surfaceSecondary,
+                    valueColor: AlwaysStoppedAnimation<Color>(colors.primary),
                   ),
                 ),
               ),
@@ -1191,18 +1174,20 @@ class Dashboard extends StatelessWidget {
     );
   }
 
-  Widget _buildSectionTitle(String title, bool isMobile) {
+  Widget _buildSectionTitle(BuildContext context, String title, bool isMobile) {
+    final typography = context.tfTypography;
     return Text(
       title,
-      style: TextStyle(
+      style: typography.cardTitle.copyWith(
         fontSize: isMobile ? 14 : 16,
-        fontWeight: FontWeight.bold,
-        color: const Color(0xFF1E3A5F),
       ),
     );
   }
 
-  Widget _buildStatusDistribution(Map<String, int> distribution, int total, bool isMobile) {
+  Widget _buildStatusDistribution(BuildContext context, Map<String, int> distribution, int total, bool isMobile) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
     String statusDescricao(String sigla) {
       final key = sigla.trim().toUpperCase();
       const map = {
@@ -1217,50 +1202,52 @@ class Dashboard extends StatelessWidget {
       return map[key] ?? sigla;
     }
 
-    return Card(
-      child: Padding(
-        padding: EdgeInsets.all(isMobile ? 8 : 16),
-        child: Column(
-          children: distribution.entries.map((entry) {
-            final percentage = total > 0 ? (entry.value / total * 100) : 0.0;
-            return Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: isMobile ? 60 : 80,
-                    child: Text(
-                      statusDescricao(entry.key),
-                      style: TextStyle(fontSize: isMobile ? 10 : 12),
-                    ),
-                  ),
-                  Expanded(
-                    child: LinearProgressIndicator(
-                      value: percentage / 100,
-                      backgroundColor: Colors.grey[200],
-                      valueColor: AlwaysStoppedAnimation<Color>(
-                        entry.key == 'ANDA' ? Colors.orange :
-                        entry.key == 'CONC' || entry.key == 'RPAR' ? Colors.green :
-                        entry.key == 'CANC' ? Colors.redAccent :
-                        Colors.blue,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    '${entry.value} (${percentage.toStringAsFixed(1)}%)',
-                    style: TextStyle(fontSize: isMobile ? 10 : 12, fontWeight: FontWeight.bold),
-                  ),
-                ],
+    return Column(
+      children: distribution.entries.map((entry) {
+        final percentage = total > 0 ? (entry.value / total * 100) : 0.0;
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Row(
+            children: [
+              SizedBox(
+                width: isMobile ? 70 : 90,
+                child: Text(
+                  statusDescricao(entry.key),
+                  style: typography.caption,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-            );
-          }).toList(),
-        ),
-      ),
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(TFRadius.rFull),
+                  child: LinearProgressIndicator(
+                    value: percentage / 100,
+                    minHeight: 8,
+                    backgroundColor: colors.surfaceSecondary,
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      entry.key.contains('ANDA') ? colors.warning :
+                      entry.key.contains('CONC') || entry.key.contains('RPAR') ? colors.success :
+                      entry.key.contains('CANC') ? colors.danger :
+                      colors.primary,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '${entry.value} (${percentage.toStringAsFixed(1)}%)',
+                style: typography.caption.copyWith(fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+        );
+      }).toList(),
     );
   }
 
   Widget _buildTypeDistribution(BuildContext context, Map<String, int> distribution, bool isMobile) {
+    final typography = context.tfTypography;
+
     return FutureBuilder<List<TipoAtividade>>(
       future: TipoAtividadeService().getTiposAtividadeAtivos(),
       builder: (context, snapshot) {
@@ -1275,66 +1262,55 @@ class Dashboard extends StatelessWidget {
           return mapDescricao[key] ?? sigla;
         }
 
-    return Card(
-      child: Padding(
-        padding: EdgeInsets.all(isMobile ? 8 : 16),
-        child: Column(
+        return Column(
           children: distribution.entries.map((entry) {
             return Padding(
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(
-                        tipoDescricao(entry.key),
-                    style: TextStyle(fontSize: isMobile ? 10 : 12),
+                  Expanded(
+                    child: Text(
+                      tipoDescricao(entry.key),
+                      style: typography.bodySmall,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                   Text(
                     entry.value.toString(),
-                    style: TextStyle(
-                      fontSize: isMobile ? 10 : 12,
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: typography.bodySmall.copyWith(fontWeight: FontWeight.bold),
                   ),
                 ],
               ),
             );
           }).toList(),
-        ),
-      ),
         );
       },
     );
   }
 
-  Widget _buildRegionalDistribution(Map<String, int> distribution, bool isMobile) {
-    return Card(
-      child: Padding(
-        padding: EdgeInsets.all(isMobile ? 8 : 16),
-        child: Column(
-          children: distribution.entries.map((entry) {
-            return Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    entry.key,
-                    style: TextStyle(fontSize: isMobile ? 10 : 12),
-                  ),
-                  Text(
-                    entry.value.toString(),
-                    style: TextStyle(
-                      fontSize: isMobile ? 10 : 12,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ],
+  Widget _buildRegionalDistribution(BuildContext context, Map<String, int> distribution, bool isMobile) {
+    final typography = context.tfTypography;
+
+    return Column(
+      children: distribution.entries.map((entry) {
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                entry.key,
+                style: typography.bodySmall,
               ),
-            );
-          }).toList(),
-        ),
-      ),
+              Text(
+                entry.value.toString(),
+                style: typography.bodySmall.copyWith(fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+        );
+      }).toList(),
     );
   }
 }

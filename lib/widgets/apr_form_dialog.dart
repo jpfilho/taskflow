@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import '../models/task.dart';
 import '../models/apr.dart';
 import '../services/apr_service.dart';
+import '../design_system/taskflow_design_system.dart';
 
 class APRFormDialog extends StatefulWidget {
   final Task task;
@@ -21,7 +22,8 @@ class APRFormDialog extends StatefulWidget {
 class _APRFormDialogState extends State<APRFormDialog> {
   final _formKey = GlobalKey<FormState>();
   final APRService _aprService = APRService();
-  
+  bool _isSaving = false;
+
   late TextEditingController _numeroAprController;
   late TextEditingController _responsavelElaboracaoController;
   late TextEditingController _aprovadorController;
@@ -36,7 +38,7 @@ class _APRFormDialogState extends State<APRFormDialog> {
   late TextEditingController _autorizacoesNecessariasController;
   late TextEditingController _procedimentosEmergenciaController;
   late TextEditingController _observacoesController;
-  
+
   DateTime? _dataElaboracao;
   DateTime? _dataAprovacao;
   DateTime? _dataExecucao;
@@ -46,7 +48,7 @@ class _APRFormDialogState extends State<APRFormDialog> {
   void initState() {
     super.initState();
     final apr = widget.apr;
-    
+
     _numeroAprController = TextEditingController(text: apr?.numeroApr ?? '');
     _responsavelElaboracaoController = TextEditingController(text: apr?.responsavelElaboracao ?? '');
     _aprovadorController = TextEditingController(text: apr?.aprovador ?? '');
@@ -61,7 +63,7 @@ class _APRFormDialogState extends State<APRFormDialog> {
     _autorizacoesNecessariasController = TextEditingController(text: apr?.autorizacoesNecessarias ?? '');
     _procedimentosEmergenciaController = TextEditingController(text: apr?.procedimentosEmergencia ?? '');
     _observacoesController = TextEditingController(text: apr?.observacoes ?? '');
-    
+
     _dataElaboracao = apr?.dataElaboracao ?? DateTime.now();
     _dataAprovacao = apr?.dataAprovacao;
     _dataExecucao = apr?.dataExecucao ?? widget.task.dataInicio;
@@ -102,6 +104,8 @@ class _APRFormDialogState extends State<APRFormDialog> {
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
 
+    setState(() => _isSaving = true);
+
     try {
       final apr = APR(
         id: widget.apr?.id,
@@ -127,7 +131,7 @@ class _APRFormDialogState extends State<APRFormDialog> {
       );
 
       await _aprService.createOrUpdateAPR(apr);
-      
+
       if (mounted) {
         Navigator.of(context).pop(apr);
         ScaffoldMessenger.of(context).showSnackBar(
@@ -139,6 +143,7 @@ class _APRFormDialogState extends State<APRFormDialog> {
       }
     } catch (e) {
       if (mounted) {
+        setState(() => _isSaving = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Erro ao salvar APR: $e'),
@@ -151,9 +156,13 @@ class _APRFormDialogState extends State<APRFormDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
     final isMobile = MediaQuery.of(context).size.width < 600;
-    
+
     return Dialog(
+      backgroundColor: colors.surface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(TFRadius.r16)),
       child: Container(
         width: isMobile ? double.infinity : 900,
         constraints: BoxConstraints(
@@ -164,19 +173,20 @@ class _APRFormDialogState extends State<APRFormDialog> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // Header
               Container(
-                padding: const EdgeInsets.all(16),
-                decoration: const BoxDecoration(
-                  color: Color(0xFF1E3A5F),
-                  borderRadius: BorderRadius.only(
-                    topLeft: Radius.circular(8),
-                    topRight: Radius.circular(8),
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                decoration: BoxDecoration(
+                  color: colors.primary,
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(TFRadius.r16),
+                    topRight: Radius.circular(TFRadius.r16),
                   ),
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.warning, color: Colors.white),
-                    const SizedBox(width: 8),
+                    const Icon(Icons.shield_outlined, color: Colors.white),
+                    const SizedBox(width: 12),
                     const Expanded(
                       child: Text(
                         'APR - Análise Preliminar de Risco',
@@ -189,6 +199,7 @@ class _APRFormDialogState extends State<APRFormDialog> {
                     ),
                     IconButton(
                       icon: const Icon(Icons.close, color: Colors.white),
+                      tooltip: 'Fechar',
                       onPressed: () => Navigator.of(context).pop(),
                     ),
                   ],
@@ -196,21 +207,18 @@ class _APRFormDialogState extends State<APRFormDialog> {
               ),
               Expanded(
                 child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(24),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _buildSectionTitle('Informações Gerais'),
-                      const SizedBox(height: 8),
+                      _buildSectionTitle(context, 'Informações Gerais'),
+                      const SizedBox(height: 12),
                       Row(
                         children: [
                           Expanded(
-                            child: TextFormField(
+                            child: TFTextField(
                               controller: _numeroAprController,
-                              decoration: const InputDecoration(
-                                labelText: 'Número APR',
-                                border: OutlineInputBorder(),
-                              ),
+                              label: 'Número APR',
                             ),
                           ),
                           const SizedBox(width: 16),
@@ -220,14 +228,17 @@ class _APRFormDialogState extends State<APRFormDialog> {
                                 setState(() => _dataElaboracao = date);
                               }),
                               child: InputDecorator(
-                                decoration: const InputDecoration(
+                                decoration: InputDecoration(
                                   labelText: 'Data de Elaboração',
-                                  border: OutlineInputBorder(),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(TFRadius.r12),
+                                  ),
                                 ),
                                 child: Text(
                                   _dataElaboracao != null
                                       ? DateFormat('dd/MM/yyyy').format(_dataElaboracao!)
                                       : 'Selecione a data',
+                                  style: typography.bodyMedium,
                                 ),
                               ),
                             ),
@@ -238,47 +249,35 @@ class _APRFormDialogState extends State<APRFormDialog> {
                       Row(
                         children: [
                           Expanded(
-                            child: TextFormField(
+                            child: TFTextField(
                               controller: _responsavelElaboracaoController,
-                              decoration: const InputDecoration(
-                                labelText: 'Responsável pela Elaboração',
-                                border: OutlineInputBorder(),
-                              ),
+                              label: 'Responsável pela Elaboração',
                             ),
                           ),
                           const SizedBox(width: 16),
                           Expanded(
-                            child: TextFormField(
+                            child: TFTextField(
                               controller: _aprovadorController,
-                              decoration: const InputDecoration(
-                                labelText: 'Aprovador',
-                                border: OutlineInputBorder(),
-                              ),
+                              label: 'Aprovador',
                             ),
                           ),
                         ],
                       ),
                       const SizedBox(height: 24),
-                      _buildSectionTitle('Dados da Atividade'),
-                      const SizedBox(height: 8),
-                      TextFormField(
+                      _buildSectionTitle(context, 'Dados da Atividade'),
+                      const SizedBox(height: 12),
+                      TFTextField(
                         controller: _atividadeController,
-                        decoration: const InputDecoration(
-                          labelText: 'Atividade',
-                          border: OutlineInputBorder(),
-                        ),
+                        label: 'Atividade',
                         maxLines: 2,
                       ),
                       const SizedBox(height: 16),
                       Row(
                         children: [
                           Expanded(
-                            child: TextFormField(
+                            child: TFTextField(
                               controller: _localExecucaoController,
-                              decoration: const InputDecoration(
-                                labelText: 'Local de Execução',
-                                border: OutlineInputBorder(),
-                              ),
+                              label: 'Local de Execução',
                             ),
                           ),
                           const SizedBox(width: 16),
@@ -288,14 +287,17 @@ class _APRFormDialogState extends State<APRFormDialog> {
                                 setState(() => _dataExecucao = date);
                               }),
                               child: InputDecorator(
-                                decoration: const InputDecoration(
+                                decoration: InputDecoration(
                                   labelText: 'Data de Execução',
-                                  border: OutlineInputBorder(),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(TFRadius.r12),
+                                  ),
                                 ),
                                 child: Text(
                                   _dataExecucao != null
                                       ? DateFormat('dd/MM/yyyy').format(_dataExecucao!)
                                       : 'Selecione a data',
+                                  style: typography.bodyMedium,
                                 ),
                               ),
                             ),
@@ -306,118 +308,93 @@ class _APRFormDialogState extends State<APRFormDialog> {
                       Row(
                         children: [
                           Expanded(
-                            child: TextFormField(
+                            child: TFTextField(
                               controller: _equipeExecutoraController,
-                              decoration: const InputDecoration(
-                                labelText: 'Equipe Executora',
-                                border: OutlineInputBorder(),
-                              ),
+                              label: 'Equipe Executora',
                             ),
                           ),
                           const SizedBox(width: 16),
                           Expanded(
-                            child: TextFormField(
+                            child: TFTextField(
                               controller: _coordenadorAtividadeController,
-                              decoration: const InputDecoration(
-                                labelText: 'Coordenador da Atividade',
-                                border: OutlineInputBorder(),
-                              ),
+                              label: 'Coordenador da Atividade',
                             ),
                           ),
                         ],
                       ),
                       const SizedBox(height: 24),
-                      _buildSectionTitle('Análise de Riscos'),
-                      const SizedBox(height: 8),
-                      TextFormField(
+                      _buildSectionTitle(context, 'Análise de Riscos & Medidas'),
+                      const SizedBox(height: 12),
+                      TFTextField(
                         controller: _riscosIdentificadosController,
-                        decoration: const InputDecoration(
-                          labelText: 'Riscos Identificados',
-                          border: OutlineInputBorder(),
-                          hintText: 'Descreva os riscos identificados',
-                        ),
-                        maxLines: 5,
+                        label: 'Riscos Identificados',
+                        hint: 'Descreva os riscos identificados',
+                        maxLines: 4,
                       ),
-                      const SizedBox(height: 24),
-                      _buildSectionTitle('Medidas de Controle'),
-                      const SizedBox(height: 8),
-                      TextFormField(
+                      const SizedBox(height: 16),
+                      TFTextField(
                         controller: _medidasControleController,
-                        decoration: const InputDecoration(
-                          labelText: 'Medidas de Controle',
-                          border: OutlineInputBorder(),
-                          hintText: 'Descreva as medidas de controle',
-                        ),
-                        maxLines: 5,
+                        label: 'Medidas de Controle',
+                        hint: 'Descreva as medidas de controle',
+                        maxLines: 4,
+                      ),
+                      const SizedBox(height: 16),
+                      TFTextField(
+                        controller: _episNecessariosController,
+                        label: 'EPIs Necessários',
+                        maxLines: 2,
                       ),
                       const SizedBox(height: 24),
-                      _buildSectionTitle('EPIs Necessários'),
-                      const SizedBox(height: 8),
-                      TextFormField(
-                        controller: _episNecessariosController,
-                        decoration: const InputDecoration(
-                          labelText: 'EPIs Necessários',
-                          border: OutlineInputBorder(),
-                        ),
+                      _buildSectionTitle(context, 'Permissões & Emergência'),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TFTextField(
+                              controller: _permissoesNecessariasController,
+                              label: 'Permissões Necessárias',
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: TFTextField(
+                              controller: _autorizacoesNecessariasController,
+                              label: 'Autorizações Necessárias',
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      TFTextField(
+                        controller: _procedimentosEmergenciaController,
+                        label: 'Procedimentos de Emergência',
                         maxLines: 3,
                       ),
-                      const SizedBox(height: 24),
-                      _buildSectionTitle('Permissões e Autorizações'),
-                      const SizedBox(height: 8),
-                      TextFormField(
-                        controller: _permissoesNecessariasController,
-                        decoration: const InputDecoration(
-                          labelText: 'Permissões Necessárias',
-                          border: OutlineInputBorder(),
-                        ),
+                      const SizedBox(height: 16),
+                      TFTextField(
+                        controller: _observacoesController,
+                        label: 'Observações',
                         maxLines: 2,
                       ),
                       const SizedBox(height: 16),
-                      TextFormField(
-                        controller: _autorizacoesNecessariasController,
-                        decoration: const InputDecoration(
-                          labelText: 'Autorizações Necessárias',
-                          border: OutlineInputBorder(),
-                        ),
-                        maxLines: 2,
-                      ),
-                      const SizedBox(height: 24),
-                      _buildSectionTitle('Procedimentos de Emergência'),
-                      const SizedBox(height: 8),
-                      TextFormField(
-                        controller: _procedimentosEmergenciaController,
-                        decoration: const InputDecoration(
-                          labelText: 'Procedimentos de Emergência',
-                          border: OutlineInputBorder(),
-                        ),
-                        maxLines: 4,
-                      ),
-                      const SizedBox(height: 24),
-                      _buildSectionTitle('Observações'),
-                      const SizedBox(height: 8),
-                      TextFormField(
-                        controller: _observacoesController,
-                        decoration: const InputDecoration(
-                          labelText: 'Observações',
-                          border: OutlineInputBorder(),
-                        ),
-                        maxLines: 3,
-                      ),
-                      const SizedBox(height: 24),
-                      _buildSectionTitle('Status'),
-                      const SizedBox(height: 8),
-                      DropdownButtonFormField<String>(
-                        initialValue: _status,
-                        decoration: const InputDecoration(
-                          labelText: 'Status',
-                          border: OutlineInputBorder(),
-                        ),
-                        items: const [
-                          DropdownMenuItem(value: 'rascunho', child: Text('Rascunho')),
-                          DropdownMenuItem(value: 'aprovado', child: Text('Aprovado')),
-                          DropdownMenuItem(value: 'em_execucao', child: Text('Em Execução')),
-                          DropdownMenuItem(value: 'concluido', child: Text('Concluído')),
-                        ],
+                      TFDropdown<String>(
+                        label: 'Status',
+                        value: _status,
+                        items: const ['rascunho', 'aprovado', 'em_execucao', 'concluido'],
+                        displayText: (status) {
+                          switch (status) {
+                            case 'rascunho':
+                              return 'Rascunho';
+                            case 'aprovado':
+                              return 'Aprovado';
+                            case 'em_execucao':
+                              return 'Em Execução';
+                            case 'concluido':
+                              return 'Concluído';
+                            default:
+                              return status;
+                          }
+                        },
                         onChanged: (value) {
                           if (value != null) {
                             setState(() => _status = value);
@@ -428,26 +405,33 @@ class _APRFormDialogState extends State<APRFormDialog> {
                   ),
                 ),
               ),
+              // Footer
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: Colors.grey[100],
+                  color: colors.surfaceSecondary,
                   borderRadius: const BorderRadius.only(
-                    bottomLeft: Radius.circular(8),
-                    bottomRight: Radius.circular(8),
+                    bottomLeft: Radius.circular(TFRadius.r16),
+                    topRight: Radius.zero,
+                    topLeft: Radius.zero,
+                    bottomRight: Radius.circular(TFRadius.r16),
                   ),
+                  border: Border(top: BorderSide(color: colors.borderSubtle)),
                 ),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
-                    TextButton(
+                    TFButton(
+                      label: 'Cancelar',
+                      variant: TFButtonVariant.secondary,
                       onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('Cancelar'),
                     ),
-                    const SizedBox(width: 8),
-                    ElevatedButton(
+                    const SizedBox(width: 12),
+                    TFButton(
+                      label: 'Salvar',
+                      variant: TFButtonVariant.primary,
+                      loading: _isSaving,
                       onPressed: _save,
-                      child: const Text('Salvar'),
                     ),
                   ],
                 ),
@@ -459,13 +443,15 @@ class _APRFormDialogState extends State<APRFormDialog> {
     );
   }
 
-  Widget _buildSectionTitle(String title) {
+  Widget _buildSectionTitle(BuildContext context, String title) {
+    final typography = context.tfTypography;
+    final colors = context.tfColors;
+
     return Text(
       title,
-      style: const TextStyle(
-        fontSize: 16,
+      style: typography.sectionTitle.copyWith(
         fontWeight: FontWeight.bold,
-        color: Color(0xFF1E3A5F),
+        color: colors.primary,
       ),
     );
   }

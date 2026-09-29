@@ -85,6 +85,7 @@ class AppMenuConfig {
     AppMenuItem(index: 24, label: 'Documentos', icon: Icons.folder, forRootOnly: true),
     AppMenuItem(index: 23, label: 'Álbuns de Imagens', icon: Icons.photo_library),
     AppMenuItem(index: 25, label: 'GTD', icon: Icons.check_circle_outline, forGtdOnly: true),
+    // AppMenuItem(index: 29, label: 'Projetos', icon: Icons.account_tree),
     AppMenuItem(index: 26, label: 'Melhorias e Bugs', icon: Icons.bug_report),
     // Chat e Configuração (índices 14 e 15 no Sidebar são acionados pelo HeaderBar)
     AppMenuItem(index: 15, label: 'Chat', icon: Icons.chat),

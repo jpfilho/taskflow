@@ -1,12 +1,22 @@
 import 'package:flutter/material.dart';
-
-import '../../../documents/data/models/document.dart';
-import '../../../documents/data/repositories/supabase_documents_repository.dart';
-import '../../../documents/data/models/document_status.dart';
+import 'package:url_launcher/url_launcher.dart';
+import '../../../../design_system/components/buttons/tf_button.dart';
+import '../../../../design_system/components/buttons/tf_icon_button.dart';
+import '../../../../design_system/components/feedback/tf_empty_state.dart';
+import '../../../../design_system/components/feedback/tf_loading.dart';
+import '../../../../design_system/components/inputs/tf_text_field.dart';
+import '../../../../design_system/components/layout/tf_page_header.dart';
+import '../../../../design_system/foundations/tf_breakpoints.dart';
+import '../../../../design_system/foundations/tf_icons.dart';
+import '../../../../design_system/foundations/tf_radius.dart';
+import '../../../../design_system/theme/taskflow_theme_extension.dart';
+import '../../data/models/document.dart';
+import '../../data/models/document_status.dart';
+import '../../data/repositories/supabase_documents_repository.dart';
 import '../widgets/document_card.dart';
 import 'document_detail_page.dart';
 import 'document_upload_page.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'status_documents_page.dart';
 
 class DocumentsPage extends StatefulWidget {
   final SupabaseDocumentsRepository? repository;
@@ -124,25 +134,175 @@ class _DocumentsPageState extends State<DocumentsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+
     return Scaffold(
+      backgroundColor: colors.background,
       body: SafeArea(
-        child: Container(
-          color: Colors.grey.shade100,
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 1100),
-              child: Column(
-                children: [
-                  _buildHeader(context),
-                  const Divider(height: 1),
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: _buildContent(),
+        child: Column(
+          children: [
+            TFPageHeader(
+              title: 'Gestão de Documentos',
+              subtitle: 'Consulte, filtre e gerencie os documentos técnicos e operacionais.',
+              primaryAction: TFButton(
+                label: 'Upload de Documento',
+                leadingIcon: TFIcons.add,
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => DocumentUploadPage(repository: _repo),
+                    ),
+                  ).then((_) => _load());
+                },
+              ),
+              secondaryActions: [
+                TFButton(
+                  label: 'Status',
+                  variant: TFButtonVariant.secondary,
+                  leadingIcon: Icons.tune_rounded,
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => StatusDocumentsPage(repository: _repo),
+                      ),
+                    );
+                  },
+                ),
+                TFIconButton(
+                  icon: TFIcons.refresh,
+                  tooltip: 'Atualizar Lista',
+                  onPressed: _load,
+                ),
+              ],
+            ),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: spacing.md, vertical: spacing.xs),
+              child: _buildSearchAndFilters(context),
+            ),
+            Expanded(
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: spacing.md),
+                child: _buildContent(context),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSearchAndFilters(BuildContext context) {
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+    final typography = context.tfTypography;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: TFTextField(
+                controller: _searchController,
+                hint: 'Buscar por título, descrição ou autor...',
+                prefixIcon: const Icon(TFIcons.search),
+                onChanged: (val) {
+                  setState(() {
+                    _search = val;
+                    _page = 0;
+                  });
+                  _load();
+                },
+              ),
+            ),
+            if (_statuses.isNotEmpty) ...[
+              SizedBox(width: spacing.sm),
+              PopupMenuButton<String?>(
+                tooltip: 'Filtrar por Status',
+                initialValue: _selectedStatusId,
+                color: colors.surface,
+                icon: Container(
+                  padding: EdgeInsets.all(spacing.xs),
+                  decoration: BoxDecoration(
+                    color: _selectedStatusId != null ? colors.primary.withValues(alpha: 0.12) : colors.surface,
+                    borderRadius: TFRadius.borderRadiusMd,
+                    border: Border.all(
+                      color: _selectedStatusId != null ? colors.primary : colors.borderSubtle,
+                    ),
+                  ),
+                  child: Icon(
+                    Icons.filter_list_rounded,
+                    color: _selectedStatusId != null ? colors.primary : colors.textSecondary,
+                    size: 20,
+                  ),
+                ),
+                itemBuilder: (context) => [
+                  PopupMenuItem<String?>(
+                    value: null,
+                    child: Text('Todos os Status', style: typography.bodyMedium),
+                  ),
+                  ..._statuses.map(
+                    (s) => PopupMenuItem<String?>(
+                      value: s.id,
+                      child: Text(s.nome, style: typography.bodyMedium),
                     ),
                   ),
                 ],
+                onSelected: (val) {
+                  setState(() {
+                    _selectedStatusId = val;
+                    _page = 0;
+                  });
+                  _load();
+                },
               ),
+            ],
+          ],
+        ),
+        SizedBox(height: spacing.xs),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              _formatChip(context, 'Todos os Formatos', null),
+              ..._mimeOptions.map((m) => _formatChip(context, m.toUpperCase(), m)),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _formatChip(BuildContext context, String label, String? mime) {
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+    final typography = context.tfTypography;
+    final isSelected = _selectedMime == mime;
+
+    return Padding(
+      padding: EdgeInsets.only(right: spacing.xs),
+      child: InkWell(
+        onTap: () {
+          setState(() {
+            _selectedMime = mime;
+          });
+        },
+        borderRadius: TFRadius.borderRadiusFull,
+        child: Container(
+          padding: EdgeInsets.symmetric(horizontal: spacing.sm, vertical: spacing.xxs),
+          decoration: BoxDecoration(
+            color: isSelected ? colors.primary.withValues(alpha: 0.15) : colors.surface,
+            borderRadius: TFRadius.borderRadiusFull,
+            border: Border.all(
+              color: isSelected ? colors.primary : colors.borderSubtle,
+            ),
+          ),
+          child: Text(
+            label,
+            style: typography.caption.copyWith(
+              color: isSelected ? colors.primary : colors.textSecondary,
+              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
             ),
           ),
         ),
@@ -150,242 +310,134 @@ class _DocumentsPageState extends State<DocumentsPage> {
     );
   }
 
-  Widget _buildHeader(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: Row(
-        children: [
-          Expanded(
-            child: TextField(
-              controller: _searchController,
-              decoration: InputDecoration(
-                hintText: 'Buscar por título/descrição/tags',
-                prefixIcon: const Icon(Icons.search),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-              ),
-              onChanged: (v) {
-                _search = v;
-                _page = 0;
-                _load();
-              },
-            ),
-          ),
-          const SizedBox(width: 12),
-          ElevatedButton.icon(
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => DocumentUploadPage(repository: _repo),
-                ),
-              );
-            },
-            icon: const Icon(Icons.add_circle),
-            label: const Text('Novo Documento'),
-            style: ElevatedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildContent() {
+  Widget _buildContent(BuildContext context) {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator());
+      return const Center(child: TFLoading(message: 'Carregando documentos...'));
     }
     if (_error != null) {
       return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('Erro ao carregar: $_error'),
-            const SizedBox(height: 8),
-            OutlinedButton(
-              onPressed: _load,
-              child: const Text('Tentar novamente'),
-            ),
-          ],
+        child: TFEmptyState(
+          title: 'Erro ao carregar documentos',
+          description: _error!,
+          icon: TFIcons.warning,
+          action: TFButton(
+            label: 'Tentar Novamente',
+            leadingIcon: TFIcons.refresh,
+            onPressed: _load,
+          ),
         ),
       );
     }
     final docs = _filteredDocs;
     if (docs.isEmpty) {
       return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('Nenhum documento encontrado'),
-            const SizedBox(height: 8),
-            OutlinedButton(
-              onPressed: _load,
-              child: const Text('Recarregar'),
-            ),
-          ],
+        child: TFEmptyState(
+          title: _search.isNotEmpty || _selectedStatusId != null || _selectedMime != null
+              ? 'Nenhum documento encontrado'
+              : 'Nenhum documento cadastrado',
+          description: _search.isNotEmpty || _selectedStatusId != null || _selectedMime != null
+              ? 'Tente ajustar os filtros ou termos de pesquisa aplicados.'
+              : 'Envie manuais, relatórios ou procedimentos para a biblioteca digital.',
+          icon: Icons.folder_open_rounded,
+          action: TFButton(
+            label: 'Upload de Documento',
+            leadingIcon: TFIcons.add,
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => DocumentUploadPage(repository: _repo),
+                ),
+              ).then((_) => _load());
+            },
+          ),
         ),
       );
     }
-
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Card(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          elevation: 0,
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: _buildFilters(),
-          ),
-        ),
-        const SizedBox(height: 12),
         Expanded(
-          child: Card(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            elevation: 0,
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: _buildGrid(docs),
-            ),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final isDesktop = constraints.maxWidth >= TFBreakpoints.md;
+              final isTablet = constraints.maxWidth >= TFBreakpoints.sm && !isDesktop;
+              final crossAxisCount = isDesktop ? 3 : (isTablet ? 2 : 1);
+
+              return GridView.builder(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: crossAxisCount,
+                  childAspectRatio: isDesktop ? 2.4 : (isTablet ? 2.2 : 1.8),
+                  crossAxisSpacing: 12,
+                  mainAxisSpacing: 12,
+                ),
+                itemCount: docs.length,
+                itemBuilder: (context, index) {
+                  final doc = docs[index];
+                  return DocumentCard(
+                    document: doc,
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => DocumentDetailPage(
+                            documentId: doc.id,
+                            repository: _repo,
+                          ),
+                        ),
+                      ).then((_) => _load());
+                    },
+                    onDownload: doc.file.url != null
+                        ? () => _openUrl(context, doc.file.url!)
+                        : null,
+                  );
+                },
+              );
+            },
           ),
         ),
-        const SizedBox(height: 12),
-        _buildPagination(docs.length),
+        _buildPagination(context, docs.length),
       ],
     );
   }
 
-  Widget _buildFilters() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            InputChip(
-              selected: _selectedStatusId == null,
-              label: const Text('Status: Todos'),
-              onSelected: (_) {
-                setState(() {
-                  _selectedStatusId = null;
-                  _page = 0;
-                  _load();
-                });
-              },
-            ),
-            ..._statuses.map(
-              (s) => InputChip(
-                selected: _selectedStatusId == s.id,
-                label: Text('Status: ${s.nome}'),
-                onSelected: (_) {
-                  setState(() {
-                    _selectedStatusId = s.id;
-                    _page = 0;
-                    _load();
-                  });
-                },
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            ChoiceChip(
-              selected: _selectedMime == null,
-              label: const Text('Formato: Todos'),
-              onSelected: (_) {
-                setState(() {
-                  _selectedMime = null;
-                });
-              },
-            ),
-            ..._mimeOptions.map(
-              (m) => ChoiceChip(
-                selected: _selectedMime == m,
-                label: Text('Formato: ${m.toUpperCase()}'),
-                onSelected: (_) {
-                  setState(() {
-                    _selectedMime = m;
-                  });
-                },
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
+  Widget _buildPagination(BuildContext context, int currentCount) {
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+    final typography = context.tfTypography;
 
-  Widget _buildGrid(List<Document> docs) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final width = constraints.maxWidth;
-        final crossAxisCount = width > 1200
-            ? 3
-            : width > 800
-                ? 2
-                : 1;
-        return GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: crossAxisCount,
-            childAspectRatio: width > 800 ? 2.8 : 1.6,
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 12,
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: spacing.xs),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            'Total: $_total documentos',
+            style: typography.caption.copyWith(color: colors.textSecondary),
           ),
-          itemCount: docs.length,
-          itemBuilder: (context, index) {
-            final doc = docs[index];
-            return DocumentCard(
-              document: doc,
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => DocumentDetailPage(
-                      documentId: doc.id,
-                      repository: _repo,
-                    ),
-                  ),
-                );
-              },
-              onDownload: doc.file.url != null
-                  ? () => _openUrl(context, doc.file.url!)
-                  : null,
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Widget _buildPagination(int currentCount) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text('Total: $_total'),
-        Row(
-          children: [
-            IconButton(
-              onPressed: _page > 0 ? _prevPage : null,
-              icon: const Icon(Icons.chevron_left),
-            ),
-            Text('Página ${_page + 1}'),
-            IconButton(
-              onPressed: currentCount == _pageSize ? _nextPage : null,
-              icon: const Icon(Icons.chevron_right),
-            ),
-          ],
-        ),
-      ],
+          Row(
+            children: [
+              TFIconButton(
+                icon: Icons.chevron_left_rounded,
+                tooltip: 'Página Anterior',
+                onPressed: _page > 0 ? _prevPage : null,
+              ),
+              SizedBox(width: spacing.xs),
+              Text(
+                'Página ${_page + 1}',
+                style: typography.caption.copyWith(
+                  color: colors.textPrimary,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              SizedBox(width: spacing.xs),
+              TFIconButton(
+                icon: Icons.chevron_right_rounded,
+                tooltip: 'Próxima Página',
+                onPressed: currentCount == _pageSize ? _nextPage : null,
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 

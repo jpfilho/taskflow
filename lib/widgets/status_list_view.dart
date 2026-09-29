@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
+import '../design_system/taskflow_design_system.dart';
 import '../models/status.dart';
 import '../services/status_service.dart';
 import 'status_form_dialog.dart';
-import '../utils/responsive.dart';
-import 'dart:async';
 
 class StatusListView extends StatefulWidget {
   const StatusListView({super.key});
@@ -33,7 +33,7 @@ class _StatusListViewState extends State<StatusListView> {
     });
     // No desktop, tabela é o padrão
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && Responsive.isDesktop(context)) {
+      if (mounted && TFBreakpoints.isDesktop(context)) {
         setState(() {
           _isTableView = true;
         });
@@ -61,15 +61,16 @@ class _StatusListViewState extends State<StatusListView> {
         _isLoading = false;
       });
     } catch (e) {
-      print('Erro ao carregar status: $e');
+      debugPrint('Erro ao carregar status: $e');
       setState(() {
         _isLoading = false;
       });
       if (mounted) {
+        final colors = context.tfColors;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Erro ao carregar status: $e'),
-            backgroundColor: Colors.red,
+            backgroundColor: colors.danger,
           ),
         );
       }
@@ -94,7 +95,7 @@ class _StatusListViewState extends State<StatusListView> {
         _filteredStatusList = results;
       });
     } catch (e) {
-      print('Erro ao buscar status: $e');
+      debugPrint('Erro ao buscar status: $e');
     }
   }
 
@@ -109,19 +110,21 @@ class _StatusListViewState extends State<StatusListView> {
       if (created != null) {
         await _loadStatus();
         if (mounted) {
+          final colors = context.tfColors;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Status criado com sucesso!'),
-              backgroundColor: Colors.green,
+            SnackBar(
+              content: const Text('Status criado com sucesso!'),
+              backgroundColor: colors.success,
             ),
           );
         }
       } else {
         if (mounted) {
+          final colors = context.tfColors;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Erro ao criar status'),
-              backgroundColor: Colors.red,
+            SnackBar(
+              content: const Text('Erro ao criar status'),
+              backgroundColor: colors.danger,
             ),
           );
         }
@@ -130,32 +133,31 @@ class _StatusListViewState extends State<StatusListView> {
   }
 
   Future<void> _editStatus(Status status) async {
-    print('✏️ Editando status: ${status.codigo} com cor atual: ${status.cor}');
     final result = await showDialog<Status>(
       context: context,
       builder: (context) => StatusFormDialog(status: status),
     );
 
     if (result != null) {
-      print('💾 Status editado recebido com cor: ${result.cor}');
       final updated = await _statusService.updateStatus(status.id, result);
       if (updated != null) {
-        print('✅ Status atualizado no banco. Cor: ${updated.cor}');
         await _loadStatus();
         if (mounted) {
+          final colors = context.tfColors;
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('Status atualizado com sucesso! Cor: ${updated.cor}'),
-              backgroundColor: Colors.green,
+              backgroundColor: colors.success,
             ),
           );
         }
       } else {
         if (mounted) {
+          final colors = context.tfColors;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Erro ao atualizar status'),
-              backgroundColor: Colors.red,
+            SnackBar(
+              content: const Text('Erro ao atualizar status'),
+              backgroundColor: colors.danger,
             ),
           );
         }
@@ -164,10 +166,9 @@ class _StatusListViewState extends State<StatusListView> {
   }
 
   Future<void> _duplicateStatus(Status status) async {
-    // Criar cópia com código e nome modificados
     final duplicated = status.copyWith(
       id: '',
-      codigo: '${status.codigo}CP', // Adicionar sufixo ao código
+      codigo: '${status.codigo}CP',
       status: '${status.status} (Cópia)',
     );
 
@@ -181,19 +182,21 @@ class _StatusListViewState extends State<StatusListView> {
       if (created != null) {
         await _loadStatus();
         if (mounted) {
+          final colors = context.tfColors;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Status duplicado com sucesso!'),
-              backgroundColor: Colors.green,
+            SnackBar(
+              content: const Text('Status duplicado com sucesso!'),
+              backgroundColor: colors.success,
             ),
           );
         }
       } else {
         if (mounted) {
+          final colors = context.tfColors;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Erro ao duplicar status'),
-              backgroundColor: Colors.red,
+            SnackBar(
+              content: const Text('Erro ao duplicar status'),
+              backgroundColor: colors.danger,
             ),
           );
         }
@@ -202,27 +205,13 @@ class _StatusListViewState extends State<StatusListView> {
   }
 
   Future<void> _deleteStatus(Status status) async {
-    final confirm = await showDialog<bool>(
+    final confirm = await TFModalDialog.confirm(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Confirmar Exclusão'),
-        content: Text(
-          'Deseja realmente excluir o status:\n\n'
-          'Código: ${status.codigo}\n'
-          'Status: ${status.status}',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Excluir'),
-          ),
-        ],
-      ),
+      title: 'Confirmar Exclusão',
+      message: 'Deseja realmente excluir o status "${status.status}" (${status.codigo})?',
+      confirmLabel: 'Excluir',
+      cancelLabel: 'Cancelar',
+      isDestructive: true,
     );
 
     if (confirm == true) {
@@ -230,19 +219,21 @@ class _StatusListViewState extends State<StatusListView> {
       if (deleted) {
         await _loadStatus();
         if (mounted) {
+          final colors = context.tfColors;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Status excluído com sucesso!'),
-              backgroundColor: Colors.green,
+            SnackBar(
+              content: const Text('Status excluído com sucesso!'),
+              backgroundColor: colors.success,
             ),
           );
         }
       } else {
         if (mounted) {
+          final colors = context.tfColors;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Erro ao excluir status'),
-              backgroundColor: Colors.red,
+            SnackBar(
+              content: const Text('Erro ao excluir status'),
+              backgroundColor: colors.danger,
             ),
           );
         }
@@ -252,181 +243,207 @@ class _StatusListViewState extends State<StatusListView> {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+    final isDesktop = TFBreakpoints.isDesktop(context);
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Cadastro de Status'),
-        actions: [
-          // Toggle de visualização
-          IconButton(
-            icon: Icon(_isTableView ? Icons.view_list : Icons.table_chart),
-            onPressed: () {
-              setState(() {
-                _isTableView = !_isTableView;
-              });
-            },
-            tooltip: _isTableView ? 'Visualização em Lista' : 'Visualização em Tabela',
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadStatus,
-            tooltip: 'Atualizar',
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          // Barra de busca e botão criar
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _searchController,
-                    decoration: InputDecoration(
-                      hintText: 'Buscar por código ou status...',
-                      prefixIcon: const Icon(Icons.search),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      filled: true,
-                      fillColor: Colors.grey[100],
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                ElevatedButton.icon(
+      backgroundColor: colors.background,
+      body: SafeArea(
+        child: Padding(
+          padding: EdgeInsets.all(spacing.lg),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // 1. Page Header oficial TFDS
+              TFPageHeader(
+                title: 'Cadastro de Status',
+                subtitle: 'Gestão de códigos, cores indicativas e estados operacionais do sistema',
+                onBack: () => Navigator.of(context).maybePop(),
+                primaryAction: TFButton(
+                  label: 'Novo Status',
+                  leadingIcon: TFIcons.add,
+                  variant: TFButtonVariant.primary,
                   onPressed: _createStatus,
-                  icon: const Icon(Icons.add),
-                  label: const Text('Novo Status'),
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 12,
+                ),
+                secondaryActions: [
+                  TFButton(
+                    label: 'Atualizar',
+                    leadingIcon: TFIcons.refresh,
+                    variant: TFButtonVariant.secondary,
+                    onPressed: _loadStatus,
+                  ),
+                ],
+              ),
+
+              SizedBox(height: spacing.md),
+
+              // 2. Barra de Busca e Alternância de Visualização
+              Row(
+                children: [
+                  Expanded(
+                    child: TFTextField(
+                      controller: _searchController,
+                      hint: 'Buscar status por código ou nome...',
+                      prefixIcon: const Icon(TFIcons.search),
+                      suffixIcon: _searchController.text.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(TFIcons.close, size: 16),
+                              onPressed: () {
+                                _searchController.clear();
+                              },
+                            )
+                          : null,
                     ),
                   ),
-                ),
-              ],
-            ),
-          ),
-          // Lista de status
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _filteredStatusList.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.label,
-                              size: 64,
-                              color: Colors.grey[400],
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              _statusList.isEmpty
-                                  ? 'Nenhum status cadastrado'
-                                  : 'Nenhum status encontrado',
-                              style: TextStyle(
-                                fontSize: 16,
-                                color: Colors.grey[600],
-                              ),
-                            ),
-                            if (_statusList.isEmpty) ...[
-                              const SizedBox(height: 8),
-                              ElevatedButton.icon(
-                                onPressed: _createStatus,
-                                icon: const Icon(Icons.add),
-                                label: const Text('Criar Primeiro Status'),
-                              ),
-                            ],
-                          ],
+                  SizedBox(width: spacing.sm),
+                  TFIconButton(
+                    icon: _isTableView ? Icons.view_list_rounded : Icons.table_chart_rounded,
+                    tooltip: _isTableView ? 'Visualizar em Cards' : 'Visualizar em Tabela',
+                    variant: TFIconButtonVariant.subtle,
+                    onPressed: () {
+                      setState(() {
+                        _isTableView = !_isTableView;
+                      });
+                    },
+                  ),
+                ],
+              ),
+
+              SizedBox(height: spacing.md),
+
+              // 3. Conteúdo Principal
+              Expanded(
+                child: _isLoading
+                    ? const Center(
+                        child: TFLoading(
+                          mode: TFLoadingMode.section,
+                          message: 'Carregando status cadastrados...',
                         ),
                       )
-                    : _isTableView
-                        ? _buildTableView()
-                        : _buildListView(),
+                    : _filteredStatusList.isEmpty
+                        ? Center(
+                            child: TFEmptyState(
+                              icon: TFIcons.task,
+                              title: _statusList.isEmpty
+                                  ? 'Nenhum status cadastrado'
+                                  : 'Nenhum status encontrado',
+                              description: _statusList.isEmpty
+                                  ? 'Comece cadastrando o primeiro status operacional do TaskFlow.'
+                                  : 'Nenhum status corresponde aos termos pesquisados.',
+                              action: _statusList.isEmpty
+                                  ? TFButton(
+                                      label: 'Cadastrar Primeiro Status',
+                                      leadingIcon: TFIcons.add,
+                                      variant: TFButtonVariant.primary,
+                                      onPressed: _createStatus,
+                                    )
+                                  : TFButton(
+                                      label: 'Limpar Busca',
+                                      leadingIcon: TFIcons.clear,
+                                      variant: TFButtonVariant.secondary,
+                                      onPressed: () => _searchController.clear(),
+                                    ),
+                            ),
+                          )
+                        : _isTableView || isDesktop
+                            ? _buildTableView()
+                            : _buildListView(),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
 
   Widget _buildListView() {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final spacing = context.tfSpacing;
+
     return ListView.builder(
       itemCount: _filteredStatusList.length,
       itemBuilder: (context, index) {
         final status = _filteredStatusList[index];
-        return Card(
-          margin: const EdgeInsets.symmetric(
-            horizontal: 16,
-            vertical: 8,
-          ),
-          child: ListTile(
-            leading: CircleAvatar(
-              backgroundColor: status.color,
-              child: Text(
-                status.codigo,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12,
-                ),
-              ),
-            ),
-            title: Text(
-              status.status,
-              style: const TextStyle(
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            subtitle: Row(
+        return Padding(
+          padding: EdgeInsets.only(bottom: spacing.sm),
+          child: TFCard(
+            variant: TFCardVariant.defaultCard,
+            padding: EdgeInsets.symmetric(horizontal: spacing.base, vertical: spacing.sm),
+            child: Row(
               children: [
-                Text('Código: ${status.codigo}'),
-                const SizedBox(width: 16),
+                // Identificador visual de cor e código
                 Container(
-                  width: 20,
-                  height: 20,
+                  padding: EdgeInsets.symmetric(horizontal: spacing.sm, vertical: spacing.xxs),
                   decoration: BoxDecoration(
                     color: status.color,
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: Colors.grey[300]!,
-                      width: 1,
+                    borderRadius: TFRadius.borderRadiusSm,
+                  ),
+                  child: Text(
+                    status.codigo,
+                    style: typography.labelSmall.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
                 ),
-                const SizedBox(width: 4),
-                Text(
-                  status.cor,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey[600],
+                SizedBox(width: spacing.md),
+                // Nome e cor
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        status.status,
+                        style: typography.cardTitle.copyWith(color: colors.textPrimary),
+                      ),
+                      SizedBox(height: spacing.xxs),
+                      Row(
+                        children: [
+                          Container(
+                            width: 12,
+                            height: 12,
+                            decoration: BoxDecoration(
+                              color: status.color,
+                              shape: BoxShape.circle,
+                              border: Border.all(color: colors.borderSubtle, width: 1),
+                            ),
+                          ),
+                          SizedBox(width: spacing.xxs),
+                          Text(
+                            status.cor,
+                            style: typography.bodySmall.copyWith(color: colors.textSecondary),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
-              ],
-            ),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.edit),
-                  color: Colors.blue,
-                  onPressed: () => _editStatus(status),
-                  tooltip: 'Editar',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.copy),
-                  color: Colors.orange,
-                  onPressed: () => _duplicateStatus(status),
-                  tooltip: 'Duplicar',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.delete),
-                  color: Colors.red,
-                  onPressed: () => _deleteStatus(status),
-                  tooltip: 'Excluir',
+                // Ações
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TFIconButton(
+                      icon: TFIcons.edit,
+                      tooltip: 'Editar status "${status.status}"',
+                      variant: TFIconButtonVariant.standard,
+                      onPressed: () => _editStatus(status),
+                    ),
+                    TFIconButton(
+                      icon: Icons.copy_rounded,
+                      tooltip: 'Duplicar status "${status.status}"',
+                      variant: TFIconButtonVariant.subtle,
+                      onPressed: () => _duplicateStatus(status),
+                    ),
+                    TFIconButton(
+                      icon: TFIcons.delete,
+                      tooltip: 'Excluir status "${status.status}"',
+                      variant: TFIconButtonVariant.danger,
+                      onPressed: () => _deleteStatus(status),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -437,104 +454,101 @@ class _StatusListViewState extends State<StatusListView> {
   }
 
   Widget _buildTableView() {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: SingleChildScrollView(
-        child: DataTable(
-          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
-          columns: const [
-            DataColumn(label: Text('Código', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Cor', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Ações', style: TextStyle(fontWeight: FontWeight.bold))),
-          ],
-          rows: _filteredStatusList.map((status) {
-            return DataRow(
-              cells: [
-                DataCell(
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: status.color,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(
-                      status.codigo,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
-                ),
-                DataCell(
-                  Text(
-                    status.status,
-                    style: const TextStyle(fontWeight: FontWeight.w500),
-                  ),
-                ),
-                DataCell(
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 20,
-                        height: 20,
-                        decoration: BoxDecoration(
-                          color: status.color,
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: Colors.grey[300]!,
-                            width: 1,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        status.cor,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey[600],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                DataCell(
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.edit, size: 20, color: Colors.blue),
-                        onPressed: () => _editStatus(status),
-                        tooltip: 'Editar',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.copy, size: 20, color: Colors.orange),
-                        onPressed: () => _duplicateStatus(status),
-                        tooltip: 'Duplicar',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.delete, size: 20, color: Colors.red),
-                        onPressed: () => _deleteStatus(status),
-                        tooltip: 'Excluir',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            );
-          }).toList(),
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final spacing = context.tfSpacing;
+
+    return TFDataTable<Status>(
+      items: _filteredStatusList,
+      zebra: true,
+      columns: [
+        TFDataColumn<Status>(
+          id: 'codigo',
+          label: const Text('Código'),
+          width: 110,
+          cellBuilder: (context, status) => Container(
+            padding: EdgeInsets.symmetric(horizontal: spacing.sm, vertical: spacing.xxs),
+            decoration: BoxDecoration(
+              color: status.color,
+              borderRadius: TFRadius.borderRadiusSm,
+            ),
+            child: Text(
+              status.codigo,
+              style: typography.labelSmall.copyWith(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
         ),
-      ),
+        TFDataColumn<Status>.text(
+          id: 'status',
+          title: 'Status',
+          cellBuilder: (context, status) => Text(
+            status.status,
+            style: typography.bodyMedium.copyWith(
+              color: colors.textPrimary,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+        TFDataColumn<Status>(
+          id: 'cor',
+          label: const Text('Cor Indicativa'),
+          width: 160,
+          cellBuilder: (context, status) => Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 16,
+                height: 16,
+                decoration: BoxDecoration(
+                  color: status.color,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: colors.borderSubtle, width: 1),
+                ),
+              ),
+              SizedBox(width: spacing.xs),
+              Text(
+                status.cor,
+                style: typography.bodySmall.copyWith(color: colors.textSecondary),
+              ),
+            ],
+          ),
+        ),
+        TFDataColumn<Status>(
+          id: 'acoes',
+          label: const Text('Ações'),
+          width: 160,
+          alignment: Alignment.centerRight,
+          cellBuilder: (context, status) => Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TFIconButton(
+                icon: TFIcons.edit,
+                tooltip: 'Editar status "${status.status}"',
+                variant: TFIconButtonVariant.standard,
+                iconSize: 18,
+                onPressed: () => _editStatus(status),
+              ),
+              TFIconButton(
+                icon: Icons.copy_rounded,
+                tooltip: 'Duplicar status "${status.status}"',
+                variant: TFIconButtonVariant.subtle,
+                iconSize: 18,
+                onPressed: () => _duplicateStatus(status),
+              ),
+              TFIconButton(
+                icon: TFIcons.delete,
+                tooltip: 'Excluir status "${status.status}"',
+                variant: TFIconButtonVariant.danger,
+                iconSize: 18,
+                onPressed: () => _deleteStatus(status),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
-

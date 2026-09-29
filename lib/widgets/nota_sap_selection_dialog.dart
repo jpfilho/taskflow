@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/nota_sap.dart';
 import '../utils/responsive.dart';
+import '../utils/clipboard_helper.dart';
 import 'multi_select_filter_dialog.dart';
 
 class NotaSAPSelectionDialog extends StatefulWidget {
@@ -188,11 +189,16 @@ class _NotaSAPSelectionDialogState extends State<NotaSAPSelectionDialog> {
   Widget build(BuildContext context) {
     final isMobile = Responsive.isMobile(context);
 
+    final screenWidth = MediaQuery.of(context).size.width;
+    final screenHeight = MediaQuery.of(context).size.height;
+
     return Dialog(
-      insetPadding: const EdgeInsets.all(16),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      clipBehavior: Clip.antiAlias,
       child: SizedBox(
-        width: isMobile ? double.infinity : 1100,
-        height: isMobile ? double.infinity : 700,
+        width: isMobile ? double.infinity : (screenWidth * 0.95).clamp(900.0, 1400.0),
+        height: isMobile ? double.infinity : (screenHeight * 0.90).clamp(600.0, 850.0),
         child: Column(
           children: [
             // Header
@@ -253,6 +259,7 @@ class _NotaSAPSelectionDialogState extends State<NotaSAPSelectionDialog> {
                       children: [
                         Expanded(
                           child: TextField(
+                    autofocus: true,
                     decoration: InputDecoration(
                       hintText: 'Pesquisar nota, ordem, descrição, local, equipamento, executor...',
                       prefixIcon: const Icon(Icons.search),
@@ -299,6 +306,7 @@ class _NotaSAPSelectionDialogState extends State<NotaSAPSelectionDialog> {
                     )
                   else
                     TextField(
+                              autofocus: true,
                               decoration: InputDecoration(
                         hintText: 'Pesquisar nota, ordem, descrição, local, equipamento, executor...',
                         prefixIcon: const Icon(Icons.search),
@@ -754,18 +762,13 @@ class _NotaSAPSelectionDialogState extends State<NotaSAPSelectionDialog> {
   }
 
   Future<void> _copiarNota(String texto) async {
-    try {
-      await Clipboard.setData(ClipboardData(text: texto));
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Nota copiada!'), duration: Duration(seconds: 1)),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Não foi possível copiar: $e'), backgroundColor: Colors.red, duration: const Duration(seconds: 3)),
-      );
-    }
+    await ClipboardHelper.copyAndNotify(
+      context,
+      texto,
+      successMessage: 'Nota copiada!',
+      errorMessage: 'Não foi possível copiar a nota.',
+      duration: const Duration(seconds: 1),
+    );
   }
 
   Widget _buildViewButton(IconData icon, String mode) {
@@ -1030,36 +1033,42 @@ class _NotaSAPSelectionDialogState extends State<NotaSAPSelectionDialog> {
   }
 
   Widget _buildTableView() {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
+    return Scrollbar(
+      controller: _scrollController,
+      thumbVisibility: true,
       child: SingleChildScrollView(
         controller: _scrollController,
-        child: DataTable(
-          columnSpacing: 45,
-          horizontalMargin: 8,
-          headingRowHeight: 38,
-          dataRowMinHeight: 36,
-          dataRowMaxHeight: 42,
-          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
-          columns: const [
-            DataColumn(label: Text('Local', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-            DataColumn(label: Text('Tipo', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-            DataColumn(label: Text('Prioridade', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-
-            DataColumn(label: Text('Nota', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-            DataColumn(label: Text('Sala', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-            DataColumn(label: Text('Descrição', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-
-            DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-            DataColumn(label: Text('Prazo', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-            DataColumn(label: Text('Ordem', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-          ],
-          rows: [
-            ..._displayedNotas.map((nota) {
-            final isSelected = _selectedNotaIds.contains(nota.id);
-            return DataRow(
-              selected: isSelected,
-              cells: [
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              minWidth: MediaQuery.of(context).size.width * 0.85,
+            ),
+            child: DataTable(
+              columnSpacing: 18,
+              horizontalMargin: 12,
+              headingRowHeight: 38,
+              dataRowMinHeight: 32,
+              dataRowMaxHeight: 40,
+              headingRowColor: WidgetStateProperty.all(const Color(0xFFF1F5F9)),
+              columns: const [
+                DataColumn(label: Text('Local', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Tipo', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Prioridade', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Nota', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Sala', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Descrição', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Prazo', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('Ordem', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+              ],
+              rows: [
+                ..._displayedNotas.map((nota) {
+                final isSelected = _selectedNotaIds.contains(nota.id);
+                return DataRow(
+                  selected: isSelected,
+                  onSelectChanged: (_) => _toggleNotaSelection(nota.id),
+                  cells: [
                   // 1. Local
                 DataCell(
                   SizedBox(
@@ -1167,7 +1176,6 @@ class _NotaSAPSelectionDialogState extends State<NotaSAPSelectionDialog> {
                   // 9. Ordem
                   DataCell(Text(nota.ordem ?? '-', style: const TextStyle(fontSize: 11))),
               ],
-              onSelectChanged: (_) => _toggleNotaSelection(nota.id),
             );
             }),
             if (_displayedNotas.length < _filteredNotas.length)
@@ -1187,6 +1195,8 @@ class _NotaSAPSelectionDialogState extends State<NotaSAPSelectionDialog> {
           ],
         ),
       ),
+    ),
+    ),
     );
   }
 

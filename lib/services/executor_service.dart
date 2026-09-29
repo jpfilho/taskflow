@@ -1,10 +1,12 @@
 import '../models/executor.dart';
+import '../models/divisao.dart';
 import '../config/supabase_config.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/foundation.dart';
 import 'local_database_service.dart';
 import 'connectivity_service.dart';
 import 'sync_service.dart';
+import 'divisao_service.dart';
 import 'package:sqflite/sqflite.dart';
 
 class ExecutorService {
@@ -42,7 +44,7 @@ class ExecutorService {
             empresas!left(empresa),
             funcoes!left(funcao),
             divisoes!left(divisao),
-            executores_segmentos!left(segmentos!inner(id, segmento))
+            executores_segmentos!left(segmentos!left(id, segmento))
           ''')
           .order('nome', ascending: true)
           .timeout(
@@ -140,7 +142,7 @@ class ExecutorService {
             empresas!left(empresa),
             funcoes!left(funcao),
             divisoes!left(divisao),
-            executores_segmentos!left(segmentos!inner(id, segmento))
+            executores_segmentos!left(segmentos!left(id, segmento))
           ''')
           .eq('ativo', true)
           .order('nome', ascending: true)
@@ -173,7 +175,7 @@ class ExecutorService {
             empresas!left(empresa),
             funcoes!left(funcao),
             divisoes!left(divisao),
-            executores_segmentos!left(segmentos!inner(id, segmento))
+            executores_segmentos!left(segmentos!left(id, segmento))
           ''')
           .eq('divisao_id', divisaoId)
           .eq('ativo', true)
@@ -203,7 +205,7 @@ class ExecutorService {
               empresas!left(empresa),
               funcoes!left(funcao),
               divisoes!left(divisao),
-              executores_segmentos!left(segmentos!inner(id, segmento))
+              executores_segmentos!left(segmentos!left(id, segmento))
             )
           ''')
           .eq('segmento_id', segmentoId)
@@ -245,71 +247,52 @@ class ExecutorService {
     String? segmentoId,
   }) async {
     try {
-      List<Executor> executores = [];
+      List<Executor> executores = await getExecutoresAtivos();
+      final divisoes = await DivisaoService().getAllDivisoes();
+      final divisaoMap = {for (var d in divisoes) d.id: d};
 
-      // Se tiver segmento, buscar por segmento (mais específico)
+      // 1. Filtrar por Regional (se especificada)
+      if (regionalId != null && regionalId.isNotEmpty) {
+        final divIdsDaRegional = divisoes
+            .where((d) => d.atuaNaRegional(regionalId))
+            .map((d) => d.id)
+            .toSet();
+
+        executores = executores.where((e) {
+          if (e.divisaoId != null) {
+            return divIdsDaRegional.contains(e.divisaoId);
+          }
+          return false;
+        }).toList();
+      }
+
+      // 2. Filtrar por Divisão (se especificada)
+      if (divisaoId != null && divisaoId.isNotEmpty) {
+        executores = executores.where((e) => e.divisaoId == divisaoId).toList();
+      }
+
+      // 3. Filtrar por Segmento (se especificado)
       if (segmentoId != null && segmentoId.isNotEmpty) {
-        executores = await getExecutoresPorSegmento(segmentoId);
-      }
-      // Se tiver divisão mas não segmento, buscar por divisão
-      else if (divisaoId != null && divisaoId.isNotEmpty) {
-        executores = await getExecutoresPorDivisao(divisaoId);
-      }
-      // Se não tiver filtros específicos, buscar todos ativos
-      else {
-        executores = await getExecutoresAtivos();
-      }
-
-      // Filtrar por regional APENAS quando não há segmento especificado.
-      // Quando segmentoId foi fornecido, a busca por segmento já é mais específica
-      // que a regional, então aplicar o filtro por divisão_id eliminaria incorretamente
-      // executores que não têm divisao_id preenchido ou pertencem a outra divisão.
-      if (regionalId != null && regionalId.isNotEmpty && (segmentoId == null || segmentoId.isEmpty)) {
-        // Buscar divisões da regional e filtrar executores
-        final divisoesDaRegional = await _supabase
-            .from('divisoes')
-            .select('id')
-            .eq('regional_id', regionalId);
-        
-        if (divisoesDaRegional.isNotEmpty) {
-          final divisaoIds = (divisoesDaRegional as List)
-              .map((d) => d['id'] as String)
-              .toList();
-          
-          executores = executores.where((e) {
-            return e.divisaoId != null && divisaoIds.contains(e.divisaoId);
-          }).toList();
-        } else {
-          executores = [];
-        }
+        executores = executores.where((e) {
+          // 3a. Segmento direto no executor
+          if (e.segmentoIds.contains(segmentoId)) return true;
+          // 3b. Segmento herdado da divisão do executor
+          if (e.divisaoId != null && divisaoMap.containsKey(e.divisaoId)) {
+            final div = divisaoMap[e.divisaoId]!;
+            if (div.segmentoIds.contains(segmentoId)) return true;
+          }
+          // 3c. Executor sem segmento específico (generalista da divisão)
+          if (e.segmentoIds.isEmpty && (e.divisaoId == null || (divisaoMap[e.divisaoId]?.segmentoIds.isEmpty ?? true))) {
+            return true;
+          }
+          return false;
+        }).toList();
       }
 
       return executores;
     } catch (e) {
       print('Erro ao buscar executores filtrados: $e');
-      return [];
-    }
-  }
-
-  // Buscar executor por ID
-  Future<Executor?> getExecutorById(String id) async {
-    try {
-      final response = await _supabase
-          .from('executores')
-          .select('''
-            *,
-            empresas!left(empresa),
-            funcoes!left(funcao),
-            divisoes!left(divisao),
-            executores_segmentos!left(segmentos!inner(id, segmento))
-          ''')
-          .eq('id', id)
-          .single();
-
-      return _executorFromMap(Map<String, dynamic>.from(response));
-    } catch (e) {
-      print('Erro ao buscar executor por ID: $e');
-      return null;
+      return await getExecutoresAtivos();
     }
   }
 
@@ -628,10 +611,34 @@ class ExecutorService {
     }
   }
 
+  // Buscar executor por ID
+  Future<Executor?> getExecutorById(String id) async {
+    try {
+      final response = await _supabase
+          .from('executores')
+          .select('''
+            *,
+            empresas!left(empresa),
+            funcoes!left(funcao),
+            divisoes!left(divisao),
+            executores_segmentos!left(segmentos!left(id, segmento))
+          ''')
+          .eq('id', id)
+          .maybeSingle();
+
+      if (response == null) return null;
+
+      return _executorFromMap(response);
+    } catch (e) {
+      print('Erro ao buscar executor por ID: $e');
+      return null;
+    }
+  }
+
   /// Coordenadores que pertencem à MESMA regional E divisão E segmento do perfil do usuário.
   /// Usado nas telas de criar/editar tarefa para restringir o dropdown de coordenador.
   
-  // Buscar todos os executores e filtrar por perfil (Regional, Divisão, Segmento)
+  // Buscar executores por escopo do formulário e perfil
   Future<List<Executor>> getExecutoresPorPerfilUsuario({
     required List<String> regionalIds,
     required List<String> divisaoIds,
@@ -641,59 +648,52 @@ class ExecutorService {
     String? formSegmentoId,
   }) async {
     try {
-      // 1. Obter executores base, filtrando pelos campos do formulário se existirem
-      List<Executor> baseExecutores = await getExecutoresFiltrados(
-        regionalId: formRegionalId,
-        divisaoId: formDivisaoId,
-        segmentoId: formSegmentoId,
-      );
+      // 1. Prioridade: Se campos foram selecionados no formulário de equipe/tarefa
+      final hasFormSelection = (formRegionalId != null && formRegionalId.isNotEmpty) ||
+          (formDivisaoId != null && formDivisaoId.isNotEmpty) ||
+          (formSegmentoId != null && formSegmentoId.isNotEmpty);
 
-      // 2. Se o perfil for vazio (root/admin sem restrições), retorna a lista base
-      if (regionalIds.isEmpty && divisaoIds.isEmpty && segmentoIds.isEmpty) {
-        return baseExecutores;
+      if (hasFormSelection) {
+        return await getExecutoresFiltrados(
+          regionalId: formRegionalId,
+          divisaoId: formDivisaoId,
+          segmentoId: formSegmentoId,
+        );
       }
 
-      // 3. Obter divisões permitidas (combinando divisões diretas + divisões das regionais)
-      List<String>? allowedDivisaoIds;
-      if (regionalIds.isNotEmpty || divisaoIds.isNotEmpty) {
-        var query = _supabase.from('divisoes').select('id');
-        if (regionalIds.isNotEmpty && divisaoIds.isEmpty) {
-          query = query.inFilter('regional_id', regionalIds);
-        } else if (regionalIds.isEmpty && divisaoIds.isNotEmpty) {
-          query = query.inFilter('id', divisaoIds);
-        } else {
-          // Both are provided, supabase doesn't have an easy OR so we fetch both and merge in Dart
-          // But usually or() works. For simplicity, we just fetch based on both using OR
-          query = query.or('regional_id.in.(${regionalIds.join(",")}),id.in.(${divisaoIds.join(",")})');
+      // 2. Fallback: Se nada foi selecionado no formulário e o usuário tem restrições de perfil
+      if (regionalIds.isNotEmpty || divisaoIds.isNotEmpty || segmentoIds.isNotEmpty) {
+        final divisoes = await DivisaoService().getAllDivisoes();
+        final Set<String> allowedDivIds = {};
+
+        for (final d in divisoes) {
+          final matchesReg = regionalIds.isNotEmpty && regionalIds.any((rId) => d.atuaNaRegional(rId));
+          final matchesDiv = divisaoIds.isNotEmpty && divisaoIds.contains(d.id);
+          if (matchesReg || matchesDiv) {
+            allowedDivIds.add(d.id);
+          }
         }
-        
-        final rows = await query;
-        allowedDivisaoIds = rows.isNotEmpty
-            ? (rows as List).map((r) => r['id'] as String).toList()
-            : <String>[];
+
+        final todos = await getExecutoresAtivos();
+        return todos.where((e) {
+          if (allowedDivIds.isNotEmpty) {
+            if (e.divisaoId != null && !allowedDivIds.contains(e.divisaoId)) {
+              return false;
+            }
+          }
+          if (segmentoIds.isNotEmpty && e.segmentoIds.isNotEmpty) {
+            final hasMatch = e.segmentoIds.any((s) => segmentoIds.contains(s));
+            if (!hasMatch) return false;
+          }
+          return true;
+        }).toList();
       }
 
-      // 4. Filtrar a base com as permissões do perfil
-      final filtrados = baseExecutores.where((e) {
-        // Validação de Regional/Divisão
-        if (allowedDivisaoIds != null) {
-          if (allowedDivisaoIds.isEmpty) return false;
-          if (e.divisaoId == null || !allowedDivisaoIds.contains(e.divisaoId)) return false;
-        }
-        
-        // Validação de Segmento
-        if (segmentoIds.isNotEmpty) {
-          final temSegmento = e.segmentoIds.any((s) => segmentoIds.contains(s));
-          if (!temSegmento) return false;
-        }
-        
-        return true;
-      }).toList();
-
-      return filtrados;
+      // 3. Sem filtros específicos: retorna todos os ativos
+      return await getExecutoresAtivos();
     } catch (e) {
       print('Erro getExecutoresPorPerfilUsuario: $e');
-      return [];
+      return await getExecutoresAtivos();
     }
   }
 

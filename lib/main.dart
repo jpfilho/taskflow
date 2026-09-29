@@ -4,11 +4,12 @@ import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode;
 import 'dart:async';
 import 'dart:convert' show utf8;
 import 'dart:typed_data' show Uint8List;
-import 'package:excel/excel.dart';
+import 'package:excel/excel.dart' hide Border;
 
 // Import condicional para web
 import 'html_stub.dart' as html if (dart.library.html) 'dart:html';
-import 'data/mock_data.dart';
+import 'mobile/core/responsive/tf_mobile_responsive.dart';
+import 'mobile/core/config/mobile_feature_flags.dart';
 import 'models/task.dart';
 import 'services/task_service.dart';
 import 'services/performance_monitor.dart';
@@ -28,7 +29,9 @@ import 'widgets/task_view_dialog.dart';
 import 'widgets/dashboard.dart';
 import 'widgets/comprehensive_dashboard.dart';
 import 'widgets/team_schedule_view.dart';
+import 'models/equipe.dart';
 import 'services/executor_service.dart';
+import 'services/equipe_service.dart';
 import 'widgets/fleet_schedule_view.dart';
 import 'services/frota_service.dart';
 import 'widgets/documents_view.dart';
@@ -43,6 +46,7 @@ import 'widgets/cost_management_view.dart';
 import 'widgets/configuracao_view.dart';
 import 'widgets/chat_view.dart';
 import 'services/chat_service.dart';
+import 'services/unread_chat_manager.dart';
 import 'widgets/notas_sap_view.dart';
 import 'widgets/ordem_view.dart';
 import 'widgets/at_view.dart';
@@ -54,6 +58,9 @@ import 'widgets/confirmacao_ordens_view.dart';
 import 'widgets/demandas_view.dart';
 import 'widgets/login_screen.dart';
 import 'widgets/home_shortcuts_screen.dart';
+import 'design_system/taskflow_design_system.dart';
+import 'widgets/sync_status_widget.dart';
+import 'widgets/perfil_usuario_view.dart';
 import 'features/warnings/warnings.dart';
 import 'widgets/resizable_panel.dart';
 import 'services/auth_service_simples.dart';
@@ -68,6 +75,8 @@ import 'services/connectivity_service.dart';
 import 'services/version_check_service.dart';
 import 'providers/theme_provider.dart';
 import 'services/theme_service.dart';
+import 'utils/file_export_helper.dart';
+import 'services/pdf_service.dart';
 import 'features/media_albums/presentation/pages/gallery_page.dart';
 import 'features/documents/presentation/pages/documents_page.dart';
 import 'modules/gtd/domain/gtd_session.dart';
@@ -75,6 +84,8 @@ import 'modules/gtd/presentation/screens/gtd_home_page.dart';
 import 'modules/melhorias_bugs/presentation/screens/melhorias_bugs_home_screen.dart';
 import 'widgets/activity_report_view.dart';
 import 'features/ai_assistants/presentation/screens/ai_assistants_list_screen.dart';
+import 'features/projetos/presentation/screens/projetos_home_screen.dart';
+import 'design_system/gallery/design_system_gallery.dart';
 // sqflite: factory obrigatória antes de qualquer openDatabase (web e desktop)
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart';
@@ -186,6 +197,15 @@ class _MyAppState extends State<MyApp> {
           ],
           locale: const Locale('pt', 'BR'),
           home: AuthWrapper(themeProvider: _themeProvider),
+          onGenerateRoute: (settings) {
+            if (kDebugMode && settings.name == '/debug/design-system') {
+              return MaterialPageRoute(
+                settings: settings,
+                builder: (_) => DesignSystemGallery(themeProvider: _themeProvider),
+              );
+            }
+            return null;
+          },
           debugShowCheckedModeBanner: false,
           builder: (context, child) {
         // Capturar erros de renderização
@@ -330,12 +350,13 @@ class _AuthWrapperState extends State<AuthWrapper> {
       );
     }
 
-    // Mobile (largura < 768): tela de atalhos primeiro; desktop/web: Programação direto.
+    // Mobile / Tablet estreito (< 768px): fluxo móvel oficial com tela de atalhos e Drawer integrado
     if (Responsive.isMobileForHome(context)) {
       return _AuthenticatedMobileShell(
         themeProvider: widget.themeProvider,
         onLogout: () {
           _authService.signOut();
+          UnreadChatManager().resetUser(null);
           setState(() {
             _isAuthenticated = false;
           });
@@ -347,6 +368,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
       themeProvider: widget.themeProvider,
       onLogout: () {
         _authService.signOut();
+        UnreadChatManager().resetUser(null);
         setState(() {
           _isAuthenticated = false;
         });
@@ -372,11 +394,15 @@ class _AuthenticatedMobileShell extends StatefulWidget {
 class _AuthenticatedMobileShellState extends State<_AuthenticatedMobileShell> {
   bool _showShortcuts = true;
   int _selectedSidebarIndex = 0;
+  String? _selectedViewMode;
+  int? _selectedTab;
 
-  void _onShortcutTap(int index) {
+  void _onShortcutTap(int index, {String? viewMode, int? selectedTab}) {
     setState(() {
       _showShortcuts = false;
       _selectedSidebarIndex = index;
+      _selectedViewMode = viewMode;
+      _selectedTab = selectedTab;
     });
   }
 
@@ -397,6 +423,8 @@ class _AuthenticatedMobileShellState extends State<_AuthenticatedMobileShell> {
       themeProvider: widget.themeProvider,
       onLogout: widget.onLogout,
       initialSidebarIndex: _selectedSidebarIndex,
+      initialViewMode: _selectedViewMode,
+      initialSelectedTab: _selectedTab,
       onBackToShortcuts: _onBackToShortcuts,
       isMobileFromShortcuts: true,
     );
@@ -408,6 +436,10 @@ class MainScreen extends StatefulWidget {
   final VoidCallback? onLogout;
   /// Índice inicial da sidebar (usado ao abrir a partir da tela de atalhos no mobile).
   final int? initialSidebarIndex;
+  /// Modo de visualização inicial (ex: 'feed', 'split', etc).
+  final String? initialViewMode;
+  /// Aba selecionada inicial (ex: 0=tabela, 4=feed).
+  final int? initialSelectedTab;
   /// Callback para voltar à tela de atalhos (mobile); evita back para login.
   final VoidCallback? onBackToShortcuts;
   /// True quando foi aberto a partir da tela de atalhos no mobile.
@@ -418,6 +450,8 @@ class MainScreen extends StatefulWidget {
     this.themeProvider,
     this.onLogout,
     this.initialSidebarIndex,
+    this.initialViewMode,
+    this.initialSelectedTab,
     this.onBackToShortcuts,
     this.isMobileFromShortcuts = false,
   });
@@ -443,6 +477,8 @@ class _MainScreenState extends State<MainScreen> {
   final AuthServiceSimples _authService = AuthServiceSimples();
   final NotaSAPService _notaSapService = NotaSAPService();
   final OrdemService _ordemService = OrdemService();
+  final PDFService _pdfService = PDFService();
+  final EquipeService _equipeService = EquipeService();
   
   List<Task> _tasks = []; // Tarefas filtradas (para telas gerais)
   bool _isTasksLoading = true; // Flag para indicar carregamento em andamento
@@ -454,6 +490,8 @@ class _MainScreenState extends State<MainScreen> {
   Map<String, List<String>>? _fleetFilterOptions; // Opções dos dropdowns da Frota (regionais, divisoes, frotas, locais)
   Map<String, String?> _teamFilters = {}; // Filtros da tela Equipes (divisao, empresa, funcao, matricula, nome)
   Map<String, List<String>>? _teamFilterOptions; // Opções dos dropdowns da Equipes
+  List<Equipe> _todasEquipes = []; // Equipes do perfil do usuário logado
+  List<String> _nomesEquipesPerfil = []; // Nomes das equipes para o dropdown de Atividades
   String _searchQuery = ''; // Termo de busca atual
   Set<String>? _conflictFilterTaskIds; // Filtro de tarefas com conflitos
   // Inicializar com primeiro e último dia do mês/ano atual
@@ -487,18 +525,18 @@ class _MainScreenState extends State<MainScreen> {
   /// Uma vez por sessão: após carregar tarefas do Supabase, disparar sync automático (rede com acesso ao BD).
   bool _autoSyncTriggeredAfterLoad = false;
 
-  // Badge de mensagens não lidas no header
+  // Gerenciador central de contagem de mensagens não lidas
+  final UnreadChatManager _unreadChatManager = UnreadChatManager();
   int _unreadChatCount = 0;
   Timer? _chatCountTimer;
 
   /// Atualiza o índice da sidebar e, se estiver SAINDO do chat (index 15),
-  /// recarrega imediatamente a contagem de mensagens não lidas.
+  /// recarrega o snapshot de mensagens não lidas no manager.
   void _setSidebarIndex(int newIndex) {
     final wasInChat = _sidebarSelectedIndex == 15;
     _sidebarSelectedIndex = newIndex;
     if (wasInChat && newIndex != 15) {
-      // Saiu do chat — atualizar badge imediatamente
-      _carregarContagemChat();
+      _unreadChatManager.refreshAll();
     }
   }
 
@@ -775,6 +813,12 @@ class _MainScreenState extends State<MainScreen> {
     if (widget.initialSidebarIndex != null) {
       _sidebarSelectedIndex = widget.initialSidebarIndex!;
     }
+    if (widget.initialViewMode != null) {
+      _viewMode = widget.initialViewMode!;
+    }
+    if (widget.initialSelectedTab != null) {
+      _selectedTab = widget.initialSelectedTab!;
+    }
     // Inicializar datas com primeiro e último dia do mês/ano atual
     final now = DateTime.now();
     _startDate = DateTime(now.year, now.month, 1);
@@ -783,6 +827,9 @@ class _MainScreenState extends State<MainScreen> {
     // Carregar tarefas (do Supabase ou mock)
     _loadTasks();
 
+    // Carregar equipes do perfil do usuário logado (para filtro de equipe em Atividades)
+    _loadEquipesPerfil();
+
     // Carregar permissões de edição/criação de tarefas
     _loadTaskEditPermission();
     
@@ -790,11 +837,35 @@ class _MainScreenState extends State<MainScreen> {
     _tableScrollController.addListener(_syncTableToGantt);
     _ganttScrollController.addListener(_syncGanttToTable);
 
-    // Carregar contagem de mensagens não lidas e iniciar timer periódico
-    _carregarContagemChat();
-    _chatCountTimer = Timer.periodic(const Duration(seconds: 60), (_) {
-      _carregarContagemChat();
+    // Inicializar UnreadChatManager de forma suave após o primeiro frame (sem bloquear renderização de tarefas)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _unreadChatManager.initialize();
+      }
     });
+
+    // Timer de 90s atua estritamente como reconciliação periódica de segurança
+    _chatCountTimer = Timer.periodic(const Duration(seconds: 90), (_) {
+      _unreadChatManager.scheduleReconciliation('watchdog_timer', delay: Duration.zero);
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant MainScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.initialSidebarIndex != null && widget.initialSidebarIndex != oldWidget.initialSidebarIndex) {
+      _setSidebarIndex(widget.initialSidebarIndex!);
+    }
+    if (widget.initialViewMode != null && widget.initialViewMode != oldWidget.initialViewMode) {
+      setState(() {
+        _viewMode = widget.initialViewMode!;
+      });
+    }
+    if (widget.initialSelectedTab != null && widget.initialSelectedTab != oldWidget.initialSelectedTab) {
+      setState(() {
+        _selectedTab = widget.initialSelectedTab!;
+      });
+    }
   }
 
   @override
@@ -808,18 +879,12 @@ class _MainScreenState extends State<MainScreen> {
     super.dispose();
   }
 
-  /// Carrega contagem total de mensagens não lidas para o badge do header.
+  /// Recarrega o snapshot de mensagens não lidas no manager (reconciliação sob demanda).
   Future<void> _carregarContagemChat() async {
     try {
-      final total = await ChatService().contarTotalMensagensNaoLidas();
-      if (mounted && total != _unreadChatCount) {
-        setState(() {
-          _unreadChatCount = total;
-        });
-      }
+      await _unreadChatManager.refreshAll();
     } catch (e) {
-      // Silencioso - não afetar o app se falhar
-      print('⚠️ Erro ao carregar contagem de chat: $e');
+      debugPrint('⚠️ Erro ao sincronizar contagem de chat: $e');
     }
   }
 
@@ -1027,6 +1092,35 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
   
+  Future<void> _loadEquipesPerfil() async {
+    try {
+      final usuario = _authService.currentUser;
+      List<Equipe> equipes = [];
+
+      if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
+        equipes = await _equipeService.getEquipesPorPerfilUsuario(
+          regionalIds: usuario.regionalIds,
+          divisaoIds: usuario.divisaoIds,
+          segmentoIds: usuario.segmentoIds,
+        );
+      } else {
+        equipes = await _equipeService.getEquipesAtivas();
+      }
+
+      final nomes = equipes.map((e) => e.nome.trim()).where((n) => n.isNotEmpty).toSet().toList()
+        ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+
+      if (mounted) {
+        setState(() {
+          _todasEquipes = equipes;
+          _nomesEquipesPerfil = nomes;
+        });
+      }
+    } catch (e) {
+      print('⚠️ Erro ao carregar equipes do perfil do usuário para filtro: $e');
+    }
+  }
+
   // Método para atualizar ordenação
   void _updateSorting(String column, bool ascending) {
     print('🔄 main.dart: _updateSorting chamado - column=$column, ascending=$ascending');
@@ -1039,122 +1133,45 @@ class _MainScreenState extends State<MainScreen> {
 
   // Carregar tarefas do Supabase ou mock
   // Adicionar uma nova tarefa à lista sem recarregar tudo (evita o "pisca" ao criar)
-  Future<void> _addTaskToList(String taskId) async {
+  Future<void> _addTaskToList(String taskId, [Task? preloadedTask]) async {
     try {
-      // Buscar a tarefa recém-criada do banco
-      final newTask = await _taskService.getTaskById(taskId);
+      // Usar a tarefa pré-carregada ou buscar do banco com joins completos
+      final newTask = preloadedTask ?? await _taskService.getTaskById(taskId);
       if (newTask == null) {
         print('⚠️ Tarefa $taskId não encontrada após criação');
         return;
       }
 
-      // Verificar se a tarefa passa pelos filtros atuais antes de adicionar
-      setState(() {
-        bool shouldAdd = true;
-        
-        // Aplicar filtros de perfil
-        final usuario = _authService.currentUser;
-        if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
-          bool passaRegional = true;
-          bool passaDivisao = true;
-          bool passaSegmento = true;
+      // Atualizar na base completa em memória
+      final semFiltroIndex = _tasksSemFiltros.indexWhere((t) => t.id == taskId);
+      if (semFiltroIndex != -1) {
+        _tasksSemFiltros[semFiltroIndex] = newTask;
+      } else {
+        _tasksSemFiltros.add(newTask);
+      }
 
-          if (usuario.regionalIds.isNotEmpty) {
-            passaRegional = newTask.regionalId != null && usuario.temAcessoRegional(newTask.regionalId);
-          }
-          if (usuario.divisaoIds.isNotEmpty) {
-            passaDivisao = newTask.divisaoId != null && usuario.temAcessoDivisao(newTask.divisaoId);
-          }
-          if (usuario.segmentoIds.isNotEmpty) {
-            passaSegmento = newTask.segmentoId != null && usuario.temAcessoSegmento(newTask.segmentoId);
-          }
-
-          shouldAdd = passaRegional && passaDivisao && passaSegmento;
-        }
-
-        // Verificar filtros de data
-        if (shouldAdd && (_startDate != null || _endDate != null)) {
-          bool hasSegmentInRange = false;
-          for (var segment in newTask.ganttSegments) {
-            final startDate = DateTime(segment.dataInicio.year, segment.dataInicio.month, segment.dataInicio.day);
-            final endDate = DateTime(segment.dataFim.year, segment.dataFim.month, segment.dataFim.day);
-            
-            if (!(startDate.isAfter(_endDate) || endDate.isBefore(_startDate))) {
-              hasSegmentInRange = true;
-              break;
-            }
-                    
-          }
-          if (!hasSegmentInRange && newTask.ganttSegments.isEmpty) {
-            if (newTask.dataInicio.isAfter(_endDate) || newTask.dataFim.isBefore(_startDate)) {
-              hasSegmentInRange = false;
-            } else {
-              hasSegmentInRange = true;
-            }
-                    }
-          shouldAdd = hasSegmentInRange;
-        }
-
-        // Aplicar outros filtros se existirem
-        if (shouldAdd && _currentFilters.isNotEmpty) {
-          // Verificar filtros básicos
-          if (_currentFilters['status'] != null && newTask.status != _currentFilters['status']) {
-            shouldAdd = false;
-          }
-          if (shouldAdd && _currentFilters['regional'] != null && newTask.regional != _currentFilters['regional']) {
-            shouldAdd = false;
-          }
-          if (shouldAdd && _currentFilters['divisao'] != null && newTask.divisao != _currentFilters['divisao']) {
-            shouldAdd = false;
-          }
-          if (shouldAdd && _currentFilters['tipo'] != null && newTask.tipo != _currentFilters['tipo']) {
-            shouldAdd = false;
-          }
-          if (shouldAdd && _currentFilters['executor'] != null) {
-            final executorMatch = newTask.executores.any((e) => e == _currentFilters['executor']) ||
-                                 newTask.executor == _currentFilters['executor'];
-            if (!executorMatch) {
-              shouldAdd = false;
-            }
-          }
-          if (shouldAdd && _currentFilters['coordenador'] != null && newTask.coordenador != _currentFilters['coordenador']) {
-            shouldAdd = false;
-          }
-          if (shouldAdd && _currentFilters['local'] != null) {
-            final localMatch = newTask.locais.any((l) => l == _currentFilters['local']);
-            if (!localMatch) {
-              shouldAdd = false;
-            }
-          }
-          if (shouldAdd && _currentFilters['frota'] != null) {
-            final frotaMatch = newTask.frota == _currentFilters['frota'] ||
-                              (newTask.frotaIds.isNotEmpty && _currentFilters['frota'] != null);
-            if (!frotaMatch) {
-              shouldAdd = false;
-            }
-          }
-        }
-
-        if (shouldAdd) {
-          // Verificar se a tarefa já não está na lista (evitar duplicatas)
+      // Reaplicar filtros vigentes de forma canônica
+      if (_currentFilters.isNotEmpty) {
+        await _applyFilters(_currentFilters);
+      } else {
+        setState(() {
           final index = _tasks.indexWhere((t) => t.id == taskId);
-          if (index == -1) {
-            _tasks.add(newTask);
-            _tasksVersion++; // Incrementar versão para forçar rebuild
-            print('✅ Tarefa $taskId adicionada à lista local (versão: $_tasksVersion)');
-          } else {
-            print('ℹ️ Tarefa $taskId já está na lista, atualizando...');
+          if (index != -1) {
             _tasks[index] = newTask;
-            _tasksVersion++;
+          } else {
+            _tasks.add(newTask);
           }
-        } else {
-          print('ℹ️ Tarefa $taskId não passa pelos filtros atuais, não será adicionada à lista');
-        }
-      });
+          _tasksVersion++;
+        });
+      }
+
+      // Recarregar alertas para incluir possíveis warnings da nova tarefa
+      await _loadWarnings();
+
+      print('✅ Tarefa $taskId adicionada à lista local mantendo filtros (versão: $_tasksVersion)');
     } catch (e, stackTrace) {
       print('❌ Erro ao adicionar tarefa à lista: $e');
       print('   Stack trace: $stackTrace');
-      // Em caso de erro, fazer reload completo como fallback
       await _loadTasks();
       if (_currentFilters.isNotEmpty) {
         await _applyFilters(_currentFilters);
@@ -1172,163 +1189,35 @@ class _MainScreenState extends State<MainScreen> {
         return;
       }
 
-      // Atualizar a tarefa na lista local mantendo os filtros
-      setState(() {
-        final index = _tasks.indexWhere((t) => t.id == taskId);
-        if (index != -1) {
-          // Verificar se a tarefa atualizada ainda passa pelos filtros
-          bool shouldKeep = true;
-          
-          // Aplicar filtros de perfil
-          final usuario = _authService.currentUser;
-          if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
-            bool passaRegional = true;
-            bool passaDivisao = true;
-            bool passaSegmento = true;
+      // 1. Atualizar na lista completa sem filtros (_tasksSemFiltros)
+      final semFiltroIndex = _tasksSemFiltros.indexWhere((t) => t.id == taskId);
+      if (semFiltroIndex != -1) {
+        _tasksSemFiltros[semFiltroIndex] = updatedTask;
+      } else {
+        _tasksSemFiltros.add(updatedTask);
+      }
 
-            if (usuario.regionalIds.isNotEmpty) {
-              passaRegional = updatedTask.regionalId != null && usuario.temAcessoRegional(updatedTask.regionalId);
-            }
-            if (usuario.divisaoIds.isNotEmpty) {
-              passaDivisao = updatedTask.divisaoId != null && usuario.temAcessoDivisao(updatedTask.divisaoId);
-            }
-            if (usuario.segmentoIds.isNotEmpty) {
-              passaSegmento = updatedTask.segmentoId != null && usuario.temAcessoSegmento(updatedTask.segmentoId);
-            }
-
-            shouldKeep = passaRegional && passaDivisao && passaSegmento;
-          }
-
-          // Verificar filtros de data
-          if (shouldKeep && (_startDate != null || _endDate != null)) {
-            bool hasSegmentInRange = false;
-            for (var segment in updatedTask.ganttSegments) {
-              final startDate = DateTime(segment.dataInicio.year, segment.dataInicio.month, segment.dataInicio.day);
-              final endDate = DateTime(segment.dataFim.year, segment.dataFim.month, segment.dataFim.day);
-              
-              if (!(startDate.isAfter(_endDate) || endDate.isBefore(_startDate))) {
-                hasSegmentInRange = true;
-                break;
-              }
-                        
-            }
-            if (!hasSegmentInRange && updatedTask.ganttSegments.isEmpty) {
-              if (updatedTask.dataInicio.isAfter(_endDate) || updatedTask.dataFim.isBefore(_startDate)) {
-                hasSegmentInRange = false;
-              } else {
-                hasSegmentInRange = true;
-              }
-                        }
-            shouldKeep = hasSegmentInRange;
-          }
-
-          // Aplicar outros filtros se existirem
-          if (shouldKeep && _currentFilters.isNotEmpty) {
-            // Verificar filtros básicos
-            if (_currentFilters['status'] != null && updatedTask.status != _currentFilters['status']) {
-              shouldKeep = false;
-            }
-            if (shouldKeep && _currentFilters['regional'] != null && updatedTask.regional != _currentFilters['regional']) {
-              shouldKeep = false;
-            }
-            if (shouldKeep && _currentFilters['divisao'] != null && updatedTask.divisao != _currentFilters['divisao']) {
-              shouldKeep = false;
-            }
-            if (shouldKeep && _currentFilters['tipo'] != null && updatedTask.tipo != _currentFilters['tipo']) {
-              shouldKeep = false;
-            }
-            if (shouldKeep && _currentFilters['executor'] != null) {
-              final executorMatch = updatedTask.executores.any((e) => e == _currentFilters['executor']) ||
-                                   updatedTask.executor == _currentFilters['executor'];
-              if (!executorMatch) {
-                shouldKeep = false;
-              }
-            }
-            if (shouldKeep && _currentFilters['coordenador'] != null && updatedTask.coordenador != _currentFilters['coordenador']) {
-              shouldKeep = false;
-            }
-            if (shouldKeep && _currentFilters['local'] != null) {
-              final localMatch = updatedTask.locais.any((l) => l == _currentFilters['local']);
-              if (!localMatch) {
-                shouldKeep = false;
-              }
-            }
-          }
-
-          if (shouldKeep) {
-            // Atualizar a tarefa na lista
+      // 2. Reaplicar os filtros atuais usando a filtragem canônica completa
+      // Se houver filtros, _applyFilters garante que tarefas com multiseleção por vírgula,
+      // equipes e executores permaneçam visíveis sem sumir.
+      if (_currentFilters.isNotEmpty) {
+        await _applyFilters(_currentFilters);
+      } else {
+        setState(() {
+          final index = _tasks.indexWhere((t) => t.id == taskId);
+          if (index != -1) {
             _tasks[index] = updatedTask;
-            _tasksVersion++; // Incrementar versão para forçar rebuild
           } else {
-            // Remover a tarefa se não passar mais pelos filtros
-            _tasks.removeAt(index);
-            _tasksVersion++;
-          }
-        } else {
-          // Tarefa não está na lista, verificar se deve ser adicionada
-          bool shouldAdd = true;
-          
-          // Aplicar mesmos filtros acima
-          final usuario = _authService.currentUser;
-          if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
-            bool passaRegional = true;
-            bool passaDivisao = true;
-            bool passaSegmento = true;
-
-            if (usuario.regionalIds.isNotEmpty) {
-              passaRegional = updatedTask.regionalId != null && usuario.temAcessoRegional(updatedTask.regionalId);
-            }
-            if (usuario.divisaoIds.isNotEmpty) {
-              passaDivisao = updatedTask.divisaoId != null && usuario.temAcessoDivisao(updatedTask.divisaoId);
-            }
-            if (usuario.segmentoIds.isNotEmpty) {
-              passaSegmento = updatedTask.segmentoId != null && usuario.temAcessoSegmento(updatedTask.segmentoId);
-            }
-
-            shouldAdd = passaRegional && passaDivisao && passaSegmento;
-          }
-
-          if (shouldAdd && (_startDate != null || _endDate != null)) {
-            bool hasSegmentInRange = false;
-            for (var segment in updatedTask.ganttSegments) {
-              final startDate = DateTime(segment.dataInicio.year, segment.dataInicio.month, segment.dataInicio.day);
-              final endDate = DateTime(segment.dataFim.year, segment.dataFim.month, segment.dataFim.day);
-              
-              if (!(startDate.isAfter(_endDate) || endDate.isBefore(_startDate))) {
-                hasSegmentInRange = true;
-                break;
-              }
-                        }
-            shouldAdd = hasSegmentInRange;
-          }
-
-          if (shouldAdd && _currentFilters.isNotEmpty) {
-            // Aplicar mesmos filtros acima
-            if (_currentFilters['status'] != null && updatedTask.status != _currentFilters['status']) {
-              shouldAdd = false;
-            }
-            // ... outros filtros
-          }
-
-          if (shouldAdd) {
             _tasks.add(updatedTask);
-            _tasksVersion++;
           }
-        }
-        
-        // Atualizar também na lista sem filtros (_tasksSemFiltros)
-        final semFiltroIndex = _tasksSemFiltros.indexWhere((t) => t.id == taskId);
-        if (semFiltroIndex != -1) {
-          _tasksSemFiltros[semFiltroIndex] = updatedTask;
-        } else {
-          _tasksSemFiltros.add(updatedTask);
-        }
-      });
+          _tasksVersion++;
+        });
+      }
 
       // Recarregar alertas para refletir correção de warning (ex.: status PROG→CONC)
       await _loadWarnings();
 
-      print('✅ Tarefa $taskId atualizada na lista local (versão: $_tasksVersion)');
+      print('✅ Tarefa $taskId atualizada na lista local mantendo filtros (versão: $_tasksVersion)');
     } catch (e) {
       print('❌ Erro ao atualizar tarefa na lista: $e');
       // Em caso de erro, fazer reload completo como fallback
@@ -1374,21 +1263,28 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Future<void> _loadTasks() async {
+    print('🚀 [DEBUG-LOAD] 1. _loadTasks() INICIADO | periodo: ${_startDate.toIso8601String()} ate ${_endDate.toIso8601String()}');
     if (mounted) setState(() => _isTasksLoading = true);
     PerformanceMonitor.start('MainScreen._loadTasks');
     try {
-      // Carregar lista base para o período (UMA ÚNICA VEZ)
+      print('🔍 [DEBUG-LOAD] 2. Disparando _taskService.filterTasks...');
+      final sw = Stopwatch()..start();
       final baseTasks = await _taskService.filterTasks(
         dataInicioMin: _startDate,
         dataFimMax: _endDate,
       );
+      sw.stop();
+      print('📦 [DEBUG-LOAD] 3. _taskService.filterTasks RETORNOU ${baseTasks.length} tarefas em ${sw.elapsedMilliseconds}ms');
 
       _tasksSemFiltros = baseTasks;
 
       if (mounted) {
         if (_currentFilters.isNotEmpty) {
+          print('🔍 [DEBUG-LOAD] 4. Aplicando filtros ativos: $_currentFilters');
           await _applyFilters(_currentFilters);
+          print('📦 [DEBUG-LOAD] 4.1. Filtros aplicados | _tasks=${_tasks.length}');
         } else {
+          print('📦 [DEBUG-LOAD] 4. Nenhum filtro ativo, atribuindo baseTasks à lista _tasks (${baseTasks.length})');
           setState(() {
             _tasks = baseTasks;
           });
@@ -1398,14 +1294,27 @@ class _MainScreenState extends State<MainScreen> {
           _isTasksLoading = false;
           _tasksVersion++;
         });
-        await _loadWarnings();
+        print('✅ [DEBUG-LOAD] 5. setState concluído: _isTasksLoading=false, _tasks=${_tasks.length}, _tasksForTable=${_tasksForTable.length}');
+
+        print('🔍 [DEBUG-LOAD] 6. Disparando _loadWarnings() em background...');
+        _loadWarnings().then((_) {
+          print('📦 [DEBUG-LOAD] 6.1. Warnings carregados: ${_warningsByTaskId?.length ?? 0} registros');
+        }).catchError((e) {
+          print('⚠️ [DEBUG-LOAD] 6.1. Erro ao carregar warnings (ignorado): $e');
+        });
+
         if (!_autoSyncTriggeredAfterLoad) {
           _autoSyncTriggeredAfterLoad = true;
+          print('🔄 [DEBUG-LOAD] 7. Disparando SyncService().syncAll() em background...');
           SyncService().syncAll();
         }
+        print('🏁 [DEBUG-LOAD] 8. _loadTasks() FINALIZADO COM SUCESSO!');
+      } else {
+        print('⚠️ [DEBUG-LOAD] MainScreen NÃO montado após filterTasks.');
       }
-    } catch (e) {
-      print('⚠️ Erro ao carregar tarefas: $e');
+    } catch (e, stack) {
+      print('❌ [DEBUG-LOAD] ERRO CRÍTICO em _loadTasks: $e');
+      print('Stack trace: $stack');
       if (mounted) setState(() => _isTasksLoading = false);
     } finally {
       PerformanceMonitor.stop('MainScreen._loadTasks');
@@ -1436,13 +1345,28 @@ class _MainScreenState extends State<MainScreen> {
       key: _scaffoldKey,
       drawer: isMobile ? _buildDrawer() : null,
       endDrawer: !isMobile ? _buildDrawer() : null,
+      bottomNavigationBar: isMobile
+          ? Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Segunda footer bar para telas com modos específicos (Atividades, Notas SAP, Horas SAP)
+                if (_sidebarSelectedIndex == 0 || _sidebarSelectedIndex == 16 || _sidebarSelectedIndex == 20)
+                  _buildFootbar(isMobile, false),
+                // Footer bar global permanente para todas as telas
+                _buildMobileGlobalFooterBar(),
+              ],
+            )
+          : null,
       body: isMobile
           ? SafeArea(
-              bottom: true,
+              bottom: false,
               child: Column(
                 children: [
                   // Header Bar
-                  if (_sidebarSelectedIndex != 15) HeaderBar(
+                  if (isMobile && _sidebarSelectedIndex == 0 && (_viewMode == 'feed' || _selectedTab == 4))
+                    _buildMobileFeedHeader()
+                  else if (_sidebarSelectedIndex != 15 && !(isMobile && _sidebarSelectedIndex == 14))
+                    HeaderBar(
                     startDate: _startDate,
                     endDate: _endDate,
                     onDateRangeChanged: (start, end) {
@@ -1566,7 +1490,9 @@ class _MainScreenState extends State<MainScreen> {
                       _sidebarSelectedIndex != 25 &&
                       _sidebarSelectedIndex != 26 &&
                       _sidebarSelectedIndex != 27 &&
-                      _sidebarSelectedIndex != 28)
+                      _sidebarSelectedIndex != 28 &&
+                      _sidebarSelectedIndex != 29 &&
+                      !(_sidebarSelectedIndex == 0 && (_viewMode == 'feed' || _selectedTab == 4)))
                     FilterBar(
                       onFiltersChanged: _applyFilters,
                       initialFilters: _currentFilters,
@@ -1581,6 +1507,7 @@ class _MainScreenState extends State<MainScreen> {
                       onFilterOnlyWithWarnings: (v) => setState(() => _filterOnlyWithWarnings = v),
                       warningsCountInTable: _tasksWithWarningsCount,
                       warningsTotalCount: _warningsTotalCount,
+                      equipesDisponiveis: _nomesEquipesPerfil,
                       onToggleGantt: () {
                         setState(() {
                           final newShowGantt = !_showGantt;
@@ -1601,15 +1528,6 @@ class _MainScreenState extends State<MainScreen> {
                   Expanded(
                     child: _buildMainContent(isMobile, isTablet, isDesktop),
                   ),
-                  // Footbar para mobile (botões de visualização)
-                  if (isMobile && (_sidebarSelectedIndex == 0 || _sidebarSelectedIndex == 16 || _sidebarSelectedIndex == 20)) ...[
-                    Builder(
-                      builder: (context) {
-                        // debug silenciado
-                        return _buildFootbar(isMobile, false);
-                      },
-                    ),
-                  ],
                 ],
               ),
             )
@@ -1761,7 +1679,8 @@ class _MainScreenState extends State<MainScreen> {
                           _sidebarSelectedIndex != 25 &&
                           _sidebarSelectedIndex != 26 &&
                           _sidebarSelectedIndex != 27 &&
-                          _sidebarSelectedIndex != 28)
+                          _sidebarSelectedIndex != 28 &&
+                          _sidebarSelectedIndex != 29)
                         FilterBar(
                           onFiltersChanged: _applyFilters,
                           initialFilters: _currentFilters,
@@ -1776,6 +1695,7 @@ class _MainScreenState extends State<MainScreen> {
                           onFilterOnlyWithWarnings: (v) => setState(() => _filterOnlyWithWarnings = v),
                           warningsCountInTable: _tasksWithWarningsCount,
                           warningsTotalCount: _warningsTotalCount,
+                          equipesDisponiveis: _nomesEquipesPerfil,
                           onToggleGantt: () {
                             setState(() { _showGantt = !_showGantt; });
                           },
@@ -1953,6 +1873,7 @@ class _MainScreenState extends State<MainScreen> {
           );
         }
         // Desktop: widget unificado que elimina dessincronização vertical
+        print('🖥️ [DEBUG-BUILD] Renderizando ActivityGanttView: _tasksForTable=${_tasksForTable.length}, _tasks=${_tasks.length}, _isTasksLoading=$_isTasksLoading');
         return ActivityGanttView(
           key: const ValueKey('activity_gantt'),
           tasks: _tasksForTable,
@@ -2369,6 +2290,8 @@ class _MainScreenState extends State<MainScreen> {
         return const ConfirmacaoOrdensView();
       case 28: // Assistentes IA
         return const AiAssistantsListScreen();
+      case 29: // Projetos
+        return const ProjetosHomeScreen();
       default:
         if (!_showGantt) {
           return TaskTable(
@@ -2482,43 +2405,156 @@ class _MainScreenState extends State<MainScreen> {
   Widget _buildDrawer() {
     final showBackToShortcuts = widget.onBackToShortcuts != null;
     final menuVisibility = MenuVisibility.getForCurrentUser();
+    final themeProvider = widget.themeProvider ?? ThemeProvider();
+    final currentTheme = themeProvider.currentTheme;
+    final barBg = ThemeService.getBarBackgroundColorSync(currentTheme);
+    final iconColor = ThemeService.getBarIconColorSync(currentTheme);
+    final user = _authService.currentUser;
+    final userName = _authService.getUserName() ?? 'Usuário';
+    final userEmail = user?.email ?? '';
+
     return Drawer(
+      backgroundColor: barBg,
       child: SafeArea(
-        child: showBackToShortcuts
-            ? Column(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Cabeçalho de perfil do Drawer
+            Container(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+              decoration: BoxDecoration(
+                color: barBg,
+                border: Border(
+                  bottom: BorderSide(
+                    color: iconColor.withValues(alpha: 0.15),
+                  ),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  ListTile(
-                    leading: const Icon(Icons.home),
-                    title: const Text('Início'),
+                  Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 20,
+                        backgroundColor: iconColor.withValues(alpha: 0.15),
+                        child: Text(
+                          userName.isNotEmpty ? userName.substring(0, 1).toUpperCase() : 'U',
+                          style: TextStyle(
+                            color: iconColor,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              userName,
+                              style: TextStyle(
+                                color: iconColor,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 14,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            if (userEmail.isNotEmpty)
+                              Text(
+                                userEmail,
+                                style: TextStyle(
+                                  color: iconColor.withValues(alpha: 0.7),
+                                  fontSize: 11,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        icon: Icon(Icons.close, color: iconColor, size: 20),
+                        onPressed: () => Navigator.of(context).pop(),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: user?.isRoot == true
+                              ? Colors.red.withValues(alpha: 0.2)
+                              : Colors.white.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          user?.isRoot == true ? 'ROOT' : 'OPERADOR',
+                          style: TextStyle(
+                            color: iconColor,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      if (!kIsWeb)
+                        const SyncStatusWidget(),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+
+            // Botão Início (Atalhos Rápidos)
+            if (showBackToShortcuts)
+              Container(
+                margin: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                child: Material(
+                  color: iconColor.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(10),
                     onTap: () {
                       Navigator.of(context).pop();
                       widget.onBackToShortcuts!();
                     },
-                  ),
-                  const Divider(height: 1),
-                  Expanded(
-                    child: Sidebar(
-                      isExpanded: true,
-                      onToggle: () {
-                        Navigator.of(context).pop();
-                      },
-                      selectedIndex: _sidebarSelectedIndex,
-                      onItemSelected: (index) {
-                        setState(() {
-                          _setSidebarIndex(index);
-                        });
-                        Navigator.of(context).pop();
-                      },
-                      onExport: _exportData,
-                      isRoot: menuVisibility.isRoot,
-                      showGtd: menuVisibility.showGtd,
-                      showGtdAndSupressao: menuVisibility.showGtdAndSupressao,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      child: Row(
+                        children: [
+                          Icon(Icons.apps_rounded, color: iconColor, size: 20),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              'Início (Painel de Atalhos)',
+                              style: TextStyle(
+                                color: iconColor,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          Icon(Icons.chevron_right, color: iconColor.withValues(alpha: 0.5), size: 18),
+                        ],
+                      ),
                     ),
                   ),
-                ],
-              )
-            : Sidebar(
+                ),
+              ),
+
+            // Módulos do TaskFlow via Sidebar oficial expandida
+            Expanded(
+              child: Sidebar(
                 isExpanded: true,
+                customWidth: double.infinity,
                 onToggle: () {
                   Navigator.of(context).pop();
                 },
@@ -2534,6 +2570,47 @@ class _MainScreenState extends State<MainScreen> {
                 showGtd: menuVisibility.showGtd,
                 showGtdAndSupressao: menuVisibility.showGtdAndSupressao,
               ),
+            ),
+
+            // Rodapé do Drawer com Perfil e Logout
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: barBg,
+                border: Border(
+                  top: BorderSide(
+                    color: iconColor.withValues(alpha: 0.15),
+                  ),
+                ),
+              ),
+              child: Row(
+                children: [
+                  TextButton.icon(
+                    icon: Icon(Icons.person_outline, size: 18, color: iconColor),
+                    label: Text('Meu Perfil', style: TextStyle(fontSize: 12, color: iconColor)),
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const PerfilUsuarioView()),
+                      );
+                    },
+                  ),
+                  const Spacer(),
+                  if (widget.onLogout != null)
+                    TextButton.icon(
+                      icon: const Icon(Icons.logout, size: 18, color: Colors.redAccent),
+                      label: const Text('Sair', style: TextStyle(fontSize: 12, color: Colors.redAccent)),
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                        widget.onLogout!();
+                      },
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2908,15 +2985,7 @@ class _MainScreenState extends State<MainScreen> {
     if (result != null) {
       final createdSubtask = await _taskService.createSubtask(parentTaskId, result);
       print('✅ Subtarefa criada: ${createdSubtask.id}');
-      await _loadTasks();
-      // Reaplicar filtros para preservar os filtros ativos
-      if (_currentFilters.isNotEmpty) {
-        await _applyFilters(_currentFilters);
-      }
-      // Forçar rebuild para atualizar tabela e Gantt
-      if (mounted) {
-        setState(() {});
-      }
+      await _addTaskToList(createdSubtask.id, createdSubtask);
       _showSuccessMessage('Subtarefa criada com sucesso!');
     }
   }
@@ -3016,12 +3085,18 @@ class _MainScreenState extends State<MainScreen> {
       print('   Primeiro segmento: ${normalizedSegments.first.dataInicio.toString().substring(0, 10)} até ${normalizedSegments.first.dataFim.toString().substring(0, 10)}');
     }
     
-    await _taskService.createTask(duplicatedTask);
-    await _loadTasks();
-    // Reaplicar filtros para preservar os filtros ativos
-    if (_currentFilters.isNotEmpty) {
-      await _applyFilters(_currentFilters);
+    final createdTask = await _taskService.createTask(duplicatedTask);
+
+    // Se o filtro de tarefas em conflito estiver ativo e a original estava nele, incluir a duplicada
+    if (_conflictFilterTaskIds != null && _conflictFilterTaskIds!.contains(task.id)) {
+      setState(() {
+        _conflictFilterTaskIds = {..._conflictFilterTaskIds!, createdTask.id};
+      });
     }
+
+    // Adiciona a tarefa diretamente na base em memória e reaplica os filtros ativos
+    // sem recarregar tudo do zero (evita que a original e a duplicada sumam da visualização)
+    await _addTaskToList(createdTask.id, createdTask);
     _showSuccessMessage('Tarefa duplicada com sucesso!');
   }
 
@@ -3044,6 +3119,7 @@ class _MainScreenState extends State<MainScreen> {
           ),
           TextButton(
             onPressed: () async {
+              Navigator.of(context).pop();
               final deleted = await _taskService.deleteTask(taskId);
               if (deleted) {
                 await _loadTasks();
@@ -3051,14 +3127,16 @@ class _MainScreenState extends State<MainScreen> {
                 if (_currentFilters.isNotEmpty) {
                   await _applyFilters(_currentFilters);
                 }
-                setState(() {
-                  _selectedTask = null;
-                });
-                Navigator.of(context).pop();
-                _showSuccessMessage('Atividade excluída com sucesso!');
+                if (mounted) {
+                  setState(() {
+                    _selectedTask = null;
+                  });
+                  _showSuccessMessage('Atividade excluída com sucesso!');
+                }
               } else {
-                Navigator.of(context).pop();
-                _showErrorMessage('Erro ao excluir atividade');
+                if (mounted) {
+                  _showErrorMessage('Erro ao excluir atividade');
+                }
               }
             },
             style: TextButton.styleFrom(foregroundColor: Colors.red),
@@ -3178,16 +3256,48 @@ class _MainScreenState extends State<MainScreen> {
       final divisaoSet     = _parseFilterSet(filters['divisao']);
       final localSet       = _parseFilterSet(filters['local']);
       final tipoSet        = _parseFilterSet(filters['tipo']);
+      final equipeSet      = _parseFilterSet(filters['equipe']);
       final executorSet    = _parseFilterSet(filters['executor']);
       final coordenadorSet = _parseFilterSet(filters['coordenador']);
       final frotaSet       = _parseFilterSet(filters['frota']);
       final minhasTarefas  = filters['minhasTarefas'] == 'true';
 
+      // Mapear dados das equipes selecionadas para correlacionar tarefas diretamente ou por membros executores
+      Set<String>? selectedEquipeIds;
+      Set<String>? selectedEquipeNomes;
+      Set<String>? selectedEquipeExecutorIds;
+      Set<String>? selectedEquipeExecutorNomes;
+
+      if (equipeSet.isNotEmpty && !equipeSet.contains('todos')) {
+        selectedEquipeIds = {};
+        selectedEquipeNomes = {};
+        selectedEquipeExecutorIds = {};
+        selectedEquipeExecutorNomes = {};
+
+        for (final eq in _todasEquipes) {
+          final eqId = eq.id.trim().toLowerCase();
+          final eqNome = eq.nome.trim().toLowerCase();
+          if (equipeSet.any((sel) {
+            final s = sel.trim().toLowerCase();
+            return eqId == s || eqNome == s || eqNome.contains(s) || s.contains(eqNome);
+          })) {
+            selectedEquipeIds.add(eqId);
+            selectedEquipeNomes.add(eqNome);
+            for (final ee in eq.executores) {
+              final execId = ee.executorId.trim().toLowerCase();
+              if (execId.isNotEmpty) selectedEquipeExecutorIds.add(execId);
+              final execNome = ee.executorNome.trim().toLowerCase();
+              if (execNome.isNotEmpty) selectedEquipeExecutorNomes.add(execNome);
+            }
+          }
+        }
+      }
+
       final hasFieldFilters = statusSet.isNotEmpty ||
           regionalSet.isNotEmpty || divisaoSet.isNotEmpty ||
           localSet.isNotEmpty    || tipoSet.isNotEmpty    ||
-          executorSet.isNotEmpty || coordenadorSet.isNotEmpty ||
-          frotaSet.isNotEmpty;
+          equipeSet.isNotEmpty   || executorSet.isNotEmpty ||
+          coordenadorSet.isNotEmpty || frotaSet.isNotEmpty;
 
       if (hasFieldFilters) {
         filtered = filtered.where((task) {
@@ -3210,6 +3320,33 @@ class _MainScreenState extends State<MainScreen> {
             final t = task.tipo.toLowerCase();
             if (!tipoSet.any((f) => t.contains(f.toLowerCase()))) return false;
           }
+          if (equipeSet.isNotEmpty && !equipeSet.contains('todos')) {
+            // 1. Associação direta à equipe (por ID ou nome na tarefa)
+            final activeIds = selectedEquipeIds;
+            final activeNomes = selectedEquipeNomes;
+            final activeExecIds = selectedEquipeExecutorIds;
+            final activeExecNomes = selectedEquipeExecutorNomes;
+
+            final matchesDirectEquipe = (activeIds != null && task.equipeIds.any((id) => activeIds.contains(id.trim().toLowerCase()))) ||
+                task.equipes.any((eq) {
+                  final eqLower = eq.trim().toLowerCase();
+                  return equipeSet.any((sel) {
+                    final s = sel.trim().toLowerCase();
+                    return eqLower == s || eqLower.contains(s) || s.contains(eqLower);
+                  }) || (activeNomes != null && activeNomes.contains(eqLower));
+                });
+
+            // 2. Associação indireta: qualquer executor da tarefa pertence à equipe selecionada (mesmo princípio da tela Equipe e Frota)
+            final matchesTeamMember = (activeExecIds != null && (
+                task.executorIds.any((id) => activeExecIds.contains(id.trim().toLowerCase())) ||
+                task.executorPeriods.any((ep) => activeExecIds.contains(ep.executorId.trim().toLowerCase()))
+            )) || (activeExecNomes != null && activeExecNomes.isNotEmpty && (
+                task.executores.any((ex) => activeExecNomes.contains(ex.trim().toLowerCase())) ||
+                (task.executor.isNotEmpty && activeExecNomes.any((en) => task.executor.toLowerCase().contains(en)))
+            ));
+
+            if (!matchesDirectEquipe && !matchesTeamMember) return false;
+          }
           if (executorSet.isNotEmpty) {
             final execMatch = executorSet.any((f) {
               final fl = f.toLowerCase();
@@ -3225,7 +3362,7 @@ class _MainScreenState extends State<MainScreen> {
           if (frotaSet.isNotEmpty) {
             final frotaMatch = frotaSet.any((f) {
               final fl = f.toLowerCase();
-              return (task.frota?.toLowerCase().contains(fl) ?? false) ||
+              return (task.frota.toLowerCase().contains(fl)) ||
                   task.frotaIds.any((id) => id.toLowerCase().contains(fl));
             });
             if (!frotaMatch) return false;
@@ -3323,41 +3460,30 @@ class _MainScreenState extends State<MainScreen> {
     final formato = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Exportar Dados'),
-        content: const Text('Escolha o formato de exportação:'),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.file_download_outlined, color: Colors.blue),
+            SizedBox(width: 8),
+            Text('Exportar Programação'),
+          ],
+        ),
+        content: const Text('Escolha o formato desejado para exportar as atividades:'),
         actions: [
-          TextButton(
+          TextButton.icon(
             onPressed: () => Navigator.pop(context, 'CSV'),
-            child: const Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.table_chart, size: 20),
-                SizedBox(width: 8),
-                Text('CSV'),
-              ],
-            ),
+            icon: const Icon(Icons.table_chart, size: 20),
+            label: const Text('CSV'),
           ),
-          TextButton(
+          TextButton.icon(
             onPressed: () => Navigator.pop(context, 'Excel'),
-            child: const Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.table_view, size: 20),
-                SizedBox(width: 8),
-                Text('Excel'),
-              ],
-            ),
+            icon: const Icon(Icons.table_view, size: 20),
+            label: const Text('Excel (.xlsx)'),
           ),
-          TextButton(
+          TextButton.icon(
             onPressed: () => Navigator.pop(context, 'PDF'),
-            child: const Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.picture_as_pdf, size: 20),
-                SizedBox(width: 8),
-                Text('PDF'),
-              ],
-            ),
+            icon: const Icon(Icons.picture_as_pdf, size: 20),
+            label: const Text('PDF'),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context),
@@ -3370,7 +3496,6 @@ class _MainScreenState extends State<MainScreen> {
     if (formato == null) return;
 
     try {
-      // Mostrar indicador de carregamento
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -3380,26 +3505,83 @@ class _MainScreenState extends State<MainScreen> {
         );
       }
 
-      // Obter tarefas para exportar
-      final tasksToExport = _tasks.isNotEmpty ? _tasks : await _taskService.getAllTasks();
-      
-      // Exportar no formato escolhido
+      // Obter tarefas para exportar (prioriza tarefas filtradas/visíveis atuais)
+      final tasksToExport = _tasksSemFiltros.isNotEmpty
+          ? (_tasks.isNotEmpty ? _tasks : _tasksSemFiltros)
+          : (_tasks.isNotEmpty ? _tasks : await _taskService.getAllTasks());
+
+      if (tasksToExport.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Nenhuma atividade disponível para exportação.'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+
+      final now = DateTime.now();
+      final nowStr = '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}';
+      ExportResult result;
+
       switch (formato) {
         case 'CSV':
+          final filename = 'programacao_atividades_$nowStr.csv';
           final csvContent = await _generateCSV(tasksToExport);
-          await _downloadFile(csvContent, 'atividades_${DateTime.now().millisecondsSinceEpoch}.csv', 'text/csv');
+          result = await FileExportHelper.exportString(
+            content: csvContent,
+            filename: filename,
+            mimeType: 'text/csv',
+            subject: 'Programação de Atividades (CSV)',
+          );
           break;
         case 'Excel':
+          final filename = 'programacao_atividades_$nowStr.xlsx';
           final excelBytes = await _generateExcel(tasksToExport);
-          await _downloadFileBytes(excelBytes, 'atividades_${DateTime.now().millisecondsSinceEpoch}.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+          result = await FileExportHelper.exportBytes(
+            bytes: excelBytes,
+            filename: filename,
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            subject: 'Programação de Atividades (Excel)',
+          );
           break;
         case 'PDF':
-          await _printPage();
+          final filename = 'programacao_atividades_$nowStr.pdf';
+          final pdfBytes = await _pdfService.generateTasksPDF(
+            tasksToExport,
+            startDate: _startDate,
+            endDate: _endDate,
+          );
+          result = await FileExportHelper.exportBytes(
+            bytes: pdfBytes,
+            filename: filename,
+            mimeType: 'application/pdf',
+            subject: 'Programação de Atividades (PDF)',
+          );
           break;
+        default:
+          return;
       }
-      
-      if (mounted) {
-        _showSuccessMessage('Dados exportados com sucesso! (${tasksToExport.length} atividades)');
+
+      if (!mounted) return;
+
+      if (result.success) {
+        await FileExportHelper.showExportSuccessDialog(
+          context,
+          result,
+          itemsCount: tasksToExport.length,
+          formatName: formato,
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erro ao exportar arquivo: ${result.errorMessage ?? 'Falha desconhecida'}'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
+          ),
+        );
       }
     } catch (e) {
       print('❌ Erro ao exportar dados: $e');
@@ -3408,7 +3590,7 @@ class _MainScreenState extends State<MainScreen> {
           SnackBar(
             content: Text('Erro ao exportar dados: $e'),
             backgroundColor: Colors.red,
-            duration: const Duration(seconds: 3),
+            duration: const Duration(seconds: 4),
           ),
         );
       }
@@ -3500,98 +3682,6 @@ class _MainScreenState extends State<MainScreen> {
     return Uint8List.fromList(bytes!);
   }
 
-  // Imprimir página (usar impressão do navegador)
-  Future<void> _printPage() async {
-    if (kIsWeb) {
-      // Adicionar estilos de impressão dinamicamente se necessário
-      final style = html.StyleElement()
-        ..id = 'print-styles'
-        ..text = '''
-          @media print {
-            @page {
-              size: A4 landscape;
-              margin: 10mm;
-            }
-            body {
-              margin: 0;
-              padding: 0;
-              width: 100%;
-              overflow: visible !important;
-            }
-            button, .sidebar, .header-bar, .filter-bar, .footbar {
-              display: none !important;
-            }
-            .main-content, .task-table, .gantt-chart {
-              display: block !important;
-              width: 100% !important;
-              overflow: visible !important;
-            }
-            * {
-              page-break-inside: auto;
-              -webkit-print-color-adjust: exact !important;
-              print-color-adjust: exact !important;
-            }
-            tr, .gantt-row {
-              page-break-inside: avoid;
-            }
-          }
-        ''';
-      
-      // Remover estilo anterior se existir
-      html.document.getElementById('print-styles')?.remove();
-      html.document.head?.append(style);
-      
-      // Aguardar um pouco para garantir que os estilos sejam aplicados
-      await Future.delayed(const Duration(milliseconds: 100));
-      
-      // Chamar impressão
-      html.window.print();
-    } else {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Impressão disponível apenas na versão web'),
-            backgroundColor: Colors.orange,
-            duration: Duration(seconds: 3),
-          ),
-        );
-      }
-    }
-  }
-
-  // Fazer download de arquivo (texto)
-  Future<void> _downloadFile(String content, String filename, String mimeType) async {
-    if (!kIsWeb) {
-      print('⚠️ Exportação para mobile/desktop ainda não implementada');
-      return;
-    }
-    
-    // Código apenas para web
-    final bytes = utf8.encode(content);
-    final blob = html.Blob([bytes], mimeType);
-    final url = html.Url.createObjectUrlFromBlob(blob);
-    html.AnchorElement(href: url)
-      ..setAttribute('download', filename)
-      ..click();
-    html.Url.revokeObjectUrl(url);
-  }
-
-  // Fazer download de arquivo (bytes)
-  Future<void> _downloadFileBytes(Uint8List bytes, String filename, String mimeType) async {
-    if (!kIsWeb) {
-      print('⚠️ Exportação para mobile/desktop ainda não implementada');
-      return;
-    }
-    
-    // Código apenas para web
-    final blob = html.Blob([bytes], mimeType);
-    final url = html.Url.createObjectUrlFromBlob(blob);
-    html.AnchorElement(href: url)
-      ..setAttribute('download', filename)
-      ..click();
-    html.Url.revokeObjectUrl(url);
-  }
-
   // Buscar atividades
   Future<void> _searchTasks(String query) async {
     setState(() {
@@ -3607,7 +3697,7 @@ class _MainScreenState extends State<MainScreen> {
 
   Widget _buildFootbar(bool isMobile, bool isTablet) {
     print('🔵 _buildFootbar chamado - isMobile: $isMobile, isTablet: $isTablet');
-    final footbarHeight = isMobile ? 56.0 : (isTablet ? 64.0 : 60.0);
+    final footbarHeight = isMobile ? 48.0 : (isTablet ? 64.0 : 60.0);
     
     final themeProvider = widget.themeProvider ?? ThemeProvider();
     final currentTheme = themeProvider.currentTheme;
@@ -3659,16 +3749,23 @@ class _MainScreenState extends State<MainScreen> {
       height: footbarHeight,
       decoration: BoxDecoration(
         color: backgroundColor,
+        border: Border(
+          bottom: BorderSide(
+            color: Colors.black.withValues(alpha: 0.08),
+            width: 1,
+          ),
+        ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.1),
+            color: Colors.black.withValues(alpha: 0.06),
             blurRadius: 4,
-            offset: const Offset(0, -2),
+            offset: const Offset(0, -1),
           ),
         ],
       ),
       child: SafeArea(
         top: false,
+        bottom: false,
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceAround,
           crossAxisAlignment: CrossAxisAlignment.center,
@@ -3818,6 +3915,193 @@ class _MainScreenState extends State<MainScreen> {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMobileFeedHeader() {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
+    return Container(
+      height: 52,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        border: Border(
+          bottom: BorderSide(color: colors.borderSubtle),
+        ),
+      ),
+      child: Row(
+        children: [
+          IconButton(
+            icon: Icon(Icons.menu_rounded, color: colors.textPrimary),
+            tooltip: 'Menu',
+            onPressed: () {
+              _scaffoldKey.currentState?.openDrawer();
+            },
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Text(
+              'Feed de Atividades',
+              style: typography.cardTitle.copyWith(
+                color: colors.textPrimary,
+                fontWeight: FontWeight.w600,
+                fontSize: 16,
+              ),
+            ),
+          ),
+          if (_isAtividadesRefreshing)
+            const Padding(
+              padding: EdgeInsets.all(12),
+              child: SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          else
+            IconButton(
+              icon: Icon(Icons.refresh_rounded, color: colors.textMuted),
+              tooltip: 'Atualizar feed',
+              onPressed: _refreshAtividades,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMobileGlobalFooterBar() {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
+    final isFeedActive = _sidebarSelectedIndex == 0 && (_selectedTab == 4 || _viewMode == 'feed');
+    final isProgramacaoActive = _sidebarSelectedIndex == 0 && !isFeedActive;
+    final isChatActive = _sidebarSelectedIndex == 15;
+    final isConfigActive = _sidebarSelectedIndex == 14;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: colors.surface,
+        border: Border(
+          top: BorderSide(color: colors.borderSubtle),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 8,
+            offset: const Offset(0, -2),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _buildMobileFooterItem(
+                icon: Icons.home_rounded,
+                label: 'Início',
+                isSelected: false,
+                colors: colors,
+                typography: typography,
+                onTap: () {
+                  widget.onBackToShortcuts?.call();
+                },
+              ),
+              _buildMobileFooterItem(
+                icon: Icons.grid_view_rounded,
+                label: 'Programação',
+                isSelected: isProgramacaoActive,
+                colors: colors,
+                typography: typography,
+                onTap: () {
+                  setState(() {
+                    _setSidebarIndex(0);
+                    _viewMode = 'split';
+                    _selectedTab = 0;
+                  });
+                },
+              ),
+              _buildMobileFooterItem(
+                icon: Icons.dynamic_feed_rounded,
+                label: 'Feed',
+                isSelected: isFeedActive,
+                colors: colors,
+                typography: typography,
+                onTap: () {
+                  setState(() {
+                    _setSidebarIndex(0);
+                    _viewMode = 'feed';
+                    _selectedTab = 4;
+                  });
+                },
+              ),
+              _buildMobileFooterItem(
+                icon: Icons.chat_bubble_outline_rounded,
+                label: 'Chat',
+                isSelected: isChatActive,
+                colors: colors,
+                typography: typography,
+                onTap: () {
+                  _setSidebarIndex(15);
+                },
+              ),
+              _buildMobileFooterItem(
+                icon: Icons.settings_rounded,
+                label: 'Config',
+                isSelected: isConfigActive,
+                colors: colors,
+                typography: typography,
+                onTap: () {
+                  _setSidebarIndex(14);
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMobileFooterItem({
+    required IconData icon,
+    required String label,
+    required bool isSelected,
+    required TFSemanticColors colors,
+    required TFTypography typography,
+    required VoidCallback onTap,
+  }) {
+    final activeColor = colors.primary;
+    final inactiveColor = colors.textMuted;
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              color: isSelected ? activeColor : inactiveColor,
+              size: 22,
+            ),
+            const SizedBox(height: 3),
+            Text(
+              label,
+              style: typography.labelSmall.copyWith(
+                color: isSelected ? activeColor : inactiveColor,
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                fontSize: 11,
+              ),
+            ),
+          ],
         ),
       ),
     );

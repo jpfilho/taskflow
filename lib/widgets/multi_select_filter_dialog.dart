@@ -103,6 +103,7 @@ class _MultiSelectFilterDialogState extends State<MultiSelectFilterDialog> {
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
               child: TextField(
                 controller: _searchController,
+                autofocus: true,
                 decoration: InputDecoration(
                   hintText: widget.searchHint ?? 'Pesquisar empregado...',
                   prefixIcon: const Icon(Icons.search),

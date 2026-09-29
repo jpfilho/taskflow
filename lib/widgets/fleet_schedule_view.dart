@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
+import '../utils/clipboard_helper.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import 'dart:async';
@@ -9,10 +10,12 @@ import '../models/task.dart';
 import '../models/frota.dart';
 import '../models/tipo_atividade.dart';
 import 'package:task2026/widgets/common/taskflow_calendar_marker_tooltip.dart';
+import '../models/equipe.dart';
 import '../models/feriado.dart';
 import '../models/status.dart';
 import '../services/task_service.dart';
 import '../services/frota_service.dart';
+import '../services/equipe_service.dart';
 import '../services/tipo_atividade_service.dart';
 import '../services/auth_service_simples.dart';
 import '../services/feriado_service.dart';
@@ -22,6 +25,7 @@ import '../services/tab_sync_service.dart';
 import '../services/conflict_service.dart';
 import '../services/performance_monitor.dart';
 import '../utils/responsive.dart';
+import '../design_system/taskflow_design_system.dart';
 
 class FleetScheduleView extends StatefulWidget {
   final TaskService taskService;
@@ -105,6 +109,10 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
   final SegmentoService _segmentoService = SegmentoService();
   /// ID do segmento "Frota" (quando usuário tem este segmento, vê todas as frotas da regional)
   String? _segmentoFrotaId;
+
+  // Serviço de equipes para resolução de membros no filtro
+  final EquipeService _equipeService = EquipeService();
+  List<Equipe> _todasEquipes = [];
   
   // Serviços para modal de atividades
   final StatusService _statusService = StatusService();
@@ -325,6 +333,22 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
         print('⚠️ Usuário sem perfil configurado: mostrando todas as frotas');
       }
 
+      // Carregar equipes (estritamente autorizadas para o perfil do usuário, mesma regra da tela Equipe)
+      try {
+        final isRestrictedUser = usuario != null && !usuario.isRoot;
+        final equipes = isRestrictedUser
+            ? await _equipeService.getEquipesPorPerfilUsuario(
+                regionalIds: usuario.regionalIds,
+                divisaoIds: usuario.divisaoIds,
+                segmentoIds: usuario.segmentoIds,
+              )
+            : await _equipeService.getEquipesAtivas();
+        _todasEquipes = equipes;
+      } catch (e) {
+        print('Erro ao carregar equipes na tela de frota: $e');
+        _todasEquipes = [];
+      }
+
       _frotasAfterProfileFilter = frotasFiltradas;
       final frotasComFiltroBarra = _applyFleetFiltersToFrotas(frotasFiltradas);
       
@@ -417,7 +441,7 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
     return feriados.map((f) => '${f.tipo}: ${f.descricao}').join('\n');
   }
 
-  /// Aplica filtros da barra da tela Frota (Regional, Divisão, Segmento, Frota, Local não aplicado aqui).
+  /// Aplica filtros da barra da tela Frota (Regional, Divisão, Segmento, Frota, Propriedade, Tipo, Local não aplicado aqui).
   List<Frota> _applyFleetFiltersToFrotas(List<Frota> frotas) {
     final filters = widget.fleetFilters;
     if (filters == null || filters.isEmpty) return frotas;
@@ -425,6 +449,8 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
     Set<String>? divisaoSet;
     Set<String>? segmentoSet;
     Set<String>? frotaSet;
+    Set<String>? propriedadeSet;
+    Set<String>? tipoSet;
     if (filters['regional'] != null && filters['regional']!.trim().isNotEmpty) {
       regionalSet = filters['regional']!.split(',').map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty).toSet();
     }
@@ -437,7 +463,13 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
     if (filters['frota'] != null && filters['frota']!.trim().isNotEmpty) {
       frotaSet = filters['frota']!.split(',').map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty).toSet();
     }
-    if (regionalSet == null && divisaoSet == null && segmentoSet == null && frotaSet == null) return frotas;
+    if (filters['propriedade'] != null && filters['propriedade']!.trim().isNotEmpty) {
+      propriedadeSet = filters['propriedade']!.split(',').map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty).toSet();
+    }
+    if (filters['tipo'] != null && filters['tipo']!.trim().isNotEmpty) {
+      tipoSet = filters['tipo']!.split(',').map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty).toSet();
+    }
+    if (regionalSet == null && divisaoSet == null && segmentoSet == null && frotaSet == null && propriedadeSet == null && tipoSet == null) return frotas;
     return frotas.where((f) {
       if (regionalSet != null) {
         final r = (f.regional ?? '').trim().toLowerCase();
@@ -450,6 +482,16 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
       if (segmentoSet != null) {
         final s = (f.segmento ?? '').trim().toLowerCase();
         if (s.isEmpty || !segmentoSet.contains(s)) return false;
+      }
+      if (propriedadeSet != null) {
+        final p = Frota.getPropriedadeLabel(f.propriedade).toLowerCase();
+        final rawP = f.propriedade.toLowerCase();
+        if (!propriedadeSet.contains(p) && !propriedadeSet.contains(rawP)) return false;
+      }
+      if (tipoSet != null) {
+        final t = _getTipoVeiculoLabel(f.tipoVeiculo).toLowerCase();
+        final rawT = f.tipoVeiculo.toLowerCase();
+        if (!tipoSet.contains(t) && !tipoSet.contains(rawT)) return false;
       }
       if (frotaSet != null) {
         final nome = (f.nome).trim().toLowerCase();
@@ -466,12 +508,18 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
     widget.onFleetDataLoaded?.call(_buildFleetFilterOptions(frotas, tasks));
   }
 
-  /// Constrói o mapa de opções: regionals, divisoes, segmentos, frotas (valores únicos da tabela).
+  /// Constrói o mapa de opções: regionals, divisoes, segmentos, frotas, propriedades, tipos, equipes, executores, coordenadores.
   Map<String, List<String>> _buildFleetFilterOptions(List<Frota> frotas, List<Task> tasks) {
     final regionais = <String>{};
     final divisoes = <String>{};
     final segmentos = <String>{};
     final frotasNomes = <String>{};
+    final propriedades = <String>{};
+    final tipos = <String>{};
+    final equipes = <String>{};
+    final executores = <String>{};
+    final coordenadores = <String>{};
+
     for (final f in frotas) {
       final r = (f.regional ?? '').trim();
       if (r.isNotEmpty) regionais.add(r);
@@ -482,13 +530,169 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
       final nome = f.nome.trim();
       final placa = (f.placa).trim();
       frotasNomes.add(placa.isNotEmpty ? '$nome - $placa' : nome);
+      propriedades.add(Frota.getPropriedadeLabel(f.propriedade));
+      tipos.add(_getTipoVeiculoLabel(f.tipoVeiculo));
     }
+
+    // Equipes: estritamente as autorizadas para o perfil do usuário (mesmo padrão do TeamSchedule)
+    for (final eq in _todasEquipes) {
+      final eqName = eq.nome.trim();
+      if (eqName.isNotEmpty) equipes.add(eqName);
+    }
+
+    for (final t in tasks) {
+      if (t.coordenador.trim().isNotEmpty) {
+        for (final c in t.coordenador.split(',')) {
+          final trimmed = c.trim();
+          if (trimmed.isNotEmpty) coordenadores.add(trimmed);
+        }
+      }
+      for (final eq in t.equipes) {
+        final trimmed = eq.trim();
+        if (trimmed.isNotEmpty) equipes.add(trimmed);
+      }
+      if (t.executor.trim().isNotEmpty) {
+        for (final ex in t.executor.split(',')) {
+          final trimmed = ex.trim();
+          if (trimmed.isNotEmpty) executores.add(trimmed);
+        }
+      }
+      for (final ex in t.executores) {
+        final trimmed = ex.trim();
+        if (trimmed.isNotEmpty) executores.add(trimmed);
+      }
+    }
+
+    List<String> sortList(Set<String> s) {
+      final list = s.toList();
+      list.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+      return list;
+    }
+
     return {
-      'regionals': regionais.toList(),
-      'divisoes': divisoes.toList(),
-      'segmentos': segmentos.toList(),
-      'frotas': frotasNomes.toList(),
+      'regionals': sortList(regionais),
+      'divisoes': sortList(divisoes),
+      'segmentos': sortList(segmentos),
+      'frotas': sortList(frotasNomes),
+      'propriedades': sortList(propriedades),
+      'tipos': sortList(tipos),
+      'equipes': sortList(equipes),
+      'executores': sortList(executores),
+      'coordenadores': sortList(coordenadores),
     };
+  }
+
+  /// Filtra as linhas de frota e suas atividades com base nos filtros de atividades (Equipe, Executor, Coordenador).
+  List<FleetTaskRow> _applyActivityFiltersToFleetRows(List<FleetTaskRow> rows) {
+    final filters = widget.fleetFilters;
+    if (filters == null || filters.isEmpty) return rows;
+
+    Set<String>? equipeSet;
+    Set<String>? executorSet;
+    Set<String>? coordenadorSet;
+
+    if (filters['equipe'] != null && filters['equipe']!.trim().isNotEmpty) {
+      equipeSet = filters['equipe']!.split(',').map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty).toSet();
+    }
+    if (filters['executor'] != null && filters['executor']!.trim().isNotEmpty) {
+      executorSet = filters['executor']!.split(',').map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty).toSet();
+    }
+    if (filters['coordenador'] != null && filters['coordenador']!.trim().isNotEmpty) {
+      coordenadorSet = filters['coordenador']!.split(',').map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty).toSet();
+    }
+
+    if (equipeSet == null && executorSet == null && coordenadorSet == null) {
+      return rows;
+    }
+
+    // Obter os IDs e Nomes dos executores membros das equipes selecionadas e IDs/Nomes das equipes selecionadas
+    Set<String>? selectedEquipeExecutorIds;
+    Set<String>? selectedEquipeExecutorNomes;
+    Set<String>? selectedEquipeIds;
+    Set<String>? selectedEquipeNomes;
+    if (equipeSet != null && !equipeSet.contains('todos')) {
+      selectedEquipeExecutorIds = {};
+      selectedEquipeExecutorNomes = {};
+      selectedEquipeIds = {};
+      selectedEquipeNomes = {};
+      for (final eq in _todasEquipes) {
+        final eqId = eq.id.trim().toLowerCase();
+        final eqNome = eq.nome.trim().toLowerCase();
+        if (equipeSet.contains(eqId) ||
+            equipeSet.contains(eqNome) ||
+            equipeSet.any((sel) => eqNome == sel || eqNome.contains(sel) || sel.contains(eqNome))) {
+          selectedEquipeIds.add(eqId);
+          selectedEquipeNomes.add(eqNome);
+          for (final ee in eq.executores) {
+            final execId = ee.executorId.trim().toLowerCase();
+            if (execId.isNotEmpty) {
+              selectedEquipeExecutorIds.add(execId);
+            }
+            final execNome = ee.executorNome.trim().toLowerCase();
+            if (execNome.isNotEmpty) {
+              selectedEquipeExecutorNomes.add(execNome);
+            }
+          }
+        }
+      }
+    }
+
+    final activeEquipeSet = equipeSet;
+    final activeSelectedEquipeIds = selectedEquipeIds;
+    final activeSelectedEquipeNomes = selectedEquipeNomes;
+    final activeSelectedExecIds = selectedEquipeExecutorIds;
+    final activeSelectedExecNomes = selectedEquipeExecutorNomes;
+
+    return rows.map((row) {
+      final matchingTasks = row.tasks.where((t) {
+        if (coordenadorSet != null) {
+          final coord = t.coordenador.trim().toLowerCase();
+          if (coord.isEmpty) return false;
+          final matchesCoord = coordenadorSet.any((sel) =>
+              coord == sel || coord.contains(sel) || sel.contains(coord));
+          if (!matchesCoord) return false;
+        }
+
+        if (activeEquipeSet != null && !activeEquipeSet.contains('todos')) {
+          // 1. Associação direta à equipe (por ID ou nome)
+          final matchesDirectEquipe = (activeSelectedEquipeIds != null && t.equipeIds.any((id) => activeSelectedEquipeIds.contains(id.trim().toLowerCase()))) ||
+              t.equipes.any((eq) {
+                final eqLower = eq.trim().toLowerCase();
+                return activeEquipeSet.contains(eqLower) ||
+                    (activeSelectedEquipeNomes != null && activeSelectedEquipeNomes.contains(eqLower)) ||
+                    activeEquipeSet.any((sel) => eqLower == sel || eqLower.contains(sel) || sel.contains(eqLower));
+              });
+
+          // 2. Associação indireta: qualquer executor da tarefa pertence à equipe selecionada (mesma semântica da tela Equipe)
+          final matchesTeamMember = (activeSelectedExecIds != null && (
+              t.executorIds.any((id) => activeSelectedExecIds.contains(id.trim().toLowerCase())) ||
+              t.executorPeriods.any((ep) => activeSelectedExecIds.contains(ep.executorId.trim().toLowerCase()))
+          )) || (activeSelectedExecNomes != null && activeSelectedExecNomes.isNotEmpty && (
+              t.executores.any((ex) => activeSelectedExecNomes.contains(ex.trim().toLowerCase())) ||
+              (t.executor.isNotEmpty && activeSelectedExecNomes.any((en) => t.executor.toLowerCase().contains(en)))
+          ));
+
+          if (!matchesDirectEquipe && !matchesTeamMember) return false;
+        }
+
+        if (executorSet != null) {
+          final execs = <String>[];
+          if (t.executor.trim().isNotEmpty) {
+            execs.addAll(t.executor.split(',').map((e) => e.trim().toLowerCase()));
+          }
+          execs.addAll(t.executores.map((e) => e.trim().toLowerCase()));
+          final matchesExec = executorSet.any((sel) =>
+              execs.any((ex) => ex == sel || ex.contains(sel) || sel.contains(ex)));
+          if (!matchesExec) return false;
+        }
+
+        return true;
+      }).toList();
+
+      if (matchingTasks.isEmpty) return null;
+
+      return FleetTaskRow(frota: row.frota, tasks: matchingTasks);
+    }).whereType<FleetTaskRow>().toList();
   }
 
   /// Recarrega dados
@@ -736,13 +940,10 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
         fleetRows.add(FleetTaskRow(frota: frota, tasks: tasksById.values.toList()));
       }
       if (!mounted) return;
-      final rowsWithLocalFilter = fleetRows.map((row) => FleetTaskRow(
-        frota: row.frota,
-        tasks: row.tasks,
-      )).toList();
-      setState(() => _fleetRows = rowsWithLocalFilter);
+      final filteredRows = _applyActivityFiltersToFleetRows(fleetRows);
+      setState(() => _fleetRows = filteredRows);
       await _loadFleetBackendConflicts();
-      print('✅ FleetScheduleView: Dados via view v_execucoes_dia_frota: ${rowsWithLocalFilter.length} frotas');
+      print('✅ FleetScheduleView: Dados via view v_execucoes_dia_frota: ${filteredRows.length} frotas');
     } catch (e, st) {
       print('⚠️ FleetScheduleView: View indisponível, usando fallback: $e');
       print(st);
@@ -852,13 +1053,10 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
       ));
     }
 
-    final rowsWithLocalFilter = fleetRows.map((row) => FleetTaskRow(
-      frota: row.frota,
-      tasks: row.tasks,
-    )).toList();
-    print('✅ Dados construídos: ${rowsWithLocalFilter.length} frotas');
+    final filteredRows = _applyActivityFiltersToFleetRows(fleetRows);
+    print('✅ Dados construídos: ${filteredRows.length} frotas');
     setState(() {
-      _fleetRows = rowsWithLocalFilter;
+      _fleetRows = filteredRows;
       _conflictDaysByFrota = {};
     });
   }
@@ -1029,13 +1227,24 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
     return index * dayWidth;
   }
 
+  double _getTodayOffset(List<DateTime> days, double dayWidth) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final index = days.indexWhere((d) => 
+      d.year == today.year && 
+      d.month == today.month && 
+      d.day == today.day
+    );
+    return index >= 0 ? index * dayWidth : -1.0;
+  }
+
   @override
   Widget build(BuildContext context) {
     final isMobile = Responsive.isMobile(context);
     final isTablet = Responsive.isTablet(context);
     
     if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
+      return const Center(child: TFLoading(message: 'Carregando frota...'));
     }
     
     final days = _getDaysInPeriod();
@@ -1051,9 +1260,9 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
     final screenHeight = MediaQuery.of(context).size.height;
     final minDayWidth = 30.0;
     final calculatedHeight = (screenHeight * 0.6).clamp(200.0, screenHeight * 0.9);
-    // Largura da tabela: REGIONAL(100) + DIVISÃO(100) + TIPO(100) + PLACA(100) + TAREFAS(80) + NOME(150) = 630px
+    // Largura da tabela: REGIONAL(100) + DIVISÃO(100) + PROPRIEDADE(95) + TIPO(100) + PLACA(95) + TAREFAS(80) + NOME(150) = 720px
     // Adicionar margem para garantir que todas as colunas sejam visíveis
-    final tableWidth = 650.0;
+    final tableWidth = 740.0;
     
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -1109,14 +1318,20 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
   }
 
   Widget _buildFleetTable() {
+    final colors = context.tfColors;
     if (_fleetRows.isEmpty) {
-      return const Center(child: Text('Nenhuma frota encontrada'));
+      return Center(
+        child: Text(
+          'Nenhuma frota encontrada',
+          style: context.tfTypography.bodyMedium.copyWith(color: colors.textSecondary),
+        ),
+      );
     }
 
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: Colors.grey[300]!),
+        color: colors.surface,
+        border: Border.all(color: colors.borderSubtle),
       ),
       child: Column(
         children: [
@@ -1124,10 +1339,10 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
           Container(
             height: 25,
             decoration: BoxDecoration(
-              color: Colors.grey[100],
+              color: colors.surfaceSecondary,
               border: Border(
                 bottom: BorderSide(
-                  color: Colors.grey[300]!,
+                  color: colors.borderSubtle,
                   width: 1,
                 ),
               ),
@@ -1141,8 +1356,8 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
                 colors: [
-                  Colors.blue[700]!,
-                  Colors.blue[600]!,
+                  colors.primary,
+                  colors.primaryHover,
                 ],
               ),
               boxShadow: [
@@ -1157,8 +1372,9 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
               children: [
                 _buildHeaderCell('REGIONAL', 100),
                 _buildHeaderCell('DIVISÃO', 100),
+                _buildHeaderCell('PROPRIEDADE', 95),
                 _buildHeaderCell('TIPO', 100),
-                _buildHeaderCell('PLACA', 100),
+                _buildHeaderCell('PLACA', 95),
                 _buildHeaderCell('TAREFAS', 80),
                 _buildHeaderCell('NOME', 150, textAlign: TextAlign.right),
               ],
@@ -1224,8 +1440,9 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
         children: [
           _buildCell(frota.regional ?? '-', 100, hasConflict: hasConflict),
           _buildCell(frota.divisao ?? '-', 100, hasConflict: hasConflict),
+          _buildCell(Frota.getPropriedadeLabel(frota.propriedade), 95, hasConflict: hasConflict),
           _buildCell(_getTipoVeiculoLabel(frota.tipoVeiculo), 100, hasConflict: hasConflict),
-          _buildCell(frota.placa, 100, hasConflict: hasConflict),
+          _buildCell(frota.placa, 95, hasConflict: hasConflict),
           _buildTasksCell(row.tasks.length, row, 80, hasConflict: hasConflict),
           _buildFleetNameCell(frota, 150, hasConflict: hasConflict, row: row),
         ],
@@ -1264,6 +1481,7 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
         final totalWidth = days.length * dayWidth;
         final ganttAvailableWidth = constraints.maxWidth;
         final needsScroll = totalWidth > ganttAvailableWidth;
+        final todayOffset = _getTodayOffset(days, dayWidth);
         
         return Container(
           decoration: const BoxDecoration(
@@ -1414,72 +1632,87 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
                         child: SizedBox(
                           width: totalWidth,
                           height: 50,
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.start,
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            mainAxisSize: MainAxisSize.min,
-                            children: days.map((day) {
-                              final isWeekend = day.weekday == 6 || day.weekday == 7;
-                              final holidayColor = _getHolidayColor(day);
-                              final tooltip = _getGlobalHolidayTooltip(day);
-                              final isFeriado = holidayColor != null;
+                          child: Stack(
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.start,
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                mainAxisSize: MainAxisSize.min,
+                                children: days.map((day) {
+                                  final isWeekend = day.weekday == 6 || day.weekday == 7;
+                                  final holidayColor = _getHolidayColor(day);
+                                  final tooltip = _getGlobalHolidayTooltip(day);
+                                  final isFeriado = holidayColor != null;
 
-                              Widget cell = Container(
-                                width: dayWidth,
-                                height: 50,
-                                padding: EdgeInsets.zero,
-                                margin: EdgeInsets.zero,
-                                decoration: BoxDecoration(
-                                  color: holidayColor ??
-                                      (isWeekend ? Colors.grey[200] : Colors.white),
-                                  border: Border(
-                                    right: BorderSide(
-                                      color: Colors.grey[300]!,
-                                      width: 1,
+                                  Widget cell = Container(
+                                    width: dayWidth,
+                                    height: 50,
+                                    padding: EdgeInsets.zero,
+                                    margin: EdgeInsets.zero,
+                                    decoration: BoxDecoration(
+                                      color: holidayColor ??
+                                          (isWeekend ? Colors.grey[200] : Colors.white),
+                                      border: Border(
+                                        right: BorderSide(
+                                          color: Colors.grey[300]!,
+                                          width: 1,
+                                        ),
+                                      ),
                                     ),
-                                  ),
-                                ),
-                                alignment: Alignment.centerLeft,
-                                child: Padding(
-                                  padding: const EdgeInsets.only(left: 2.0),
-                                  child: Text(
-                                    day.day.toString().padLeft(2, '0'),
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: isFeriado ? FontWeight.bold : FontWeight.normal,
-                                      color: isFeriado
-                                          ? (holidayColor == Colors.orange[100] ? Colors.orange[900] : Colors.purple[800])
-                                          : (isWeekend ? Colors.grey[600] : Colors.black),
+                                    alignment: Alignment.centerLeft,
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(left: 2.0),
+                                      child: Text(
+                                        day.day.toString().padLeft(2, '0'),
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: isFeriado ? FontWeight.bold : FontWeight.normal,
+                                          color: isFeriado
+                                              ? (holidayColor == Colors.orange[100] ? Colors.orange[900] : Colors.purple[800])
+                                              : (isWeekend ? Colors.grey[600] : Colors.black),
+                                        ),
+                                      ),
                                     ),
-                                  ),
-                                ),
-                              );
-
-                              if (tooltip != null) {
-                                final n = DateTime(day.year, day.month, day.day);
-                                final feriados = _feriadosMap[n] ?? [];
-                                
-                                if (feriados.isNotEmpty) {
-                                  final f = feriados.first;
-                                  MarkerType mType = MarkerType.nationalHoliday;
-                                  if (f.tipo == 'ESTADUAL') mType = MarkerType.stateHoliday;
-                                  else if (f.tipo == 'MUNICIPAL') mType = MarkerType.cityHoliday;
-                                  else if (f.tipo == 'EVENTO') mType = MarkerType.specialEvent;
-
-                                  cell = TaskFlowCalendarMarkerTooltip(
-                                    data: CalendarMarkerData(
-                                      title: feriados.map((e) => e.descricao).join(' + '),
-                                      type: mType,
-                                      date: day,
-                                      observation: f.tipo == 'EVENTO' ? 'Evento Setor Elétrico' : 'Dia não útil',
-                                    ),
-                                    child: cell,
                                   );
-                                }
-                              }
 
-                              return cell;
-                            }).toList(),
+                                  if (tooltip != null) {
+                                    final n = DateTime(day.year, day.month, day.day);
+                                    final feriados = _feriadosMap[n] ?? [];
+                                    
+                                    if (feriados.isNotEmpty) {
+                                      final f = feriados.first;
+                                      MarkerType mType = MarkerType.nationalHoliday;
+                                      if (f.tipo == 'ESTADUAL') mType = MarkerType.stateHoliday;
+                                      else if (f.tipo == 'MUNICIPAL') mType = MarkerType.cityHoliday;
+                                      else if (f.tipo == 'EVENTO') mType = MarkerType.specialEvent;
+
+                                      cell = TaskFlowCalendarMarkerTooltip(
+                                        data: CalendarMarkerData(
+                                          title: feriados.map((e) => e.descricao).join(' + '),
+                                          type: mType,
+                                          date: day,
+                                          observation: f.tipo == 'EVENTO' ? 'Evento Setor Elétrico' : 'Dia não útil',
+                                        ),
+                                        child: cell,
+                                      );
+                                    }
+                                  }
+
+                                  return cell;
+                                }).toList(),
+                              ),
+                              if (todayOffset >= 0)
+                                Positioned(
+                                  left: todayOffset + (dayWidth / 2) - 8,
+                                  top: 0,
+                                  child: Container(
+                                    width: 16,
+                                    height: 16,
+                                    decoration: BoxDecoration(color: Colors.red[500], shape: BoxShape.circle),
+                                    child: const Icon(Icons.circle, size: 12, color: Colors.white),
+                                  ),
+                                ),
+                            ],
                           ),
                         ),
                       ),
@@ -1520,7 +1753,7 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
                           left: 0,
                           right: 0,
                           bottom: 0,
-                          child: _buildGanttRow(row, days, dayWidth, index, needsScroll),
+                          child: _buildGanttRow(row, days, dayWidth, index, needsScroll, todayOffset),
                         ),
                       ],
                     );
@@ -1538,6 +1771,7 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
     final List<Widget> monthHeaders = [];
     DateTime? currentMonthDate;
     int startIndex = 0;
+    final colors = context.tfColors;
     
     for (int i = 0; i < days.length; i++) {
       final day = days[i];
@@ -1559,14 +1793,14 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
               width: monthWidth,
               child: Container(
                 decoration: BoxDecoration(
-                  color: Colors.grey[100],
+                  color: colors.surfaceSecondary,
                   border: Border(
                     right: BorderSide(
-                      color: Colors.grey[300]!,
+                      color: colors.borderSubtle,
                       width: 1,
                     ),
                     bottom: BorderSide(
-                      color: Colors.grey[300]!,
+                      color: colors.borderSubtle,
                       width: 1,
                     ),
                   ),
@@ -1577,7 +1811,7 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
                     style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
-                      color: Colors.grey[700],
+                      color: colors.textSecondary,
                     ),
                   ),
                 ),
@@ -1605,10 +1839,14 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
           width: monthWidth,
           child: Container(
             decoration: BoxDecoration(
-              color: Colors.grey[100],
+              color: colors.surfaceSecondary,
               border: Border(
+                right: BorderSide(
+                  color: colors.borderSubtle,
+                  width: 1,
+                ),
                 bottom: BorderSide(
-                  color: Colors.grey[300]!,
+                  color: colors.borderSubtle,
                   width: 1,
                 ),
               ),
@@ -1619,7 +1857,7 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
                 style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
-                  color: Colors.grey[700],
+                  color: colors.textSecondary,
                 ),
               ),
             ),
@@ -1640,7 +1878,7 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
   }
 
 
-  Widget _buildGanttRow(FleetTaskRow row, List<DateTime> days, double dayWidth, int index, bool needsScroll) {
+  Widget _buildGanttRow(FleetTaskRow row, List<DateTime> days, double dayWidth, int index, bool needsScroll, [double todayOffset = -1.0]) {
     final totalWidth = days.length * dayWidth;
     return SizedBox(
       height: _rowHeight,
@@ -1805,6 +2043,29 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
                       );
                     }).whereType<Widget>();
                   }),
+                  // Linha do dia atual (idêntica à de equipes e atividades)
+                  if (todayOffset >= 0)
+                    Positioned(
+                      left: todayOffset + (dayWidth / 2),
+                      top: 0,
+                      bottom: 0,
+                      child: IgnorePointer(
+                        ignoring: true,
+                        child: Container(
+                          width: 3,
+                          decoration: BoxDecoration(
+                            color: Colors.red[600],
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.red.withValues(alpha: 0.7),
+                                blurRadius: 4,
+                                spreadRadius: 1,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -1945,6 +2206,7 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
   }
 
   Widget _buildCell(String text, double width, {TextAlign? textAlign, bool hasConflict = false}) {
+    final colors = context.tfColors;
     return SizedBox(
       width: width,
       child: Padding(
@@ -1954,7 +2216,7 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
           style: TextStyle(
             fontSize: 11,
             fontWeight: hasConflict ? FontWeight.bold : FontWeight.normal,
-            color: hasConflict ? Colors.white : Colors.black,
+            color: hasConflict ? Colors.white : colors.textPrimary,
           ),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
@@ -1965,6 +2227,7 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
   }
 
   Widget _buildTasksCell(int taskCount, FleetTaskRow row, double width, {bool hasConflict = false}) {
+    final colors = context.tfColors;
     return SizedBox(
       width: width,
       child: Padding(
@@ -1977,7 +2240,7 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
               style: TextStyle(
                 fontSize: 11,
                 fontWeight: hasConflict ? FontWeight.bold : FontWeight.normal,
-                color: hasConflict ? Colors.white : Colors.black,
+                color: hasConflict ? Colors.white : colors.textPrimary,
               ),
             ),
             if (taskCount > 0) ...[
@@ -1989,7 +2252,7 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
                   child: Icon(
                     Icons.visibility,
                     size: 16,
-                    color: Colors.blue[600],
+                    color: colors.primary,
                   ),
                 ),
               ),
@@ -2024,6 +2287,7 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
   }
 
   Widget _buildFleetNameCell(Frota frota, double width, {bool hasConflict = false, FleetTaskRow? row}) {
+    final colors = context.tfColors;
     final hasOficinaToday = row != null && _fleetHasOficinaOnCurrentDay(row);
     final useOficinaStyle = hasOficinaToday;
     return SizedBox(
@@ -2037,14 +2301,14 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
                 decoration: useOficinaStyle
-                    ? BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(4))
+                    ? BoxDecoration(color: colors.danger, borderRadius: BorderRadius.circular(4))
                     : null,
                 child: Text(
                   frota.nome,
                   style: TextStyle(
                     fontSize: 11,
                     fontWeight: (hasConflict || useOficinaStyle) ? FontWeight.bold : FontWeight.normal,
-                    color: useOficinaStyle ? Colors.white : (hasConflict ? Colors.white : Colors.black),
+                    color: useOficinaStyle ? Colors.white : (hasConflict ? Colors.white : colors.textPrimary),
                   ),
                   textAlign: TextAlign.right,
                   maxLines: 1,
@@ -2060,7 +2324,7 @@ class _FleetScheduleViewState extends State<FleetScheduleView> {
                 child: Icon(
                   Icons.visibility,
                   size: 16,
-                  color: Colors.blue[600],
+                  color: colors.primary,
                 ),
               ),
             ),
@@ -2710,28 +2974,13 @@ class _FleetDetailsModal extends StatelessWidget {
   }
 
   Future<void> _copyToClipboard(BuildContext context, String text, String label) async {
-    try {
-      await Clipboard.setData(ClipboardData(text: text));
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('$label copiado para a área de transferência'),
-          duration: const Duration(seconds: 2),
-          backgroundColor: Colors.green[600],
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    } catch (e) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Não foi possível copiar: $e'),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 3),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    }
+    await ClipboardHelper.copyAndNotify(
+      context,
+      text,
+      successMessage: '$label copiado para a área de transferência',
+      errorMessage: 'Não foi possível copiar o texto.',
+      duration: const Duration(seconds: 2),
+    );
   }
 
   void _shareFleetInfo(BuildContext context) {

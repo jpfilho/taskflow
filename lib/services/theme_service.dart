@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
+import '../design_system/taskflow_design_system.dart';
 
 enum AppTheme { light, dark, axia }
 
@@ -25,7 +26,9 @@ class ColorThemeNotifier {
 
 class ThemeService {
   static const String _themeKey = 'app_theme';
+  static const String _densityKey = 'ui_density';
   static AppTheme _currentTheme = AppTheme.light;
+  static TFDensityMode _currentDensity = TFDensityMode.comfortable;
 
   // Cores da paleta Axia
   static const Color axiaBlue = Color(0xFF0000FF); // #0000FF
@@ -58,118 +61,71 @@ class ThemeService {
     }
   }
 
-  // Obter tema atual
-  static AppTheme getCurrentTheme() => _currentTheme;
-
-  // Obter ThemeData baseado no tema escolhido
-  static ThemeData getThemeData(AppTheme theme) {
-    switch (theme) {
-      case AppTheme.light:
-        return _lightTheme();
-      case AppTheme.dark:
-        return _darkTheme();
-      case AppTheme.axia:
-        return _axiaTheme();
+  // Carregar densidade salva (default: comfortable)
+  static Future<TFDensityMode> loadDensity() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final densityString = prefs.getString(_densityKey);
+      if (densityString == null) {
+        _currentDensity = TFDensityMode.comfortable;
+        return _currentDensity;
+      }
+      switch (densityString) {
+        case 'compact':
+          _currentDensity = TFDensityMode.compact;
+          break;
+        case 'dense':
+          _currentDensity = TFDensityMode.dense;
+          break;
+        case 'comfortable':
+        default:
+          _currentDensity = TFDensityMode.comfortable;
+          break;
+      }
+      return _currentDensity;
+    } catch (e) {
+      print('Erro ao carregar densidade: $e');
+      return TFDensityMode.comfortable;
     }
   }
 
-  // Tema Light (atual)
-  static ThemeData _lightTheme() {
-    return ThemeData(
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: Colors.blue,
-        brightness: Brightness.light,
-      ),
-      useMaterial3: true,
-      scaffoldBackgroundColor: Colors.white,
-    );
+  // Salvar densidade
+  static Future<void> saveDensity(TFDensityMode mode) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_densityKey, mode.name);
+      _currentDensity = mode;
+    } catch (e) {
+      print('Erro ao salvar densidade: $e');
+    }
   }
 
-  // Tema Dark
-  static ThemeData _darkTheme() {
-    return ThemeData(
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: Colors.blue,
-        brightness: Brightness.dark,
-      ),
-      useMaterial3: true,
-      scaffoldBackgroundColor: const Color(0xFF121212),
-    );
+  // Obter tema atual
+  static AppTheme getCurrentTheme() => _currentTheme;
+
+  // Obter densidade atual
+  static TFDensityMode getCurrentDensity() => _currentDensity;
+
+  // Obter ThemeData baseado no tema e densidade escolhidos
+  static ThemeData getThemeData(AppTheme theme, {TFDensityMode? densityMode}) {
+    final mode = densityMode ?? _currentDensity;
+    final density = TFDensity.fromMode(mode);
+    switch (theme) {
+      case AppTheme.light:
+        return _lightTheme(density);
+      case AppTheme.dark:
+        return _darkTheme(density);
+      case AppTheme.axia:
+        return _axiaTheme(density);
+    }
   }
 
-  // Tema Axia
-  static ThemeData _axiaTheme() {
-    return ThemeData(
-      useMaterial3: true,
-      scaffoldBackgroundColor: axiaOffWhite,
-      colorScheme: ColorScheme(
-        brightness: Brightness.light,
-        primary: axiaBlue,
-        onPrimary: Colors.white,
-        secondary: axiaNavy,
-        onSecondary: Colors.white,
-        tertiary: axiaGray,
-        onTertiary: axiaNavy,
-        error: Colors.red,
-        onError: Colors.white,
-        surface: axiaOffWhite,
-        onSurface: axiaNavy,
-        surfaceContainerHighest: axiaGray.withOpacity(0.3),
-        onSurfaceVariant: axiaNavy,
-        outline: axiaGray,
-        shadow: axiaNavy.withOpacity(0.3),
-        inverseSurface: axiaNavy,
-        onInverseSurface: axiaOffWhite,
-        inversePrimary: axiaBlue,
-      ),
-      appBarTheme: AppBarTheme(
-        backgroundColor: axiaNavy,
-        foregroundColor: axiaOffWhite,
-        elevation: 0,
-      ),
-      cardTheme: CardThemeData(
-        color: Colors.white,
-        elevation: 2,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
-        ),
-      ),
-      elevatedButtonTheme: ElevatedButtonThemeData(
-        style: ElevatedButton.styleFrom(
-          backgroundColor: axiaBlue,
-          foregroundColor: Colors.white,
-          elevation: 2,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(8),
-          ),
-        ),
-      ),
-      floatingActionButtonTheme: FloatingActionButtonThemeData(
-        backgroundColor: axiaBlue,
-        foregroundColor: Colors.white,
-      ),
-      inputDecorationTheme: InputDecorationTheme(
-        filled: true,
-        fillColor: Colors.white,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: axiaGray),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: axiaGray),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: axiaBlue, width: 2),
-        ),
-      ),
-      dividerTheme: DividerThemeData(
-        color: axiaGray,
-        thickness: 1,
-      ),
-    );
-  }
+  static ThemeData _lightTheme(TFDensity density) =>
+      TaskFlowTheme.light(customExtension: TaskFlowThemeExtension.light(customDensity: density));
+  static ThemeData _darkTheme(TFDensity density) =>
+      TaskFlowTheme.dark(customExtension: TaskFlowThemeExtension.dark(customDensity: density));
+  static ThemeData _axiaTheme(TFDensity density) =>
+      TaskFlowTheme.axia(customExtension: TaskFlowThemeExtension.axia(customDensity: density));
 
   // Obter cor de destaque (para uso em widgets específicos)
   static Color getAccentColor(AppTheme theme) {

@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import '../../../../design_system/taskflow_design_system.dart';
 import '../../../../models/melhoria_bug.dart';
 
 class MelhoriaBugCard extends StatelessWidget {
@@ -13,148 +15,275 @@ class MelhoriaBugCard extends StatelessWidget {
     this.onEdit,
   });
 
-  Color _getStatusColor(String status) {
+  TFStatusSeverity _getStatusSeverity(String status) {
     switch (status) {
-      case 'NOVO': return Colors.blue;
-      case 'EM_ANALISE': return Colors.orange;
-      case 'DESENVOLVIMENTO': return Colors.purple;
-      case 'TESTE': return Colors.indigo;
-      case 'CONCLUIDO': return Colors.green;
-      case 'REJEITADO': return Colors.red;
-      case 'REABERTO': return Colors.deepOrange;
-      default: return Colors.grey;
+      case 'BACKLOG':
+        return TFStatusSeverity.neutral;
+      case 'ANALISE':
+        return TFStatusSeverity.info;
+      case 'DESENVOLVIMENTO':
+      case 'VALIDACAO':
+        return TFStatusSeverity.warning;
+      case 'CONCLUIDO':
+        return TFStatusSeverity.success;
+      case 'REABERTO':
+      case 'REJEITADO':
+        return TFStatusSeverity.danger;
+      case 'DUPLICADO':
+        return TFStatusSeverity.neutral;
+      default:
+        return TFStatusSeverity.neutral;
     }
   }
 
-  Color _getPriorityColor(String? priority) {
+  TFStatusSeverity _getPrioritySeverity(String? priority) {
     switch (priority) {
-      case 'CRITICA': return Colors.red;
-      case 'ALTA': return Colors.orange;
-      case 'MEDIA': return Colors.blue;
-      case 'BAIXA': return Colors.grey;
-      default: return Colors.grey;
+      case 'CRITICA':
+        return TFStatusSeverity.danger;
+      case 'ALTA':
+        return TFStatusSeverity.warning;
+      case 'MEDIA':
+        return TFStatusSeverity.info;
+      case 'BAIXA':
+        return TFStatusSeverity.neutral;
+      default:
+        return TFStatusSeverity.neutral;
     }
+  }
+
+  String _getPriorityLabel(String? priority) {
+    switch (priority) {
+      case 'CRITICA':
+        return 'Crítica';
+      case 'ALTA':
+        return 'Alta';
+      case 'MEDIA':
+        return 'Média';
+      case 'BAIXA':
+        return 'Baixa';
+      default:
+        return priority ?? '';
+    }
+  }
+
+  Widget? _buildPrazoBadge(BuildContext context) {
+    if (item.prazo == null) {
+      if (item.isAberta) {
+        return const TFStatusBadge(
+          label: 'Sem prazo',
+          severity: TFStatusSeverity.neutral,
+          icon: Icons.calendar_today_outlined,
+          compact: true,
+        );
+      }
+      return null;
+    }
+
+    if (item.isPrazoVencido) {
+      final dias = item.diasRestantesPrazo?.abs() ?? 0;
+      return TFStatusBadge(
+        label: dias == 0 ? 'Venceu hoje' : 'Vencido há ${dias}d',
+        severity: TFStatusSeverity.danger,
+        icon: Icons.error_outline_rounded,
+        compact: true,
+      );
+    }
+
+    if (item.isPrazoProximo) {
+      final dias = item.diasRestantesPrazo ?? 0;
+      final text = dias == 0
+          ? 'Vence hoje'
+          : dias == 1
+              ? 'Vence amanhã'
+              : 'Vence em ${dias}d';
+      return TFStatusBadge(
+        label: text,
+        severity: TFStatusSeverity.warning,
+        icon: Icons.access_time_rounded,
+        compact: true,
+      );
+    }
+
+    return TFStatusBadge(
+      label: DateFormat('dd/MM/yyyy').format(item.prazo!),
+      severity: TFStatusSeverity.info,
+      icon: Icons.event_outlined,
+      compact: true,
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
     final isBug = item.tipo == kTipoBug;
-    final statusColor = _getStatusColor(item.status);
-    final priorityColor = _getPriorityColor(item.prioridade);
+    final statusSeverity = _getStatusSeverity(item.status);
+    final prioritySeverity = _getPrioritySeverity(item.prioridade);
+    final prazoBadge = _buildPrazoBadge(context);
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: theme.dividerColor.withOpacity(0.08)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.02),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: InkWell(
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: TFCard(
+        variant: TFCardVariant.interactive,
+        onTap: onTap,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: (isBug ? Colors.red : Colors.blue).withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(6),
+                Expanded(
+                  child: Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      TFStatusBadge(
+                        label: isBug ? 'BUG' : 'MELHORIA',
+                        severity: isBug ? TFStatusSeverity.danger : TFStatusSeverity.info,
+                        icon: isBug ? Icons.bug_report_outlined : Icons.lightbulb_outline,
+                        compact: true,
                       ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
+                      if (item.prioridade != null && item.prioridade!.isNotEmpty)
+                        TFStatusBadge(
+                          label: _getPriorityLabel(item.prioridade),
+                          severity: prioritySeverity,
+                          compact: true,
+                        ),
+                      if (prazoBadge != null)
+                        prazoBadge,
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                TFStatusBadge(
+                  label: item.statusLabel,
+                  severity: statusSeverity,
+                  compact: true,
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              item.titulo,
+              style: typography.cardTitle.copyWith(
+                color: colors.textPrimary,
+                fontWeight: FontWeight.w600,
+              ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            if (item.descricao != null && item.descricao!.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                item.descricao!,
+                style: typography.bodySmall.copyWith(
+                  color: colors.textSecondary,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+            if (item.feedback != null && item.feedback!.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: colors.primary.withValues(alpha: 0.08),
+                  borderRadius: TFRadius.borderRadiusSm,
+                  border: Border.all(color: colors.primary.withValues(alpha: 0.2)),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Icon(
+                        Icons.chat_bubble_outline_rounded,
+                        size: 14,
+                        color: colors.primary,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Icon(
-                            isBug ? Icons.bug_report : Icons.lightbulb_outline,
-                            size: 14,
-                            color: isBug ? Colors.red : Colors.blue,
-                          ),
-                          const SizedBox(width: 4),
                           Text(
-                            isBug ? 'BUG' : 'SUGESTÃO',
-                            style: TextStyle(
-                              fontSize: 10,
+                            'Feedback da equipe:',
+                            style: typography.caption.copyWith(
+                              color: colors.primary,
                               fontWeight: FontWeight.bold,
-                              color: isBug ? Colors.red : Colors.blue,
                             ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            item.feedback!,
+                            style: typography.bodySmall.copyWith(
+                              color: colors.textPrimary,
+                            ),
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ],
                       ),
                     ),
-                    const Spacer(),
-                    if (item.prioridade != null)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: priorityColor.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(6),
+                  ],
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Row(
+                    children: [
+                      if (item.createdBy != null && item.createdBy!.isNotEmpty) ...[
+                        Icon(
+                          Icons.person_outline_rounded,
+                          size: 14,
+                          color: colors.textMuted,
                         ),
-                        child: Text(
-                          item.prioridade!,
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                            color: priorityColor,
+                        const SizedBox(width: 4),
+                        Flexible(
+                          child: Text(
+                            item.createdBy!,
+                            style: typography.caption.copyWith(
+                              color: colors.textMuted,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  item.titulo,
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                    height: 1.3,
+                      ],
+                      if (item.versaoCorrigida != null && item.versaoCorrigida!.isNotEmpty) ...[
+                        if (item.createdBy != null && item.createdBy!.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 6),
+                            child: Text('•', style: typography.caption.copyWith(color: colors.textMuted)),
+                          ),
+                        Text(
+                          'Corrigido em: ${item.versaoCorrigida}',
+                          style: typography.caption.copyWith(
+                            color: colors.textMuted,
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        color: statusColor,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      item.statusLabel,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    const Spacer(),
-                    IconButton(
-                      icon: const Icon(Icons.chevron_right, size: 20),
-                      onPressed: onTap,
-                      visualDensity: VisualDensity.compact,
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                    ),
-                  ],
+                Icon(
+                  Icons.arrow_forward_ios_rounded,
+                  size: 14,
+                  color: colors.textMuted,
                 ),
               ],
             ),
-          ),
+          ],
         ),
       ),
     );

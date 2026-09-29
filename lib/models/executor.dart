@@ -139,34 +139,41 @@ class Executor {
       
       if (segmentosData is List) {
         for (var item in segmentosData) {
-          if (item is Map<String, dynamic> && item['segmentos'] != null) {
-            final segmentoData = item['segmentos'];
-            if (segmentoData is Map<String, dynamic>) {
-              final segmentoId = segmentoData['id'] as String?;
-              final segmentoNome = segmentoData['segmento'] as String?;
-              if (segmentoId != null) {
-                segmentoIdsList.add(segmentoId);
-                if (segmentoNome != null) {
+          if (item is Map<String, dynamic>) {
+            final directSegId = item['segmento_id'] as String?;
+            if (item['segmentos'] != null) {
+              final segmentoData = item['segmentos'];
+              if (segmentoData is Map<String, dynamic>) {
+                final segmentoId = segmentoData['id'] as String? ?? directSegId;
+                final segmentoNome = segmentoData['segmento'] as String?;
+                if (segmentoId != null && !segmentoIdsList.contains(segmentoId)) {
+                  segmentoIdsList.add(segmentoId);
+                }
+                if (segmentoNome != null && !segmentosNomesList.contains(segmentoNome)) {
                   segmentosNomesList.add(segmentoNome);
                 }
               }
+            } else if (directSegId != null && !segmentoIdsList.contains(directSegId)) {
+              segmentoIdsList.add(directSegId);
             }
           }
         }
       } else if (segmentosData is Map<String, dynamic>) {
-        // Caso seja um único objeto ao invés de lista
+        final directSegId = segmentosData['segmento_id'] as String?;
         if (segmentosData['segmentos'] != null) {
           final segmentoData = segmentosData['segmentos'];
           if (segmentoData is Map<String, dynamic>) {
-            final segmentoId = segmentoData['id'] as String?;
+            final segmentoId = segmentoData['id'] as String? ?? directSegId;
             final segmentoNome = segmentoData['segmento'] as String?;
-            if (segmentoId != null) {
+            if (segmentoId != null && !segmentoIdsList.contains(segmentoId)) {
               segmentoIdsList.add(segmentoId);
-              if (segmentoNome != null) {
-                segmentosNomesList.add(segmentoNome);
-              }
+            }
+            if (segmentoNome != null && !segmentosNomesList.contains(segmentoNome)) {
+              segmentosNomesList.add(segmentoNome);
             }
           }
+        } else if (directSegId != null && !segmentoIdsList.contains(directSegId)) {
+          segmentoIdsList.add(directSegId);
         }
       }
     }
@@ -174,7 +181,7 @@ class Executor {
     // Fallback: se não houver executores_segmentos, tentar segmento_id antigo
     if (segmentoIdsList.isEmpty && map['segmento_id'] != null) {
       final segmentoId = map['segmento_id'] as String?;
-      if (segmentoId != null) {
+      if (segmentoId != null && !segmentoIdsList.contains(segmentoId)) {
         segmentoIdsList.add(segmentoId);
       }
     }

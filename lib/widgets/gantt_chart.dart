@@ -15,6 +15,8 @@ import '../utils/responsive.dart';
 import '../utils/conflict_detection.dart';
 import '../services/conflict_service.dart';
 import '../services/sync_service.dart';
+import '../design_system/taskflow_design_system.dart';
+import '../design_system/components/inputs/tf_date_range_picker.dart';
 
 /// Escala de visualização do eixo temporal do Gantt.
 enum GanttScale {
@@ -410,6 +412,46 @@ class _GanttChartState extends State<GanttChart> {
       return corrected.isBefore(start) ? start : corrected;
     }
     return end;
+  }
+
+  List<_GanttChartRenderSegment> _getRenderSegments(Task task) {
+    final List<_GanttChartRenderSegment> items = [];
+    for (int i = 0; i < task.ganttSegments.length; i++) {
+      final seg = task.ganttSegments[i];
+      final tipoPeriodo = (seg.tipoPeriodo ?? '').toUpperCase();
+      if (tipoPeriodo == 'DESLOCAMENTO') {
+        final startDay = DateTime(seg.dataInicio.year, seg.dataInicio.month, seg.dataInicio.day);
+        final endDay = DateTime(seg.dataFim.year, seg.dataFim.month, seg.dataFim.day);
+        items.add(_GanttChartRenderSegment(
+          segmentIndex: i,
+          subIndex: 0,
+          segment: seg,
+          start: startDay,
+          end: startDay,
+        ));
+        if (endDay.isAfter(startDay)) {
+          items.add(_GanttChartRenderSegment(
+            segmentIndex: i,
+            subIndex: 1,
+            segment: seg,
+            start: endDay,
+            end: endDay,
+          ));
+        }
+      } else {
+        final start = DateTime(seg.dataInicio.year, seg.dataInicio.month, seg.dataInicio.day);
+        final rawEnd = DateTime(seg.dataFim.year, seg.dataFim.month, seg.dataFim.day);
+        final end = _normalizeLegacyEndDate(task, start, rawEnd);
+        items.add(_GanttChartRenderSegment(
+          segmentIndex: i,
+          subIndex: 0,
+          segment: seg,
+          start: start,
+          end: end,
+        ));
+      }
+    }
+    return items;
   }
 
   bool _hasAnyExecutorConflictOnDay(DateTime day) {
@@ -1982,8 +2024,12 @@ class _GanttChartState extends State<GanttChart> {
     }
     // Removido o auto-alinhamento contínuo para permitir navegação livre do usuário
 
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return Container(
-      decoration: BoxDecoration(border: Border.all(color: Colors.grey[300]!)),
+      decoration: BoxDecoration(border: Border.all(color: colors.borderSubtle)),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1994,9 +2040,9 @@ class _GanttChartState extends State<GanttChart> {
               Container(
                 height: Responsive.kActivitiesHeaderTopHeight,
                 decoration: BoxDecoration(
-                  color: Colors.grey[100],
+                  color: colors.surfaceSecondary,
                   border: Border(
-                    bottom: BorderSide(color: Colors.grey[300]!, width: 1),
+                    bottom: BorderSide(color: colors.borderSubtle, width: 1),
                   ),
                 ),
                 child: Align(
@@ -2031,10 +2077,10 @@ class _GanttChartState extends State<GanttChart> {
                               child: Container(
                                 width: 30,
                                 decoration: BoxDecoration(
-                                  color: Colors.grey[200],
+                                  color: colors.surfaceSecondary,
                                   border: Border(
                                     right: BorderSide(
-                                      color: Colors.grey[400]!,
+                                      color: colors.borderSubtle,
                                       width: 1,
                                     ),
                                   ),
@@ -2042,7 +2088,7 @@ class _GanttChartState extends State<GanttChart> {
                                 child: Center(
                                   child: Icon(
                                     Icons.drag_handle,
-                                    color: Colors.grey[700],
+                                    color: colors.textSecondary,
                                     size: 20,
                                   ),
                                 ),
@@ -2059,9 +2105,9 @@ class _GanttChartState extends State<GanttChart> {
               Container(
                 height: Responsive.kActivitiesHeaderRowHeight,
                 decoration: BoxDecoration(
-                  color: Colors.grey[100],
+                  color: colors.surfaceSecondary,
                   border: Border(
-                    bottom: BorderSide(color: Colors.grey[300]!, width: 1),
+                    bottom: BorderSide(color: colors.borderSubtle, width: 1),
                   ),
                 ),
                 child: Align(
@@ -2163,10 +2209,10 @@ class _GanttChartState extends State<GanttChart> {
                                     decoration: BoxDecoration(
                                       color: _getHolidayColor(day) ??
                                           (isWeekend
-                                              ? Colors.grey[200]
-                                              : Colors.white),
+                                              ? (isDark ? colors.surfaceSecondary.withOpacity(0.5) : Colors.grey[200])
+                                              : colors.surface),
                                       border: Border.all(
-                                        color: Colors.grey[300]!,
+                                        color: colors.borderSubtle,
                                         width: 1,
                                       ),
                                     ),
@@ -2175,10 +2221,10 @@ class _GanttChartState extends State<GanttChart> {
                                       padding: const EdgeInsets.only(left: 2.0),
                                       child: Text(
                                         p.label,
-                                        style: const TextStyle(
+                                        style: typography.labelSmall.copyWith(
                                           fontSize: 11,
                                           fontWeight: FontWeight.normal,
-                                          color: Colors.black,
+                                          color: colors.textPrimary,
                                         ),
                                         overflow: TextOverflow.ellipsis,
                                       ),
@@ -2448,7 +2494,7 @@ class _GanttChartState extends State<GanttChart> {
                             Container(
                               height: 1,
                               width: double.infinity,
-                              color: const Color.fromARGB(255, 0, 0, 0),
+                              color: colors.borderSubtle,
                             ),
                           // Linha do Gantt
                           SizedBox(
@@ -2460,26 +2506,26 @@ class _GanttChartState extends State<GanttChart> {
                                   margin: EdgeInsets.zero,
                                   decoration: BoxDecoration(
                                     color: isSubtask
-                                        ? Colors.grey[50]!.withOpacity(0.5)
-                                        : Colors.white,
+                                        ? (isDark ? colors.surfaceSecondary.withOpacity(0.3) : Colors.grey[50]!.withOpacity(0.5))
+                                        : colors.surface,
                                     border: Border(
                                       bottom: BorderSide(
-                                        color: Colors.grey[300]!,
+                                        color: colors.borderSubtle,
                                         width: 1,
                                       ),
                                       left: isExecutorRow
                                           ? BorderSide(
-                                              color: Colors.orange[400]!,
+                                              color: colors.warning,
                                               width: 3,
                                             )
                                           : isSubtask
                                           ? BorderSide(
-                                              color: Colors.blue[400]!,
+                                              color: colors.primary,
                                               width: 4,
                                             )
                                           : (hasSubtasks || hasExecutorPeriods)
                                           ? BorderSide(
-                                              color: Colors.blue[200]!,
+                                              color: colors.primary.withOpacity(0.4),
                                               width: 2,
                                             )
                                           : BorderSide.none,
@@ -2502,9 +2548,9 @@ class _GanttChartState extends State<GanttChart> {
                                           width: 24,
                                           height: 24,
                                           decoration: BoxDecoration(
-                                            color: Colors.blue[50],
+                                            color: colors.primary.withOpacity(0.1),
                                             border: Border.all(
-                                              color: Colors.blue[300]!,
+                                              color: colors.primary.withOpacity(0.3),
                                               width: 1,
                                             ),
                                             borderRadius: BorderRadius.circular(
@@ -2516,7 +2562,7 @@ class _GanttChartState extends State<GanttChart> {
                                                 ? Icons.expand_less
                                                 : Icons.expand_more,
                                             size: 16,
-                                            color: Colors.blue[700],
+                                            color: colors.primary,
                                           ),
                                         ),
                                       ),
@@ -2542,22 +2588,9 @@ class _GanttChartState extends State<GanttChart> {
                                       final clickX = event.localPosition.dx;
                                       bool isOnSegment = false;
 
-                                      for (var segment in task.ganttSegments) {
-                                        final startDate = DateTime(
-                                          segment.dataInicio.year,
-                                          segment.dataInicio.month,
-                                          segment.dataInicio.day,
-                                        );
-                                        final rawEndDate = DateTime(
-                                          segment.dataFim.year,
-                                          segment.dataFim.month,
-                                          segment.dataFim.day,
-                                        );
-                                        final endDate = _normalizeLegacyEndDate(
-                                          task,
-                                          startDate,
-                                          rawEndDate,
-                                        );
+                                      for (var item in _getRenderSegments(task)) {
+                                        final startDate = item.start;
+                                        final endDate = item.end;
                                         final startOffset =
                                             _getDateOffsetFromPeriods(
                                               startDate,
@@ -2605,24 +2638,10 @@ class _GanttChartState extends State<GanttChart> {
                                         final moveX = event.localPosition.dx;
                                         bool isOnSegment = false;
 
-                                        for (var segment
-                                            in task.ganttSegments) {
-                                          final startDate = DateTime(
-                                            segment.dataInicio.year,
-                                            segment.dataInicio.month,
-                                            segment.dataInicio.day,
-                                          );
-                                          final rawEnd = DateTime(
-                                            segment.dataFim.year,
-                                            segment.dataFim.month,
-                                            segment.dataFim.day,
-                                          );
-                                          final endDate =
-                                              _normalizeLegacyEndDate(
-                                                task,
-                                                startDate,
-                                                rawEnd,
-                                              );
+                                        for (var item
+                                            in _getRenderSegments(task)) {
+                                          final startDate = item.start;
+                                          final endDate = item.end;
                                           final startOffset =
                                               _getDateOffsetFromPeriods(
                                                 startDate,
@@ -2747,41 +2766,24 @@ class _GanttChartState extends State<GanttChart> {
                                                     final isWeekend =
                                                         isDaily &&
                                                         _isWeekend(day);
-                                                    final isFeriado =
-                                                        isDaily &&
-                                                        _isFeriado(day);
+                                                    final holColor =
+                                                        isDaily
+                                                            ? _getHolidayColor(day)
+                                                            : null;
                                                     return Container(
                                                       width: periodWidth,
                                                       height: rowHeight,
                                                       padding: EdgeInsets.zero,
                                                       margin: EdgeInsets.zero,
                                                       decoration: BoxDecoration(
-                                                        color: isFeriado
-                                                            ? Colors.purple[100]
+                                                        color: holColor != null
+                                                            ? (isDark ? holColor.withOpacity(0.3) : holColor)
                                                             : isWeekend
-                                                            ? Colors.grey[200]
-                                                            : Colors.white,
-                                                        border: Border(
-                                                          right: BorderSide(
-                                                            color: Colors
-                                                                .grey[300]!,
-                                                            width: 1,
-                                                          ),
-                                                          bottom: BorderSide(
-                                                            color: Colors
-                                                                .grey[300]!,
-                                                            width: 1,
-                                                          ),
-                                                          top: BorderSide(
-                                                            color: Colors
-                                                                .grey[300]!,
-                                                            width: 1,
-                                                          ),
-                                                          left: BorderSide(
-                                                            color: Colors
-                                                                .grey[300]!,
-                                                            width: 1,
-                                                          ),
+                                                            ? (isDark ? colors.surfaceSecondary.withOpacity(0.4) : Colors.grey[200])
+                                                            : colors.surface,
+                                                        border: Border.all(
+                                                          color: colors.borderSubtle,
+                                                          width: 1,
                                                         ),
                                                       ),
                                                     );
@@ -2833,23 +2835,14 @@ class _GanttChartState extends State<GanttChart> {
                                                 return const SizedBox.shrink();
                                               },
                                             ),
-                                            ...task.ganttSegments.asMap().entries.map((
-                                              entry,
+                                            ..._getRenderSegments(task).map((
+                                              item,
                                             ) {
-                                              final segmentIndex = entry.key;
-                                              final segment = entry.value;
-
-                                              // Normalizar datas para calcular corretamente
-                                              final startDate = DateTime(
-                                                segment.dataInicio.year,
-                                                segment.dataInicio.month,
-                                                segment.dataInicio.day,
-                                              );
-                                              final endDate = DateTime(
-                                                segment.dataFim.year,
-                                                segment.dataFim.month,
-                                                segment.dataFim.day,
-                                              );
+                                              final segmentIndex =
+                                                  item.segmentIndex;
+                                              final segment = item.segment;
+                                              final startDate = item.start;
+                                              final endDate = item.end;
 
                                               if (endDate.isBefore(
                                                 widget.startDate,
@@ -3071,10 +3064,11 @@ class _GanttChartState extends State<GanttChart> {
                                                 bottom: 0,
                                                 child: _DraggableSegment(
                                                   key: ValueKey(
-                                                    'segment_${task.id}_${segmentIndex}_cf${widget.tasksForConflictDetection?.length ?? 0}_cv$_conflictsVersion',
+                                                    'segment_${task.id}_${segmentIndex}_${item.subIndex}_cf${widget.tasksForConflictDetection?.length ?? 0}_cv$_conflictsVersion',
                                                   ),
                                                   task: task,
                                                   segmentIndex: segmentIndex,
+                                                  subSegmentIndex: item.subIndex,
                                                   segment: segment,
                                                   normalizedStartDate:
                                                       startDate,
@@ -3162,6 +3156,8 @@ class _GanttChartState extends State<GanttChart> {
     List<GanttPeriod> periods,
     double periodWidth,
   ) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
     final List<Widget> headers = [];
     String? currentGroup;
     int startIndex = 0;
@@ -3179,19 +3175,19 @@ class _GanttChartState extends State<GanttChart> {
               width: w,
               child: Container(
                 decoration: BoxDecoration(
-                  color: Colors.grey[100],
+                  color: colors.surfaceSecondary,
                   border: Border(
-                    right: BorderSide(color: Colors.grey[300]!, width: 1),
-                    bottom: BorderSide(color: Colors.grey[300]!, width: 1),
+                    right: BorderSide(color: colors.borderSubtle, width: 1),
+                    bottom: BorderSide(color: colors.borderSubtle, width: 1),
                   ),
                 ),
                 child: Center(
                   child: Text(
                     currentGroup,
-                    style: TextStyle(
+                    style: typography.labelSmall.copyWith(
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
-                      color: Colors.grey[700],
+                      color: colors.textSecondary,
                     ),
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -3215,18 +3211,18 @@ class _GanttChartState extends State<GanttChart> {
           width: w,
           child: Container(
             decoration: BoxDecoration(
-              color: Colors.grey[100],
+              color: colors.surfaceSecondary,
               border: Border(
-                bottom: BorderSide(color: Colors.grey[300]!, width: 1),
+                bottom: BorderSide(color: colors.borderSubtle, width: 1),
               ),
             ),
             child: Center(
               child: Text(
                 currentGroup,
-                style: TextStyle(
+                style: typography.labelSmall.copyWith(
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
-                  color: Colors.grey[700],
+                  color: colors.textSecondary,
                 ),
                 overflow: TextOverflow.ellipsis,
               ),
@@ -3242,6 +3238,7 @@ class _GanttChartState extends State<GanttChart> {
     List<GanttPeriod> periods,
     double periodWidth,
   ) {
+    final colors = context.tfColors;
     final List<Widget> sep = [];
     String? prevGroup;
     for (int i = 0; i < periods.length; i++) {
@@ -3255,10 +3252,10 @@ class _GanttChartState extends State<GanttChart> {
             child: Container(
               width: 2,
               decoration: BoxDecoration(
-                color: Colors.blue[700],
+                color: colors.primary,
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.blue.withOpacity(0.3),
+                    color: colors.primary.withOpacity(0.3),
                     blurRadius: 2,
                     spreadRadius: 0.5,
                   ),
@@ -3705,11 +3702,13 @@ class _DraggableSegment extends StatefulWidget {
   final VoidCallback? onDragStart;
   final VoidCallback? onDragEnd;
   final ValueNotifier<int>? conflictsVersionNotifier;
+  final int subSegmentIndex;
 
   const _DraggableSegment({
     super.key,
     required this.task,
     required this.segmentIndex,
+    this.subSegmentIndex = 0,
     required this.segment,
     required this.normalizedStartDate,
     required this.normalizedEndDate,
@@ -3849,6 +3848,9 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
   }
 
   _DragMode _getDragMode(double x) {
+    if (widget.segment.tipoPeriodo.toUpperCase() == 'DESLOCAMENTO') {
+      return _DragMode.move;
+    }
     if (x < _resizeHandleWidth) {
       return _DragMode.resizeStart; // Borda esquerda
     } else if (x > widget.barWidth - _resizeHandleWidth) {
@@ -3986,6 +3988,23 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
         _currentEndDate!.month,
         _currentEndDate!.day,
       );
+
+      final isDeslocamento = widget.segment.tipoPeriodo.toUpperCase() == 'DESLOCAMENTO';
+      final DateTime targetStart;
+      final DateTime targetEnd;
+      if (isDeslocamento) {
+        if (widget.subSegmentIndex == 1) {
+          targetEnd = normalizedEnd;
+          targetStart = widget.segment.dataInicio.isAfter(targetEnd) ? targetEnd : widget.segment.dataInicio;
+        } else {
+          targetStart = normalizedStart;
+          targetEnd = widget.segment.dataFim.isBefore(targetStart) ? targetStart : widget.segment.dataFim;
+        }
+      } else {
+        targetStart = normalizedStart;
+        targetEnd = normalizedEnd;
+      }
+
       // Verificar se é uma tarefa virtual (executor row)
       final isExecutorRow = widget.task.id.contains('_executor_');
 
@@ -4037,8 +4056,8 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
               label: widget.segment.label,
               tipo: widget.segment.tipo,
               tipoPeriodo: widget.segment.tipoPeriodo,
-              dataInicio: _currentStartDate!,
-              dataFim: _currentEndDate!,
+              dataInicio: targetStart,
+              dataFim: targetEnd,
             );
 
             updatedExecutorPeriods[executorPeriodIndex] = ExecutorPeriod(
@@ -4081,8 +4100,8 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
           label: widget.segment.label,
           tipo: widget.segment.tipo,
           tipoPeriodo: widget.segment.tipoPeriodo, // Preservar tipoPeriodo
-          dataInicio: normalizedStart,
-          dataFim: normalizedEnd,
+          dataInicio: targetStart,
+          dataFim: targetEnd,
         );
 
         print('💾 GanttChart _onPanEnd: Salvando alterações do segmento');
@@ -4449,8 +4468,8 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
                     if (value != null) {
                       setDialogState(() {
                         selectedTipoPeriodo = value;
-                        // Se mudou para DESLOCAMENTO, fazer data fim igual à data início
-                        if (value == 'DESLOCAMENTO') {
+                        // Se mudou para DESLOCAMENTO, garantir apenas que data fim não seja anterior à início
+                        if (value == 'DESLOCAMENTO' && newEnd.isBefore(newStart)) {
                           newEnd = newStart;
                         }
                         print(
@@ -4472,7 +4491,7 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
                     ),
                     trailing: const Icon(Icons.date_range),
                     onTap: () async {
-                      final dateRange = await showDateRangePicker(
+                      final dateRange = await showTFDateRangePicker(
                         context: context,
                         initialDateRange: DateTimeRange(
                           start: newStart,
@@ -4481,19 +4500,6 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
                         firstDate: DateTime(2020),
                         lastDate: DateTime(2030),
                         helpText: 'Selecione o período',
-                        builder: (context, child) {
-                          return Theme(
-                            data: Theme.of(context).copyWith(
-                              colorScheme: ColorScheme.light(
-                                primary: Colors.blue,
-                                onPrimary: Colors.white,
-                                surface: Colors.white,
-                                onSurface: Colors.black,
-                              ),
-                            ),
-                            child: child!,
-                          );
-                        },
                       );
                       if (dateRange != null) {
                         setDialogState(() {
@@ -4623,8 +4629,8 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
                   );
                 }
 
-                // Se for deslocamento, garantir que data fim seja igual à data início
-                final finalDataFim = tipoPeriodoFinal == 'DESLOCAMENTO'
+                // Se for deslocamento, garantir que data fim não seja anterior à data início
+                final finalDataFim = (tipoPeriodoFinal == 'DESLOCAMENTO' && newEnd.isBefore(newStart))
                     ? newStart
                     : newEnd;
 
@@ -5302,4 +5308,20 @@ class _DraggableSegmentState extends State<_DraggableSegment> {
     }
     return stack;
   }
+}
+
+class _GanttChartRenderSegment {
+  final int segmentIndex;
+  final int subIndex;
+  final GanttSegment segment;
+  final DateTime start;
+  final DateTime end;
+
+  const _GanttChartRenderSegment({
+    required this.segmentIndex,
+    required this.subIndex,
+    required this.segment,
+    required this.start,
+    required this.end,
+  });
 }

@@ -1,8 +1,9 @@
 import 'dart:async';
 import '../models/equipe.dart';
+import '../models/divisao.dart';
 import '../config/supabase_config.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-
+import 'divisao_service.dart';
 import 'performance_monitor.dart';
 
 class EquipeService {
@@ -71,6 +72,9 @@ class EquipeService {
           .from('equipes')
           .select('''
             *,
+            regionais!left(regional),
+            divisoes!left(divisao),
+            segmentos!left(segmento),
             equipes_executores!left(executor_id, papel, executores!inner(id, nome))
           ''')
           .eq('ativo', true)
@@ -99,6 +103,9 @@ class EquipeService {
           .from('equipes')
           .select('''
             *,
+            regionais!left(regional),
+            divisoes!left(divisao),
+            segmentos!left(segmento),
             equipes_executores!left(executor_id, papel, executores!inner(id, nome))
           ''')
           .eq('id', id)
@@ -233,6 +240,9 @@ class EquipeService {
     try {
       dynamic query = _supabase.from('equipes').select('''
         *,
+        regionais!left(regional),
+        divisoes!left(divisao),
+        segmentos!left(segmento),
         equipes_executores!left(executor_id, papel, executores!inner(id, nome))
       ''');
 
@@ -273,6 +283,9 @@ class EquipeService {
           .from('equipes')
           .select('''
             *,
+            regionais!left(regional),
+            divisoes!left(divisao),
+            segmentos!left(segmento),
             equipes_executores!left(executor_id, papel, executores!inner(id, nome))
           ''')
           .or('nome.ilike.%$query%,descricao.ilike.%$query%')
@@ -302,55 +315,125 @@ class EquipeService {
     String? regionalId,
     String? divisaoId,
     String? segmentoId,
+    bool includeInativas = false,
   }) async {
     try {
-      // Se não houver filtros, retornar todas as equipes ativas
-      if (regionalId == null && divisaoId == null && segmentoId == null) {
-        return await getEquipesAtivas();
+      final todas = includeInativas ? await getAllEquipes() : await getEquipesAtivas();
+      if ((regionalId == null || regionalId.isEmpty) &&
+          (divisaoId == null || divisaoId.isEmpty) &&
+          (segmentoId == null || segmentoId.isEmpty)) {
+        return todas;
       }
 
-      dynamic query = _supabase
-          .from('equipes')
-          .select('''
-        *,
-        regionais!left(regional),
-        divisoes!left(divisao),
-        segmentos!left(segmento),
-        equipes_executores!left(executor_id, papel, executores!inner(id, nome))
-      ''')
-          .eq('ativo', true);
-
-      // Filtrar por regional
+      final divisoes = await DivisaoService().getAllDivisoes();
+      final Map<String, Divisao> divisaoMap = {for (var d in divisoes) d.id: d};
+      final Set<String> divisaoIdsDaRegional = {};
       if (regionalId != null && regionalId.isNotEmpty) {
-        query = query.eq('regional_id', regionalId);
+        divisaoIdsDaRegional.addAll(
+          divisoes.where((d) => d.atuaNaRegional(regionalId)).map((d) => d.id),
+        );
       }
 
-      // Filtrar por divisão
-      if (divisaoId != null && divisaoId.isNotEmpty) {
-        query = query.eq('divisao_id', divisaoId);
-      }
+      return todas.where((eq) {
+        if (regionalId != null && regionalId.isNotEmpty) {
+          final matchesReg = eq.regionalId == regionalId;
+          final matchesDivReg = eq.divisaoId != null && (divisaoIdsDaRegional.contains(eq.divisaoId) || (divisaoMap[eq.divisaoId]?.atuaNaRegional(regionalId) ?? false));
+          if (!matchesReg && !matchesDivReg) return false;
+        }
 
-      // Filtrar por segmento
-      if (segmentoId != null && segmentoId.isNotEmpty) {
-        query = query.eq('segmento_id', segmentoId);
-      }
+        if (divisaoId != null && divisaoId.isNotEmpty) {
+          if (eq.divisaoId != divisaoId) return false;
+        }
 
-      final response = await query
-          .order('nome', ascending: true)
-          .timeout(
-            const Duration(seconds: 30),
-            onTimeout: () => <Map<String, dynamic>>[],
-          );
+        if (segmentoId != null && segmentoId.isNotEmpty) {
+          if (eq.segmentoId != segmentoId) return false;
+        }
 
-      if (response.isEmpty) return [];
-
-      final equipesList = response as List;
-      return equipesList
-          .map((map) => _equipeFromMap(map as Map<String, dynamic>))
-          .toList();
+        return true;
+      }).toList();
     } catch (e) {
       print('Erro ao buscar equipes filtradas: $e');
       return [];
     }
   }
+
+  // Buscar equipes por escopo do formulário e perfil do usuário
+  Future<List<Equipe>> getEquipesPorPerfilUsuario({
+    required List<String> regionalIds,
+    required List<String> divisaoIds,
+    required List<String> segmentoIds,
+    String? formRegionalId,
+    String? formDivisaoId,
+    String? formSegmentoId,
+    bool includeInativas = false,
+  }) async {
+    try {
+      final todas = includeInativas ? await getAllEquipes() : await getEquipesAtivas();
+      final divisoes = await DivisaoService().getAllDivisoes();
+      final Map<String, Divisao> divisaoMap = {for (var d in divisoes) d.id: d};
+
+      // Mapear divisões permitidas pelo perfil do usuário
+      final Set<String> divisaoIdsPermitidasPeloPerfil = Set.from(divisaoIds);
+      if (regionalIds.isNotEmpty) {
+        for (final rId in regionalIds) {
+          divisaoIdsPermitidasPeloPerfil.addAll(
+            divisoes.where((d) => d.atuaNaRegional(rId)).map((d) => d.id),
+          );
+        }
+      }
+
+      // Mapear divisões da regional selecionada no formulário
+      final Set<String> divisaoIdsDaRegionalForm = {};
+      if (formRegionalId != null && formRegionalId.isNotEmpty) {
+        divisaoIdsDaRegionalForm.addAll(
+          divisoes.where((d) => d.atuaNaRegional(formRegionalId)).map((d) => d.id),
+        );
+      }
+
+      return todas.where((eq) {
+        // 1. Filtrar pelo escopo do formulário (se informado)
+        if (formRegionalId != null && formRegionalId.isNotEmpty) {
+          final matchesReg = eq.regionalId == formRegionalId;
+          final matchesDivReg = eq.divisaoId != null && (divisaoIdsDaRegionalForm.contains(eq.divisaoId) || (divisaoMap[eq.divisaoId]?.atuaNaRegional(formRegionalId) ?? false));
+          if (!matchesReg && !matchesDivReg) return false;
+        }
+
+        if (formDivisaoId != null && formDivisaoId.isNotEmpty) {
+          if (eq.divisaoId != formDivisaoId) return false;
+        }
+
+        if (formSegmentoId != null && formSegmentoId.isNotEmpty) {
+          if (eq.segmentoId != formSegmentoId) return false;
+        }
+
+        // 2. Filtrar pelas restrições do perfil do usuário logado (se houver)
+        if (regionalIds.isNotEmpty) {
+          final matchesReg = eq.regionalId != null && regionalIds.contains(eq.regionalId);
+          final matchesDivReg = eq.divisaoId != null && (
+            divisaoIdsPermitidasPeloPerfil.contains(eq.divisaoId) ||
+            regionalIds.any((rId) => divisaoMap[eq.divisaoId]?.atuaNaRegional(rId) ?? false)
+          );
+          if (!matchesReg && !matchesDivReg) return false;
+        }
+
+        if (divisaoIdsPermitidasPeloPerfil.isNotEmpty && divisaoIds.isNotEmpty) {
+          if (eq.divisaoId != null && !divisaoIdsPermitidasPeloPerfil.contains(eq.divisaoId)) {
+            return false;
+          }
+        }
+
+        if (segmentoIds.isNotEmpty) {
+          if (eq.segmentoId != null && !segmentoIds.contains(eq.segmentoId)) {
+            return false;
+          }
+        }
+
+        return true;
+      }).toList();
+    } catch (e) {
+      print('Erro getEquipesPorPerfilUsuario: $e');
+      return includeInativas ? await getAllEquipes() : await getEquipesAtivas();
+    }
+  }
 }
+

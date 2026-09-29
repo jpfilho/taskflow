@@ -100,36 +100,42 @@ class LocalService {
             .map((map) => _localFromMap(map as Map<String, dynamic>))
             .toList();
 
-        // Carregar nomes das associações
-        final locaisCompletos = <Local>[];
-        for (var local in locais) {
-          var localAtualizado = local;
-          
-          if (local.regionalId != null && local.regionalId!.isNotEmpty) {
-            final regional = await _regionalService.getRegionalById(local.regionalId!);
-            if (regional != null) {
-              localAtualizado = localAtualizado.copyWith(regional: regional.regional);
-            }
-          }
-          
-          if (local.divisaoId != null && local.divisaoId!.isNotEmpty) {
-            final divisao = await _divisaoService.getDivisaoById(local.divisaoId!);
-            if (divisao != null) {
-              localAtualizado = localAtualizado.copyWith(divisao: divisao.divisao);
-            }
-          }
-          
-          if (local.segmentoId != null && local.segmentoId!.isNotEmpty) {
-            final segmento = await _segmentoService.getSegmentoById(local.segmentoId!);
-            if (segmento != null) {
-              localAtualizado = localAtualizado.copyWith(segmento: segmento.segmento);
-            }
-          }
-          
-          locaisCompletos.add(localAtualizado);
-        }
+        // Carregar nomes das associações em lote rápido
+        Map<String, String> regMap = {};
+        Map<String, String> divMap = {};
+        Map<String, String> segMap = {};
+        try {
+          final regList = await _regionalService.getAllRegionais();
+          regMap = {for (var r in regList) r.id: r.regional};
+        } catch (_) {}
+        try {
+          final divList = await _divisaoService.getAllDivisoes();
+          divMap = {for (var d in divList) d.id: d.divisao};
+        } catch (_) {}
+        try {
+          final segList = await _segmentoService.getAllSegmentos();
+          segMap = {for (var s in segList) s.id: s.segmento};
+        } catch (_) {}
 
-        return locaisCompletos;
+        return locais.map((local) {
+          var regionalNome = local.regional;
+          var divisaoNome = local.divisao;
+          var segmentoNome = local.segmento;
+          if (regionalNome.isEmpty && local.regionalId != null) {
+            regionalNome = regMap[local.regionalId!] ?? '';
+          }
+          if (divisaoNome.isEmpty && local.divisaoId != null) {
+            divisaoNome = divMap[local.divisaoId!] ?? '';
+          }
+          if (segmentoNome.isEmpty && local.segmentoId != null) {
+            segmentoNome = segMap[local.segmentoId!] ?? '';
+          }
+          return local.copyWith(
+            regional: regionalNome,
+            divisao: divisaoNome,
+            segmento: segmentoNome,
+          );
+        }).toList();
       } catch (e2) {
         print('Erro ao buscar locais (fallback): $e2');
         return [];

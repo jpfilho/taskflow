@@ -1,4 +1,11 @@
 import 'package:flutter/material.dart';
+import '../../../../design_system/components/buttons/tf_button.dart';
+import '../../../../design_system/components/feedback/tf_empty_state.dart';
+import '../../../../design_system/components/feedback/tf_loading.dart';
+import '../../../../design_system/foundations/tf_breakpoints.dart';
+import '../../../../design_system/foundations/tf_icons.dart';
+import '../../../../design_system/foundations/tf_radius.dart';
+import '../../../../design_system/theme/taskflow_theme_extension.dart';
 import '../../data/models/media_image.dart';
 import 'media_card.dart';
 
@@ -26,142 +33,135 @@ class MediaGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final spacing = context.tfSpacing;
+
     if (images.isEmpty && !isLoading) {
       return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.photo_library_outlined,
-              size: 64,
-              color: Theme.of(context).colorScheme.onSurface.withOpacity(0.3),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'Nenhuma imagem encontrada',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurface.withOpacity(0.5),
-                  ),
-            ),
-          ],
+        child: TFEmptyState(
+          title: 'Nenhuma imagem encontrada',
+          description: 'Não foram encontradas fotos com os filtros aplicados.',
+          icon: Icons.photo_library_outlined,
+          action: onAddNew != null
+              ? TFButton(
+                  label: 'Nova Imagem',
+                  leadingIcon: TFIcons.add,
+                  onPressed: onAddNew,
+                )
+              : null,
         ),
       );
     }
 
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final width = MediaQuery.of(context).size.width;
-    final crossAxisCount = _getCrossAxisCount(context);
-    final spacing = width < 600 ? 12.0 : (width < 1024 ? 16.0 : 24.0);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final crossAxisCount = _getCrossAxisCount(width);
+        final gridSpacing = width < TFBreakpoints.sm ? spacing.sm : spacing.md;
 
-    return GridView.builder(
-      controller: scrollController,
-      padding: EdgeInsets.zero,
-      addAutomaticKeepAlives: true,
-      addRepaintBoundaries: true,
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: crossAxisCount,
-        crossAxisSpacing: spacing,
-        mainAxisSpacing: spacing,
-        childAspectRatio: width < 600 ? 0.82 : 0.85,
-      ),
-      itemCount: images.length + (hasMore && !isLoading ? 1 : 0) + (onAddNew != null && !hasMore ? 1 : 0),
-      itemBuilder: (context, index) {
-        // Card de "Adicionar Nova Imagem" no final (apenas se não há mais para carregar)
-        if (onAddNew != null && !hasMore && index == images.length) {
-          return _buildAddNewCard(context, isDark, onAddNew!);
-        }
-        
-        // Botão de carregar mais (apenas se há mais e não está carregando)
-        if (hasMore && !isLoading && index == images.length) {
-          return Center(
-            child: ElevatedButton(
-              onPressed: onLoadMore,
-              child: const Text('Carregar mais'),
-            ),
-          );
-        }
-        
-        // Indicador de carregamento
-        if (isLoading && index == images.length) {
-          return const Center(
-            child: CircularProgressIndicator(),
-          );
-        }
+        return GridView.builder(
+          controller: scrollController,
+          padding: EdgeInsets.zero,
+          addAutomaticKeepAlives: true,
+          addRepaintBoundaries: true,
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: crossAxisCount,
+            crossAxisSpacing: gridSpacing,
+            mainAxisSpacing: gridSpacing,
+            childAspectRatio: width < TFBreakpoints.sm ? 0.82 : 0.88,
+          ),
+          itemCount: images.length + (hasMore && !isLoading ? 1 : 0) + (onAddNew != null && !hasMore ? 1 : 0),
+          itemBuilder: (context, index) {
+            // Card de "Adicionar Nova Imagem" no final (se aplicável)
+            if (onAddNew != null && !hasMore && index == images.length) {
+              return _buildAddNewCard(context, onAddNew!);
+            }
 
-        final image = images[index];
-        return MediaCard(
-          image: image,
-          onTap: () => onImageTap(image),
-          onDelete: onImageDelete != null
-              ? () => onImageDelete!(image)
-              : null,
+            // Botão de carregar mais
+            if (hasMore && !isLoading && index == images.length) {
+              return Center(
+                child: TFButton(
+                  label: 'Carregar mais',
+                  variant: TFButtonVariant.secondary,
+                  leadingIcon: Icons.expand_more_rounded,
+                  onPressed: onLoadMore,
+                ),
+              );
+            }
+
+            // Indicador de carregamento
+            if (isLoading && index == images.length) {
+              return const Center(
+                child: TFLoading(message: 'Carregando fotos...'),
+              );
+            }
+
+            final image = images[index];
+            return MediaCard(
+              image: image,
+              onTap: () => onImageTap(image),
+              onDelete: onImageDelete != null
+                  ? () => onImageDelete!(image)
+                  : null,
+            );
+          },
         );
       },
     );
   }
 
-  Widget _buildAddNewCard(BuildContext context, bool isDark, VoidCallback onTap) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Container(
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF1e293b) : Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-              width: 2,
-              style: BorderStyle.solid,
+  Widget _buildAddNewCard(BuildContext context, VoidCallback onTap) {
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+    final typography = context.tfTypography;
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: TFRadius.borderRadiusMd,
+      child: Container(
+        decoration: BoxDecoration(
+          color: colors.surface,
+          borderRadius: TFRadius.borderRadiusMd,
+          border: Border.all(
+            color: colors.primary.withValues(alpha: 0.4),
+            width: 1.5,
+          ),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: colors.primary.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.add_photo_alternate_rounded,
+                size: 26,
+                color: colors.primary,
+              ),
             ),
-          ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: isDark ? const Color(0xFF334155) : const Color(0xFFf8fafc),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  Icons.add_photo_alternate,
-                  size: 28,
-                  color: isDark ? Colors.grey[400] : Colors.grey[500],
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'Carregar Nova Imagem',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  color: isDark ? Colors.white : const Color(0xFF0f172a),
-                  fontSize: 14,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'JPG, PNG ou WEBP',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: isDark ? Colors.grey[500] : Colors.grey[500],
-                ),
-              ),
-            ],
-          ),
+            SizedBox(height: spacing.sm),
+            Text(
+              'Carregar Nova Imagem',
+              style: typography.cardTitle.copyWith(color: colors.textPrimary),
+            ),
+            SizedBox(height: spacing.xxs),
+            Text(
+              'JPG, PNG ou WEBP',
+              style: typography.caption.copyWith(color: colors.textSecondary),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  int _getCrossAxisCount(BuildContext context) {
-    final width = MediaQuery.of(context).size.width;
-    if (width >= 1200) return 4;
-    if (width >= 800) return 3;
-    if (width >= 600) return 2;
+  int _getCrossAxisCount(double width) {
+    if (width >= TFBreakpoints.lg) return 4;
+    if (width >= TFBreakpoints.md) return 3;
+    if (width >= TFBreakpoints.sm) return 2;
     return 1;
   }
 }

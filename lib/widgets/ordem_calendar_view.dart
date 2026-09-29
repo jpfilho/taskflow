@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../utils/clipboard_helper.dart';
 
 import '../models/ordem.dart';
 import '../utils/responsive.dart';
@@ -304,16 +305,13 @@ class _OrdemCalendarViewState extends State<OrdemCalendarView> {
   }
 
   Future<void> _copiar(String texto) async {
-    try {
-      await Clipboard.setData(ClipboardData(text: texto));
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Ordem copiada!'),
-          duration: Duration(seconds: 1),
-        ),
-      );
-    } catch (_) {}
+    await ClipboardHelper.copyAndNotify(
+      context,
+      texto,
+      successMessage: 'Ordem copiada!',
+      errorMessage: 'Não foi possível copiar a ordem.',
+      duration: const Duration(seconds: 1),
+    );
   }
 
   Map<int, List<Ordem>> _getOrdensForMonth(List<Ordem> ordens) {

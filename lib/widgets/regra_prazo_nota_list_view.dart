@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
+import '../design_system/taskflow_design_system.dart';
 import '../models/regra_prazo_nota.dart';
+import '../models/segmento.dart';
 import '../services/regra_prazo_nota_service.dart';
 import '../services/segmento_service.dart';
-import '../models/segmento.dart';
 import 'regra_prazo_nota_form_dialog.dart';
-import '../utils/responsive.dart';
 
 class RegraPrazoNotaListView extends StatefulWidget {
   const RegraPrazoNotaListView({super.key});
@@ -18,24 +18,17 @@ class _RegraPrazoNotaListViewState extends State<RegraPrazoNotaListView> {
   final SegmentoService _segmentoService = SegmentoService();
   List<RegraPrazoNota> _regrasList = [];
   List<RegraPrazoNota> _filteredRegrasList = [];
-  Map<String, Segmento> _segmentosMap = {}; // Cache de segmentos por ID
+  Map<String, Segmento> _segmentosMap = {};
   bool _isLoading = true;
   final TextEditingController _searchController = TextEditingController();
-  bool _isTableView = false; // false = lista (cards), true = tabela
+  int _currentPage = 1;
+  final int _itemsPerPage = 10;
 
   @override
   void initState() {
     super.initState();
     _loadRegras();
     _searchController.addListener(_onSearchChanged);
-    // No desktop, tabela é o padrão
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && Responsive.isDesktop(context)) {
-        setState(() {
-          _isTableView = true;
-        });
-      }
-    });
   }
 
   @override
@@ -45,38 +38,34 @@ class _RegraPrazoNotaListViewState extends State<RegraPrazoNotaListView> {
   }
 
   Future<void> _loadRegras() async {
-    setState(() {
-      _isLoading = true;
-    });
+    setState(() => _isLoading = true);
 
     try {
-      // Carregar regras e segmentos em paralelo
       final results = await Future.wait([
         _service.getAllRegras(),
         _segmentoService.getAllSegmentos(),
       ]);
-      
+
       final regrasList = results[0] as List<RegraPrazoNota>;
       final segmentosList = results[1] as List<Segmento>;
-      
-      // Criar mapa de segmentos por ID
+
       final segmentosMap = <String, Segmento>{};
       for (var segmento in segmentosList) {
         segmentosMap[segmento.id] = segmento;
       }
-      
-      setState(() {
-        _regrasList = regrasList;
-        _filteredRegrasList = regrasList;
-        _segmentosMap = segmentosMap;
-        _isLoading = false;
-      });
-    } catch (e) {
-      print('Erro ao carregar regras de prazo: $e');
-      setState(() {
-        _isLoading = false;
-      });
+
       if (mounted) {
+        setState(() {
+          _regrasList = regrasList;
+          _filteredRegrasList = regrasList;
+          _segmentosMap = segmentosMap;
+          _isLoading = false;
+          _currentPage = 1;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Erro ao carregar regras de prazo: $e'),
@@ -86,23 +75,21 @@ class _RegraPrazoNotaListViewState extends State<RegraPrazoNotaListView> {
       }
     }
   }
-  
+
   String _getSegmentosNomes(List<String> segmentoIds) {
     if (segmentoIds.isEmpty) return 'Todos os Segmentos';
-    final nomes = segmentoIds
-        .map((id) => _segmentosMap[id]?.segmento ?? 'Segmento não encontrado')
+    return segmentoIds
+        .map((id) => _segmentosMap[id]?.segmento ?? 'Não identificado')
         .join(', ');
-    return nomes;
   }
 
   void _onSearchChanged() {
     final query = _searchController.text.trim().toLowerCase();
-    if (query.isEmpty) {
-      setState(() {
+    setState(() {
+      _currentPage = 1;
+      if (query.isEmpty) {
         _filteredRegrasList = _regrasList;
-      });
-    } else {
-      setState(() {
+      } else {
         _filteredRegrasList = _regrasList.where((regra) {
           final segmentosNomes = _getSegmentosNomes(regra.segmentoIds).toLowerCase();
           return regra.prioridade.toLowerCase().contains(query) ||
@@ -110,9 +97,20 @@ class _RegraPrazoNotaListViewState extends State<RegraPrazoNotaListView> {
               segmentosNomes.contains(query) ||
               (regra.descricao?.toLowerCase().contains(query) ?? false);
         }).toList();
-      });
-    }
+      }
+    });
   }
+
+  List<RegraPrazoNota> get _paginatedRegras {
+    final startIndex = (_currentPage - 1) * _itemsPerPage;
+    if (startIndex >= _filteredRegrasList.length) return [];
+    final endIndex = (startIndex + _itemsPerPage < _filteredRegrasList.length)
+        ? startIndex + _itemsPerPage
+        : _filteredRegrasList.length;
+    return _filteredRegrasList.sublist(startIndex, endIndex);
+  }
+
+  int get _totalPages => (_filteredRegrasList.length / _itemsPerPage).ceil().clamp(1, 9999);
 
   Future<void> _createRegra() async {
     final result = await showDialog<RegraPrazoNota>(
@@ -181,47 +179,45 @@ class _RegraPrazoNotaListViewState extends State<RegraPrazoNotaListView> {
   }
 
   Future<void> _deleteRegra(RegraPrazoNota regra) async {
-    final confirm = await showDialog<bool>(
+    final confirmed = await TFModalDialog.confirm(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Confirmar Exclusão'),
-        content: Text(
-          'Deseja realmente excluir a regra de prazo?\n\n'
+      title: 'Confirmar Exclusão',
+      message: 'Deseja realmente excluir a regra de prazo?\n\n'
           'Prioridade: ${regra.prioridade}\n'
-          'Dias de Prazo: ${regra.diasPrazo}\n'
-          'Data de Referência: ${regra.dataReferenciaLabel}',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Excluir'),
-          ),
-        ],
-      ),
+          'Dias de Prazo: ${regra.diasPrazo} dias\n'
+          'Data Base: ${regra.dataReferenciaLabel}',
+      confirmLabel: 'Excluir',
+      isDestructive: true,
     );
 
-    if (confirm == true) {
-      final deleted = await _service.deleteRegra(regra.id);
-      if (deleted) {
-        await _loadRegras();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Regra de prazo excluída com sucesso!'),
-              backgroundColor: Colors.green,
-            ),
-          );
+    if (confirmed == true) {
+      try {
+        final deleted = await _service.deleteRegra(regra.id);
+        if (deleted) {
+          await _loadRegras();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Regra de prazo excluída com sucesso!'),
+                backgroundColor: Colors.green,
+              ),
+            );
+          }
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Erro ao excluir regra de prazo'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
         }
-      } else {
+      } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Erro ao excluir regra de prazo'),
+            SnackBar(
+              content: Text('Erro ao excluir regra: $e'),
               backgroundColor: Colors.red,
             ),
           );
@@ -232,178 +228,205 @@ class _RegraPrazoNotaListViewState extends State<RegraPrazoNotaListView> {
 
   @override
   Widget build(BuildContext context) {
+    final spacing = context.tfSpacing;
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final isDesktop = MediaQuery.of(context).size.width >= 768;
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Regras de Prazo para Notas'),
-        actions: [
-          // Toggle de visualização
-          IconButton(
-            icon: Icon(_isTableView ? Icons.view_list : Icons.table_chart),
-            onPressed: () {
-              setState(() {
-                _isTableView = !_isTableView;
-              });
-            },
-            tooltip: _isTableView ? 'Visualização em Lista' : 'Visualização em Tabela',
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadRegras,
-            tooltip: 'Atualizar',
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          // Barra de busca e botão criar
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _searchController,
-                    decoration: InputDecoration(
-                      hintText: 'Buscar por prioridade ou data de referência...',
-                      prefixIcon: const Icon(Icons.search),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      filled: true,
-                      fillColor: Colors.grey[100],
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                ElevatedButton.icon(
+      backgroundColor: colors.background,
+      body: SafeArea(
+        child: Padding(
+          padding: EdgeInsets.all(spacing.lg),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TFPageHeader(
+                title: 'Regras de Prazo para Notas',
+                subtitle: 'Parametrização administrativa dos prazos de atendimento por prioridade',
+                onBack: () => Navigator.of(context).maybePop(),
+                primaryAction: TFButton(
+                  label: 'Nova Regra',
+                  leadingIcon: TFIcons.add,
                   onPressed: _createRegra,
-                  icon: const Icon(Icons.add),
-                  label: const Text('Nova Regra'),
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 12,
-                    ),
-                  ),
                 ),
-              ],
-            ),
-          ),
-          // Lista de regras
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _filteredRegrasList.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.schedule,
-                              size: 64,
-                              color: Colors.grey[400],
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              _regrasList.isEmpty
-                                  ? 'Nenhuma regra de prazo cadastrada'
-                                  : 'Nenhuma regra encontrada',
-                              style: TextStyle(
-                                fontSize: 16,
-                                color: Colors.grey[600],
-                              ),
-                            ),
-                            if (_regrasList.isEmpty) ...[
-                              const SizedBox(height: 8),
-                              ElevatedButton.icon(
-                                onPressed: _createRegra,
-                                icon: const Icon(Icons.add),
-                                label: const Text('Criar Primeira Regra'),
-                              ),
-                            ],
-                          ],
+                secondaryActions: [
+                  TFIconButton(
+                    icon: TFIcons.refresh,
+                    tooltip: 'Atualizar',
+                    variant: TFIconButtonVariant.standard,
+                    onPressed: _loadRegras,
+                  ),
+                ],
+              ),
+              SizedBox(height: spacing.sm),
+              TFTextField(
+                controller: _searchController,
+                hint: 'Buscar por prioridade, data base, segmento ou descrição...',
+                prefixIcon: const Icon(Icons.search),
+              ),
+              SizedBox(height: spacing.md),
+              Expanded(
+                child: _isLoading
+                    ? const Center(
+                        child: TFLoading(
+                          mode: TFLoadingMode.section,
+                          message: 'Carregando regras de prazo...',
                         ),
                       )
-                    : _isTableView
-                        ? _buildTableView()
-                        : _buildListView(),
+                    : _filteredRegrasList.isEmpty
+                        ? TFEmptyState(
+                            icon: TFIcons.search,
+                            title: _regrasList.isEmpty
+                                ? 'Nenhuma regra de prazo cadastrada'
+                                : 'Nenhuma regra encontrada',
+                            description: _regrasList.isEmpty
+                                ? 'Cadastre a primeira regra para automação dos prazos de notas.'
+                                : 'Tente buscar por outro termo ou limpe o campo de busca.',
+                            action: _regrasList.isEmpty
+                                ? TFButton(
+                                    label: 'Criar Primeira Regra',
+                                    leadingIcon: TFIcons.add,
+                                    onPressed: _createRegra,
+                                  )
+                                : TFButton(
+                                    label: 'Limpar Busca',
+                                    variant: TFButtonVariant.secondary,
+                                    onPressed: () => _searchController.clear(),
+                                  ),
+                          )
+                        : Column(
+                            children: [
+                              Expanded(
+                                child: isDesktop
+                                    ? _buildTableView()
+                                    : _buildCardsView(),
+                              ),
+                              if (_totalPages > 1) ...[
+                                SizedBox(height: spacing.sm),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(
+                                      'Página $_currentPage de $_totalPages (${_filteredRegrasList.length} itens)',
+                                      style: typography.bodySmall.copyWith(
+                                        color: colors.textSecondary,
+                                      ),
+                                    ),
+                                    Row(
+                                      children: [
+                                        TFIconButton(
+                                          icon: Icons.chevron_left,
+                                          tooltip: 'Página anterior',
+                                          variant: TFIconButtonVariant.standard,
+                                          onPressed: _currentPage > 1
+                                              ? () => setState(() => _currentPage--)
+                                              : null,
+                                        ),
+                                        SizedBox(width: spacing.xs),
+                                        TFIconButton(
+                                          icon: Icons.chevron_right,
+                                          tooltip: 'Próxima página',
+                                          variant: TFIconButtonVariant.standard,
+                                          onPressed: _currentPage < _totalPages
+                                              ? () => setState(() => _currentPage++)
+                                              : null,
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                                SizedBox(height: spacing.sm),
+                              ],
+                            ],
+                          ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
 
-  Widget _buildListView() {
-    return ListView.builder(
-      itemCount: _filteredRegrasList.length,
+  Widget _buildCardsView() {
+    final items = _paginatedRegras;
+    final spacing = context.tfSpacing;
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
+    return ListView.separated(
+      itemCount: items.length,
+      separatorBuilder: (_, __) => SizedBox(height: spacing.sm),
       itemBuilder: (context, index) {
-        final regra = _filteredRegrasList[index];
-        return Card(
-          margin: const EdgeInsets.symmetric(
-            horizontal: 16,
-            vertical: 8,
-          ),
-          child: ListTile(
-            leading: CircleAvatar(
-              backgroundColor: regra.ativo ? Colors.green : Colors.grey,
-              child: Icon(
-                regra.ativo ? Icons.check : Icons.block,
-                color: Colors.white,
-              ),
-            ),
-            title: Text(
-              regra.prioridade,
-              style: const TextStyle(
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            subtitle: Column(
+        final regra = items[index];
+        return TFCard(
+          child: Padding(
+            padding: EdgeInsets.all(spacing.sm),
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const SizedBox(height: 4),
-                Text('Prazo: ${regra.diasPrazo} dias'),
-                Text('Referência: ${regra.dataReferenciaLabel}'),
-                Text('Segmentos: ${_getSegmentosNomes(regra.segmentoIds)}'),
-                if (regra.descricao != null && regra.descricao!.isNotEmpty)
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        regra.prioridade,
+                        style: typography.cardTitle.copyWith(
+                          color: colors.textPrimary,
+                        ),
+                      ),
+                    ),
+                    TFStatusBadge(
+                      label: regra.ativo ? 'Ativa' : 'Inativa',
+                      severity: regra.ativo
+                          ? TFStatusSeverity.success
+                          : TFStatusSeverity.neutral,
+                      compact: true,
+                    ),
+                  ],
+                ),
+                SizedBox(height: spacing.xs),
+                Text(
+                  'Prazo: ${regra.diasPrazo} dias • Base: ${regra.dataReferenciaLabel}',
+                  style: typography.bodyMedium.copyWith(
+                    color: colors.textPrimary,
+                  ),
+                ),
+                SizedBox(height: spacing.xs),
+                Text(
+                  'Segmentos: ${_getSegmentosNomes(regra.segmentoIds)}',
+                  style: typography.bodySmall.copyWith(
+                    color: colors.textSecondary,
+                  ),
+                ),
+                if (regra.descricao != null && regra.descricao!.isNotEmpty) ...[
+                  SizedBox(height: spacing.xs),
                   Text(
                     regra.descricao!,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.grey[600],
+                    style: typography.bodySmall.copyWith(
+                      color: colors.textSecondary,
+                      fontStyle: FontStyle.italic,
                     ),
                   ),
-                Container(
-                  margin: const EdgeInsets.only(top: 4),
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: regra.ativo ? Colors.green[100] : Colors.grey[200],
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text(
-                    regra.ativo ? 'Ativa' : 'Inativa',
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                      color: regra.ativo ? Colors.green[800] : Colors.grey[600],
+                ],
+                SizedBox(height: spacing.sm),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TFIconButton(
+                      icon: TFIcons.edit,
+                      tooltip: 'Editar',
+                      variant: TFIconButtonVariant.standard,
+                      onPressed: () => _editRegra(regra),
                     ),
-                  ),
-                ),
-              ],
-            ),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.edit),
-                  color: Colors.blue,
-                  onPressed: () => _editRegra(regra),
-                  tooltip: 'Editar',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.delete),
-                  color: Colors.red,
-                  onPressed: () => _deleteRegra(regra),
-                  tooltip: 'Excluir',
+                    SizedBox(width: spacing.xs),
+                    TFIconButton(
+                      icon: TFIcons.delete,
+                      tooltip: 'Excluir',
+                      variant: TFIconButtonVariant.subtle,
+                      onPressed: () => _deleteRegra(regra),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -414,102 +437,106 @@ class _RegraPrazoNotaListViewState extends State<RegraPrazoNotaListView> {
   }
 
   Widget _buildTableView() {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: SingleChildScrollView(
-        child: DataTable(
-          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
-          columns: const [
-            DataColumn(label: Text('Prioridade', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Dias de Prazo', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Data de Referência', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Segmento', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Descrição', style: TextStyle(fontWeight: FontWeight.bold))),
-            DataColumn(label: Text('Ações', style: TextStyle(fontWeight: FontWeight.bold))),
-          ],
-          rows: _filteredRegrasList.map((regra) {
-            return DataRow(
-              cells: [
-                DataCell(
-                  Text(
-                    regra.prioridade,
-                    style: const TextStyle(fontWeight: FontWeight.w500),
-                  ),
-                ),
-                DataCell(
-                  Text('${regra.diasPrazo} dias'),
-                ),
-                DataCell(
-                  Text(regra.dataReferenciaLabel),
-                ),
-                DataCell(
-                  SizedBox(
-                    width: 200,
-                    child: Text(
-                      _getSegmentosNomes(regra.segmentoIds),
-                      style: TextStyle(
-                        fontWeight: regra.segmentoIds.isEmpty ? FontWeight.bold : FontWeight.normal,
-                        color: regra.segmentoIds.isEmpty ? Colors.blue : Colors.black,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ),
-                DataCell(
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: regra.ativo ? Colors.green[100] : Colors.grey[200],
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(
-                      regra.ativo ? 'Ativa' : 'Inativa',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: regra.ativo ? Colors.green[800] : Colors.grey[600],
-                      ),
-                    ),
-                  ),
-                ),
-                DataCell(
-                  SizedBox(
-                    width: 200,
-                    child: Text(
-                      regra.descricao ?? '-',
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ),
-                DataCell(
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.edit, size: 20, color: Colors.blue),
-                        onPressed: () => _editRegra(regra),
-                        tooltip: 'Editar',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.delete, size: 20, color: Colors.red),
-                        onPressed: () => _deleteRegra(regra),
-                        tooltip: 'Excluir',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            );
-          }).toList(),
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+
+    return TFDataTable<RegraPrazoNota>(
+      items: _paginatedRegras,
+      columns: [
+        TFDataColumn<RegraPrazoNota>.text(
+          id: 'prioridade',
+          title: 'Prioridade',
+          width: 140,
+          cellBuilder: (context, regra) => Text(
+            regra.prioridade,
+            style: typography.bodyMedium.copyWith(
+              color: colors.textPrimary,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
         ),
-      ),
+        TFDataColumn<RegraPrazoNota>.text(
+          id: 'prazo',
+          title: 'Prazo',
+          width: 110,
+          cellBuilder: (context, regra) => Text(
+            '${regra.diasPrazo} dias',
+            style: typography.bodyMedium.copyWith(
+              color: colors.textPrimary,
+            ),
+          ),
+        ),
+        TFDataColumn<RegraPrazoNota>.text(
+          id: 'referencia',
+          title: 'Data de Referência',
+          width: 180,
+          cellBuilder: (context, regra) => Text(
+            regra.dataReferenciaLabel,
+            style: typography.bodyMedium.copyWith(
+              color: colors.textPrimary,
+            ),
+          ),
+        ),
+        TFDataColumn<RegraPrazoNota>.text(
+          id: 'segmentos',
+          title: 'Segmentos',
+          cellBuilder: (context, regra) => Text(
+            _getSegmentosNomes(regra.segmentoIds),
+            style: typography.bodyMedium.copyWith(
+              color: colors.textSecondary,
+            ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        TFDataColumn<RegraPrazoNota>(
+          id: 'status',
+          label: const Text('Status'),
+          width: 110,
+          cellBuilder: (context, regra) => TFStatusBadge(
+            label: regra.ativo ? 'Ativa' : 'Inativa',
+            severity: regra.ativo
+                ? TFStatusSeverity.success
+                : TFStatusSeverity.neutral,
+            compact: true,
+          ),
+        ),
+        TFDataColumn<RegraPrazoNota>.text(
+          id: 'descricao',
+          title: 'Descrição',
+          cellBuilder: (context, regra) => Text(
+            regra.descricao ?? '-',
+            style: typography.bodyMedium.copyWith(
+              color: colors.textSecondary,
+            ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        TFDataColumn<RegraPrazoNota>(
+          id: 'acoes',
+          label: const Text('Ações'),
+          width: 130,
+          alignment: Alignment.centerRight,
+          cellBuilder: (context, regra) => Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TFIconButton(
+                icon: TFIcons.edit,
+                tooltip: 'Editar',
+                variant: TFIconButtonVariant.standard,
+                onPressed: () => _editRegra(regra),
+              ),
+              TFIconButton(
+                icon: TFIcons.delete,
+                tooltip: 'Excluir',
+                variant: TFIconButtonVariant.subtle,
+                onPressed: () => _deleteRegra(regra),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

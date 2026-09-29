@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../utils/clipboard_helper.dart';
 import '../models/task.dart';
 import '../models/status.dart';
 import '../models/regional.dart';
@@ -42,6 +43,7 @@ import '../models/at.dart';
 import '../services/at_service.dart';
 import '../services/si_service.dart';
 import '../services/conflict_service.dart';
+import '../design_system/components/inputs/tf_date_range_picker.dart';
 import 'pex_apr_crc_view.dart';
 
 class TaskFormDialog extends StatefulWidget {
@@ -82,6 +84,7 @@ class _TaskFormDialogState extends State<TaskFormDialog>
   // ScrollControllers para manter a posição do scroll em cada tab
   final Map<int, ScrollController> _scrollControllers = {};
   final Map<int, double> _savedScrollPositions = {};
+  Offset _dragOffset = Offset.zero; // Offset para arrastar o diálogo pelo cabeçalho
   late String _status;
   late String _regional;
   late String _divisao;
@@ -1443,9 +1446,11 @@ class _TaskFormDialogState extends State<TaskFormDialog>
       }
     } catch (e) {
       print('Erro ao carregar dados: $e');
-      setState(() {
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -1468,30 +1473,36 @@ class _TaskFormDialogState extends State<TaskFormDialog>
         tipos = await _tipoAtividadeService.getTiposAtividadeAtivos();
       }
 
-      setState(() {
-        _tiposAtividadeList = tipos;
-      });
-
-      // Se não houver tipo selecionado e houver tipos disponíveis, selecionar o primeiro
-      if (_tipo.isEmpty && tipos.isNotEmpty) {
+      if (mounted) {
         setState(() {
-          _tipo = tipos.first.codigo;
+          _tiposAtividadeList = tipos;
         });
+
+        // Se não houver tipo selecionado e houver tipos disponíveis, selecionar o primeiro
+        if (_tipo.isEmpty && tipos.isNotEmpty) {
+          setState(() {
+            _tipo = tipos.first.codigo;
+          });
+        }
       }
 
       print('📋 Tipos de atividade carregados: ${tipos.length}');
     } catch (e) {
       print('❌ Erro ao carregar tipos de atividade: $e');
-      setState(() {
-        _tiposAtividadeList = [];
-      });
+      if (mounted) {
+        setState(() {
+          _tiposAtividadeList = [];
+        });
+      }
     }
   }
 
   Future<void> _loadExecutoresEquipesFiltrados() async {
-    setState(() {
-      _isLoadingExecutoresEquipes = true;
-    });
+    if (mounted) {
+      setState(() {
+        _isLoadingExecutoresEquipes = true;
+      });
+    }
 
     try {
       final results = await Future.wait([
@@ -1503,10 +1514,13 @@ class _TaskFormDialogState extends State<TaskFormDialog>
           formDivisaoId: _divisaoId,
           formSegmentoId: _segmentoId,
         ),
-        _equipeService.getEquipesFiltradas(
-          regionalId: _regionalId,
-          divisaoId: _divisaoId,
-          segmentoId: _segmentoId,
+        _equipeService.getEquipesPorPerfilUsuario(
+          regionalIds: _usuarioAtual?.regionalIds ?? [],
+          divisaoIds: _usuarioAtual?.divisaoIds ?? [],
+          segmentoIds: _usuarioAtual?.segmentoIds ?? [],
+          formRegionalId: _regionalId,
+          formDivisaoId: _divisaoId,
+          formSegmentoId: _segmentoId,
         ),
       ]);
 
@@ -1526,16 +1540,20 @@ class _TaskFormDialogState extends State<TaskFormDialog>
         print('📋 Primeira equipe: ${equipes.first.nome}');
       }
 
-      setState(() {
-        _executoresList = executores;
-        _equipesList = equipes;
-        _isLoadingExecutoresEquipes = false;
-      });
+      if (mounted) {
+        setState(() {
+          _executoresList = executores;
+          _equipesList = equipes;
+          _isLoadingExecutoresEquipes = false;
+        });
+      }
     } catch (e) {
       print('❌ Erro ao carregar executores e equipes: $e');
-      setState(() {
-        _isLoadingExecutoresEquipes = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoadingExecutoresEquipes = false;
+        });
+      }
     }
   }
 
@@ -1573,16 +1591,20 @@ class _TaskFormDialogState extends State<TaskFormDialog>
         );
       }
 
-      setState(() {
-        _coordenadoresList = coordenadores;
-      });
+      if (mounted) {
+        setState(() {
+          _coordenadoresList = coordenadores;
+        });
+      }
       print('👔 Coordenadores carregados: ${coordenadores.length}');
     } catch (e, stackTrace) {
       print('❌ Erro ao carregar coordenadores: $e');
       print('   Stack trace: $stackTrace');
-      setState(() {
-        _coordenadoresList = [];
-      });
+      if (mounted) {
+        setState(() {
+          _coordenadoresList = [];
+        });
+      }
     }
   }
 
@@ -1827,101 +1849,115 @@ class _TaskFormDialogState extends State<TaskFormDialog>
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       elevation: 0,
       backgroundColor: Colors.transparent,
-      child: Container(
-        width: isMobile ? double.infinity : 700,
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.of(context).size.height * 0.9,
-          maxWidth: MediaQuery.of(context).size.width * 0.95,
-        ),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.1),
-              blurRadius: 20,
-              offset: const Offset(0, 10),
-            ),
-          ],
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Header com gradiente
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Color(0xFF1E3A5F), Color(0xFF2C5282)],
-                ),
-                borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(20),
-                  topRight: Radius.circular(20),
-                ),
+      child: Transform.translate(
+        offset: isMobile ? Offset.zero : _dragOffset,
+        child: Container(
+          width: isMobile ? double.infinity : 700,
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.9,
+            maxWidth: MediaQuery.of(context).size.width * 0.95,
+          ),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
               ),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Header com gradiente e suporte a arrasto (drag) no desktop/web
+              GestureDetector(
+                onPanUpdate: isMobile
+                    ? null
+                    : (details) {
+                        setState(() {
+                          _dragOffset += details.delta;
+                        });
+                      },
+                child: MouseRegion(
+                  cursor: isMobile ? SystemMouseCursors.basic : SystemMouseCursors.move,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.2),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Icon(
-                      Icons.task_alt,
-                      color: Colors.white,
-                      size: 24,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      title,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 0.5,
+                      gradient: const LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [Color(0xFF1E3A5F), Color(0xFF2C5282)],
+                      ),
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(20),
+                        topRight: Radius.circular(20),
                       ),
                     ),
-                  ),
-                  // Botão de chat (apenas para tarefas existentes)
-                  if (widget.task != null)
-                    Container(
-                      margin: const EdgeInsets.only(right: 8),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: IconButton(
-                        icon: const Icon(
-                          Icons.chat,
-                          color: Colors.white,
-                          size: 20,
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Icon(
+                            Icons.task_alt,
+                            color: Colors.white,
+                            size: 24,
+                          ),
                         ),
-                        tooltip: 'Abrir chat da tarefa',
-                        onPressed: () => _abrirChatTarefa(),
-                      ),
-                    ),
-                  Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.2),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: IconButton(
-                      icon: const Icon(
-                        Icons.close,
-                        color: Colors.white,
-                        size: 20,
-                      ),
-                      onPressed: () => Navigator.of(context).pop(),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            title,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 22,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ),
+                        // Botão de chat (apenas para tarefas existentes)
+                        if (widget.task != null)
+                          Container(
+                            margin: const EdgeInsets.only(right: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: IconButton(
+                              icon: const Icon(
+                                Icons.chat,
+                                color: Colors.white,
+                                size: 20,
+                              ),
+                              tooltip: 'Abrir chat da tarefa',
+                              onPressed: () => _abrirChatTarefa(),
+                            ),
+                          ),
+                        Container(
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: IconButton(
+                            icon: const Icon(
+                              Icons.close,
+                              color: Colors.white,
+                              size: 20,
+                            ),
+                            onPressed: () => Navigator.of(context).pop(),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                ],
+                ),
               ),
-            ),
             // Tabs modernas
             Container(
               decoration: BoxDecoration(
@@ -2434,6 +2470,7 @@ class _TaskFormDialogState extends State<TaskFormDialog>
           ],
         ),
       ),
+      ),
     );
   }
 
@@ -2459,6 +2496,7 @@ class _TaskFormDialogState extends State<TaskFormDialog>
       popupProps: PopupProps.menu(
         showSearchBox: true,
         searchFieldProps: TextFieldProps(
+          autofocus: true,
           decoration: InputDecoration(
             hintText: 'Digite para buscar status...',
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
@@ -3545,6 +3583,7 @@ class _TaskFormDialogState extends State<TaskFormDialog>
       popupProps: PopupProps.menu(
         showSearchBox: true,
         searchFieldProps: TextFieldProps(
+          autofocus: true,
           decoration: InputDecoration(
             hintText: hintText ?? 'Digite para buscar...',
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
@@ -3690,25 +3729,12 @@ class _TaskFormDialogState extends State<TaskFormDialog>
   ) {
     return InkWell(
       onTap: () async {
-        final dateRange = await showDateRangePicker(
+        final dateRange = await showTFDateRangePicker(
           context: context,
           initialDateRange: DateTimeRange(start: startDate, end: endDate),
           firstDate: DateTime(2020),
           lastDate: DateTime(2030),
           helpText: 'Selecione o período',
-          builder: (context, child) {
-            return Theme(
-              data: Theme.of(context).copyWith(
-                colorScheme: ColorScheme.light(
-                  primary: Colors.blue,
-                  onPrimary: Colors.white,
-                  surface: Colors.white,
-                  onSurface: Colors.black,
-                ),
-              ),
-              child: child!,
-            );
-          },
         );
         if (dateRange != null) {
           onChanged(dateRange.start, dateRange.end);
@@ -5077,7 +5103,7 @@ class _TaskFormDialogState extends State<TaskFormDialog>
             // DateRangePicker para o período (mantém horas atuais)
             InkWell(
               onTap: () async {
-                final DateTimeRange? picked = await showDateRangePicker(
+                final DateTimeRange? picked = await showTFDateRangePicker(
                   context: context,
                   firstDate: DateTime(2020),
                   lastDate: DateTime(2030),
@@ -5236,7 +5262,8 @@ class _TaskFormDialogState extends State<TaskFormDialog>
                   );
                   periods[periodIndex] = segment.copyWith(
                     tipoPeriodo: value,
-                    dataFim: value == 'DESLOCAMENTO'
+                    dataFim: (value == 'DESLOCAMENTO' &&
+                            segment.dataFim.isBefore(segment.dataInicio))
                         ? segment.dataInicio
                         : segment.dataFim,
                   );
@@ -5572,7 +5599,7 @@ class _TaskFormDialogState extends State<TaskFormDialog>
             const SizedBox(height: 8),
             InkWell(
               onTap: () async {
-                final DateTimeRange? picked = await showDateRangePicker(
+                final DateTimeRange? picked = await showTFDateRangePicker(
                   context: context,
                   firstDate: DateTime(2020),
                   lastDate: DateTime(2030),
@@ -5841,8 +5868,9 @@ class _TaskFormDialogState extends State<TaskFormDialog>
               const ['EXECUCAO', 'PLANEJAMENTO', 'DESLOCAMENTO'],
               (value) {
                 setState(() {
-                  // Se mudou para DESLOCAMENTO, fazer data fim igual à data início
-                  final newDataFim = value == 'DESLOCAMENTO'
+                  // Se mudou para DESLOCAMENTO, garantir apenas que data fim não seja anterior à data início
+                  final newDataFim = (value == 'DESLOCAMENTO' &&
+                          segment.dataFim.isBefore(segment.dataInicio))
                       ? segment.dataInicio
                       : segment.dataFim;
                   _ganttSegments[index] = segment.copyWith(
@@ -6060,6 +6088,44 @@ class _TaskFormDialogState extends State<TaskFormDialog>
     return Colors.white;
   }
 
+  List<String> _obterNomesLocaisTarefa() {
+    final locais = <String>{};
+
+    // 1. Locais selecionados nos dropdowns do formulário
+    for (final l in _locaisSelecionados) {
+      if (l != null && l.local.trim().isNotEmpty) {
+        locais.add(l.local.trim());
+      }
+    }
+
+    // 2. Do objeto task original
+    final taskLocais = widget.task?.locais;
+    if (taskLocais != null) {
+      for (final l in taskLocais) {
+        if (l.trim().isNotEmpty) locais.add(l.trim());
+      }
+    }
+
+    // 3. Da string _local
+    final localStr = _local;
+    if (localStr != null && localStr.trim().isNotEmpty) {
+      for (final part in localStr.split(',')) {
+        final p = part.trim();
+        if (p.isNotEmpty) locais.add(p);
+      }
+    }
+
+    // 4. Dos IDs selecionados procurando na lista de locais disponíveis
+    for (final id in _selectedLocalIds) {
+      final match = _locaisList.where((l) => l.id == id).firstOrNull;
+      if (match != null && match.local.trim().isNotEmpty) {
+        locais.add(match.local.trim());
+      }
+    }
+
+    return locais.toList();
+  }
+
   Future<void> _adicionarNotaSAP() async {
     if (widget.task == null) return;
     setState(() {
@@ -6081,8 +6147,7 @@ class _TaskFormDialogState extends State<TaskFormDialog>
       }).toList();
 
       // Restringir ao mesmo local da tarefa, se houver locais definidos
-      final locaisTarefa =
-          widget.task?.locais.where((l) => l.trim().isNotEmpty).toList() ?? [];
+      final locaisTarefa = _obterNomesLocaisTarefa();
       if (locaisTarefa.isNotEmpty) {
         final localSet = locaisTarefa
             .map((l) => l.trim().toLowerCase())
@@ -6320,15 +6385,16 @@ class _TaskFormDialogState extends State<TaskFormDialog>
       }
 
       // Usar o diálogo de seleção de ordens
+      final locaisTarefa = _obterNomesLocaisTarefa();
+      final localPrincipal = locaisTarefa.isNotEmpty ? locaisTarefa.first : null;
+
       final ordensSelecionadas = await showDialog<List<Ordem>>(
         context: context,
         builder: (context) => OrdemSelectionDialog(
           ordens: ordensDisponiveis,
           title: 'Selecionar Ordem',
-          taskTarefa: widget.task?.tarefa,
-          taskLocal: widget.task?.locais.isNotEmpty == true
-              ? widget.task!.locais.first
-              : null,
+          taskTarefa: widget.task?.tarefa ?? _tarefa,
+          taskLocal: localPrincipal,
         ),
       );
 
@@ -6519,28 +6585,13 @@ class _TaskFormDialogState extends State<TaskFormDialog>
                           padding: EdgeInsets.zero,
                           constraints: const BoxConstraints(),
                           onPressed: () async {
-                            try {
-                              await Clipboard.setData(
-                                ClipboardData(text: ordem.ordem),
-                              );
-                              if (!mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Ordem copiada!'),
-                                  duration: Duration(seconds: 1),
-                                ),
-                              );
-                            } catch (e) {
-                              if (!mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    'Não foi possível copiar a ordem: $e',
-                                  ),
-                                  backgroundColor: Colors.red,
-                                ),
-                              );
-                            }
+                            await ClipboardHelper.copyAndNotify(
+                              context,
+                              ordem.ordem,
+                              successMessage: 'Ordem copiada!',
+                              errorMessage: 'Não foi possível copiar a ordem.',
+                              duration: const Duration(seconds: 1),
+                            );
                           },
                           tooltip: 'Copiar ordem',
                         ),
@@ -6550,22 +6601,39 @@ class _TaskFormDialogState extends State<TaskFormDialog>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         if (ordem.textoBreve != null)
-                          Text(
-                            ordem.textoBreve!,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              ordem.textoBreve!,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
-                        if (ordem.localInstalacao != null)
-                          Text(
-                            'Local: ${ordem.localInstalacao}',
-                            style: const TextStyle(fontSize: 12),
+                        if (ordem.localInstalacao != null || ordem.local != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(
+                              'Local: ${ordem.localInstalacao ?? ordem.local}',
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ),
+                        if (ordem.sala != null && ordem.sala!.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(
+                              'Sala: ${ordem.sala}',
+                              style: const TextStyle(fontSize: 12),
+                            ),
                           ),
                         if (ordem.inicioBase != null)
-                          Text(
-                            'Início: ${_formatDateOrdem(ordem.inicioBase!)}',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Colors.grey,
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(
+                              'Início: ${_formatDateOrdem(ordem.inicioBase!)}',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey,
+                              ),
                             ),
                           ),
                       ],
@@ -6574,6 +6642,7 @@ class _TaskFormDialogState extends State<TaskFormDialog>
                       icon: const Icon(Icons.delete, color: Colors.red),
                       onPressed: () => _removerOrdem(ordem),
                     ),
+                    onTap: () => _visualizarOrdem(ordem),
                   ),
                 );
               },
@@ -6585,6 +6654,46 @@ class _TaskFormDialogState extends State<TaskFormDialog>
 
   String _formatDateOrdem(DateTime date) {
     return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
+  }
+
+  void _visualizarOrdem(Ordem ordem) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Ordem: ${ordem.ordem}'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildInfoRowNotaSAP('Tipo', ordem.tipo),
+              _buildInfoRowNotaSAP('Status Sistema', ordem.statusSistema),
+              _buildInfoRowNotaSAP('Status Usuário', ordem.statusUsuario),
+              _buildInfoRowNotaSAP('Texto Breve', ordem.textoBreve),
+              _buildInfoRowNotaSAP('Denominação Local', ordem.denominacaoLocalInstalacao),
+              _buildInfoRowNotaSAP('Denominação Objeto', ordem.denominacaoObjeto),
+              _buildInfoRowNotaSAP('Local Instalação', ordem.localInstalacao),
+              _buildInfoRowNotaSAP('Sala', ordem.sala),
+              _buildInfoRowNotaSAP('Local', ordem.local),
+              if (ordem.tolerancia != null)
+                _buildInfoRowNotaSAP('Tolerância', _formatDateOrdem(ordem.tolerancia!)),
+              _buildInfoRowNotaSAP('Código SI', ordem.codigoSI),
+              _buildInfoRowNotaSAP('GPM', ordem.gpm),
+              if (ordem.inicioBase != null)
+                _buildInfoRowNotaSAP('Início Base', _formatDateOrdem(ordem.inicioBase!)),
+              if (ordem.fimBase != null)
+                _buildInfoRowNotaSAP('Fim Base', _formatDateOrdem(ordem.fimBase!)),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Fechar'),
+          ),
+        ],
+      ),
+    );
   }
 
   // Métodos para ATs Vinculadas
@@ -6645,15 +6754,16 @@ class _TaskFormDialogState extends State<TaskFormDialog>
       }
 
       // Usar o diálogo de seleção de ATs
+      final locaisTarefa = _obterNomesLocaisTarefa();
+      final localPrincipal = locaisTarefa.isNotEmpty ? locaisTarefa.first : null;
+
       final atsSelecionadas = await showDialog<List<AT>>(
         context: context,
         builder: (context) => ATSelectionDialog(
           ats: atsDisponiveis,
           title: 'Selecionar AT',
-          taskTarefa: widget.task?.tarefa,
-          taskLocal: widget.task?.locais.isNotEmpty == true
-              ? widget.task!.locais.first
-              : null,
+          taskTarefa: widget.task?.tarefa ?? _tarefa,
+          taskLocal: localPrincipal,
         ),
       );
 
@@ -7002,15 +7112,17 @@ class _TaskFormDialogState extends State<TaskFormDialog>
       }
 
       // Usar o diálogo de seleção de SIs
+      final locaisTarefa = _obterNomesLocaisTarefa();
+      final localPrincipal = locaisTarefa.isNotEmpty ? locaisTarefa.first : null;
+
       final sisSelecionadas = await showDialog<List<SI>>(
         context: context,
         builder: (context) => SISelectionDialog(
           sis: sisDisponiveis,
           title: 'Selecionar SI',
-          taskTarefa: widget.task?.tarefa,
-          taskLocal: widget.task?.locais.isNotEmpty == true
-              ? widget.task!.locais.first
-              : null,
+          taskTarefa: widget.task?.tarefa ?? _tarefa,
+          taskLocal: localPrincipal,
+          taskLocais: locaisTarefa,
         ),
       );
 

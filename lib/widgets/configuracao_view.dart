@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../design_system/foundations/tf_density.dart';
 import 'regional_list_view.dart';
 import 'status_list_view.dart';
 import 'divisao_list_view.dart';
@@ -359,6 +360,9 @@ class _ConfiguracaoViewState extends State<ConfiguracaoView> {
           // Card de seleção de tema
           if (themeProvider != null) _buildThemeCard(context, isMobile, themeProvider),
           SizedBox(height: isMobile ? 24 : 32),
+          // Card de seleção de densidade
+          if (themeProvider != null) _buildDensityCard(context, isMobile, themeProvider),
+          SizedBox(height: isMobile ? 24 : 32),
           // Card de cores personalizadas (não expansível, estilo simples)
           if (themeProvider != null) _buildCustomColorsCard(context, isMobile, themeProvider),
           SizedBox(height: isMobile ? 32 : 40),
@@ -594,6 +598,205 @@ class _ConfiguracaoViewState extends State<ConfiguracaoView> {
                           final themeName = themeProvider.getThemeName(themeProvider.currentTheme);
                           return Text(
                             'Tema atual: $themeName',
+                            style: TextStyle(
+                              fontSize: isMobile ? 13 : 14,
+                              color: Colors.grey[600],
+                            ),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(
+                  Icons.chevron_right,
+                  color: Colors.grey[400],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDensityCard(BuildContext context, bool isMobile, ThemeProvider themeProvider) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey[200]!),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () {
+            // Abrir o dialog de seleção de densidade
+            showDialog(
+              context: context,
+              builder: (context) => Dialog(
+                child: Container(
+                  padding: const EdgeInsets.all(24),
+                  constraints: const BoxConstraints(maxWidth: 450),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Densidade da Interface',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      ListenableBuilder(
+                        listenable: themeProvider,
+                        builder: (context, child) {
+                          return Column(
+                            children: TFDensityMode.values.map((mode) {
+                              final isSelected = themeProvider.currentDensity == mode;
+                              final densityName = themeProvider.getDensityName(mode);
+                              final densityDesc = themeProvider.getDensityDescription(mode);
+                              
+                              Color modeColor;
+                              IconData modeIcon;
+                              switch (mode) {
+                                case TFDensityMode.comfortable:
+                                  modeColor = Colors.blue;
+                                  modeIcon = Icons.view_comfortable;
+                                  break;
+                                case TFDensityMode.compact:
+                                  modeColor = Colors.teal;
+                                  modeIcon = Icons.view_compact;
+                                  break;
+                                case TFDensityMode.dense:
+                                  modeColor = Colors.indigo;
+                                  modeIcon = Icons.density_small;
+                                  break;
+                              }
+                              
+                              return Container(
+                                margin: const EdgeInsets.only(bottom: 12),
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                    color: isSelected 
+                                        ? modeColor 
+                                        : Colors.grey[300]!,
+                                    width: isSelected ? 2 : 1,
+                                  ),
+                                  borderRadius: BorderRadius.circular(8),
+                                  color: isSelected 
+                                      ? modeColor.withValues(alpha: 0.1) 
+                                      : Colors.transparent,
+                                ),
+                                child: ListTile(
+                                  leading: Icon(
+                                    modeIcon,
+                                    color: isSelected ? modeColor : Colors.grey[600],
+                                  ),
+                                  title: Text(
+                                    densityName,
+                                    style: TextStyle(
+                                      fontWeight: isSelected 
+                                          ? FontWeight.bold 
+                                          : FontWeight.normal,
+                                      color: isSelected 
+                                          ? modeColor 
+                                          : Colors.grey[800],
+                                    ),
+                                  ),
+                                  subtitle: Text(
+                                    densityDesc,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.grey[600],
+                                    ),
+                                  ),
+                                  trailing: isSelected
+                                      ? Icon(
+                                          Icons.check_circle,
+                                          color: modeColor,
+                                        )
+                                      : const Icon(
+                                          Icons.radio_button_unchecked,
+                                          color: Colors.grey,
+                                        ),
+                                  onTap: () {
+                                    themeProvider.setDensity(mode);
+                                    Navigator.pop(context);
+                                  },
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context),
+                            child: const Text('Fechar'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+          borderRadius: BorderRadius.circular(16),
+          child: Container(
+            padding: EdgeInsets.all(isMobile ? 16 : 20),
+            child: Row(
+              children: [
+                Container(
+                  width: isMobile ? 48 : 56,
+                  height: isMobile ? 48 : 56,
+                  decoration: BoxDecoration(
+                    color: Colors.indigo[50],
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    Icons.density_medium,
+                    color: Colors.indigo[600],
+                    size: isMobile ? 24 : 28,
+                  ),
+                ),
+                SizedBox(width: isMobile ? 12 : 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Densidade da Interface',
+                        style: TextStyle(
+                          fontSize: isMobile ? 16 : 18,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey[900],
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      ListenableBuilder(
+                        listenable: themeProvider,
+                        builder: (context, child) {
+                          final densityName = themeProvider.getDensityName(themeProvider.currentDensity);
+                          final densityDesc = themeProvider.getDensityDescription(themeProvider.currentDensity);
+                          return Text(
+                            'Densidade atual: $densityName ($densityDesc)',
                             style: TextStyle(
                               fontSize: isMobile ? 13 : 14,
                               color: Colors.grey[600],
@@ -1008,20 +1211,20 @@ class _ConfiguracaoViewState extends State<ConfiguracaoView> {
                 fontWeight: FontWeight.bold,
                 color: Colors.grey[900],
               ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
             SizedBox(height: isMobile ? 3 : 4),
             // Descrição
-            Expanded(
-              child: Text(
-                subtitle,
-                style: TextStyle(
-                  fontSize: isMobile ? 11 : 12,
-                  color: Colors.grey[600],
-                  height: 1.3,
-                ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
+            Text(
+              subtitle,
+              style: TextStyle(
+                fontSize: isMobile ? 11 : 12,
+                color: Colors.grey[600],
+                height: 1.3,
               ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
             ),
           ],
         ),
@@ -1054,25 +1257,30 @@ class _HoverCardState extends State<_HoverCard> {
     return MouseRegion(
       onEnter: (_) => setState(() => _isHovered = true),
       onExit: (_) => setState(() => _isHovered = false),
+      cursor: SystemMouseCursors.click,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeInOut,
-        transform: Matrix4.identity()..translate(0.0, _isHovered ? -4.0 : 0.0),
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOut,
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.grey[200]!),
+          border: Border.all(
+            color: _isHovered
+                ? Theme.of(context).colorScheme.primary.withOpacity(0.5)
+                : Colors.grey[200]!,
+            width: _isHovered ? 1.5 : 1.0,
+          ),
           boxShadow: _isHovered
               ? [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.15),
-                    blurRadius: 20,
-                    offset: const Offset(0, 8),
+                    color: Colors.black.withOpacity(0.08),
+                    blurRadius: 14,
+                    offset: const Offset(0, 4),
                   ),
                 ]
               : [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.05),
+                    color: Colors.black.withOpacity(0.04),
                     blurRadius: 4,
                     offset: const Offset(0, 2),
                   ),

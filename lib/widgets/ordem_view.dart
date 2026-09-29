@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode;
 import 'package:file_picker/file_picker.dart';
 import 'dart:io';
@@ -19,10 +18,15 @@ import '../services/executor_service.dart';
 import 'task_view_dialog.dart';
 import 'multi_select_filter_dialog.dart';
 import 'ordem_calendar_view.dart';
+import 'ordem_dashboard_view.dart';
+import 'gantt_chart.dart';
+import 'resizable_panel.dart';
 import '../services/local_service.dart';
 import '../features/media_albums/data/models/room.dart';
 import '../features/media_albums/data/repositories/supabase_media_repository.dart';
 import '../features/media_albums/presentation/pages/gallery_page.dart';
+import '../design_system/taskflow_design_system.dart';
+import '../utils/clipboard_helper.dart';
 
 /// Info de álbum (imagens) para uma ordem: contagem e filtros para abrir a galeria.
 class _AlbumInfo {
@@ -102,6 +106,36 @@ class _OrdemViewState extends State<OrdemView> {
   Map<String, _AlbumInfo> _albumInfoByOrdemId = {};
   final SupabaseMediaRepository _mediaRepo = SupabaseMediaRepository();
 
+  bool _exibirGantt = false;
+  GanttScale _ganttScale = GanttScale.daily;
+  final ScrollController _tableVerticalScrollController = ScrollController();
+  final ScrollController _ganttVerticalScrollController = ScrollController();
+
+  void _sincronizarScrolls() {
+    _tableVerticalScrollController.addListener(() {
+      if (_tableVerticalScrollController.hasClients && 
+          _ganttVerticalScrollController.hasClients && 
+          _tableVerticalScrollController.position.isScrollingNotifier.value) {
+        final targetOffset = _tableVerticalScrollController.offset.clamp(
+          0.0,
+          _ganttVerticalScrollController.position.maxScrollExtent,
+        );
+        _ganttVerticalScrollController.jumpTo(targetOffset);
+      }
+    });
+    _ganttVerticalScrollController.addListener(() {
+      if (_ganttVerticalScrollController.hasClients && 
+          _tableVerticalScrollController.hasClients && 
+          _ganttVerticalScrollController.position.isScrollingNotifier.value) {
+        final targetOffset = _ganttVerticalScrollController.offset.clamp(
+          0.0,
+          _tableVerticalScrollController.position.maxScrollExtent,
+        );
+        _tableVerticalScrollController.jumpTo(targetOffset);
+      }
+    });
+  }
+
   @override
   void initState() {
     super.initState();
@@ -112,6 +146,7 @@ class _OrdemViewState extends State<OrdemView> {
     _loadOrdens();
     _loadTodasOrdensParaEstatisticas();
     _loadOrdensProgramadas();
+    _sincronizarScrolls();
     // Escutar mudanças nos status
     _statusChangeSubscription = _statusService.statusChangeStream.listen((_) {
       _loadStatus(); // Recarregar quando houver mudança
@@ -150,72 +185,15 @@ class _OrdemViewState extends State<OrdemView> {
         _filtroGPMs.length;
   }
 
-  Widget _buildViewButton(String label, IconData icon, String value, bool isSelected) {
-    return InkWell(
-      onTap: () {
-        setState(() {
-          _modoVisualizacao = value;
-          _paginaAtual = 0;
-        });
-      },
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: BoxDecoration(
-          color: isSelected ? Colors.blue[600] : Colors.transparent,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              icon,
-              size: 16,
-              color: isSelected ? Colors.white : Colors.grey[700],
-            ),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                color: isSelected ? Colors.white : Colors.grey[700],
-                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                fontSize: 13,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
   Future<void> _copiarOrdem(String ordemNumero) async {
-    try {
-      // Verificar se está em web e clipboard está disponível
-      if (kIsWeb) {
-        // Em web, pode precisar de permissão ou contexto seguro
-        // Tentar copiar mesmo assim
-        await Clipboard.setData(ClipboardData(text: ordemNumero));
-      } else {
-        await Clipboard.setData(ClipboardData(text: ordemNumero));
-      }
-      
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Ordem copiada!'),
-          duration: Duration(seconds: 1),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Não foi possível copiar a ordem: ${e.toString()}'),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 3),
-        ),
-      );
-    }
+    await ClipboardHelper.copyAndNotify(
+      context,
+      ordemNumero,
+      successMessage: 'Ordem copiada!',
+      errorMessage: 'Não foi possível copiar a ordem.',
+      duration: const Duration(seconds: 1),
+    );
   }
 
   Future<void> _loadTaskEditPermission() async {
@@ -279,6 +257,8 @@ class _OrdemViewState extends State<OrdemView> {
   @override
   void dispose() {
     _statusChangeSubscription?.cancel();
+    _tableVerticalScrollController.dispose();
+    _ganttVerticalScrollController.dispose();
     super.dispose();
   }
 
@@ -322,8 +302,14 @@ class _OrdemViewState extends State<OrdemView> {
       // Ordenar cada lista por data de vinculação (mais recente primeiro)
       for (final ordemId in info.keys) {
         info[ordemId]!.sort((a, b) {
-          final dataA = a['vinculado_em'] as DateTime?;
-          final dataB = b['vinculado_em'] as DateTime?;
+          DateTime? parseDate(dynamic v) {
+            if (v == null) return null;
+            if (v is DateTime) return v;
+            if (v is String) return DateTime.tryParse(v);
+            return null;
+          }
+          final dataA = parseDate(a['vinculado_em']);
+          final dataB = parseDate(b['vinculado_em']);
           if (dataA == null && dataB == null) return 0;
           if (dataA == null) return 1;
           if (dataB == null) return -1;
@@ -565,6 +551,8 @@ class _OrdemViewState extends State<OrdemView> {
     Function(Set<String>) onChanged, {
     String? searchHint,
   }) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
     return InkWell(
       onTap: () {
         showDialog(
@@ -584,11 +572,23 @@ class _OrdemViewState extends State<OrdemView> {
       child: InputDecorator(
         decoration: InputDecoration(
           labelText: label,
-          border: const OutlineInputBorder(),
+          labelStyle: typography.labelMedium.copyWith(color: colors.textSecondary),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(TFRadius.r8),
+            borderSide: BorderSide(color: colors.borderSubtle),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(TFRadius.r8),
+            borderSide: BorderSide(color: colors.borderSubtle),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(TFRadius.r8),
+            borderSide: BorderSide(color: colors.primary, width: 1.5),
+          ),
           filled: true,
-          fillColor: Colors.white,
-          suffixIcon: const Icon(Icons.arrow_drop_down),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+          fillColor: colors.surface,
+          suffixIcon: Icon(Icons.arrow_drop_down, color: colors.textSecondary),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         ),
         child: Text(
           selectedValues.isEmpty
@@ -596,8 +596,8 @@ class _OrdemViewState extends State<OrdemView> {
               : selectedValues.length == 1
                   ? selectedValues.first
                   : '${selectedValues.length} selecionado(s)',
-          style: TextStyle(
-            color: selectedValues.isEmpty ? Colors.grey[600] : Colors.black,
+          style: typography.bodyMedium.copyWith(
+            color: selectedValues.isEmpty ? colors.textSecondary : colors.textPrimary,
           ),
         ),
       ),
@@ -942,6 +942,8 @@ class _OrdemViewState extends State<OrdemView> {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
     final isMobile = Responsive.isMobile(context);
     final isTablet = Responsive.isTablet(context);
     final isCompact = isMobile || isTablet;
@@ -967,36 +969,38 @@ class _OrdemViewState extends State<OrdemView> {
             ButtonSegment(value: 'programadas', label: Text('Programadas')),
             ButtonSegment(value: 'nao_programadas', label: Text('Não Programadas')),
           ];
-    
+
+    final viewOptions = [
+      ('tabela', Icons.table_chart, 'Tabela'),
+      ('cards', Icons.view_module, 'Cards'),
+      ('calendario', Icons.calendar_today, 'Calendário'),
+      ('dashboard', Icons.dashboard, 'Dashboard'),
+    ];
 
     return Scaffold(
+      backgroundColor: colors.background,
       body: Column(
         children: [
-          // Header com botões
+          // Header com botões responsivos
           Container(
-            padding: const EdgeInsets.all(16),
+            padding: EdgeInsets.all(isCompact ? 8 : 12),
             decoration: BoxDecoration(
-              color: Colors.white,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.grey.withOpacity(0.1),
-                  spreadRadius: 1,
-                  blurRadius: 3,
-                  offset: const Offset(0, 2),
-                ),
-              ],
+              color: colors.surface,
+              border: Border(
+                bottom: BorderSide(color: colors.borderSubtle),
+              ),
             ),
-            child: Row(
+            child: Wrap(
+              spacing: 12,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                const Text(
-                  'Ordens',
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
+                if (!isCompact)
+                  Text(
+                    'Ordens',
+                    style: typography.sectionTitle,
                   ),
-                ),
-                const SizedBox(width: 16),
-                // Filtros rápidos (mesma regra da tela de Notas)
+                // Filtros rápidos
                 SegmentedButton<String?>(
                   segments: tipoOrdemSegments,
                   selected: {_filtroTipoOrdem},
@@ -1007,17 +1011,16 @@ class _OrdemViewState extends State<OrdemView> {
                     _reaplicarFiltrosLocais();
                   },
                   style: SegmentedButton.styleFrom(
-                    backgroundColor: Colors.grey[200],
-                    selectedBackgroundColor: Colors.blue[600],
+                    backgroundColor: colors.surfaceSecondary,
+                    selectedBackgroundColor: colors.primary,
                     selectedForegroundColor: Colors.white,
-                    foregroundColor: Colors.grey[700],
-                    side: BorderSide(color: Colors.grey[300]!, width: 1),
+                    foregroundColor: colors.textSecondary,
+                    side: BorderSide(color: colors.borderSubtle, width: 1),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(TFRadius.r8),
                     ),
                   ),
                 ),
-                const SizedBox(width: 16),
                 SegmentedButton<String?>(
                   segments: programacaoSegments,
                   selected: {_filtroProgramacao},
@@ -1028,180 +1031,208 @@ class _OrdemViewState extends State<OrdemView> {
                     _reaplicarFiltrosLocais();
                   },
                   style: SegmentedButton.styleFrom(
-                    backgroundColor: Colors.grey[200],
-                    selectedBackgroundColor: Colors.blue[600],
+                    backgroundColor: colors.surfaceSecondary,
+                    selectedBackgroundColor: colors.primary,
                     selectedForegroundColor: Colors.white,
-                    foregroundColor: Colors.grey[700],
-                    side: BorderSide(color: Colors.grey[300]!, width: 1),
+                    foregroundColor: colors.textSecondary,
+                    side: BorderSide(color: colors.borderSubtle, width: 1),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(TFRadius.r8),
                     ),
                   ),
                 ),
-                const SizedBox(width: 16),
-            // Botão de filtros na barra
-            OutlinedButton.icon(
-              icon: const Icon(Icons.filter_list),
-              label: isCompact
-                  ? const SizedBox.shrink()
-                  : Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Text('Filtros'),
-                        if (_totalFiltrosAtivos() > 0) ...[
-                          const SizedBox(width: 6),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: Colors.blue,
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Text(
-                              '${_totalFiltrosAtivos()}',
-                              style: const TextStyle(color: Colors.white, fontSize: 12),
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-              style: OutlinedButton.styleFrom(
-                minimumSize: Size(isCompact ? 44 : 0, 36),
-                padding: EdgeInsets.symmetric(
-                  horizontal: isCompact ? 12 : 16,
-                  vertical: 12,
-                ),
-              ),
-              onPressed: () {
-                setState(() {
-                  _filtrosExpandidos = !_filtrosExpandidos;
-                });
-              },
-            ),
-            const SizedBox(width: 8),
-            if (!isCompact)
-              Text(
-                _filtrosExpandidos ? 'Ocultar' : 'Mostrar',
-                style: TextStyle(color: Colors.grey[600]),
-              ),
-            const SizedBox(width: 16),
-            if (_ordensSelecionadas.isNotEmpty) ...[
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.blue[100],
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.blue[300]!),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.check_circle, size: 18, color: Colors.blue[700]),
-                    const SizedBox(width: 8),
-                    Text(
-                      '${_ordensSelecionadas.length} selecionada${_ordensSelecionadas.length > 1 ? 's' : ''}',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: Colors.blue[700],
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    InkWell(
-                      onTap: () {
-                        setState(() {
-                          _ordensSelecionadas.clear();
-                        });
-                      },
-                      child: Icon(Icons.close, size: 16, color: Colors.blue[700]),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 16),
-            ],
-            const Spacer(),
-                // Opções de visualização
-                if (isCompact)
-                  PopupMenuButton<String>(
-                    onSelected: (value) {
+                // Seletor de modo de visualização (SegmentedButton no desktop)
+                if (!isCompact)
+                  SegmentedButton<String>(
+                    segments: viewOptions.map((opt) {
+                      return ButtonSegment<String>(
+                        value: opt.$1,
+                        icon: Icon(opt.$2),
+                        label: Text(opt.$3),
+                      );
+                    }).toList(),
+                    selected: {_modoVisualizacao},
+                    onSelectionChanged: (Set<String> newSelection) {
                       setState(() {
-                        _modoVisualizacao = value;
+                        _modoVisualizacao = newSelection.first;
                       });
                     },
-                    itemBuilder: (context) => [
-                      const PopupMenuItem(value: 'tabela', child: Row(children: [Icon(Icons.table_chart, size: 18), SizedBox(width: 8), Text('Tabela')])),
-                      const PopupMenuItem(value: 'cards', child: Row(children: [Icon(Icons.view_module, size: 18), SizedBox(width: 8), Text('Cards')])),
-                      const PopupMenuItem(value: 'calendario', child: Row(children: [Icon(Icons.calendar_today, size: 18), SizedBox(width: 8), Text('Calendário')])),
-                    ],
-                    child: OutlinedButton.icon(
-                      icon: const Icon(Icons.view_agenda),
-                      label: Text(
-                        _modoVisualizacao == 'tabela' ? 'Tabela' : _modoVisualizacao == 'cards' ? 'Cards' : 'Calendário',
+                    showSelectedIcon: false,
+                    style: SegmentedButton.styleFrom(
+                      backgroundColor: colors.surface,
+                      selectedBackgroundColor: colors.primary.withValues(alpha: 0.12),
+                      selectedForegroundColor: colors.primary,
+                      foregroundColor: colors.textSecondary,
+                      side: BorderSide(color: colors.borderSubtle, width: 1),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(TFRadius.r8),
                       ),
-                      onPressed: null,
                     ),
                   )
                 else
-                  Row(
-                    children: [
-                      // Container para os botões de visualização (estilo SegmentedButton)
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.grey[200],
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            _buildViewButton(
-                              'Tabela',
-                              Icons.table_chart,
-                              'tabela',
-                              _modoVisualizacao == 'tabela',
-                            ),
-                            _buildViewButton(
-                              'Cards',
-                              Icons.view_module,
-                              'cards',
-                              _modoVisualizacao == 'cards',
-                            ),
-                            _buildViewButton(
-                              'Calendário',
-                              Icons.calendar_today,
-                              'calendario',
-                              _modoVisualizacao == 'calendario',
-                            ),
-                          ],
-                        ),
+                  DropdownButtonHideUnderline(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: colors.surface,
+                        border: Border.all(color: colors.borderSubtle),
+                        borderRadius: BorderRadius.circular(TFRadius.r8),
                       ),
-                    ],
+                      child: DropdownButton<String>(
+                        value: _modoVisualizacao,
+                        isDense: true,
+                        icon: const Icon(Icons.arrow_drop_down),
+                        dropdownColor: colors.surface,
+                        items: viewOptions.map((opt) {
+                          return DropdownMenuItem<String>(
+                            value: opt.$1,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(opt.$2, size: 18, color: colors.primary),
+                                const SizedBox(width: 8),
+                                Text(opt.$3, style: typography.bodySmall),
+                              ],
+                            ),
+                          );
+                        }).toList(),
+                        onChanged: (String? newValue) {
+                          if (newValue != null) {
+                            setState(() {
+                              _modoVisualizacao = newValue;
+                            });
+                          }
+                        },
+                      ),
+                    ),
                   ),
-                const SizedBox(width: 8),
+                // Botão de Gantt desabilitado temporariamente
+                /*
+                if (_modoVisualizacao == 'tabela')
+                  IconButton(
+                    tooltip: _exibirGantt ? 'Ocultar Gantt' : 'Exibir Gantt',
+                    icon: Icon(_exibirGantt ? Icons.timeline : Icons.timeline_outlined, color: _exibirGantt ? colors.primary : colors.textSecondary),
+                    style: IconButton.styleFrom(
+                      backgroundColor: _exibirGantt ? colors.primary.withValues(alpha: 0.12) : colors.surface,
+                      side: BorderSide(color: colors.borderSubtle, width: 1),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(TFRadius.r8),
+                      ),
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        _exibirGantt = !_exibirGantt;
+                      });
+                    },
+                  ),
+                */
+                // Botão Atualizar
                 ElevatedButton.icon(
                   onPressed: () {
                     setState(() {
-                      _filtroStatusTarefa.clear();
-                      _filtroLocais.clear();
-                      _filtroSalas.clear();
-                      _filtroTipos.clear();
-                      _filtroOrdens.clear();
-                      _filtroGPMs.clear();
-                      _filtroTipoOrdem = 'abertas';
-                      _filtroProgramacao = null;
                       _paginaAtual = 0;
                     });
                     _loadOrdens();
                     _loadTodasOrdensParaEstatisticas();
                   },
-                  icon: const Icon(Icons.refresh),
+                  icon: const Icon(Icons.refresh, size: 18),
                   label: isCompact ? const SizedBox.shrink() : const Text('Atualizar'),
                   style: ElevatedButton.styleFrom(
-                    minimumSize: Size(isCompact ? 44 : 0, 36),
+                    backgroundColor: colors.primary,
+                    foregroundColor: Colors.white,
+                    minimumSize: Size(isCompact ? 40 : 0, 36),
                     padding: EdgeInsets.symmetric(
-                      horizontal: isCompact ? 12 : 16,
-                      vertical: 12,
+                      horizontal: isCompact ? 10 : 16,
+                      vertical: 10,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(TFRadius.r8),
                     ),
                   ),
                 ),
+                // Botão de filtros na barra
+                OutlinedButton.icon(
+                  icon: Icon(Icons.filter_list, size: 18, color: _filtrosExpandidos ? colors.primary : colors.textSecondary),
+                  label: isCompact
+                      ? const SizedBox.shrink()
+                      : Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              'Filtros',
+                              style: typography.labelMedium.copyWith(
+                                color: _filtrosExpandidos ? colors.primary : colors.textPrimary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            if (_totalFiltrosAtivos() > 0) ...[
+                              const SizedBox(width: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: colors.primary,
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Text(
+                                  '${_totalFiltrosAtivos()}',
+                                  style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                  style: OutlinedButton.styleFrom(
+                    backgroundColor: _filtrosExpandidos ? colors.primary.withValues(alpha: 0.08) : colors.surface,
+                    side: BorderSide(
+                      color: _filtrosExpandidos ? colors.primary : colors.borderDefault,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(TFRadius.r8),
+                    ),
+                    minimumSize: Size(isCompact ? 40 : 0, 36),
+                    padding: EdgeInsets.symmetric(
+                      horizontal: isCompact ? 10 : 16,
+                      vertical: 10,
+                    ),
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      _filtrosExpandidos = !_filtrosExpandidos;
+                    });
+                  },
+                ),
+                if (_ordensSelecionadas.isNotEmpty)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: colors.primary.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(TFRadius.r8),
+                      border: Border.all(color: colors.primary.withValues(alpha: 0.3)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.check_circle, size: 16, color: colors.primary),
+                        const SizedBox(width: 6),
+                        Text(
+                          '${_ordensSelecionadas.length} selecionada${_ordensSelecionadas.length > 1 ? 's' : ''}',
+                          style: typography.labelMedium.copyWith(
+                            fontWeight: FontWeight.bold,
+                            color: colors.primary,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        InkWell(
+                          onTap: () {
+                            setState(() {
+                              _ordensSelecionadas.clear();
+                            });
+                          },
+                          child: Icon(Icons.close, size: 16, color: colors.primary),
+                        ),
+                      ],
+                    ),
+                  ),
               ],
             ),
           ),
@@ -1209,22 +1240,17 @@ class _OrdemViewState extends State<OrdemView> {
           AnimatedCrossFade(
             firstChild: const SizedBox.shrink(),
             secondChild: Container(
-            padding: EdgeInsets.all(isMobile ? 8 : 16),
-            decoration: BoxDecoration(
-              color: Colors.grey[100],
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.grey.withOpacity(0.1),
-                  spreadRadius: 1,
-                  blurRadius: 2,
-                  offset: const Offset(0, 1),
+              padding: EdgeInsets.all(isMobile ? 12 : 16),
+              decoration: BoxDecoration(
+                color: colors.surfaceSecondary,
+                border: Border(
+                  bottom: BorderSide(color: colors.borderSubtle),
                 ),
-              ],
-            ),
+              ),
               child: Wrap(
                 spacing: 16,
                 runSpacing: 16,
-                      children: [
+                children: [
                   SizedBox(
                     width: isMobile ? double.infinity : 180,
                     child: _buildMultiSelectFilterField(
@@ -1236,8 +1262,8 @@ class _OrdemViewState extends State<OrdemView> {
                       },
                       searchHint: 'Pesquisar status...',
                     ),
-                      ),
-                SizedBox(
+                  ),
+                  SizedBox(
                     width: isMobile ? double.infinity : 220,
                     child: _buildMultiSelectFilterField(
                       'Local',
@@ -1247,9 +1273,9 @@ class _OrdemViewState extends State<OrdemView> {
                         setState(() => _filtroLocais = values);
                       },
                       searchHint: 'Pesquisar local...',
+                    ),
                   ),
-                ),
-                SizedBox(
+                  SizedBox(
                     width: isMobile ? double.infinity : 160,
                     child: _buildMultiSelectFilterField(
                       'Sala',
@@ -1259,9 +1285,9 @@ class _OrdemViewState extends State<OrdemView> {
                         setState(() => _filtroSalas = values);
                       },
                       searchHint: 'Pesquisar sala...',
+                    ),
                   ),
-                ),
-                SizedBox(
+                  SizedBox(
                     width: isMobile ? double.infinity : 160,
                     child: _buildMultiSelectFilterField(
                       'Tipo',
@@ -1271,10 +1297,10 @@ class _OrdemViewState extends State<OrdemView> {
                         setState(() => _filtroTipos = values);
                       },
                       searchHint: 'Pesquisar tipo...',
+                    ),
                   ),
-                ),
-                SizedBox(
-                  width: isMobile ? double.infinity : 150,
+                  SizedBox(
+                    width: isMobile ? double.infinity : 150,
                     child: _buildMultiSelectFilterField(
                       'Ordem',
                       _filtroOrdens,
@@ -1283,10 +1309,10 @@ class _OrdemViewState extends State<OrdemView> {
                         setState(() => _filtroOrdens = values);
                       },
                       searchHint: 'Pesquisar ordem...',
-                      ),
                     ),
-                SizedBox(
-                  width: isMobile ? double.infinity : 150,
+                  ),
+                  SizedBox(
+                    width: isMobile ? double.infinity : 150,
                     child: _buildMultiSelectFilterField(
                       'GPM',
                       _filtroGPMs,
@@ -1295,64 +1321,103 @@ class _OrdemViewState extends State<OrdemView> {
                         setState(() => _filtroGPMs = values);
                       },
                       searchHint: 'Pesquisar GPM...',
-                      ),
                     ),
-                ],
                   ),
-                ),
+                ],
+              ),
+            ),
             crossFadeState:
                 _filtrosExpandidos ? CrossFadeState.showSecond : CrossFadeState.showFirst,
             duration: const Duration(milliseconds: 200),
           ),
 
-          // Contador de resultados
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            color: Colors.blue[50],
-            child: Row(
-              children: [
-                Text(
-                  'Total: $_totalOrdens ordens (${_ordens.length} nesta página)',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.blue,
-                  ),
+          // Contador de resultados (não exibir no dashboard)
+          if (_modoVisualizacao != 'dashboard')
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: colors.surface,
+                border: Border(
+                  bottom: BorderSide(color: colors.borderSubtle),
                 ),
-                const Spacer(),
-                Text(
-                  'Página ${_paginaAtual + 1} de ${(_totalOrdens / _itensPorPagina).ceil()}',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.blue,
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Total: $_totalOrdens ordens (${_ordens.length} nesta página)',
+                      style: typography.labelMedium.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: colors.primary,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
-                ),
-              ],
+                  const SizedBox(width: 8),
+                  Text(
+                    'Página ${_paginaAtual + 1} de ${(_totalOrdens / _itensPorPagina).ceil()}',
+                    style: typography.labelMedium.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: colors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
 
-          // Lista de ordems (Cards, Tabela ou Calendário - usando tolerância)
+          // Lista de ordens (Cards, Tabela, Calendário ou Dashboard)
           Expanded(
             child: (() {
-              // Apenas loading de ordens da API mostra spinner; atualização de programadas não.
               final loading = _isLoading;
               if (loading) {
-                return const Center(child: CircularProgressIndicator());
+                return const Center(child: TFLoading(message: 'Carregando ordens...'));
+              }
+              if (_modoVisualizacao == 'dashboard') {
+                return OrdemDashboardView(
+                  key: ValueKey('dashboard_${_todasOrdens.length}_${_filtroTipoOrdem}_${_filtroLocais.length}_${_filtroSalas.length}_${_filtroTipos.length}_${_filtroOrdens.length}_${_filtroGPMs.length}_$_searchQuery'),
+                  ordens: _todasOrdens,
+                  ordensProgramadasIds: _ordensProgramadasIds,
+                );
               }
               if (_ordens.isEmpty) {
-                return const Center(
-                  child: Text(
-                    'Nenhuma ordem encontrada',
-                    style: TextStyle(fontSize: 16, color: Colors.grey),
+                return Center(
+                  child: TFEmptyState(
+                    icon: Icons.search_off,
+                    title: 'Nenhuma ordem encontrada',
+                    description: _totalFiltrosAtivos() > 0
+                        ? 'Não há ordens correspondentes aos filtros aplicados.'
+                        : 'Não há ordens cadastradas.',
+                    action: _totalFiltrosAtivos() > 0
+                        ? OutlinedButton(
+                            onPressed: () {
+                              setState(() {
+                                _filtroStatusTarefa.clear();
+                                _filtroLocais.clear();
+                                _filtroSalas.clear();
+                                _filtroTipos.clear();
+                                _filtroOrdens.clear();
+                                _filtroGPMs.clear();
+                                _filtroTipoOrdem = 'abertas';
+                                _filtroProgramacao = null;
+                                _paginaAtual = 0;
+                              });
+                              _loadOrdens();
+                              _loadTodasOrdensParaEstatisticas();
+                            },
+                            child: const Text('Limpar Filtros'),
+                          )
+                        : null,
                   ),
                 );
               }
-              return _modoVisualizacao == 'tabela'
-                  ? _buildTabelaView()
-                  : _modoVisualizacao == 'calendario'
-                      ? OrdemCalendarView(
-                          ordens: _todasOrdens,
-                          onOrdemTap: (ordem) => _mostrarDetalhesOrdem(ordem),
-                        )
+              return _modoVisualizacao == 'calendario'
+                  ? OrdemCalendarView(
+                      ordens: _todasOrdens,
+                      onOrdemTap: (ordem) => _mostrarDetalhesOrdem(ordem),
+                    )
+                  : _modoVisualizacao == 'tabela'
+                      ? (_exibirGantt ? _buildSplitTabelaGanttView() : _buildTabelaView())
                       : ListView.builder(
                           itemCount: _ordens.length,
                           itemBuilder: (context, index) {
@@ -1363,20 +1428,15 @@ class _OrdemViewState extends State<OrdemView> {
             })(),
           ),
 
-          // Paginação
-          if (_modoVisualizacao != 'calendario' && _totalOrdens > _itensPorPagina)
+          // Paginação (não mostrar no dashboard nem no calendário)
+          if (_modoVisualizacao != 'dashboard' && _modoVisualizacao != 'calendario' && _totalOrdens > _itensPorPagina)
             Container(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
-                color: Colors.white,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.grey.withOpacity(0.1),
-                    spreadRadius: 1,
-                    blurRadius: 2,
-                    offset: const Offset(0, -1),
-                  ),
-                ],
+                color: colors.surface,
+                border: Border(
+                  top: BorderSide(color: colors.borderSubtle),
+                ),
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -1386,16 +1446,18 @@ class _OrdemViewState extends State<OrdemView> {
                         ? () {
                             setState(() {
                               _paginaAtual--;
-                              // Reaplicar paginação local sem refazer fetch
                               final start = _paginaAtual * _itensPorPagina;
                               final end = (start + _itensPorPagina).clamp(0, _todasOrdens.length);
                               _ordens = start < _todasOrdens.length ? _todasOrdens.sublist(start, end) : <Ordem>[];
                             });
                           }
                         : null,
-                    icon: const Icon(Icons.chevron_left),
+                    icon: Icon(Icons.chevron_left, color: _paginaAtual > 0 ? colors.primary : colors.textSecondary.withValues(alpha: 0.4)),
                   ),
-                  Text('Página ${_paginaAtual + 1} de ${(_totalOrdens / _itensPorPagina).ceil()}'),
+                  Text(
+                    'Página ${_paginaAtual + 1} de ${(_totalOrdens / _itensPorPagina).ceil()}',
+                    style: typography.bodyMedium,
+                  ),
                   IconButton(
                     onPressed: (_paginaAtual + 1) * _itensPorPagina < _totalOrdens
                         ? () {
@@ -1407,7 +1469,7 @@ class _OrdemViewState extends State<OrdemView> {
                             });
                           }
                         : null,
-                    icon: const Icon(Icons.chevron_right),
+                    icon: Icon(Icons.chevron_right, color: (_paginaAtual + 1) * _itensPorPagina < _totalOrdens ? colors.primary : colors.textSecondary.withValues(alpha: 0.4)),
                   ),
                 ],
               ),
@@ -2137,43 +2199,49 @@ class _OrdemViewState extends State<OrdemView> {
   }
 
   Widget _buildOrdemCard(Ordem ordem) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
     final isProgramada = _ordensProgramadasIds.contains(ordem.id);
     final programadasList = isProgramada ? _ordensProgramadasInfo[ordem.id] : null;
     final programadaInfo = programadasList?.isNotEmpty == true ? programadasList!.first : null;
     final tarefa = programadaInfo?['tarefa'] as Map<String, dynamic>?;
     final tarefaStatus = tarefa?['status'] as String?;
-    final statusColor = tarefaStatus != null ? _getTaskStatusColor(tarefaStatus) : null;
     
     return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      elevation: 2,
-      color: isProgramada && statusColor != null 
-          ? statusColor.withOpacity(0.1) 
-          : null,
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      elevation: 0,
+      color: colors.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(TFRadius.r8),
+        side: BorderSide(color: colors.borderSubtle),
+      ),
       child: ExpansionTile(
         leading: Stack(
           children: [
             CircleAvatar(
-              backgroundColor: _getStatusColor(ordem.statusSistema),
+              backgroundColor: colors.surfaceSecondary,
               child: Text(
                 ordem.tipo ?? '?',
-                style: const TextStyle(color: Colors.white, fontSize: 12),
+                style: typography.labelMedium.copyWith(
+                  color: colors.primary,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
-            if (isProgramada && statusColor != null)
+            if (isProgramada && tarefaStatus != null)
               Positioned(
                 right: 0,
                 top: 0,
                 child: Container(
-                  padding: const EdgeInsets.all(4),
+                  padding: const EdgeInsets.all(3),
                   decoration: BoxDecoration(
-                    color: statusColor,
+                    color: colors.primary,
                     shape: BoxShape.circle,
                   ),
                   child: const Icon(
-                    Icons.check_circle,
+                    Icons.check,
                     color: Colors.white,
-                    size: 16,
+                    size: 10,
                   ),
                 ),
               ),
@@ -2184,37 +2252,23 @@ class _OrdemViewState extends State<OrdemView> {
             Expanded(
               child: Text(
                 'Ordem: ${ordem.ordem}',
-                style: const TextStyle(fontWeight: FontWeight.bold),
+                style: typography.labelLarge.copyWith(fontWeight: FontWeight.bold),
               ),
             ),
             IconButton(
-              icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
+              icon: Icon(Icons.copy, size: 16, color: colors.primary),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
               onPressed: () => _copiarOrdem(ordem.ordem),
               tooltip: 'Copiar ordem',
             ),
-            if (isProgramada && tarefaStatus != null && statusColor != null)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: statusColor,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.task, color: Colors.white, size: 14),
-                    const SizedBox(width: 4),
-                    Text(
-                      tarefaStatus,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
+            if (isProgramada && tarefaStatus != null)
+              Padding(
+                padding: const EdgeInsets.only(left: 8),
+                child: TFStatusBadge(
+                  label: tarefaStatus,
+                  severity: _getTaskStatusSeverity(tarefaStatus),
+                  icon: Icons.task_alt,
                 ),
               ),
           ],
@@ -2225,6 +2279,7 @@ class _OrdemViewState extends State<OrdemView> {
             if (ordem.textoBreve != null)
               Text(
                 ordem.textoBreve!,
+                style: typography.bodyMedium,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -2232,17 +2287,15 @@ class _OrdemViewState extends State<OrdemView> {
               const SizedBox(height: 4),
               InkWell(
                 onTap: () => _navegarParaTarefa(tarefa['id'] as String?),
-                borderRadius: BorderRadius.circular(4),
+                borderRadius: BorderRadius.circular(TFRadius.r4),
                 child: Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: statusColor != null 
-                        ? statusColor.withOpacity(0.15)
-                        : Colors.blue[50],
-                    borderRadius: BorderRadius.circular(4),
+                    color: colors.primary.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(TFRadius.r4),
                     border: Border.all(
-                      color: statusColor ?? Colors.blue[200]!,
-                      width: 1.5,
+                      color: colors.primary.withValues(alpha: 0.3),
+                      width: 1,
                     ),
                   ),
                   child: Row(
@@ -2250,16 +2303,16 @@ class _OrdemViewState extends State<OrdemView> {
                     children: [
                       Icon(
                         Icons.open_in_new,
-                        size: 16,
-                        color: statusColor ?? Colors.blue[700],
+                        size: 14,
+                        color: colors.primary,
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 6),
                       Flexible(
                         child: Text(
                           tarefa['tarefa']?.toString() ?? '-',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w500,
-                            color: statusColor ?? Colors.blue[700],
+                          style: typography.labelMedium.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: colors.primary,
                             decoration: TextDecoration.underline,
                           ),
                           maxLines: 1,
@@ -2271,46 +2324,38 @@ class _OrdemViewState extends State<OrdemView> {
                 ),
               ),
             ],
-            const SizedBox(height: 4),
-            Row(
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 if (ordem.inicioBase != null)
                   Text(
                     'Início: ${_formatDate(ordem.inicioBase!)}',
-                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                    style: typography.labelSmall.copyWith(color: colors.textSecondary),
                   ),
-                if (ordem.statusSistema != null) ...[
-                  const SizedBox(width: 16),
+                if (ordem.statusSistema != null)
+                  TFStatusBadge(
+                    label: ordem.statusSistema!,
+                    severity: _getSystemStatusSeverity(ordem.statusSistema),
+                  ),
+                if (ordem.local != null && ordem.local!.isNotEmpty)
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                     decoration: BoxDecoration(
-                      color: _getStatusColor(ordem.statusSistema),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(
-                      ordem.statusSistema!,
-                      style: const TextStyle(color: Colors.white, fontSize: 10),
-                    ),
-                  ),
-                ],
-                if (ordem.local != null && ordem.local!.isNotEmpty) ...[
-                  const SizedBox(width: 16),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: _getLocalColor(ordem.local),
-                      borderRadius: BorderRadius.circular(4),
+                      color: colors.surfaceSecondary,
+                      borderRadius: BorderRadius.circular(TFRadius.r4),
+                      border: Border.all(color: colors.borderSubtle),
                     ),
                     child: Text(
                       ordem.local!,
-                      style: TextStyle(
-                        color: _getLocalTextColor(_getLocalColor(ordem.local)),
-                        fontSize: 10,
+                      style: typography.labelSmall.copyWith(
+                        color: colors.textPrimary,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
                   ),
-                ],
               ],
             ),
           ],
@@ -2341,12 +2386,13 @@ class _OrdemViewState extends State<OrdemView> {
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
                     ElevatedButton.icon(
-                      onPressed: () => _criarTarefaDaOrdem(ordem),
+                      onPressed: _canEditTasks ? () => _criarTarefaDaOrdem(ordem) : null,
                       icon: const Icon(Icons.add_task, size: 18),
                       label: const Text('Criar Tarefa'),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green,
-                        foregroundColor: Colors.white,
+                        backgroundColor: colors.success,
+                        foregroundColor: colors.surface,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(TFRadius.r8)),
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -2355,15 +2401,17 @@ class _OrdemViewState extends State<OrdemView> {
                           ? null 
                           : () => _vincularOrdemATarefaExistente(ordem),
                       icon: _ordensVinculando.contains(ordem.id)
-                          ? const SizedBox(
+                          ? SizedBox(
                               width: 18,
                               height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
+                              child: CircularProgressIndicator(strokeWidth: 2, color: colors.primary),
                             )
                           : const Icon(Icons.link, size: 18),
                       label: const Text('Vincular a Tarefa'),
                       style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.blue,
+                        foregroundColor: colors.primary,
+                        side: BorderSide(color: colors.borderSubtle),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(TFRadius.r8)),
                       ),
                     ),
                   ],
@@ -2587,16 +2635,6 @@ class _OrdemViewState extends State<OrdemView> {
     );
   }
 
-  Color _getStatusColor(String? status) {
-    if (status == null) return Colors.grey;
-    if (status.contains('ABER')) return Colors.orange;
-    if (status.contains('CAPC')) return Colors.blue;
-    if (status.contains('DMNV')) return Colors.red;
-    if (status.contains('ERRD')) return Colors.red;
-    if (status.contains('SCDM')) return Colors.green;
-    return Colors.grey;
-  }
-
   Color _getLocalColor(String? local) {
     if (local == null || local.isEmpty) return Colors.grey[300]!;
     
@@ -2710,6 +2748,59 @@ class _OrdemViewState extends State<OrdemView> {
     });
   }
 
+  TFStatusSeverity _getSystemStatusSeverity(String? status) {
+    if (status == null) return TFStatusSeverity.neutral;
+    final s = status.toUpperCase();
+    if (s.contains('ENCE') || s.contains('ENTE') || s.contains('CONC') || s.contains('SCDM')) {
+      return TFStatusSeverity.success;
+    }
+    if (s.contains('EXEC') || s.contains('CAPC')) {
+      return TFStatusSeverity.info;
+    }
+    if (s.contains('ABER')) {
+      return TFStatusSeverity.warning;
+    }
+    if (s.contains('DMNV') || s.contains('ERRD') || s.contains('CANC')) {
+      return TFStatusSeverity.danger;
+    }
+    return TFStatusSeverity.neutral;
+  }
+
+  TFStatusSeverity _getTaskStatusSeverity(String? status) {
+    if (status == null) return TFStatusSeverity.neutral;
+    switch (status.toUpperCase()) {
+      case 'CONC':
+      case 'CONCLUÍDA':
+        return TFStatusSeverity.success;
+      case 'ANDA':
+      case 'EM ANDAMENTO':
+      case 'EXEC':
+      case 'PROG':
+        return TFStatusSeverity.info;
+      case 'RPAR':
+      case 'PENDENTE':
+      case 'ABER':
+        return TFStatusSeverity.warning;
+      case 'CANC':
+      case 'CANCELADA':
+        return TFStatusSeverity.neutral;
+      default:
+        return TFStatusSeverity.neutral;
+    }
+  }
+
+  TFStatusSeverity _getPrazoSeverity(DateTime? prazo) {
+    if (prazo == null) return TFStatusSeverity.neutral;
+    final hoje = DateTime.now();
+    final hojeSemHora = DateTime(hoje.year, hoje.month, hoje.day);
+    final prazoSemHora = DateTime(prazo.year, prazo.month, prazo.day);
+    final diasRestantes = prazoSemHora.difference(hojeSemHora).inDays;
+    if (diasRestantes <= 0) return TFStatusSeverity.danger;
+    if (diasRestantes <= 30) return TFStatusSeverity.danger;
+    if (diasRestantes <= 90) return TFStatusSeverity.warning;
+    return TFStatusSeverity.info;
+  }
+
   Widget _buildPrazoBadge(Ordem ordem) {
     if (ordem.tolerancia == null) {
       return const Text('-', style: TextStyle(color: Colors.grey));
@@ -2721,27 +2812,11 @@ class _OrdemViewState extends State<OrdemView> {
     final prazoSemHora = DateTime(prazo.year, prazo.month, prazo.day);
 
     final diasRestantes = prazoSemHora.difference(hojeSemHora).inDays;
-
-    Color badgeColor;
-    Color textColor;
-
-    if (diasRestantes <= 0) {
-      badgeColor = Colors.black;
-      textColor = Colors.white;
-    } else if (diasRestantes <= 30) {
-      badgeColor = Colors.red;
-      textColor = Colors.white;
-    } else if (diasRestantes <= 90) {
-      badgeColor = Colors.yellow[700] ?? Colors.amber;
-      textColor = Colors.black;
-    } else {
-      badgeColor = Colors.blue;
-      textColor = Colors.white;
-    }
+    final severity = _getPrazoSeverity(prazo);
 
     String diasLabel;
     if (diasRestantes < 0) {
-      diasLabel = '$diasRestantes dias';
+      diasLabel = '${diasRestantes.abs()}d atrasada';
     } else if (diasRestantes == 0) {
       diasLabel = 'Vence hoje';
     } else if (diasRestantes == 1) {
@@ -2750,51 +2825,14 @@ class _OrdemViewState extends State<OrdemView> {
       diasLabel = '$diasRestantes dias';
     }
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: badgeColor,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            Icons.calendar_today,
-            size: 14,
-            color: textColor,
-          ),
-          const SizedBox(width: 4),
-          Text(
-            _formatDate(prazoSemHora),
-            style: TextStyle(
-              color: textColor,
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(width: 6),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              diasLabel,
-              style: const TextStyle(
-                color: Colors.black,
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-        ],
-      ),
+    return TFStatusBadge(
+      label: '${_formatDate(prazoSemHora)} ($diasLabel)',
+      severity: severity,
+      icon: Icons.calendar_today,
     );
   }
 
-  // Tabela: fonte cabeçalho/dados e larguras (ajuste aqui para reduzir/aumentar)
+  // Tabela: fonte cabeçalho/dados e larguras
   static const double _kTableHeaderFontSize = 11;
   static const double _kTableDataFontSize = 10;
   static const double _wTarefaVinculada = 200;
@@ -2803,6 +2841,7 @@ class _OrdemViewState extends State<OrdemView> {
   static const double _wLocalInstalacao = 170;
 
   DataColumn _sortableColumn(String title, String columnKey, TextStyle headerStyle) {
+    final colors = context.tfColors;
     final isActive = _sortColumn == columnKey || (_sortColumn == null && columnKey == 'Tolerância');
     return DataColumn(
       tooltip: 'Clique para ordenar por $title',
@@ -2816,7 +2855,7 @@ class _OrdemViewState extends State<OrdemView> {
                 ? (_ordenacaoAscendente ? Icons.arrow_upward : Icons.arrow_downward)
                 : Icons.unfold_more,
             size: 14,
-            color: isActive ? Theme.of(context).colorScheme.primary : Colors.grey,
+            color: isActive ? colors.primary : colors.textSecondary.withValues(alpha: 0.5),
           ),
         ],
       ),
@@ -2831,14 +2870,132 @@ class _OrdemViewState extends State<OrdemView> {
     );
   }
 
+
+  Task _convertOrdemToTask(Ordem ordem) {
+    final listVinc = _ordensProgramadasInfo[ordem.id];
+    final programadaInfo = listVinc?.isNotEmpty == true ? listVinc!.first : null;
+    final tarefaVinc = programadaInfo?['tarefa'] as Map<String, dynamic>?;
+
+    final id = tarefaVinc?['id'] as String? ?? 'simulado_${ordem.id}';
+    final status = tarefaVinc?['status'] as String? ?? 'ANDA';
+    final regional = tarefaVinc?['regional'] as String? ?? '';
+    final divisao = tarefaVinc?['divisao'] as String? ?? '';
+    final tipo = tarefaVinc?['tipo'] as String? ?? ordem.tipo ?? 'MANU';
+    final nomeTarefa = tarefaVinc?['tarefa'] as String? ?? ordem.textoBreve ?? 'Ordem ${ordem.ordem}';
+    final coordenador = tarefaVinc?['coordenador'] as String? ?? '';
+
+    DateTime inicio = DateTime.now();
+    if (tarefaVinc?['data_inicio'] != null) {
+      if (tarefaVinc!['data_inicio'] is String) {
+        inicio = DateTime.parse(tarefaVinc['data_inicio'] as String);
+      } else {
+        inicio = tarefaVinc['data_inicio'] as DateTime;
+      }
+    } else {
+      inicio = ordem.inicioBase ?? DateTime.now();
+    }
+
+    DateTime fim = DateTime.now().add(const Duration(days: 1));
+    if (tarefaVinc?['data_fim'] != null) {
+      if (tarefaVinc!['data_fim'] is String) {
+        fim = DateTime.parse(tarefaVinc['data_fim'] as String);
+      } else {
+        fim = tarefaVinc['data_fim'] as DateTime;
+      }
+    } else {
+      fim = ordem.fimBase ?? ordem.tolerancia ?? DateTime.now().add(const Duration(days: 1));
+    }
+
+    return Task(
+      id: id,
+      status: status,
+      regional: regional,
+      divisao: divisao,
+      tipo: tipo,
+      tarefa: nomeTarefa,
+      coordenador: coordenador,
+      dataInicio: inicio,
+      dataFim: fim,
+      ordem: ordem.ordem,
+      locais: [if (ordem.local != null && ordem.local!.isNotEmpty) ordem.local!],
+    );
+  }
+
+  Widget _buildSplitTabelaGanttView() {
+    final List<Task> tasksForGantt = _ordens.map((o) => _convertOrdemToTask(o)).toList();
+
+    DateTime ganttStartDate = DateTime.now().subtract(const Duration(days: 7));
+    DateTime ganttEndDate = DateTime.now().add(const Duration(days: 30));
+
+    if (_ordens.isNotEmpty) {
+      DateTime? minDate;
+      DateTime? maxDate;
+      for (final ordem in _ordens) {
+        final listVinc = _ordensProgramadasInfo[ordem.id];
+        final programadaInfo = listVinc?.isNotEmpty == true ? listVinc!.first : null;
+        final tarefaVinc = programadaInfo?['tarefa'] as Map<String, dynamic>?;
+
+        DateTime? inicio = ordem.inicioBase;
+        if (tarefaVinc?['data_inicio'] != null) {
+          inicio = tarefaVinc!['data_inicio'] is String
+              ? DateTime.parse(tarefaVinc['data_inicio'] as String)
+              : tarefaVinc['data_inicio'] as DateTime;
+        }
+
+        DateTime? fim = ordem.fimBase ?? ordem.tolerancia;
+        if (tarefaVinc?['data_fim'] != null) {
+          fim = tarefaVinc!['data_fim'] is String
+              ? DateTime.parse(tarefaVinc['data_fim'] as String)
+              : tarefaVinc['data_fim'] as DateTime;
+        }
+
+        if (inicio != null) {
+          if (minDate == null || inicio.isBefore(minDate)) minDate = inicio;
+        }
+        if (fim != null) {
+          if (maxDate == null || fim.isAfter(maxDate)) maxDate = fim;
+        }
+      }
+      if (minDate != null) ganttStartDate = minDate.subtract(const Duration(days: 2));
+      if (maxDate != null) ganttEndDate = maxDate.add(const Duration(days: 5));
+    }
+
+    return ResizablePanel(
+      initialLeftWidth: MediaQuery.of(context).size.width * 0.5,
+      minLeftWidth: 200,
+      minRightWidth: 200,
+      leftChild: _buildTabelaView(),
+      rightChild: GanttChart(
+        key: ValueKey('gantt_chart_ordens_${tasksForGantt.length}_${_ganttScale}'),
+        tasks: tasksForGantt,
+        startDate: ganttStartDate,
+        endDate: ganttEndDate,
+        scale: _ganttScale,
+        onScaleChanged: (v) => setState(() => _ganttScale = v),
+        scrollController: _ganttVerticalScrollController,
+      ),
+    );
+  }
+
   Widget _buildTabelaView() {
-    const headerStyle = TextStyle(fontWeight: FontWeight.bold, fontSize: _kTableHeaderFontSize);
-    const dataStyle = TextStyle(fontSize: _kTableDataFontSize);
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final headerStyle = typography.labelMedium.copyWith(
+      fontWeight: FontWeight.bold,
+      fontSize: _kTableHeaderFontSize,
+      color: colors.textPrimary,
+    );
+    final dataStyle = typography.bodySmall.copyWith(
+      fontSize: _kTableDataFontSize,
+      color: colors.textPrimary,
+    );
+
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: SingleChildScrollView(
+        controller: _tableVerticalScrollController,
         child: DataTable(
-          headingRowColor: WidgetStateProperty.all(Colors.blue[50]),
+          headingRowColor: WidgetStateProperty.all(colors.surfaceSecondary),
           columns: [
             DataColumn(
               label: Checkbox(
@@ -2877,14 +3034,13 @@ class _OrdemViewState extends State<OrdemView> {
             final programadaInfo = programadasList?.isNotEmpty == true ? programadasList!.first : null;
             final tarefa = programadaInfo?['tarefa'] as Map<String, dynamic>?;
             final tarefaStatus = tarefa?['status'] as String?;
-            final statusColor = tarefaStatus != null ? _getTaskStatusColor(tarefaStatus) : null;
             final totalVinculacoes = programadasList?.length ?? 0;
-            
             final isSelected = _ordensSelecionadas.contains(ordem.id);
+
             return DataRow(
               selected: isSelected,
-              color: isProgramada && statusColor != null
-                  ? WidgetStateProperty.all(statusColor.withOpacity(0.1))
+              color: isProgramada
+                  ? WidgetStateProperty.all(colors.primary.withValues(alpha: 0.04))
                   : null,
               cells: [
                 DataCell(
@@ -2906,25 +3062,49 @@ class _OrdemViewState extends State<OrdemView> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Tooltip(
+                        message: 'Ver Detalhes',
+                        child: Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: () => _mostrarDetalhesOrdem(ordem),
+                            borderRadius: BorderRadius.circular(TFRadius.r4),
+                            child: Container(
+                              padding: const EdgeInsets.all(6),
+                              decoration: BoxDecoration(
+                                color: colors.surfaceSecondary,
+                                borderRadius: BorderRadius.circular(TFRadius.r4),
+                                border: Border.all(color: colors.borderSubtle),
+                              ),
+                              child: Icon(Icons.visibility, size: 16, color: colors.primary),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Tooltip(
                         message: 'Criar Tarefa',
                         child: Material(
                           color: Colors.transparent,
                           child: InkWell(
                             onTap: _canEditTasks ? () => _criarTarefaDaOrdem(ordem) : null,
-                            borderRadius: BorderRadius.circular(4),
+                            borderRadius: BorderRadius.circular(TFRadius.r4),
                             child: Container(
-                              padding: const EdgeInsets.all(8),
+                              padding: const EdgeInsets.all(6),
                               decoration: BoxDecoration(
-                                color: Colors.green[50],
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(color: Colors.green[300]!),
+                                color: colors.surfaceSecondary,
+                                borderRadius: BorderRadius.circular(TFRadius.r4),
+                                border: Border.all(color: colors.borderSubtle),
                               ),
-                              child: const Icon(Icons.add_task, size: 20, color: Colors.green),
+                              child: Icon(
+                                Icons.add_task,
+                                size: 16,
+                                color: _canEditTasks ? colors.success : colors.textDisabled,
+                              ),
                             ),
                           ),
                         ),
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 6),
                       Tooltip(
                         message: 'Vincular a Tarefa',
                         child: Material(
@@ -2933,27 +3113,21 @@ class _OrdemViewState extends State<OrdemView> {
                             onTap: _ordensVinculando.contains(ordem.id)
                                 ? null
                                 : () => _vincularOrdensSelecionadas(ordem),
-                            borderRadius: BorderRadius.circular(4),
+                            borderRadius: BorderRadius.circular(TFRadius.r4),
                             child: Container(
-                              padding: const EdgeInsets.all(8),
+                              padding: const EdgeInsets.all(6),
                               decoration: BoxDecoration(
-                                color: _ordensVinculando.contains(ordem.id)
-                                    ? Colors.grey[200]
-                                    : Colors.blue[50],
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(
-                                  color: _ordensVinculando.contains(ordem.id)
-                                      ? Colors.grey[300]!
-                                      : Colors.blue[300]!,
-                                ),
+                                color: colors.surfaceSecondary,
+                                borderRadius: BorderRadius.circular(TFRadius.r4),
+                                border: Border.all(color: colors.borderSubtle),
                               ),
                               child: _ordensVinculando.contains(ordem.id)
-                                  ? const SizedBox(
-                                      width: 20,
-                                      height: 20,
-                                      child: CircularProgressIndicator(strokeWidth: 2),
+                                  ? SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(strokeWidth: 2, color: colors.primary),
                                     )
-                                  : const Icon(Icons.link, size: 20, color: Colors.blue),
+                                  : Icon(Icons.link, size: 16, color: colors.info),
                             ),
                           ),
                         ),
@@ -2962,68 +3136,36 @@ class _OrdemViewState extends State<OrdemView> {
                   ),
                 ),
                 DataCell(
-                  isProgramada && tarefaStatus != null && statusColor != null
-                      ? Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: statusColor,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.task, color: Colors.white, size: 14),
+                  isProgramada && tarefaStatus != null
+                      ? Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            TFStatusBadge(
+                              label: tarefaStatus,
+                              severity: _getTaskStatusSeverity(tarefaStatus),
+                              icon: Icons.task_alt,
+                            ),
+                            if (totalVinculacoes > 1) ...[
                               const SizedBox(width: 4),
-                              Text(
-                                tarefaStatus,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold,
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: colors.surfaceSecondary,
+                                  borderRadius: BorderRadius.circular(TFRadius.r4),
+                                  border: Border.all(color: colors.borderSubtle),
+                                ),
+                                child: Text(
+                                  '+${totalVinculacoes - 1}',
+                                  style: typography.labelSmall.copyWith(fontWeight: FontWeight.bold),
                                 ),
                               ),
-                              if (totalVinculacoes > 1) ...[
-                                const SizedBox(width: 4),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.3),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Text(
-                                    '+${totalVinculacoes - 1}',
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 9,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                              ],
                             ],
-                          ),
+                          ],
                         )
-                      : Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: Colors.grey[200],
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.cancel_outlined, color: Colors.grey[600], size: 14),
-                              const SizedBox(width: 4),
-                              Text(
-                                'Não Programada',
-                                style: TextStyle(
-                                  color: Colors.grey[700],
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
-                          ),
+                      : const TFStatusBadge(
+                          label: 'Não Programada',
+                          severity: TFStatusSeverity.neutral,
+                          icon: Icons.hourglass_empty,
                         ),
                 ),
                 DataCell(
@@ -3035,14 +3177,14 @@ class _OrdemViewState extends State<OrdemView> {
                           child: SizedBox(
                             width: _wTarefaVinculada,
                             child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
                                 Flexible(
                                   child: Text(
                                     tarefa['tarefa']?.toString() ?? '-',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.w500,
-                                      color: totalVinculacoes > 1 ? Colors.orange : Colors.blue,
+                                    style: typography.labelMedium.copyWith(
+                                      fontWeight: FontWeight.w600,
+                                      color: colors.primary,
                                       decoration: TextDecoration.underline,
                                     ),
                                     maxLines: 1,
@@ -3054,16 +3196,12 @@ class _OrdemViewState extends State<OrdemView> {
                                   Container(
                                     padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                                     decoration: BoxDecoration(
-                                      color: Colors.orange,
-                                      borderRadius: BorderRadius.circular(8),
+                                      color: colors.primary,
+                                      borderRadius: BorderRadius.circular(TFRadius.r4),
                                     ),
                                     child: Text(
                                       '$totalVinculacoes',
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 9,
-                                        fontWeight: FontWeight.bold,
-                                      ),
+                                      style: typography.labelSmall.copyWith(color: Colors.white, fontWeight: FontWeight.bold),
                                     ),
                                   ),
                                 ],
@@ -3071,7 +3209,7 @@ class _OrdemViewState extends State<OrdemView> {
                             ),
                           ),
                         )
-                      : Text('-', style: dataStyle.copyWith(color: Colors.grey)),
+                      : Text('-', style: dataStyle.copyWith(color: colors.textSecondary)),
                 ),
                 DataCell(
                   Builder(
@@ -3082,22 +3220,22 @@ class _OrdemViewState extends State<OrdemView> {
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                         decoration: BoxDecoration(
                           color: localColor,
-                          borderRadius: BorderRadius.circular(4),
+                          borderRadius: BorderRadius.circular(TFRadius.r4),
                           border: Border.all(
-                            color: ordem.local != null && ordem.local!.isNotEmpty 
-                                ? localColor.withOpacity(0.8)
-                                : Colors.grey[300]!,
-                            width: 1.5,
+                            color: (ordem.local != null && ordem.local!.isNotEmpty)
+                                ? localColor.withValues(alpha: 0.8)
+                                : colors.borderSubtle,
+                            width: 1,
                           ),
                         ),
                         child: Text(
                           ordem.local ?? '-',
                           style: TextStyle(
-                            fontSize: _kTableDataFontSize,
-                            fontWeight: ordem.local != null && ordem.local!.isNotEmpty 
-                                ? FontWeight.bold 
+                            fontWeight: (ordem.local != null && ordem.local!.isNotEmpty)
+                                ? FontWeight.bold
                                 : FontWeight.normal,
                             color: textColor,
+                            fontSize: 11,
                           ),
                         ),
                       );
@@ -3124,15 +3262,19 @@ class _OrdemViewState extends State<OrdemView> {
                         onTap: () => _mostrarDetalhesOrdem(ordem),
                         child: Text(
                           ordem.ordem,
-                          style: dataStyle.copyWith(fontWeight: FontWeight.bold, decoration: TextDecoration.underline),
+                          style: dataStyle.copyWith(
+                            fontWeight: FontWeight.bold,
+                            color: colors.primary,
+                            decoration: TextDecoration.underline,
+                          ),
                         ),
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 6),
                       Material(
                         type: MaterialType.transparency,
                         child: InkWell(
                           onTap: () => _copiarOrdem(ordem.ordem),
-                        child: const Icon(Icons.copy, size: 16, color: Colors.blue),
+                          child: Icon(Icons.copy, size: 14, color: colors.primary),
                         ),
                       ),
                     ],
@@ -3140,10 +3282,11 @@ class _OrdemViewState extends State<OrdemView> {
                 ),
                 DataCell(
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
-                      color: Colors.grey[300],
-                      borderRadius: BorderRadius.circular(4),
+                      color: colors.surfaceSecondary,
+                      borderRadius: BorderRadius.circular(TFRadius.r4),
+                      border: Border.all(color: colors.borderSubtle),
                     ),
                     child: Text(ordem.tipo ?? '-', style: dataStyle),
                   ),
@@ -3161,17 +3304,12 @@ class _OrdemViewState extends State<OrdemView> {
                 ),
                 DataCell(_buildPrazoBadge(ordem)),
                 DataCell(
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: _getStatusColor(ordem.statusSistema),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(
-                      ordem.statusSistema ?? '-',
-                      style: TextStyle(color: Colors.white, fontSize: _kTableDataFontSize),
-                    ),
-                  ),
+                  ordem.statusSistema != null
+                      ? TFStatusBadge(
+                          label: ordem.statusSistema!,
+                          severity: _getSystemStatusSeverity(ordem.statusSistema),
+                        )
+                      : Text('-', style: dataStyle),
                 ),
                 DataCell(
                   Text(ordem.statusUsuario ?? '-', style: dataStyle),
@@ -3205,16 +3343,25 @@ class _OrdemViewState extends State<OrdemView> {
   }
 
   void _mostrarDetalhesOrdem(Ordem ordem) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
+        backgroundColor: colors.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(TFRadius.r12),
+        ),
         title: Row(
           children: [
             Expanded(
-              child: Text('Detalhes da Ordem: ${ordem.ordem}'),
+              child: Text(
+                'Detalhes da Ordem: ${ordem.ordem}',
+                style: typography.sectionTitle,
+              ),
             ),
             IconButton(
-              icon: const Icon(Icons.copy, size: 18, color: Colors.blue),
+              icon: Icon(Icons.copy, size: 18, color: colors.primary),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
               onPressed: () => _copiarOrdem(ordem.ordem),
@@ -3250,7 +3397,7 @@ class _OrdemViewState extends State<OrdemView> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Fechar'),
+            child: Text('Fechar', style: TextStyle(color: colors.primary)),
           ),
         ],
       ),

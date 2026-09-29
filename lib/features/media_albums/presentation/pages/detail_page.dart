@@ -5,6 +5,14 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/material.dart';
 import 'package:photo_view/photo_view.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import '../../../../design_system/components/buttons/tf_button.dart';
+import '../../../../design_system/components/buttons/tf_icon_button.dart';
+import '../../../../design_system/components/dialogs/tf_modal_dialog.dart';
+import '../../../../design_system/components/feedback/tf_empty_state.dart';
+import '../../../../design_system/components/feedback/tf_loading.dart';
+import '../../../../design_system/foundations/tf_icons.dart';
+import '../../../../design_system/foundations/tf_radius.dart';
+import '../../../../design_system/theme/taskflow_theme_extension.dart';
 import '../../data/models/media_image.dart';
 import '../../data/repositories/supabase_media_repository.dart';
 import '../../application/controllers/annotation_controller.dart';
@@ -39,15 +47,12 @@ class _DetailPageState extends State<DetailPage> {
   bool _isFullscreen = false;
 
   bool _annotationMode = false;
-  /// Exibir por padrão a imagem com anotações quando existir.
   bool _showAnnotated = true;
-  /// URL usada no canvas de anotação (pública ou assinada, para não depender de fileUrl expirada).
   String? _annotationImageUrl;
   bool _isSavingAnnotations = false;
   AnnotationController? _annotationController;
   final GlobalKey _annotationRepaintKey = GlobalKey();
 
-  /// URL da imagem atualmente exibida: com anotações ou original conforme _showAnnotated.
   String? get _displayImageUrl {
     if (_image == null) return null;
     if (_showAnnotated && _image!.annotatedFileUrl != null) return _image!.annotatedFileUrl;
@@ -69,7 +74,6 @@ class _DetailPageState extends State<DetailPage> {
 
   Future<void> _openAnnotationMode() async {
     if (_image == null) return;
-    // Obter URL válida para o canvas (fileUrl do banco pode estar expirada)
     String? urlToUse;
     try {
       urlToUse = await _repository.getSignedUrl(_image!.filePath, expiresIn: 3600);
@@ -131,7 +135,7 @@ class _DetailPageState extends State<DetailPage> {
         _closeAnnotationMode();
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Anotações salvas. PNG exportado.'),
+            content: Text('Anotações salvas com sucesso.'),
             backgroundColor: Colors.green,
           ),
         );
@@ -157,31 +161,27 @@ class _DetailPageState extends State<DetailPage> {
       builder: (context) {
         final controller = TextEditingController();
         return AlertDialog(
-          title: const Text('Texto'),
+          title: const Text('Texto da Anotação'),
           content: TextField(
             controller: controller,
             autofocus: true,
-            decoration: const InputDecoration(
-              hintText: 'Digite o texto',
-              border: OutlineInputBorder(),
-            ),
-            maxLines: 3,
+            decoration: const InputDecoration(hintText: 'Digite a observação...'),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
               child: const Text('Cancelar'),
             ),
-            FilledButton(
+            TextButton(
               onPressed: () => Navigator.pop(context, controller.text),
-              child: const Text('OK'),
+              child: const Text('Adicionar'),
             ),
           ],
         );
       },
     );
     if (text != null && text.trim().isNotEmpty) {
-      _annotationController!.addTextAt(position, text);
+      _annotationController!.addTextAt(position, text.trim());
     }
   }
 
@@ -216,20 +216,24 @@ class _DetailPageState extends State<DetailPage> {
     if (updated != null) {
       try {
         await _repository.updateMediaImage(updated);
-        _loadImage(); // Recarregar
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Imagem atualizada com sucesso!'),
-            backgroundColor: Colors.green,
-          ),
-        );
+        _loadImage();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Metadados da imagem atualizados!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
       } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Erro ao atualizar: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Erro ao atualizar: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
       }
     }
   }
@@ -237,48 +241,30 @@ class _DetailPageState extends State<DetailPage> {
   Future<void> _deleteImage() async {
     if (_image == null) return;
 
-    final confirmed = await showDialog<bool>(
+    final confirmed = await TFModalDialog.confirm(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Confirmar exclusão'),
-        content: const Text(
-          'Tem certeza que deseja excluir esta imagem? Esta ação não pode ser desfeita.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(
-              foregroundColor: Theme.of(context).colorScheme.error,
-            ),
-            child: const Text('Excluir'),
-          ),
-        ],
-      ),
+      title: 'Excluir Imagem',
+      message: 'Tem certeza que deseja excluir esta imagem permanentemente? Esta ação não pode ser desfeita.',
+      confirmLabel: 'Excluir Imagem',
+      isDestructive: true,
     );
 
     if (confirmed == true) {
       try {
-        // Deletar do storage
         await _repository.deleteFile(_image!.filePath);
         if (_image!.thumbPath != null) {
           await _repository.deleteFile(_image!.thumbPath!);
         }
-
-        // Deletar do banco
         await _repository.deleteMediaImage(_image!.id);
 
         if (mounted) {
-          Navigator.of(context).pop(true); // Retornar true indica que foi deletada
+          Navigator.of(context).pop(true);
         }
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Erro ao deletar: $e'),
+              content: Text('Erro ao deletar imagem: $e'),
               backgroundColor: Colors.red,
             ),
           );
@@ -293,7 +279,6 @@ class _DetailPageState extends State<DetailPage> {
     try {
       if (Theme.of(context).platform == TargetPlatform.iOS ||
           Theme.of(context).platform == TargetPlatform.android) {
-        // Baixar bytes e compartilhar como arquivo para apps que não pré-visualizam links
         try {
           final resp = await http.get(Uri.parse(_displayImageUrl!));
           if (resp.statusCode == 200 && resp.bodyBytes.isNotEmpty) {
@@ -305,99 +290,78 @@ class _DetailPageState extends State<DetailPage> {
             await Share.shareXFiles([file], text: widget.imageId);
             return;
           }
-        } catch (_) {
-          // fallback abaixo
-        }
-        // Fallback: compartilhar link se não conseguir baixar
+        } catch (_) {}
         await Share.share(_displayImageUrl!);
       } else {
-        // Web: abrir URL
         final uri = Uri.parse(_displayImageUrl!);
         if (await canLaunchUrl(uri)) {
           await launchUrl(uri);
         }
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Erro ao compartilhar: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erro ao compartilhar: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
+    final colors = context.tfColors;
     final width = MediaQuery.of(context).size.width;
-    final isMobile = width < 600;
+    final isMobile = width < 768;
 
     if (_isLoading) {
       return Scaffold(
-        backgroundColor: isDark ? const Color(0xFF0f172a) : const Color(0xFFf8fafc),
-        body: Center(child: CircularProgressIndicator(color: const Color(0xFF1e40af))),
+        backgroundColor: colors.background,
+        body: const Center(child: TFLoading(message: 'Carregando foto e anotações...')),
       );
     }
 
     if (_error != null || _image == null) {
       return Scaffold(
-        backgroundColor: isDark ? const Color(0xFF0f172a) : const Color(0xFFf8fafc),
+        backgroundColor: colors.background,
         body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                Icons.error_outline_rounded,
-                size: 48,
-                color: theme.colorScheme.error,
-              ),
-              const SizedBox(height: 16),
-              Text(
-                _error ?? 'Imagem não encontrada',
-                style: theme.textTheme.bodyLarge?.copyWith(
-                  color: theme.colorScheme.error,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: _loadImage,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF1e40af),
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                ),
-                child: const Text('Tentar novamente'),
-              ),
-            ],
+          child: TFEmptyState(
+            title: 'Imagem não encontrada',
+            description: _error ?? 'Não foi possível carregar os dados desta imagem.',
+            icon: TFIcons.warning,
+            action: TFButton(
+              label: 'Tentar Novamente',
+              leadingIcon: TFIcons.refresh,
+              onPressed: _loadImage,
+            ),
           ),
         ),
       );
     }
 
     if (_annotationMode && _annotationController != null && (_annotationImageUrl != null || _image?.fileUrl != null)) {
-      return _buildAnnotationView(context, theme, isDark, isMobile);
+      return _buildAnnotationView(context, isMobile);
     }
 
     if (_isFullscreen) {
       return Scaffold(
         backgroundColor: Colors.black,
-        body: _buildFullscreenViewer(theme, isDark),
+        body: _buildFullscreenViewer(),
       );
     }
 
     return Scaffold(
-      backgroundColor: isDark ? const Color(0xFF0f172a) : const Color(0xFFf8fafc),
+      backgroundColor: colors.background,
       body: SafeArea(
         child: Column(
           children: [
-            _buildHeader(context, theme, isDark, isMobile),
+            _buildHeader(context, isMobile),
             Expanded(
               child: isMobile
-                  ? _buildMobileLayout(context, theme, isDark)
-                  : _buildDesktopLayout(context, theme, isDark),
+                  ? _buildMobileLayout(context)
+                  : _buildDesktopLayout(context),
             ),
           ],
         ),
@@ -405,11 +369,16 @@ class _DetailPageState extends State<DetailPage> {
     );
   }
 
-  Widget _buildAnnotationView(BuildContext context, ThemeData theme, bool isDark, bool isMobile) {
+  Widget _buildAnnotationView(BuildContext context, bool isMobile) {
+    final colors = context.tfColors;
+
     return Scaffold(
-      backgroundColor: isDark ? const Color(0xFF0f172a) : const Color(0xFFf8fafc),
+      backgroundColor: colors.background,
       appBar: AppBar(
-        title: const Text('Editar / Anotar'),
+        title: const Text('Editar / Anotar Imagem'),
+        backgroundColor: colors.surface,
+        foregroundColor: colors.textPrimary,
+        elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.close_rounded),
           onPressed: _closeAnnotationMode,
@@ -425,8 +394,6 @@ class _DetailPageState extends State<DetailPage> {
               onTextTap: _showTextAnnotationDialog,
             ),
           ),
-          // Altura fixa para a barra de edição evita que o quadro da imagem mude de tamanho
-          // ao selecionar (e exibir "Editar seleção" / "Editar texto"), eliminando o deslocamento.
           SizedBox(
             height: 280,
             child: SingleChildScrollView(
@@ -444,53 +411,42 @@ class _DetailPageState extends State<DetailPage> {
     );
   }
 
-  Widget _buildHeader(BuildContext context, ThemeData theme, bool isDark, bool isMobile) {
-    final shortTitle = _image!.title.length > 40
-        ? '${_image!.title.substring(0, 40)}...'
+  Widget _buildHeader(BuildContext context, bool isMobile) {
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+    final typography = context.tfTypography;
+
+    final shortTitle = _image!.title.length > 35
+        ? '${_image!.title.substring(0, 35)}...'
         : _image!.title;
-    final headerPadding = MediaQuery.of(context).size.width < 600 ? 12.0 : (MediaQuery.of(context).size.width < 1024 ? 16.0 : 24.0);
+
     return Container(
-      height: 64,
-      padding: EdgeInsets.symmetric(horizontal: headerPadding),
+      padding: EdgeInsets.symmetric(horizontal: spacing.md, vertical: spacing.xs),
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1e293b) : Colors.white,
-        border: Border(
-          bottom: BorderSide(
-            color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-            width: 1,
-          ),
-        ),
+        color: colors.surface,
+        border: Border(bottom: BorderSide(color: colors.borderSubtle)),
       ),
       child: Row(
         children: [
-          IconButton(
+          TFIconButton(
+            icon: Icons.arrow_back_rounded,
+            tooltip: 'Voltar',
             onPressed: () => Navigator.of(context).pop(),
-            icon: Icon(
-              Icons.arrow_back_rounded,
-              color: isDark ? Colors.grey[400] : Colors.grey[600],
-            ),
-            style: IconButton.styleFrom(
-              backgroundColor: Colors.transparent,
-            ),
           ),
-          const SizedBox(width: 16),
+          SizedBox(width: spacing.sm),
           Expanded(
             child: Text(
-              'Detalhes da Imagem: $shortTitle',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-                color: isDark ? Colors.white : const Color(0xFF1e293b),
-              ),
+              shortTitle,
+              style: typography.cardTitle.copyWith(color: colors.textPrimary),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
           ),
-          if (_image!.annotatedFileUrl != null) ...[
+          if (_image!.annotatedFileUrl != null && !isMobile) ...[
             SegmentedButton<bool>(
               segments: const [
-                ButtonSegment(value: true, label: Text('Com anotações'), icon: Icon(Icons.draw_rounded, size: 18)),
-                ButtonSegment(value: false, label: Text('Sem anotações'), icon: Icon(Icons.image_rounded, size: 18)),
+                ButtonSegment(value: true, label: Text('Com anotações'), icon: Icon(Icons.draw_rounded, size: 16)),
+                ButtonSegment(value: false, label: Text('Original'), icon: Icon(Icons.image_rounded, size: 16)),
               ],
               selected: {_showAnnotated},
               onSelectionChanged: (Set<bool> selected) {
@@ -498,149 +454,100 @@ class _DetailPageState extends State<DetailPage> {
               },
               style: ButtonStyle(
                 visualDensity: VisualDensity.compact,
-                padding: WidgetStateProperty.all(const EdgeInsets.symmetric(horizontal: 10, vertical: 6)),
+                textStyle: WidgetStateProperty.all(typography.caption),
               ),
             ),
-            const SizedBox(width: 12),
+            SizedBox(width: spacing.sm),
           ],
-          _headerAction(context, Icons.share_rounded, 'Compartilhar', _shareImage, isDark, isMobile),
-          _headerAction(context, Icons.draw_rounded, 'Editar / Anotar', _openAnnotationMode, isDark, isMobile),
-          _headerAction(context, Icons.edit_rounded, 'Editar', _editImage, isDark, isMobile),
-          Container(
-            width: 1,
-            height: 24,
-            margin: const EdgeInsets.symmetric(horizontal: 8),
-            color: isDark ? const Color(0xFF475569) : const Color(0xFFe2e8f0),
+          TFIconButton(
+            icon: Icons.share_rounded,
+            tooltip: 'Compartilhar',
+            onPressed: _shareImage,
           ),
-          InkWell(
-            onTap: _deleteImage,
-            borderRadius: BorderRadius.circular(8),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.delete_rounded, size: 20, color: theme.colorScheme.error),
-                  if (!isMobile) ...[
-                    const SizedBox(width: 8),
-                    Text(
-                      'Excluir',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                        color: theme.colorScheme.error,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
+          TFIconButton(
+            icon: Icons.draw_rounded,
+            tooltip: 'Anotar / Desenhar',
+            onPressed: _openAnnotationMode,
+          ),
+          TFIconButton(
+            icon: TFIcons.edit,
+            tooltip: 'Editar Metadados',
+            onPressed: _editImage,
+          ),
+          TFIconButton(
+            icon: TFIcons.delete,
+            tooltip: 'Excluir Imagem',
+            onPressed: _deleteImage,
           ),
         ],
       ),
     );
   }
 
-  Widget _headerAction(
-    BuildContext context,
-    IconData icon,
-    String label,
-    VoidCallback onTap,
-    bool isDark,
-    bool isMobile,
-  ) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              icon,
-              size: 20,
-              color: isDark ? Colors.grey[400] : Colors.grey[600],
-            ),
-            if (!isMobile) ...[
-              const SizedBox(width: 8),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: isDark ? Colors.grey[400] : Colors.grey[600],
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildMobileLayout(BuildContext context, ThemeData theme, bool isDark) {
+  Widget _buildMobileLayout(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         SizedBox(
           height: MediaQuery.of(context).size.height * 0.35,
-          child: _buildImageViewer(theme, isDark),
+          child: _buildImageViewer(),
         ),
         Expanded(
-          child: _buildMetadataPanel(context, theme, isDark),
+          child: _buildMetadataPanel(context),
         ),
       ],
     );
   }
 
-  Widget _buildDesktopLayout(BuildContext context, ThemeData theme, bool isDark) {
+  Widget _buildDesktopLayout(BuildContext context) {
     final width = MediaQuery.of(context).size.width;
-    // Tablet: painel mais estreito; desktop: 384px
-    final panelWidth = width < 1024
-        ? (width * 0.42).clamp(280.0, 400.0)
-        : 384.0;
+    final panelWidth = width < 1024 ? 320.0 : 380.0;
+
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Expanded(
-          child: _buildImageViewer(theme, isDark),
+          child: _buildImageViewer(),
         ),
         SizedBox(
           width: panelWidth,
-          child: _buildMetadataPanel(context, theme, isDark),
+          child: _buildMetadataPanel(context),
         ),
       ],
     );
   }
 
-  Widget _buildImageViewer(ThemeData theme, bool isDark) {
+  Widget _buildImageViewer() {
+    final colors = context.tfColors;
+
     if (_displayImageUrl == null) {
       return Container(
-        height: MediaQuery.of(context).size.height - 64,
-        color: isDark ? const Color(0xFF020617) : const Color(0xFFe2e8f0),
+        color: colors.background,
         child: Center(
           child: Icon(
             Icons.broken_image_rounded,
             size: 64,
-            color: isDark ? Colors.grey[600] : Colors.grey[400],
+            color: colors.textSecondary,
           ),
         ),
       );
     }
 
     return _isFullscreen
-        ? _buildFullscreenViewer(theme, isDark)
-        : _buildNormalViewer(theme, isDark);
+        ? _buildFullscreenViewer()
+        : _buildNormalViewer();
   }
 
-  Widget _buildNormalViewer(ThemeData theme, bool isDark) {
+  Widget _buildNormalViewer() {
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+
     return Container(
-      color: isDark ? const Color(0xFF020617) : const Color(0xFFe2e8f0),
-      padding: const EdgeInsets.all(16),
+      color: Colors.black,
+      padding: EdgeInsets.all(spacing.sm),
       child: Center(
         child: ClipRRect(
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: TFRadius.borderRadiusMd,
           child: Stack(
             alignment: Alignment.center,
             children: [
@@ -670,32 +577,37 @@ class _DetailPageState extends State<DetailPage> {
                 ),
               ),
               Positioned(
-                bottom: 24,
-                right: 24,
-                child: Material(
-                  color: Colors.transparent,
+                bottom: spacing.md,
+                right: spacing.md,
+                child: Container(
+                  padding: EdgeInsets.all(spacing.xxs),
+                  decoration: BoxDecoration(
+                    color: colors.surface.withValues(alpha: 0.85),
+                    borderRadius: TFRadius.borderRadiusMd,
+                  ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      _zoomButton(
-                        context,
-                        Icons.zoom_in_rounded,
-                        isDark,
-                        _zoomIn,
+                      TFIconButton(
+                        icon: Icons.zoom_in_rounded,
+                        tooltip: 'Aproximar',
+                        onPressed: () {
+                          _zoomIn();
+                          setState(() {});
+                        },
                       ),
-                      const SizedBox(width: 8),
-                      _zoomButton(
-                        context,
-                        Icons.zoom_out_rounded,
-                        isDark,
-                        _zoomOut,
+                      TFIconButton(
+                        icon: Icons.zoom_out_rounded,
+                        tooltip: 'Afastar',
+                        onPressed: () {
+                          _zoomOut();
+                          setState(() {});
+                        },
                       ),
-                      const SizedBox(width: 8),
-                      _zoomButton(
-                        context,
-                        Icons.fullscreen_rounded,
-                        isDark,
-                        _enterFullscreen,
+                      TFIconButton(
+                        icon: Icons.fullscreen_rounded,
+                        tooltip: 'Tela Cheia',
+                        onPressed: _enterFullscreen,
                       ),
                     ],
                   ),
@@ -708,7 +620,9 @@ class _DetailPageState extends State<DetailPage> {
     );
   }
 
-  Widget _buildFullscreenViewer(ThemeData theme, bool isDark) {
+  Widget _buildFullscreenViewer() {
+    final spacing = context.tfSpacing;
+
     return Stack(
       children: [
         Listener(
@@ -723,8 +637,7 @@ class _DetailPageState extends State<DetailPage> {
               }
             }
           },
-          child: Container(
-            color: Colors.black,
+          child: SizedBox(
             width: double.infinity,
             height: double.infinity,
             child: PhotoView(
@@ -743,36 +656,34 @@ class _DetailPageState extends State<DetailPage> {
         ),
         SafeArea(
           child: Padding(
-            padding: const EdgeInsets.all(16),
+            padding: EdgeInsets.all(spacing.md),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 IconButton(
-                  icon: const Icon(Icons.close_rounded, color: Colors.white),
+                  icon: const Icon(Icons.close_rounded, color: Colors.white, size: 28),
                   onPressed: _exitFullscreen,
                 ),
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    _zoomButton(
-                      context,
-                      Icons.zoom_in_rounded,
-                      true,
-                      () => _zoomIn(),
+                    IconButton(
+                      icon: const Icon(Icons.zoom_in_rounded, color: Colors.white),
+                      onPressed: () {
+                        _zoomIn();
+                        setState(() {});
+                      },
                     ),
-                    const SizedBox(width: 8),
-                    _zoomButton(
-                      context,
-                      Icons.zoom_out_rounded,
-                      true,
-                      () => _zoomOut(),
+                    IconButton(
+                      icon: const Icon(Icons.zoom_out_rounded, color: Colors.white),
+                      onPressed: () {
+                        _zoomOut();
+                        setState(() {});
+                      },
                     ),
-                    const SizedBox(width: 8),
-                    _zoomButton(
-                      context,
-                      Icons.fullscreen_exit_rounded,
-                      true,
-                      () => _exitFullscreen(),
+                    IconButton(
+                      icon: const Icon(Icons.fullscreen_exit_rounded, color: Colors.white),
+                      onPressed: _exitFullscreen,
                     ),
                   ],
                 ),
@@ -812,315 +723,149 @@ class _DetailPageState extends State<DetailPage> {
     });
   }
 
-  Widget _zoomButton(
-    BuildContext context,
-    IconData icon,
-    bool isDark,
-    VoidCallback onTap,
-  ) {
-    return Material(
-      color: isDark
-          ? const Color(0xFF1e293b).withOpacity(0.9)
-          : Colors.white.withOpacity(0.9),
-      borderRadius: BorderRadius.circular(8),
-      child: InkWell(
-        onTap: () {
-          onTap();
-          setState(() {}); // Garante atualização visual após zoom
-        },
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          padding: const EdgeInsets.all(12),
-          child: Icon(
-            icon,
-            size: 20,
-            color: isDark ? Colors.grey[300] : Colors.grey[700],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildMetadataPanel(BuildContext context, ThemeData theme, bool isDark) {
+  Widget _buildMetadataPanel(BuildContext context) {
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+    final typography = context.tfTypography;
     final dateFormat = DateFormat('dd/MM/yyyy \'às\' HH:mm', 'pt_BR');
-    final width = MediaQuery.of(context).size.width;
-    final panelPadding = width < 600 ? 12.0 : (width < 1024 ? 16.0 : 24.0);
 
     return Container(
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1e293b) : Colors.white,
-        border: Border(
-          left: BorderSide(
-            color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-            width: 1,
-          ),
-        ),
+        color: colors.surface,
+        border: Border(left: BorderSide(color: colors.borderSubtle)),
       ),
       child: Column(
         children: [
           Expanded(
             child: SingleChildScrollView(
-              padding: EdgeInsets.all(panelPadding),
+              padding: EdgeInsets.all(spacing.md),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Status + ID
                   Row(
                     children: [
                       StatusBadge(
                         status: _image!.status,
                         statusAlbum: _image!.statusAlbum,
                       ),
-                      const SizedBox(width: 12),
+                      SizedBox(width: spacing.sm),
                       Text(
                         'ID: #${_image!.id.length > 8 ? _image!.id.substring(0, 8) : _image!.id}',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: isDark ? Colors.grey[500] : Colors.grey[400],
-                        ),
+                        style: typography.caption.copyWith(color: colors.textSecondary),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 12),
-                  // Título
+                  SizedBox(height: spacing.sm),
                   Text(
                     _image!.title,
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                      color: isDark ? Colors.white : const Color(0xFF1e293b),
-                      height: 1.2,
-                    ),
+                    style: typography.sectionTitle.copyWith(color: colors.textPrimary),
                   ),
-                  const SizedBox(height: 16),
-                  // Descrição (sempre visível)
+                  SizedBox(height: spacing.md),
                   Text(
                     'DESCRIÇÃO',
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 1.5,
-                      color: isDark ? Colors.grey[500] : Colors.grey[500],
+                    style: typography.caption.copyWith(
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1.2,
+                      color: colors.textSecondary,
                     ),
                   ),
-                  const SizedBox(height: 8),
+                  SizedBox(height: spacing.xxs),
                   Text(
                     _image!.description != null && _image!.description!.isNotEmpty
                         ? _image!.description!
-                        : 'Sem descrição',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: isDark ? Colors.grey[400] : Colors.grey[600],
-                      height: 1.5,
+                        : 'Sem descrição cadastrada.',
+                    style: typography.bodyMedium.copyWith(
+                      color: colors.textSecondary,
                       fontStyle: _image!.description == null || _image!.description!.isEmpty
                           ? FontStyle.italic
                           : FontStyle.normal,
                     ),
                   ),
-                  const SizedBox(height: 32),
-                  // Hierarquia
+                  SizedBox(height: spacing.md),
+                  Divider(color: colors.borderSubtle, height: 1),
+                  SizedBox(height: spacing.md),
                   Text(
                     'HIERARQUIA',
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 1.5,
-                      color: isDark ? Colors.grey[500] : Colors.grey[500],
+                    style: typography.caption.copyWith(
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1.2,
+                      color: colors.textSecondary,
                     ),
                   ),
-                  const SizedBox(height: 16),
+                  SizedBox(height: spacing.xs),
                   if (_image!.regionalName != null)
-                    _buildHierarchyRow(
-                      theme,
-                      isDark,
-                      Icons.public_rounded,
-                      'Regional',
-                      _image!.regionalName!,
-                    ),
-                  if (_image!.regionalName != null) const SizedBox(height: 16),
+                    _buildHierarchyRow(context, Icons.public_rounded, 'Regional', _image!.regionalName!),
                   if (_image!.divisaoName != null)
-                    _buildHierarchyRow(
-                      theme,
-                      isDark,
-                      Icons.account_tree_rounded,
-                      'Divisão',
-                      _image!.divisaoName!,
-                    ),
-                  if (_image!.divisaoName != null) const SizedBox(height: 16),
+                    _buildHierarchyRow(context, Icons.account_tree_rounded, 'Divisão', _image!.divisaoName!),
                   if (_image!.segmentName != null)
-                    _buildHierarchyRow(
-                      theme,
-                      isDark,
-                      Icons.business_rounded,
-                      'Segmento',
-                      _image!.segmentName!,
-                    ),
-                  if (_image!.segmentName != null) const SizedBox(height: 16),
+                    _buildHierarchyRow(context, Icons.business_rounded, 'Segmento', _image!.segmentName!),
                   if (_image!.localName != null)
-                    _buildHierarchyRow(
-                      theme,
-                      isDark,
-                      Icons.place_rounded,
-                      'Local',
-                      _image!.localName!,
-                    ),
-                  if (_image!.localName != null) const SizedBox(height: 16),
+                    _buildHierarchyRow(context, Icons.place_rounded, 'Local', _image!.localName!),
                   if (_image!.roomName != null)
-                    _buildHierarchyRow(
-                      theme,
-                      isDark,
-                      Icons.meeting_room_rounded,
-                      'Sala',
-                      _image!.roomName!,
-                    ),
-                  if (_image!.roomName == null)
-                    _buildHierarchyRow(
-                      theme,
-                      isDark,
-                      Icons.meeting_room_rounded,
-                      'Sala',
-                      '—',
-                    ),
-                  const SizedBox(height: 16),
-                  if (_image!.regionalName == null &&
-                      _image!.divisaoName == null &&
-                      _image!.segmentName == null &&
-                      _image!.localName == null &&
-                      _image!.roomName == null)
-                    Text(
-                      'Sem classificação',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: isDark ? Colors.grey[500] : Colors.grey[500],
-                      ),
-                    ),
-                  const SizedBox(height: 24),
-                  Divider(
-                    color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                  ),
-                  const SizedBox(height: 24),
-                  // Metadados
+                    _buildHierarchyRow(context, Icons.meeting_room_rounded, 'Sala', _image!.roomName!),
+
+                  SizedBox(height: spacing.md),
+                  Divider(color: colors.borderSubtle, height: 1),
+                  SizedBox(height: spacing.md),
                   Text(
                     'METADADOS',
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 1.5,
-                      color: isDark ? Colors.grey[500] : Colors.grey[500],
+                    style: typography.caption.copyWith(
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1.2,
+                      color: colors.textSecondary,
                     ),
                   ),
-                  const SizedBox(height: 16),
-                  _buildMetaRow(
-                    theme,
-                    isDark,
-                    Icons.calendar_today_rounded,
-                    'Criado em:',
-                    dateFormat.format(_image!.createdAt),
-                  ),
-                  const SizedBox(height: 12),
-                  _buildMetaRow(
-                    theme,
-                    isDark,
-                    Icons.update_rounded,
-                    'Atualizado em:',
-                    dateFormat.format(_image!.updatedAt),
-                  ),
-                  const SizedBox(height: 12),
-                  _buildMetaRow(
-                    theme,
-                    isDark,
-                    Icons.person_outline_rounded,
-                    'Cadastrado por:',
-                    _image!.creatorName ?? '—',
-                  ),
-                  if (_image!.annotatorName != null && _image!.annotatorName!.isNotEmpty) ...[
-                    const SizedBox(height: 12),
-                    _buildMetaRow(
-                      theme,
-                      isDark,
-                      Icons.draw_rounded,
-                      'Anotado por:',
-                      _image!.annotatorName!,
-                    ),
-                  ],
-                  const SizedBox(height: 24),
-                  // Tags
-                  Text(
-                    'TAGS',
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 1.5,
-                      color: isDark ? Colors.grey[500] : Colors.grey[500],
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  if (_image!.tags.isNotEmpty)
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: _image!.tags.map((tag) {
-                        return Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: isDark ? const Color(0xFF334155) : const Color(0xFFf1f5f9),
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(
-                              color: isDark ? const Color(0xFF475569) : const Color(0xFFe2e8f0),
-                            ),
-                          ),
-                          child: Text(
-                            tag.startsWith('#') ? tag : '#$tag',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: isDark ? Colors.grey[300] : Colors.grey[700],
-                            ),
-                          ),
-                        );
-                      }).toList(),
-                    )
-                  else
+                  SizedBox(height: spacing.xs),
+                  _buildMetaRow(context, Icons.calendar_today_rounded, 'Criado em:', dateFormat.format(_image!.createdAt)),
+                  _buildMetaRow(context, Icons.update_rounded, 'Atualizado em:', dateFormat.format(_image!.updatedAt)),
+                  _buildMetaRow(context, Icons.person_outline_rounded, 'Cadastrado por:', _image!.creatorName ?? '—'),
+                  if (_image!.annotatorName != null && _image!.annotatorName!.isNotEmpty)
+                    _buildMetaRow(context, Icons.draw_rounded, 'Anotado por:', _image!.annotatorName!),
+
+                  if (_image!.tags.isNotEmpty) ...[
+                    SizedBox(height: spacing.md),
                     Text(
-                      'Nenhuma tag',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: isDark ? Colors.grey[500] : Colors.grey[500],
+                      'TAGS',
+                      style: typography.caption.copyWith(
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.2,
+                        color: colors.textSecondary,
                       ),
                     ),
+                    SizedBox(height: spacing.xs),
+                    Wrap(
+                      spacing: spacing.xs,
+                      runSpacing: spacing.xxs,
+                      children: _image!.tags.map((tag) => Container(
+                        padding: EdgeInsets.symmetric(horizontal: spacing.xs, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: colors.surfaceSecondary,
+                          borderRadius: TFRadius.borderRadiusSm,
+                          border: Border.all(color: colors.borderSubtle),
+                        ),
+                        child: Text(
+                          tag.startsWith('#') ? tag : '#$tag',
+                          style: typography.caption.copyWith(color: colors.textSecondary),
+                        ),
+                      )).toList(),
+                    ),
+                  ],
                 ],
               ),
             ),
           ),
-          // Rodapé: Baixar Imagem HD
           Container(
-            padding: EdgeInsets.all(panelPadding),
+            padding: EdgeInsets.all(spacing.md),
             decoration: BoxDecoration(
-              color: isDark ? const Color(0xFF0f172a).withOpacity(0.5) : const Color(0xFFf8fafc),
-              border: Border(
-                top: BorderSide(
-                  color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                  width: 1,
-                ),
-              ),
+              color: colors.surfaceSecondary.withValues(alpha: 0.3),
+              border: Border(top: BorderSide(color: colors.borderSubtle)),
             ),
-            child: SafeArea(
-              top: false,
-              child: SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: _displayImageUrl != null ? _downloadImage : null,
-                  icon: const Icon(Icons.download_rounded, size: 20),
-                  label: const Text('Baixar Imagem HD'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF1e40af),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    elevation: 4,
-                  ),
-                ),
+            child: SizedBox(
+              width: double.infinity,
+              child: TFButton(
+                label: 'Baixar Imagem HD',
+                leadingIcon: TFIcons.download,
+                onPressed: _displayImageUrl != null ? _downloadImage : null,
               ),
             ),
           ),
@@ -1129,93 +874,63 @@ class _DetailPageState extends State<DetailPage> {
     );
   }
 
-  Widget _buildHierarchyRow(
-    ThemeData theme,
-    bool isDark,
-    IconData icon,
-    String label,
-    String value,
-  ) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: 40,
-          height: 40,
-          decoration: BoxDecoration(
-            color: isDark
-                ? const Color(0xFF1e3a8a).withOpacity(0.2)
-                : const Color(0xFFdbeafe),
-            borderRadius: BorderRadius.circular(8),
+  Widget _buildHierarchyRow(BuildContext context, IconData icon, String label, String value) {
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+    final typography = context.tfTypography;
+
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: spacing.xxs),
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: colors.primary),
+          SizedBox(width: spacing.xs),
+          Text(
+            '$label: ',
+            style: typography.bodySmall.copyWith(
+              color: colors.textSecondary,
+              fontWeight: FontWeight.w600,
+            ),
           ),
-          child: Icon(icon, size: 20, color: const Color(0xFF1e40af)),
-        ),
-        const SizedBox(width: 16),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label.toUpperCase(),
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w500,
-                  color: isDark ? Colors.grey[500] : Colors.grey[500],
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                value,
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: isDark ? Colors.white : const Color(0xFF1e293b),
-                ),
-              ),
-            ],
+          Expanded(
+            child: Text(
+              value,
+              style: typography.bodySmall.copyWith(color: colors.textPrimary),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
-  Widget _buildMetaRow(
-    ThemeData theme,
-    bool isDark,
-    IconData icon,
-    String label,
-    String value,
-  ) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(
-          icon,
-          size: 20,
-          color: isDark ? Colors.grey[500] : Colors.grey[400],
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: RichText(
-            text: TextSpan(
-              style: TextStyle(
-                fontSize: 14,
-                color: isDark ? Colors.grey[400] : Colors.grey[600],
+  Widget _buildMetaRow(BuildContext context, IconData icon, String label, String value) {
+    final colors = context.tfColors;
+    final spacing = context.tfSpacing;
+    final typography = context.tfTypography;
+
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: spacing.xxs),
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: colors.textSecondary),
+          SizedBox(width: spacing.xs),
+          Text(
+            '$label ',
+            style: typography.caption.copyWith(color: colors.textSecondary),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: typography.caption.copyWith(
+                color: colors.textPrimary,
+                fontWeight: FontWeight.w600,
               ),
-              children: [
-                TextSpan(text: '$label '),
-                TextSpan(
-                  text: value,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w500,
-                    color: isDark ? Colors.white : const Color(0xFF1e293b),
-                  ),
-                ),
-              ],
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -1237,5 +952,4 @@ class _DetailPageState extends State<DetailPage> {
       }
     }
   }
-
 }

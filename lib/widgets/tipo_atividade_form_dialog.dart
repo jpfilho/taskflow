@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
+import '../design_system/taskflow_design_system.dart';
 import '../models/tipo_atividade.dart';
 import '../models/segmento.dart';
 import '../services/segmento_service.dart';
 import 'color_picker_dialog.dart';
-import 'form_dialog_helpers.dart';
 
 class TipoAtividadeFormDialog extends StatefulWidget {
   final TipoAtividade? tipoAtividade;
@@ -29,6 +29,7 @@ class _TipoAtividadeFormDialogState extends State<TipoAtividadeFormDialog> {
   Set<String> _selectedSegmentoIds = {};
   bool _ativo = true;
   bool _isLoadingSegmentos = true;
+  bool _isSaving = false;
   Color _selectedColor = Colors.blue;
   Color _selectedSegmentBackgroundColor = Colors.grey;
   Color _selectedSegmentTextColor = Colors.white;
@@ -87,7 +88,7 @@ class _TipoAtividadeFormDialogState extends State<TipoAtividadeFormDialog> {
   }
 
   String _colorToHex(Color color) {
-    return '#${color.value.toRadixString(16).substring(2).toUpperCase()}';
+    return '#${color.toARGB32().toRadixString(16).substring(2).toUpperCase()}';
   }
 
   Color? _hexToColor(String hex) {
@@ -174,6 +175,7 @@ class _TipoAtividadeFormDialogState extends State<TipoAtividadeFormDialog> {
 
   void _save() {
     if (_formKey.currentState!.validate()) {
+      setState(() => _isSaving = true);
       final corHex = _corController.text.trim();
       final corSegmentoValue = _corSegmentoController.text.trim();
       final corTextoSegmentoValue = _corTextoSegmentoController.text.trim();
@@ -200,280 +202,213 @@ class _TipoAtividadeFormDialogState extends State<TipoAtividadeFormDialog> {
   @override
   Widget build(BuildContext context) {
     final isEditing = widget.tipoAtividade != null;
-    final brightness = Theme.of(context).brightness;
-    final isDark = brightness == Brightness.dark;
+    final spacing = context.tfSpacing;
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
 
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.all(16),
-      elevation: 0,
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 512),
-        decoration: BoxDecoration(
-          color: isDark ? const Color(0xFF1e293b) : Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-            width: 1,
-          ),
-        ),
+    return TFFormDialog(
+      title: isEditing ? 'Editar Tipo de Atividade' : 'Novo Tipo de Atividade',
+      subtitle: 'Atualize as informações do tipo de atividade.',
+      saveLabel: isEditing ? 'Salvar Alterações' : 'Criar Tipo de Atividade',
+      isSaving: _isSaving,
+      onSave: _save,
+      onCancel: () => Navigator.of(context).pop(),
+      child: Form(
+        key: _formKey,
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
-            Padding(
-              padding: const EdgeInsets.fromLTRB(32, 32, 32, 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    isEditing ? 'Editar Tipo de Atividade' : 'Novo Tipo de Atividade',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w600,
-                      color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Atualize as informações do tipo de atividade.',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
-                    ),
-                  ),
-                ],
+            TFTextField(
+              label: 'Código',
+              controller: _codigoController,
+              required: true,
+              hint: 'Ex: MANUT, OPER',
+              validator: (value) {
+                if (value == null || value.trim().isEmpty) {
+                  return 'Campo obrigatório';
+                }
+                return null;
+              },
+            ),
+            SizedBox(height: spacing.md),
+            TFTextField(
+              label: 'Descrição',
+              controller: _descricaoController,
+              required: true,
+              hint: 'Descrição detalhada do tipo de atividade',
+              validator: (value) {
+                if (value == null || value.trim().isEmpty) {
+                  return 'Campo obrigatório';
+                }
+                return null;
+              },
+            ),
+            SizedBox(height: spacing.md),
+            _buildColorTile(
+              label: 'Cor de Destaque',
+              color: _selectedColor,
+              colorHex: _corController.text.isEmpty ? 'Padrão' : _corController.text,
+              onTap: _showColorPicker,
+            ),
+            SizedBox(height: spacing.sm),
+            _buildColorTile(
+              label: 'Fundo do Segmento (Gantt)',
+              color: _selectedSegmentBackgroundColor,
+              colorHex: _corSegmentoController.text,
+              onTap: _showSegmentBackgroundColorPicker,
+            ),
+            SizedBox(height: spacing.sm),
+            _buildColorTile(
+              label: 'Texto do Segmento (Gantt)',
+              color: _selectedSegmentTextColor,
+              colorHex: _corTextoSegmentoController.text,
+              onTap: _showSegmentTextColorPicker,
+            ),
+            SizedBox(height: spacing.md),
+            Text(
+              'Segmentos Aplicáveis',
+              style: typography.bodyMedium.copyWith(
+                color: colors.textPrimary,
+                fontWeight: FontWeight.w600,
               ),
             ),
-
-            // Content
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                child: Form(
-                  key: _formKey,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      FloatingLabelTextField(
-                        label: 'Código *',
-                        controller: _codigoController,
-                        isDark: isDark,
-                        textCapitalization: TextCapitalization.characters,
-                        validator: (value) {
-                          if (value == null || value.trim().isEmpty) {
-                            return 'Campo obrigatório';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 24),
-                      FloatingLabelTextField(
-                        label: 'Descrição *',
-                        controller: _descricaoController,
-                        isDark: isDark,
-                        validator: (value) {
-                          if (value == null || value.trim().isEmpty) {
-                            return 'Campo obrigatório';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 24),
-                      ColorPickerField(
-                        label: 'Cor',
-                        color: _selectedColor,
-                        colorHex: _corController.text.isEmpty ? 'Não definida' : _corController.text,
-                        isDark: isDark,
-                        onTap: _showColorPicker,
-                        icon: Icons.color_lens,
-                      ),
-                      const SizedBox(height: 24),
-                      ColorPickerField(
-                        label: 'Cor de Fundo do Segmento',
-                        color: _selectedSegmentBackgroundColor,
-                        colorHex: _corSegmentoController.text,
-                        isDark: isDark,
-                        onTap: _showSegmentBackgroundColorPicker,
-                        icon: Icons.color_lens,
-                      ),
-                      const SizedBox(height: 24),
-                      ColorPickerField(
-                        label: 'Cor do Texto do Segmento',
-                        color: _selectedSegmentTextColor,
-                        colorHex: _corTextoSegmentoController.text,
-                        isDark: isDark,
-                        onTap: _showSegmentTextColorPicker,
-                        icon: Icons.format_color_text,
-                      ),
-                      const SizedBox(height: 24),
-                      Text(
-                        'Segmentos',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: isDark ? const Color(0xFFcbd5e1) : const Color(0xFF334155),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Container(
-                        constraints: const BoxConstraints(maxHeight: 200),
-                        decoration: BoxDecoration(
-                          color: isDark ? const Color(0xFF1e293b).withOpacity(0.5) : const Color(0xFFf8fafc),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: isDark ? const Color(0xFF334155).withOpacity(0.5) : const Color(0xFFe2e8f0),
+            SizedBox(height: spacing.xs),
+            Container(
+              constraints: const BoxConstraints(maxHeight: 180),
+              decoration: BoxDecoration(
+                color: colors.surface,
+                borderRadius: BorderRadius.circular(TFRadius.r12),
+                border: Border.all(color: colors.borderSubtle),
+              ),
+              child: _isLoadingSegmentos
+                  ? const Center(child: Padding(
+                      padding: EdgeInsets.all(8.0),
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ))
+                  : _segmentos.isEmpty
+                      ? Padding(
+                          padding: EdgeInsets.all(spacing.sm),
+                          child: Text(
+                            'Nenhum segmento cadastrado',
+                            style: typography.bodySmall.copyWith(color: colors.textSecondary),
                           ),
-                        ),
-                        child: _isLoadingSegmentos
-                            ? const Center(child: CircularProgressIndicator())
-                            : _segmentos.isEmpty
-                                ? Padding(
-                                    padding: const EdgeInsets.all(16.0),
-                                    child: Text(
-                                      'Nenhum segmento disponível',
-                                      style: TextStyle(
-                                        color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b),
+                        )
+                      : ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: _segmentos.length,
+                          separatorBuilder: (_, __) => Divider(height: 1, color: colors.borderSubtle),
+                          itemBuilder: (context, index) {
+                            final segmento = _segmentos[index];
+                            final isSelected = _selectedSegmentoIds.contains(segmento.id);
+                            return InkWell(
+                              onTap: () {
+                                setState(() {
+                                  if (isSelected) {
+                                    _selectedSegmentoIds.remove(segmento.id);
+                                  } else {
+                                    _selectedSegmentoIds.add(segmento.id);
+                                  }
+                                });
+                              },
+                              child: Padding(
+                                padding: EdgeInsets.symmetric(
+                                  horizontal: spacing.sm,
+                                  vertical: spacing.xs,
+                                ),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        segmento.segmento,
+                                        style: typography.bodyMedium.copyWith(
+                                          color: isSelected ? colors.textPrimary : colors.textSecondary,
+                                          fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                                        ),
                                       ),
                                     ),
-                                  )
-                                : SingleChildScrollView(
-                                    child: Column(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: _segmentos.map((segmento) {
-                                        final isSelected = _selectedSegmentoIds.contains(segmento.id);
-                                        return InkWell(
-                                          onTap: () {
-                                            setState(() {
-                                              if (isSelected) {
-                                                _selectedSegmentoIds.remove(segmento.id);
-                                              } else {
-                                                _selectedSegmentoIds.add(segmento.id);
-                                              }
-                                            });
-                                          },
-                                          child: Container(
-                                            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-                                            child: Row(
-                                              children: [
-                                                Expanded(
-                                                  child: Text(
-                                                    segmento.segmento,
-                                                    style: TextStyle(
-                                                      fontSize: 14,
-                                                      color: isSelected
-                                                          ? (isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b))
-                                                          : (isDark ? const Color(0xFF94a3b8) : const Color(0xFF64748b)),
-                                                    ),
-                                                  ),
-                                                ),
-                                                Checkbox(
-                                                  value: isSelected,
-                                                  onChanged: (value) {
-                                                    setState(() {
-                                                      if (value == true) {
-                                                        _selectedSegmentoIds.add(segmento.id);
-                                                      } else {
-                                                        _selectedSegmentoIds.remove(segmento.id);
-                                                      }
-                                                    });
-                                                  },
-                                                  activeColor: const Color(0xFF3b82f6),
-                                                  shape: RoundedRectangleBorder(
-                                                    borderRadius: BorderRadius.circular(4),
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        );
-                                      }).toList(),
+                                    Checkbox(
+                                      value: isSelected,
+                                      activeColor: colors.primary,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(TFRadius.r4),
+                                      ),
+                                      onChanged: (val) {
+                                        setState(() {
+                                          if (val == true) {
+                                            _selectedSegmentoIds.add(segmento.id);
+                                          } else {
+                                            _selectedSegmentoIds.remove(segmento.id);
+                                          }
+                                        });
+                                      },
                                     ),
-                                  ),
-                      ),
-                      const SizedBox(height: 24),
-                      Container(
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        decoration: BoxDecoration(
-                          border: Border.all(
-                            color: isDark ? const Color(0xFF475569) : const Color(0xFFcbd5e1),
-                          ),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: SwitchListTile(
-                          title: Text(
-                            'Ativo',
-                            style: TextStyle(
-                              color: isDark ? const Color(0xFFf1f5f9) : const Color(0xFF1e293b),
-                            ),
-                          ),
-                          value: _ativo,
-                          activeThumbColor: const Color(0xFF3b82f6),
-                          onChanged: (value) {
-                            setState(() {
-                              _ativo = value;
-                            });
+                                  ],
+                                ),
+                              ),
+                            );
                           },
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
             ),
+            SizedBox(height: spacing.md),
+            TFSwitch(
+              label: 'Ativo',
+              description: 'Define se este tipo de atividade pode ser selecionado em ordens operacionais',
+              value: _ativo,
+              onChanged: (val) => setState(() => _ativo = val),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
-            // Footer com botões
+  Widget _buildColorTile({
+    required String label,
+    required Color color,
+    required String colorHex,
+    required VoidCallback onTap,
+  }) {
+    final colors = context.tfColors;
+    final typography = context.tfTypography;
+    final spacing = context.tfSpacing;
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(TFRadius.r8),
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: spacing.sm, vertical: spacing.xs),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(TFRadius.r8),
+          border: Border.all(color: colors.borderSubtle),
+          color: colors.surface,
+        ),
+        child: Row(
+          children: [
             Container(
-              padding: const EdgeInsets.all(32),
+              width: 24,
+              height: 24,
               decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF0f172a).withOpacity(0.5) : const Color(0xFFf8fafc),
-                border: Border(
-                  top: BorderSide(
-                    color: isDark ? const Color(0xFF334155) : const Color(0xFFe2e8f0),
-                    width: 1,
-                  ),
-                ),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
-                    ),
-                    child: Text(
-                      'Cancelar',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                        color: isDark ? const Color(0xFF94a3b8) : const Color(0xFF475569),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  ElevatedButton(
-                    onPressed: _save,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF3b82f6),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 10),
-                      elevation: 2,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                    child: Text(
-                      isEditing ? 'Salvar Alterações' : 'Criar Tipo de Atividade',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ],
+                color: color,
+                shape: BoxShape.circle,
+                border: Border.all(color: colors.borderSubtle),
               ),
             ),
+            SizedBox(width: spacing.sm),
+            Expanded(
+              child: Text(
+                label,
+                style: typography.bodyMedium.copyWith(color: colors.textPrimary),
+              ),
+            ),
+            Text(
+              colorHex,
+              style: typography.bodySmall.copyWith(
+                color: colors.textSecondary,
+                fontFamily: 'monospace',
+              ),
+            ),
+            SizedBox(width: spacing.xs),
+            Icon(Icons.colorize_rounded, size: 16, color: colors.textMuted),
           ],
         ),
       ),

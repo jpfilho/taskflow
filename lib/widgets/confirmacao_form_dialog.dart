@@ -9,6 +9,7 @@ import '../models/confirmacao_sap.dart';
 import '../services/confirmacao_service.dart';
 import '../services/confirmacao_sap_service.dart';
 import '../utils/responsive.dart';
+import '../design_system/taskflow_design_system.dart';
 
 class ConfirmacaoFormDialog extends StatefulWidget {
   final Confirmacao? confirmacao;
@@ -264,60 +265,6 @@ class _ConfirmacaoFormDialogState extends State<ConfirmacaoFormDialog> {
     }
   }
 
-  Future<ConfirmacaoSap?> _showSapOptionsDialog(
-    List<ConfirmacaoSap> items,
-  ) async {
-    return showDialog<ConfirmacaoSap>(
-      context: context,
-      builder: (context) {
-        return Dialog(
-          child: SizedBox(
-            width: 700,
-            height: 420,
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.all(12.0),
-                  child: Text(
-                    'Selecione a opção SAP',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                  ),
-                ),
-                const Divider(height: 1),
-                Expanded(
-                  child: ListView.separated(
-                    itemCount: items.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
-                    itemBuilder: (_, idx) {
-                      final it = items[idx];
-                      return ListTile(
-                        title: Text(
-                          '${it.operacao ?? ''} ${it.textoBreveOperacao ?? ''}'
-                              .trim(),
-                        ),
-                        subtitle: Text(
-                          '${it.centroTrabalho ?? ''} • ${it.criadoPor ?? ''}',
-                        ),
-                        onTap: () => Navigator.of(context).pop(it),
-                      );
-                    },
-                  ),
-                ),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: TextButton(
-                    onPressed: () => Navigator.of(context).pop(null),
-                    child: const Text('Cancelar'),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
   Future<void> _selectDate(
     BuildContext context,
     DateTime? initial,
@@ -562,6 +509,7 @@ class _ConfirmacaoFormDialogState extends State<ConfirmacaoFormDialog> {
           const SizedBox(height: 16),
 
           DropdownButtonFormField<String>(
+            isExpanded: true,
             initialValue: _operacaoKeySelecionada,
             items: _operacoesDaOrdem
                 .map(
@@ -628,6 +576,7 @@ class _ConfirmacaoFormDialogState extends State<ConfirmacaoFormDialog> {
           ),
           const SizedBox(height: 16),
           DropdownButtonFormField<String>(
+            isExpanded: true,
             initialValue: _tipoAtividadeOptions.contains(_tipoAtividadeController.text)
                 ? _tipoAtividadeController.text
                 : null,
@@ -651,6 +600,7 @@ class _ConfirmacaoFormDialogState extends State<ConfirmacaoFormDialog> {
           ),
           const SizedBox(height: 16),
           DropdownButtonFormField<String>(
+            isExpanded: true,
             initialValue: _simNaoOptions.contains(_confirmacaoFinalController.text)
                 ? _confirmacaoFinalController.text
                 : null,
@@ -674,6 +624,7 @@ class _ConfirmacaoFormDialogState extends State<ConfirmacaoFormDialog> {
           ),
           const SizedBox(height: 16),
           DropdownButtonFormField<String>(
+            isExpanded: true,
             initialValue: _simNaoOptions.contains(_sTrabRestanteController.text)
                 ? _sTrabRestanteController.text
                 : null,
@@ -790,26 +741,22 @@ class _ConfirmacaoFormDialogState extends State<ConfirmacaoFormDialog> {
             maxLines: 4,
           ),
           const SizedBox(height: 24),
-
           Row(
             children: [
               Expanded(
-                child: OutlinedButton(
+                child: TFButton(
+                  label: 'Cancelar',
+                  variant: TFButtonVariant.secondary,
                   onPressed: () => Navigator.pop(context),
-                  child: const Text('Cancelar'),
                 ),
               ),
               const SizedBox(width: 16),
               Expanded(
-                child: ElevatedButton(
+                child: TFButton(
+                  label: 'Salvar',
+                  variant: TFButtonVariant.primary,
+                  loading: _isSaving,
                   onPressed: _isSaving ? null : _save,
-                  child: _isSaving
-                      ? const SizedBox(
-                          height: 20,
-                          width: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Text('Salvar'),
                 ),
               ),
             ],
@@ -818,9 +765,14 @@ class _ConfirmacaoFormDialogState extends State<ConfirmacaoFormDialog> {
       ),
     );
 
+    final colors = context.tfColors;
+
     if (isMobile) {
       return Scaffold(
+        backgroundColor: colors.background,
         appBar: AppBar(
+          backgroundColor: colors.surface,
+          foregroundColor: colors.textPrimary,
           title: Text(
             widget.confirmacao == null
                 ? 'Nova Confirmação'
@@ -832,6 +784,11 @@ class _ConfirmacaoFormDialogState extends State<ConfirmacaoFormDialog> {
     }
 
     return Dialog(
+      backgroundColor: colors.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: colors.borderSubtle),
+      ),
       child: SizedBox(
         width: 600,
         height: MediaQuery.of(context).size.height * 0.9,
