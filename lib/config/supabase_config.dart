@@ -1,11 +1,18 @@
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class SupabaseConfig {
-  // URL do seu projeto Supabase (HTTP na porta 8000)
-  // NOTA: HTTPS está dando "Unauthorized" - proxy Nginx precisa ser configurado
-  static const String supabaseUrl = 'http://212.85.0.249:8000';
-  // API Node (webhook/geo), mesma máquina na porta 3001
-  static const String apiBaseUrl = 'http://212.85.0.249:3001';
+  // URLs de Desenvolvimento (Servidor Antigo VPS)
+  static const String _devSupabaseUrl = 'http://212.85.0.249:8000';
+  static const String _devApiBaseUrl  = 'http://212.85.0.249:3001';
+
+  // URLs de Produção (Rede Interna 10.140.50.12:8085)
+  static const String _prodSupabaseUrl = 'http://10.140.50.12:8085';
+  static const String _prodApiBaseUrl  = 'http://10.140.50.12:3001';
+
+  // Release (Produção) vs Debug/Local (Desenvolvimento)
+  static const String supabaseUrl = kReleaseMode ? _prodSupabaseUrl : _devSupabaseUrl;
+  static const String apiBaseUrl  = kReleaseMode ? _prodApiBaseUrl  : _devApiBaseUrl;
   
   // Chave anon do Supabase
   static const String supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzY1ODE3OTgzLCJleHAiOjIwODExNzc5ODN9.YQByqDrpmw0en7VeEcjDfvvTx8Ind_q8gD6-bzEY4Yc';

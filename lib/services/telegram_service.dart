@@ -231,9 +231,8 @@ class TelegramService {
     String? refId,    // UUID da nota_sap ou ordem
     String? refLabel, // Label para exibição (ex: "NOTA 12345")
   }) async {
-    // Tentar primeiro com domínio, depois com IP direto se falhar
+    // Tentar primeiro com domínio, depois com fallback dinâmico (dev/prod) se falhar
     const telegramServerUrl = 'https://api.taskflowv3.com.br';
-    const telegramServerUrlFallback = 'https://212.85.0.249'; // IP direto como fallback
     final url = Uri.parse('$telegramServerUrl/send-message');
     
     final payload = {
@@ -342,8 +341,8 @@ class TelegramService {
           // Na primeira tentativa com erro de DNS ou SSL, tentar com IP direto via HTTP
           // (certificado SSL não funciona para IP direto)
           print('🔍 [Telegram] Erro de DNS/SSL detectado. Tentando com IP direto via HTTP como fallback...');
-          // Usar HTTP na porta 3001 (Node.js direto) ao invés de HTTPS via Nginx
-          final urlFallback = Uri.parse('http://212.85.0.249:3001/send-message');
+          // Usar HTTP na porta da API (Node.js direto) ao invés de HTTPS via Nginx
+          final urlFallback = Uri.parse('${SupabaseConfig.apiBaseUrl}/send-message');
           try {
             print('📡 [Telegram] Tentando endpoint via IP (HTTP porta 3001): $urlFallback');
             final responseFallback = await http.post(
