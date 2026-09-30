@@ -6,8 +6,8 @@ class SupabaseConfig {
   static const String _devSupabaseUrl = 'http://212.85.0.249:8000';
   static const String _devApiBaseUrl  = 'http://212.85.0.249:3001';
 
-  // URLs de Produção (Rede Interna 10.140.50.12:8085)
-  static const String _prodSupabaseUrl = 'http://10.140.50.12:8085';
+  // URLs de Produção (Rede Interna - Supabase/Kong: 8000, Node/API: 3001, Web: 8085)
+  static const String _prodSupabaseUrl = 'http://10.140.50.12:8000';
   static const String _prodApiBaseUrl  = 'http://10.140.50.12:3001';
 
   // Release (Produção) vs Debug/Local (Desenvolvimento)
