@@ -53,6 +53,8 @@ import 'gantt_chart.dart' show GanttScale, GanttPeriod;
 import 'gantt_segment_widget.dart';
 import 'chat_view.dart';
 import '../design_system/taskflow_design_system.dart';
+import '../models/task_table_column.dart';
+import 'common/task_table_column_picker_dialog.dart';
 
 /// Widget unificado: tabela de atividades + Gantt numa única rolagem vertical.
 class ActivityGanttView extends StatefulWidget {
@@ -226,8 +228,8 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
     _displayStartDate = start;
     _displayEndDate = end;
 
-    // Sincronizar scroll horizontal entre cabeçalho e linhas
     _ganttHorizController.addListener(_syncGanttHorizScroll);
+    TaskTableColumnService.instance.columnsNotifier.addListener(_onColumnsChanged);
     _ganttBottomHorizController.addListener(() {
       if (_isHorizScrolling || !_ganttBottomHorizController.hasClients) return;
       final offset = _ganttBottomHorizController.offset;
@@ -309,7 +311,8 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
       for (var task in mainTasks) {
         final hasSubs = (_loadedSubtasks[task.id]?.isNotEmpty ?? false);
         final hasExec = task.executorPeriods.isNotEmpty;
-        if (hasSubs || hasExec) toToggle.add(task.id);
+        final hasFrota = task.frotaPeriods.isNotEmpty;
+        if (hasSubs || hasExec || hasFrota) toToggle.add(task.id);
       }
       setState(() {
         if (widget.allSubtasksExpanded ?? false) {
@@ -348,6 +351,7 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
     _syncStreamSub?.cancel();
     _statusChangeSubscription?.cancel();
     _emptyTimer?.cancel();
+    TaskTableColumnService.instance.columnsNotifier.removeListener(_onColumnsChanged);
     _verticalController.dispose();
     _ganttHorizController.removeListener(_syncGanttHorizScroll);
     _ganttHorizController.dispose();
@@ -763,118 +767,72 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
       }
 
       if (isExpanded) {
-        final _addedExecutors = <String>{};
-
         if (main.executorPeriods.isNotEmpty) {
+          // Agrupar executores que possuem o mesmo período
+          final Map<String, List<ExecutorPeriod>> groupedExecutors = {};
+          final Map<String, ({DateTime minDate, DateTime maxDate})> groupDates = {};
+
           for (var ep in main.executorPeriods) {
-            _addedExecutors.add(ep.executorId);
             DateTime? minDate, maxDate;
             for (var p in ep.periods) {
               if (minDate == null || p.dataInicio.isBefore(minDate)) minDate = p.dataInicio;
               if (maxDate == null || p.dataFim.isAfter(maxDate)) maxDate = p.dataFim;
             }
-            result.add(Task(
-              id: '${main.id}_executor_${ep.executorId}',
-              parentId: main.id,
-              statusId: main.statusId,
-              regionalId: main.regionalId,
-              divisaoId: main.divisaoId,
-              segmentoId: main.segmentoId,
-              localIds: main.localIds,
-              executorIds: [ep.executorId],
-              equipeIds: main.equipeIds,
-              localId: main.localId,
-              equipeId: main.equipeId,
-              status: main.status,
-              statusNome: main.statusNome,
-              regional: main.regional,
-              divisao: main.divisao,
-              locais: main.locais,
-              tipo: main.tipo,
-              ordem: main.ordem,
-              tarefa: '${ep.executorNome} - ${main.tarefa}',
-              executores: [ep.executorNome],
-              equipes: main.equipes,
-              executor: ep.executorNome,
-              frota: main.frota,
-              coordenador: main.coordenador,
-              si: main.si,
-              dataInicio: minDate ?? main.dataInicio,
-              dataFim: maxDate ?? main.dataFim,
-              ganttSegments: ep.periods,
-              executorPeriods: const [],
-              observacoes: main.observacoes,
-              horasPrevistas: main.horasPrevistas,
-              horasExecutadas: main.horasExecutadas,
-              prioridade: main.prioridade,
-            ));
+            minDate ??= main.dataInicio;
+            maxDate ??= main.dataFim;
+
+            final periodKey =
+                '${minDate.year}-${minDate.month.toString().padLeft(2, '0')}-${minDate.day.toString().padLeft(2, '0')}_'
+                '${maxDate.year}-${maxDate.month.toString().padLeft(2, '0')}-${maxDate.day.toString().padLeft(2, '0')}';
+
+            groupedExecutors.putIfAbsent(periodKey, () => []).add(ep);
+            groupDates[periodKey] = (minDate: minDate, maxDate: maxDate);
           }
-        }
 
-        if (main.executorIds.isNotEmpty) {
-          for (int i = 0; i < main.executorIds.length; i++) {
-            final exId = main.executorIds[i];
-            if (_addedExecutors.contains(exId)) continue;
-            final exName = i < main.executores.length ? main.executores[i] : 'Executor';
-            result.add(Task(
-              id: '${main.id}_executor_$exId',
-              parentId: main.id,
-              statusId: main.statusId,
-              regionalId: main.regionalId,
-              divisaoId: main.divisaoId,
-              segmentoId: main.segmentoId,
-              localIds: main.localIds,
-              executorIds: [exId],
-              equipeIds: main.equipeIds,
-              localId: main.localId,
-              equipeId: main.equipeId,
-              status: main.status,
-              statusNome: main.statusNome,
-              regional: main.regional,
-              divisao: main.divisao,
-              locais: main.locais,
-              tipo: main.tipo,
-              ordem: main.ordem,
-              tarefa: '$exName - ${main.tarefa}',
-              executores: [exName],
-              equipes: main.equipes,
-              executor: exName,
-              frota: main.frota,
-              coordenador: main.coordenador,
-              si: main.si,
-              dataInicio: main.dataInicio,
-              dataFim: main.dataFim,
-              ganttSegments: main.ganttSegments, // Herda do main
-              executorPeriods: const [],
-              observacoes: main.observacoes,
-              horasPrevistas: main.horasPrevistas,
-              horasExecutadas: main.horasExecutadas,
-              prioridade: main.prioridade,
-            ));
-          }
-        }
+          for (var entry in groupedExecutors.entries) {
+            final periodKey = entry.key;
+            final group = entry.value;
+            final dates = groupDates[periodKey]!;
 
-        final _addedFrotas = <String>{};
+            final executorNomes = group
+                .map((e) => e.executorNome.trim())
+                .where((n) => n.isNotEmpty)
+                .toSet()
+                .toList();
+            final nomesJuntos = executorNomes.join(', ');
+            final executorIds = group.map((e) => e.executorId).toList();
 
-        if (main.frotaPeriods.isNotEmpty) {
-          for (var fp in main.frotaPeriods) {
-            _addedFrotas.add(fp.frotaId);
-            DateTime? minDate, maxDate;
-            for (var p in fp.periods) {
-              if (minDate == null || p.dataInicio.isBefore(minDate)) minDate = p.dataInicio;
-              if (maxDate == null || p.dataFim.isAfter(maxDate)) maxDate = p.dataFim;
+            final List<GanttSegment> combinedSegments = [];
+            for (var ep in group) {
+              for (var seg in ep.periods) {
+                final exists = combinedSegments.any((s) =>
+                    s.dataInicio.isAtSameMomentAs(seg.dataInicio) &&
+                    s.dataFim.isAtSameMomentAs(seg.dataFim));
+                if (!exists) {
+                  combinedSegments.add(seg);
+                }
+              }
             }
+            if (combinedSegments.isEmpty) {
+              combinedSegments.add(GanttSegment(
+                dataInicio: dates.minDate,
+                dataFim: dates.maxDate,
+                label: 'EXECUCAO',
+                tipo: 'EXECUCAO',
+              ));
+            }
+
             result.add(Task(
-              id: '${main.id}_frota_${fp.frotaId}',
+              id: '${main.id}_executor_${group.first.executorId}_${dates.minDate.millisecondsSinceEpoch}',
               parentId: main.id,
               statusId: main.statusId,
               regionalId: main.regionalId,
               divisaoId: main.divisaoId,
               segmentoId: main.segmentoId,
               localIds: main.localIds,
-              executorIds: main.executorIds,
+              executorIds: executorIds,
               equipeIds: main.equipeIds,
-              frotaIds: [fp.frotaId],
+              frotaIds: main.frotaIds,
               localId: main.localId,
               equipeId: main.equipeId,
               status: main.status,
@@ -884,16 +842,16 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
               locais: main.locais,
               tipo: main.tipo,
               ordem: main.ordem,
-              tarefa: '${fp.frotaNome} - ${main.tarefa}',
-              executores: main.executores,
+              tarefa: nomesJuntos,
+              executores: executorNomes,
               equipes: main.equipes,
-              executor: main.executor,
-              frota: fp.frotaNome,
+              executor: nomesJuntos,
+              frota: main.frota,
               coordenador: main.coordenador,
               si: main.si,
-              dataInicio: minDate ?? main.dataInicio,
-              dataFim: maxDate ?? main.dataFim,
-              ganttSegments: fp.periods,
+              dataInicio: dates.minDate,
+              dataFim: dates.maxDate,
+              ganttSegments: combinedSegments,
               executorPeriods: const [],
               frotaPeriods: const [],
               observacoes: main.observacoes,
@@ -904,15 +862,63 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
           }
         }
 
-        if (main.frotaIds.isNotEmpty) {
-          for (int i = 0; i < main.frotaIds.length; i++) {
-            final fId = main.frotaIds[i];
-            if (_addedFrotas.contains(fId)) continue;
-            // The frota name can be retrieved from existing lists if there are lists. But currently we just use the name from main if it's there.
-            // Wait, we need the actual name of the frota. ActivityGanttView has `_frotasNomes`.
-            // But we can just pass the generic name from main or use ID. _buildTableRowPanel looks up the name!
+        if (main.frotaPeriods.isNotEmpty) {
+          // Agrupar frotas que possuem o mesmo período
+          final Map<String, List<FrotaPeriod>> groupedFrota = {};
+          final Map<String, ({DateTime minDate, DateTime maxDate})> groupDates = {};
+
+          for (var fp in main.frotaPeriods) {
+            DateTime? minDate, maxDate;
+            for (var p in fp.periods) {
+              if (minDate == null || p.dataInicio.isBefore(minDate)) minDate = p.dataInicio;
+              if (maxDate == null || p.dataFim.isAfter(maxDate)) maxDate = p.dataFim;
+            }
+            minDate ??= main.dataInicio;
+            maxDate ??= main.dataFim;
+
+            final periodKey =
+                '${minDate.year}-${minDate.month.toString().padLeft(2, '0')}-${minDate.day.toString().padLeft(2, '0')}_'
+                '${maxDate.year}-${maxDate.month.toString().padLeft(2, '0')}-${maxDate.day.toString().padLeft(2, '0')}';
+
+            groupedFrota.putIfAbsent(periodKey, () => []).add(fp);
+            groupDates[periodKey] = (minDate: minDate, maxDate: maxDate);
+          }
+
+          for (var entry in groupedFrota.entries) {
+            final periodKey = entry.key;
+            final group = entry.value;
+            final dates = groupDates[periodKey]!;
+
+            final frotaNomes = group
+                .map((f) => f.frotaNome.trim())
+                .where((n) => n.isNotEmpty)
+                .toSet()
+                .toList();
+            final veiculosJuntos = frotaNomes.join(', ');
+            final frotaIds = group.map((f) => f.frotaId).toList();
+
+            final List<GanttSegment> combinedSegments = [];
+            for (var fp in group) {
+              for (var seg in fp.periods) {
+                final exists = combinedSegments.any((s) =>
+                    s.dataInicio.isAtSameMomentAs(seg.dataInicio) &&
+                    s.dataFim.isAtSameMomentAs(seg.dataFim));
+                if (!exists) {
+                  combinedSegments.add(seg);
+                }
+              }
+            }
+            if (combinedSegments.isEmpty) {
+              combinedSegments.add(GanttSegment(
+                dataInicio: dates.minDate,
+                dataFim: dates.maxDate,
+                label: 'EXECUCAO',
+                tipo: 'EXECUCAO',
+              ));
+            }
+
             result.add(Task(
-              id: '${main.id}_frota_$fId',
+              id: '${main.id}_frota_${group.first.frotaId}_${dates.minDate.millisecondsSinceEpoch}',
               parentId: main.id,
               statusId: main.statusId,
               regionalId: main.regionalId,
@@ -921,7 +927,7 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
               localIds: main.localIds,
               executorIds: main.executorIds,
               equipeIds: main.equipeIds,
-              frotaIds: [fId],
+              frotaIds: frotaIds,
               localId: main.localId,
               equipeId: main.equipeId,
               status: main.status,
@@ -931,16 +937,16 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
               locais: main.locais,
               tipo: main.tipo,
               ordem: main.ordem,
-              tarefa: 'Frota - ${main.tarefa}',
+              tarefa: veiculosJuntos,
               executores: main.executores,
               equipes: main.equipes,
               executor: main.executor,
-              frota: main.frota,
+              frota: veiculosJuntos,
               coordenador: main.coordenador,
               si: main.si,
-              dataInicio: main.dataInicio,
-              dataFim: main.dataFim,
-              ganttSegments: main.ganttSegments, // Herda do main
+              dataInicio: dates.minDate,
+              dataFim: dates.maxDate,
+              ganttSegments: combinedSegments,
               executorPeriods: const [],
               frotaPeriods: const [],
               observacoes: main.observacoes,
@@ -1197,13 +1203,22 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
   // =========================================================================
 
   Color _getStatusBackgroundColor(String status) {
-    if (status == 'ANDA' || status == 'PROG') return Colors.white;
+    if (status == 'PROG') return Colors.white;
     final s = _statusMap[status];
     if (s != null) {
-      if (s.codigo == 'ANDA' || s.codigo == 'PROG') return Colors.white;
-      return s.color.withOpacity(0.15);
+      if (s.codigo == 'PROG') return Colors.white;
+      return s.color.withValues(alpha: 0.15);
     }
-    return Colors.white;
+    switch (status) {
+      case 'PROG':
+        return Colors.white;
+      case 'CONC':
+        return Colors.green.withValues(alpha: 0.15);
+      case 'ANDA':
+        return Colors.orange.withValues(alpha: 0.15);
+      default:
+        return Colors.white;
+    }
   }
 
   Color _getStatusBadgeColor(String status) {
@@ -1472,6 +1487,10 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
   // =========================================================================
 
   Widget _buildTableHeader(bool isMobile) {
+    final colService = TaskTableColumnService.instance;
+    final visibleCols = colService.visibleColumns;
+    final w = _tableColWidths(isMobile);
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -1482,16 +1501,48 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
             color: Colors.grey[100],
             border: Border(bottom: BorderSide(color: Colors.grey[300]!, width: 1)),
           ),
-          child: Center(
-            child: Text(
-              'ATIVIDADES',
-              style: TextStyle(
-                fontSize: isMobile ? 9 : 10,
-                fontWeight: FontWeight.w600,
-                color: Colors.grey[500],
-                letterSpacing: 1.0,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: Center(
+                  child: Text(
+                    'ATIVIDADES',
+                    style: TextStyle(
+                      fontSize: isMobile ? 9 : 10,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey[600],
+                      letterSpacing: 1.0,
+                    ),
+                  ),
+                ),
               ),
-            ),
+              Tooltip(
+                message: 'Personalizar colunas (expandir área do Gantt)',
+                child: InkWell(
+                  onTap: () => TaskTableColumnPickerDialog.show(context, isMobile: isMobile),
+                  borderRadius: BorderRadius.circular(4),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.tune_rounded, size: isMobile ? 13 : 15, color: Colors.blue[800]),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Colunas',
+                          style: TextStyle(
+                            fontSize: isMobile ? 9 : 11,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.blue[800],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
         // Linha de colunas (alinhada com a linha de dias do Gantt)
@@ -1513,21 +1564,36 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
               width: _calcTableWidth(isMobile),
               child: Row(
                 children: [
-                  _buildTableHeaderCell('AÇÕES', _tableColWidths(isMobile).acoes, isMobile),
-                  _buildTableHeaderCell('STATUS', _tableColWidths(isMobile).status, isMobile),
-                  _buildTableHeaderCell('LOCAL', _tableColWidths(isMobile).local, isMobile),
-                  _buildTableHeaderCell('TIPO', _tableColWidths(isMobile).tipo, isMobile),
-                  _buildTableHeaderCell('TAREFA', _tableColWidths(isMobile).tarefa, isMobile),
-                  _buildTableHeaderCell('EXECUTOR', _tableColWidths(isMobile).executor, isMobile),
-                  _buildTableHeaderCell('COORDENADOR', _tableColWidths(isMobile).coordenador, isMobile),
-                  _buildTableHeaderCell('FROTA', _tableColWidths(isMobile).frota, isMobile),
-                  _buildTableHeaderCell('CHAT', _tableColWidths(isMobile).chat, isMobile),
-                  _buildTableHeaderCell('ANEXOS', _tableColWidths(isMobile).anexos, isMobile),
-                  _buildTableHeaderCell('NOTA', _tableColWidths(isMobile).notasSAP, isMobile),
-                  _buildTableHeaderCell('ORDEM', _tableColWidths(isMobile).ordens, isMobile),
-                  _buildTableHeaderCell('AT', _tableColWidths(isMobile).ats, isMobile),
-                  _buildTableHeaderCell('SI', _tableColWidths(isMobile).sis, isMobile),
-                  _buildTableHeaderCell('ALERTAS', _tableColWidths(isMobile).alertas, isMobile),
+                  if (visibleCols.contains(TaskTableColumn.acoes))
+                    _buildTableHeaderCell('AÇÕES', w.acoes, isMobile),
+                  if (visibleCols.contains(TaskTableColumn.status))
+                    _buildTableHeaderCell('STATUS', w.status, isMobile),
+                  if (visibleCols.contains(TaskTableColumn.local))
+                    _buildTableHeaderCell('LOCAL', w.local, isMobile),
+                  if (visibleCols.contains(TaskTableColumn.tipo))
+                    _buildTableHeaderCell('TIPO', w.tipo, isMobile),
+                  if (visibleCols.contains(TaskTableColumn.tarefa))
+                    _buildTableHeaderCell('TAREFA', w.tarefa, isMobile),
+                  if (visibleCols.contains(TaskTableColumn.executor))
+                    _buildTableHeaderCell('EXECUTOR', w.executor, isMobile),
+                  if (visibleCols.contains(TaskTableColumn.coordenador))
+                    _buildTableHeaderCell('COORDENADOR', w.coordenador, isMobile),
+                  if (visibleCols.contains(TaskTableColumn.frota))
+                    _buildTableHeaderCell('FROTA', w.frota, isMobile),
+                  if (visibleCols.contains(TaskTableColumn.chat))
+                    _buildTableHeaderCell('CHAT', w.chat, isMobile),
+                  if (visibleCols.contains(TaskTableColumn.anexos))
+                    _buildTableHeaderCell('ANEXOS', w.anexos, isMobile),
+                  if (visibleCols.contains(TaskTableColumn.nota))
+                    _buildTableHeaderCell('NOTA', w.notasSAP, isMobile),
+                  if (visibleCols.contains(TaskTableColumn.ordem))
+                    _buildTableHeaderCell('ORDEM', w.ordens, isMobile),
+                  if (visibleCols.contains(TaskTableColumn.at))
+                    _buildTableHeaderCell('AT', w.ats, isMobile),
+                  if (visibleCols.contains(TaskTableColumn.si))
+                    _buildTableHeaderCell('SI', w.sis, isMobile),
+                  if (visibleCols.contains(TaskTableColumn.alertas))
+                    _buildTableHeaderCell('ALERTAS', w.alertas, isMobile),
                 ],
               ),
             ),
@@ -1789,12 +1855,13 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
     double ganttWidth,
     bool isMobile,
   ) {
-    final isSubtask = task.parentId != null;
-    final subtasksCount = _loadedSubtasks[task.id]?.length ?? 0;
-    final hasSubtasks = subtasksCount > 0;
     final isExecutorRow = task.id.contains('_executor_');
     final isFrotaRow = task.id.contains('_frota_');
-    final hasExecutorPeriods = !isSubtask && !isExecutorRow && task.executorPeriods.isNotEmpty;
+    final isSubtask = task.parentId != null && !isExecutorRow && !isFrotaRow;
+    final subtasksCount = _loadedSubtasks[task.id]?.length ?? 0;
+    final hasSubtasks = subtasksCount > 0;
+    final hasExecutorPeriods = !isSubtask && !isExecutorRow && !isFrotaRow && task.executorPeriods.isNotEmpty;
+    final hasFrotaPeriods = !isSubtask && !isExecutorRow && !isFrotaRow && task.frotaPeriods.isNotEmpty;
     final isExpanded = _expandedTasks.contains(task.id);
     final statusBg = _getStatusBackgroundColor(task.status);
 
@@ -1864,14 +1931,15 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
               // ── Painel da tabela (largura fixa) ───────────────────────────
               _buildTableRowPanel(
                 task, isMobile, isSubtask, hasSubtasks, isExecutorRow, isFrotaRow,
-                hasExecutorPeriods, isExpanded, statusBg, subtasksCount, toggleExpansion,
+                hasExecutorPeriods, hasFrotaPeriods, isExpanded, statusBg, subtasksCount, toggleExpansion,
               ),
               // ── Divisor visual ────────────────────────────────────────────
               Container(width: 1, color: Colors.grey[300]),
               // ── Painel do Gantt (scroll horizontal) ───────────────────────
               Expanded(
                 child: _buildGanttRowPanel(
-                  task, index, isSubtask, hasSubtasks, isExecutorRow, hasExecutorPeriods,
+                  task, index, isSubtask, hasSubtasks, isExecutorRow, isFrotaRow,
+                  hasExecutorPeriods, hasFrotaPeriods,
                   isExpanded, periods, periodWidth, totalWidth, todayOffset,
                   rowController, toggleExpansion, hierarchicalTasks,
                 ),
@@ -1887,8 +1955,197 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
   // Painel da tabela (linha)
   // =========================================================================
 
+  void _onColumnsChanged() {
+    if (mounted) setState(() {});
+  }
+
   _TableColWidths _tableColWidths(bool isMobile) => _TableColWidths(isMobile);
-  double _calcTableWidth(bool isMobile) => _tableColWidths(isMobile).total;
+  double _calcTableWidth(bool isMobile) => TaskTableColumnService.instance.calculateTotalWidth(isMobile);
+
+  String _formatDateRange(DateTime start, DateTime end) {
+    final sDay = start.day.toString().padLeft(2, '0');
+    final sMonth = start.month.toString().padLeft(2, '0');
+    final eDay = end.day.toString().padLeft(2, '0');
+    final eMonth = end.month.toString().padLeft(2, '0');
+    final days = end.difference(start).inDays + 1;
+    return '$sDay/$sMonth a $eDay/$eMonth (${days}d)';
+  }
+
+  Widget _buildTaskTitleCell(
+    Task task,
+    double width,
+    bool isMobile, {
+    required bool isSubtask,
+    required bool isExecutorRow,
+    required bool isFrotaRow,
+    required Color statusBg,
+  }) {
+    Widget content;
+
+    if (isExecutorRow) {
+      final periodStr = _formatDateRange(task.dataInicio, task.dataFim);
+      content = Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: Colors.orange[50],
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: Colors.orange[300]!, width: 0.8),
+            ),
+            child: Tooltip(
+              message: 'Período por executor',
+              child: Icon(
+                Icons.person,
+                size: isMobile ? 12 : 14,
+                color: Colors.orange[800],
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  task.executor.isNotEmpty ? task.executor : task.tarefa,
+                  style: TextStyle(
+                    fontSize: isMobile ? 10 : 11.5,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.black87,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  'Período: $periodStr',
+                  style: TextStyle(
+                    fontSize: isMobile ? 8.5 : 9.5,
+                    color: Colors.grey[600],
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    } else if (isFrotaRow) {
+      final periodStr = _formatDateRange(task.dataInicio, task.dataFim);
+      content = Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: Colors.green[50],
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: Colors.green[300]!, width: 0.8),
+            ),
+            child: Tooltip(
+              message: 'Período por frota',
+              child: Icon(
+                Icons.directions_car,
+                size: isMobile ? 12 : 14,
+                color: Colors.green[800],
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  task.frota.isNotEmpty ? task.frota : task.tarefa,
+                  style: TextStyle(
+                    fontSize: isMobile ? 10 : 11.5,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.black87,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  'Período: $periodStr',
+                  style: TextStyle(
+                    fontSize: isMobile ? 8.5 : 9.5,
+                    color: Colors.grey[600],
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    } else if (isSubtask) {
+      content = Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: Colors.blue[50],
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: Colors.blue[300]!, width: 0.8),
+            ),
+            child: Tooltip(
+              message: 'Subtarefa',
+              child: Icon(
+                Icons.subdirectory_arrow_right,
+                size: isMobile ? 12 : 14,
+                color: Colors.blue[800],
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              task.tarefa,
+              style: TextStyle(
+                fontSize: isMobile ? 10.5 : 11.5,
+                fontWeight: FontWeight.w500,
+                color: Colors.black87,
+              ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      );
+    } else {
+      content = Text(
+        task.tarefa,
+        style: TextStyle(
+          fontSize: isMobile ? 10 : 11.5,
+          fontWeight: (task.status == 'PROG' || task.status == 'ANDA') ? FontWeight.w600 : FontWeight.normal,
+          color: Colors.black87,
+        ),
+        maxLines: 2,
+        softWrap: true,
+        overflow: TextOverflow.fade,
+      );
+    }
+
+    return Container(
+      width: width,
+      height: 50,
+      padding: EdgeInsets.only(
+        left: (isSubtask || isExecutorRow || isFrotaRow) ? (isMobile ? 10 : 14) : (isMobile ? 4 : 6),
+        right: isMobile ? 4 : 6,
+        top: 4,
+        bottom: 4,
+      ),
+      alignment: Alignment.centerLeft,
+      decoration: BoxDecoration(
+        border: Border(right: BorderSide(color: Colors.grey[300]!, width: 0.5)),
+      ),
+      child: content,
+    );
+  }
 
   Widget _buildTableRowPanel(
     Task task,
@@ -1898,12 +2155,14 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
     bool isExecutorRow,
     bool isFrotaRow,
     bool hasExecutorPeriods,
+    bool hasFrotaPeriods,
     bool isExpanded,
     Color statusBg,
     int subtasksCount,
     VoidCallback toggleExpansion,
   ) {
     final w = _tableColWidths(isMobile);
+    final visibleCols = TaskTableColumnService.instance.visibleColumns;
     final baseId = task.id.split('_executor_').first.split('_frota_').first;
     final taskWarnings = (widget.warningsByTaskId ?? {})[baseId] ?? [];
 
@@ -1921,55 +2180,94 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
               border: Border(
                 bottom: BorderSide(color: Colors.grey[200]!, width: 0.5),
                 left: isExecutorRow
-                    ? BorderSide(color: Colors.orange[400]!, width: 3)
+                    ? BorderSide(color: Colors.orange[400]!, width: 4)
                     : isFrotaRow
-                    ? BorderSide(color: Colors.green[400]!, width: 3)
+                    ? BorderSide(color: Colors.green[500]!, width: 4)
                     : isSubtask
-                    ? BorderSide(color: Colors.blue[300]!, width: 3)
+                    ? BorderSide(color: Colors.blue[400]!, width: 4)
                     : BorderSide.none,
               ),
             ),
             child: SizedBox(
-                width: w.total,
+                width: _calcTableWidth(isMobile),
                 child: Row(
                   children: [
-                    _buildActionsCell(task, w.acoes, isMobile),
-                    _buildStatusCell(task, w.status, isMobile, hasSubtasks, isSubtask || isFrotaRow,
-                        isExecutorRow, hasExecutorPeriods, isExpanded, subtasksCount, toggleExpansion),
-                    _buildCell(task.locais.isNotEmpty ? task.locais.join(', ') : '', w.local, isMobile,
-                        hasColoredBackground: statusBg != Colors.white),
-                    _buildCell(task.tipo, w.tipo, isMobile, hasColoredBackground: statusBg != Colors.white),
-                    SizedBox(
-                      width: w.tarefa,
-                      child: Container(
-                        padding: EdgeInsets.only(left: (isSubtask || isExecutorRow || isFrotaRow) ? (isMobile ? 20 : 24) : 0),
-                        child: _buildCell(task.tarefa, 0, isMobile,
-                            isSubtask: isSubtask || isFrotaRow,
-                            hasColoredBackground: statusBg != Colors.white,
-                            maxLines: 2, softWrap: true, overflow: TextOverflow.fade,
-                            fontWeight: (task.status == 'PROG' || task.status == 'ANDA') ? FontWeight.w600 : null),
+                    if (visibleCols.contains(TaskTableColumn.acoes))
+                      _buildActionsCell(task, w.acoes, isMobile),
+                    if (visibleCols.contains(TaskTableColumn.status))
+                      _buildStatusCell(task, w.status, isMobile, hasSubtasks, isSubtask,
+                          isExecutorRow, isFrotaRow, hasExecutorPeriods, hasFrotaPeriods, isExpanded, subtasksCount, toggleExpansion),
+                    if (visibleCols.contains(TaskTableColumn.local))
+                      _buildCell(
+                        task.locais.isNotEmpty ? task.locais.join(', ') : '',
+                        w.local,
+                        isMobile,
+                        hasColoredBackground: statusBg != Colors.white,
+                        isSubtask: isExecutorRow || isFrotaRow,
                       ),
-                    ),
-                    _buildCell(
-                      task.equipeExecutores?.isNotEmpty == true
-                          ? '${task.equipes.isNotEmpty ? task.equipes.join(', ') : ''} (${task.equipeExecutores!.length})'
-                          : task.executores.isNotEmpty ? task.executores.join(', ') : task.executor,
-                      w.executor, isMobile,
-                      hasColoredBackground: statusBg != Colors.white, maxLines: 2, softWrap: true, overflow: TextOverflow.fade,
-                    ),
-                    _buildCell(task.coordenador, w.coordenador, isMobile, hasColoredBackground: statusBg != Colors.white),
-                    _buildFrotaCell(task, w.frota, isMobile, statusBg),
-                    _buildChatCell(task, w.chat, isMobile, statusBg),
-                    _buildIconCountCell(
-                      Icons.attach_file,
-                      _anexosCount[task.id] ?? 0,
-                      w.anexos, isMobile, statusBg,
-                    ),
-                    _buildNotaSAPCell(task, w.notasSAP, isMobile, statusBg),
-                    _buildOrdemCell(task, w.ordens, isMobile, statusBg),
-                    _buildATCell(task, w.ats, isMobile, statusBg),
-                    _buildSICell(task, w.sis, isMobile, statusBg),
-                    _buildAlertasCell(task, w.alertas, isMobile, statusBg, taskWarnings),
+                    if (visibleCols.contains(TaskTableColumn.tipo))
+                      _buildCell(
+                        task.tipo,
+                        w.tipo,
+                        isMobile,
+                        hasColoredBackground: statusBg != Colors.white,
+                        isSubtask: isExecutorRow || isFrotaRow,
+                      ),
+                    if (visibleCols.contains(TaskTableColumn.tarefa))
+                      _buildTaskTitleCell(
+                        task,
+                        w.tarefa,
+                        isMobile,
+                        isSubtask: isSubtask,
+                        isExecutorRow: isExecutorRow,
+                        isFrotaRow: isFrotaRow,
+                        statusBg: statusBg,
+                      ),
+                    if (visibleCols.contains(TaskTableColumn.executor))
+                      _buildCell(
+                        isFrotaRow
+                            ? '—'
+                            : (task.equipeExecutores?.isNotEmpty == true
+                                ? '${task.equipes.isNotEmpty ? task.equipes.join(', ') : ''} (${task.equipeExecutores!.length})'
+                                : task.executores.isNotEmpty ? task.executores.join(', ') : task.executor),
+                        w.executor,
+                        isMobile,
+                        hasColoredBackground: statusBg != Colors.white,
+                        maxLines: 2,
+                        softWrap: true,
+                        overflow: TextOverflow.fade,
+                        fontWeight: isExecutorRow ? FontWeight.bold : null,
+                      ),
+                    if (visibleCols.contains(TaskTableColumn.coordenador))
+                      _buildCell(
+                        task.coordenador,
+                        w.coordenador,
+                        isMobile,
+                        hasColoredBackground: statusBg != Colors.white,
+                        isSubtask: isExecutorRow || isFrotaRow,
+                      ),
+                    if (visibleCols.contains(TaskTableColumn.frota))
+                      isExecutorRow
+                          ? _buildCell('—', w.frota, isMobile)
+                          : _buildFrotaCell(task, w.frota, isMobile, statusBg),
+                    if (visibleCols.contains(TaskTableColumn.chat))
+                      _buildChatCell(task, w.chat, isMobile, statusBg),
+                    if (visibleCols.contains(TaskTableColumn.anexos))
+                      _buildIconCountCell(
+                        Icons.attach_file,
+                        _anexosCount[task.id] ?? 0,
+                        w.anexos, isMobile, statusBg,
+                      ),
+                    if (visibleCols.contains(TaskTableColumn.nota))
+                      _buildNotaSAPCell(task, w.notasSAP, isMobile, statusBg),
+                    if (visibleCols.contains(TaskTableColumn.ordem))
+                      _buildOrdemCell(task, w.ordens, isMobile, statusBg),
+                    if (visibleCols.contains(TaskTableColumn.at))
+                      _buildATCell(task, w.ats, isMobile, statusBg),
+                    if (visibleCols.contains(TaskTableColumn.si))
+                      _buildSICell(task, w.sis, isMobile, statusBg),
+                    if (visibleCols.contains(TaskTableColumn.alertas))
+                      _buildAlertasCell(task, w.alertas, isMobile, statusBg, taskWarnings),
                   ],
                 ),
               ),
@@ -2094,46 +2392,50 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
 
   Widget _buildStatusCell(
     Task task, double width, bool isMobile, bool hasSubtasks, bool isSubtask,
-    bool isExecutorRow, bool hasExecutorPeriods, bool isExpanded, int subtasksCount,
-    VoidCallback toggleExpansion,
+    bool isExecutorRow, bool isFrotaRow, bool hasExecutorPeriods, bool hasFrotaPeriods,
+    bool isExpanded, int subtasksCount, VoidCallback toggleExpansion,
   ) {
     final badge = _getStatusBadgeColor(task.status);
+    final hasChildren = hasSubtasks || hasExecutorPeriods || hasFrotaPeriods;
+    final isChildRow = isSubtask || isExecutorRow || isFrotaRow;
+
     return SizedBox(
       width: width,
       child: Container(
-        padding: EdgeInsets.symmetric(horizontal: isMobile ? 3 : 6, vertical: isMobile ? 4 : 8),
+        padding: EdgeInsets.symmetric(horizontal: isMobile ? 2 : 4, vertical: isMobile ? 4 : 8),
         decoration: BoxDecoration(border: Border(right: BorderSide(color: Colors.grey[300]!, width: 0.5))),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (hasSubtasks || hasExecutorPeriods)
-              Row(mainAxisSize: MainAxisSize.min, children: [
-                IconButton(
-                  icon: Icon(isExpanded ? Icons.expand_less : Icons.expand_more, size: isMobile ? 16 : 18, color: Colors.blue[700]),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  onPressed: toggleExpansion,
+            if (hasChildren)
+              IconButton(
+                icon: Icon(
+                  isExpanded ? Icons.expand_less : Icons.expand_more,
+                  size: isMobile ? 16 : 18,
+                  color: Colors.blue[700],
                 ),
-                if (hasSubtasks && !isExpanded)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                    decoration: BoxDecoration(color: Colors.blue[100], borderRadius: BorderRadius.circular(10)),
-                    child: Text('$subtasksCount', style: TextStyle(fontSize: isMobile ? 8 : 9, color: Colors.blue[900], fontWeight: FontWeight.bold)),
-                  ),
-              ])
-            else if (isSubtask)
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                onPressed: toggleExpansion,
+              )
+            else if (isChildRow)
               Padding(
-                padding: EdgeInsets.only(left: isMobile ? 16 : 20),
-                child: Icon(Icons.subdirectory_arrow_right, size: isMobile ? 14 : 16, color: Colors.grey[600]),
+                padding: EdgeInsets.only(left: isMobile ? 10 : 14),
+                child: Icon(Icons.subdirectory_arrow_right, size: isMobile ? 13 : 15, color: Colors.grey[600]),
               )
             else
               const SizedBox(width: 8),
+            const SizedBox(width: 4),
             Tooltip(
               message: _statusMap[task.status]?.status ?? task.status,
               child: Container(
-                width: isMobile ? 12 : 14,
-                height: isMobile ? 12 : 14,
-                decoration: BoxDecoration(color: badge, shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 1.5)),
+                width: isMobile ? 10 : 12,
+                height: isMobile ? 10 : 12,
+                decoration: BoxDecoration(
+                  color: (isExecutorRow || isFrotaRow) ? badge.withValues(alpha: 0.6) : badge,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 1.2),
+                ),
               ),
             ),
           ],
@@ -2301,7 +2603,9 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
     bool isSubtask,
     bool hasSubtasks,
     bool isExecutorRow,
+    bool isFrotaRow,
     bool hasExecutorPeriods,
+    bool hasFrotaPeriods,
     bool isExpanded,
     List<GanttPeriod> periods,
     double periodWidth,
@@ -2317,20 +2621,28 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
         children: [
           Container(
             decoration: BoxDecoration(
-              color: isSubtask ? Colors.grey[50]!.withOpacity(0.5) : Colors.white,
+              color: isSubtask
+                  ? Colors.blue.withValues(alpha: 0.02)
+                  : isExecutorRow
+                  ? Colors.orange.withValues(alpha: 0.03)
+                  : isFrotaRow
+                  ? Colors.green.withValues(alpha: 0.03)
+                  : Colors.white,
               border: Border(
                 bottom: BorderSide(color: Colors.grey[300]!, width: 1),
                 left: isExecutorRow
-                    ? BorderSide(color: Colors.orange[400]!, width: 3)
+                    ? BorderSide(color: Colors.orange[400]!, width: 4)
+                    : isFrotaRow
+                    ? BorderSide(color: Colors.green[500]!, width: 4)
                     : isSubtask
                     ? BorderSide(color: Colors.blue[400]!, width: 4)
-                    : (hasSubtasks || hasExecutorPeriods)
+                    : (hasSubtasks || hasExecutorPeriods || hasFrotaPeriods)
                     ? BorderSide(color: Colors.blue[200]!, width: 2)
                     : BorderSide.none,
               ),
             ),
           ),
-          if ((hasSubtasks || hasExecutorPeriods) && !isSubtask && !isExecutorRow)
+          if ((hasSubtasks || hasExecutorPeriods || hasFrotaPeriods) && !isSubtask && !isExecutorRow && !isFrotaRow)
             Positioned(
               left: 4,
               top: 4,
@@ -3791,25 +4103,23 @@ class _TableColWidths {
   final double alertas;
 
   _TableColWidths(bool isMobile)
-      : acoes = isMobile ? 50 : 60,
-        status = isMobile ? 60 : 70,
-        local = isMobile ? 80 : 90,
-        tipo = isMobile ? 90 : 100,
-        tarefa = isMobile ? 150 : 184,
-        executor = isMobile ? 120 : 150,
-        coordenador = isMobile ? 85 : 110,
-        frota = isMobile ? 45 : 50,
-        chat = isMobile ? 45 : 50,
-        anexos = isMobile ? 45 : 50,
-        notasSAP = isMobile ? 45 : 50,
-        ordens = isMobile ? 45 : 50,
-        ats = isMobile ? 38 : 42,
-        sis = isMobile ? 38 : 42,
-        alertas = isMobile ? 45 : 50;
+      : acoes = TaskTableColumn.acoes.width(isMobile),
+        status = TaskTableColumn.status.width(isMobile),
+        local = TaskTableColumn.local.width(isMobile),
+        tipo = TaskTableColumn.tipo.width(isMobile),
+        tarefa = TaskTableColumn.tarefa.width(isMobile),
+        executor = TaskTableColumn.executor.width(isMobile),
+        coordenador = TaskTableColumn.coordenador.width(isMobile),
+        frota = TaskTableColumn.frota.width(isMobile),
+        chat = TaskTableColumn.chat.width(isMobile),
+        anexos = TaskTableColumn.anexos.width(isMobile),
+        notasSAP = TaskTableColumn.nota.width(isMobile),
+        ordens = TaskTableColumn.ordem.width(isMobile),
+        ats = TaskTableColumn.at.width(isMobile),
+        sis = TaskTableColumn.si.width(isMobile),
+        alertas = TaskTableColumn.alertas.width(isMobile);
 
-  double get total =>
-      acoes + status + local + tipo + tarefa + executor + coordenador +
-      frota + chat + anexos + notasSAP + ordens + ats + sis + alertas + 32;
+  double get total => TaskTableColumnService.instance.calculateTotalWidth(false);
 }
 
 class _ActivityRenderSegment {

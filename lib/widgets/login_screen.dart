@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:video_player/video_player.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:ui';
 import '../services/auth_service_simples.dart';
 import '../services/biometric_service.dart';
@@ -36,77 +36,22 @@ class _LoginScreenState extends State<LoginScreen> {
   final _biometricService = BiometricService();
   final _azureAuthService = AzureAuthService();
   final _azureAuthServiceWeb = AzureAuthServiceWeb();
-  final bool _azureLoginEnabled =
-      false; // Temporariamente desativado até aprovação admin
+  final bool _azureLoginEnabled = true; // Ativado para login Microsoft Entra ID
   final _passwordFocusNode = FocusNode();
   final _nomeFocusNode = FocusNode();
 
   bool _isLoading = false;
   bool _obscurePassword = true;
   bool _isLoginMode = true; // true = login, false = registro
+  bool _isAdLogin = false; // true = login com Active Directory Chesf
   bool _showBiometricOption = false;
-
-  late VideoPlayerController _videoController;
-  bool _videoInitialized = false;
-  late VoidCallback _videoListener;
+  final _adUserFocusNode = FocusNode();
 
   @override
   void initState() {
     super.initState();
     _checkBiometricAvailability();
     _loadSavedCredentials();
-    _initVideo();
-  }
-
-  void _initVideo() {
-    _videoController = VideoPlayerController.asset('assets/videos/intro.mp4');
-
-    _videoController
-        .initialize()
-        .then((_) {
-          if (!mounted) return;
-
-          setState(() {
-            _videoInitialized = true;
-          });
-
-          // Configurações garantidas antes do play
-          _videoController.setLooping(false);
-          _videoController.setVolume(
-            0,
-          ); // Muted para facilitar o autoplay nos browsers
-
-          // Delay pequeno ou PostFrameCallback para garantir que o widget VideoPlayer já esteja na árvore
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) {
-              _videoController.play();
-            }
-          });
-
-          // Esconder o vídeo quando terminar de tocar
-          _videoListener = () {
-            if (!_videoController.value.isInitialized) return;
-            final pos = _videoController.value.position;
-            final dur = _videoController.value.duration;
-            if (pos >= dur - const Duration(milliseconds: 200)) {
-              if (mounted) {
-                setState(() {
-                  _videoInitialized = false;
-                });
-              }
-              _videoController.removeListener(_videoListener);
-            }
-          };
-          _videoController.addListener(_videoListener);
-        })
-        .catchError((error) {
-          print('❌ Erro ao inicializar vídeo de fundo: $error');
-          if (mounted) {
-            setState(() {
-              _videoInitialized = false;
-            });
-          }
-        });
   }
 
   @override
@@ -116,10 +61,7 @@ class _LoginScreenState extends State<LoginScreen> {
     _nomeController.dispose();
     _passwordFocusNode.dispose();
     _nomeFocusNode.dispose();
-    try {
-      _videoController.removeListener(_videoListener);
-    } catch (_) {}
-    _videoController.dispose();
+    _adUserFocusNode.dispose();
     super.dispose();
   }
 
@@ -151,6 +93,41 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _isLoading = true);
 
     try {
+      if (_isAdLogin) {
+        // Autenticação com Active Directory (Rede Chesf)
+        final response = await _authService.signInWithAD(
+          username: _emailController.text.trim(),
+          password: _passwordController.text,
+        );
+
+        if (mounted) {
+          if (response.sucesso) {
+            await _biometricService.saveCredentials(
+              _emailController.text.trim(),
+              _passwordController.text,
+            );
+
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Bem-vindo(a), ${response.usuario?.nome ?? "Usuário"}! Autenticado via Rede Chesf.',
+                ),
+                backgroundColor: Colors.green,
+              ),
+            );
+            widget.onLoginSuccess?.call();
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(response.erro ?? 'Erro ao autenticar com a rede Chesf'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+        }
+        return;
+      }
+
       if (_isLoginMode) {
         // Login
         final response = await _authService.signInWithEmail(
@@ -313,6 +290,70 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  Future<void> _handleMicrosoftLogin() async {
+    setState(() => _isLoading = true);
+    try {
+      String? email;
+
+      if (kIsWeb) {
+        final result = await _azureAuthServiceWeb.signInInteractive();
+        if (!result.sucesso) {
+          throw Exception(result.erro ?? 'Falha ao autenticar na Microsoft');
+        }
+        email = result.email;
+      } else {
+        final result = await _azureAuthService.signInInteractive();
+        if (!result.sucesso) {
+          throw Exception(result.erro ?? 'Falha ao autenticar na Microsoft');
+        }
+        email = result.email;
+      }
+
+      if (email == null || email.isEmpty) {
+        throw Exception('Email não retornado pela conta Microsoft');
+      }
+
+      final response = await _authService.signInWithAzureEmail(
+        email: email,
+      );
+
+      if (mounted) {
+        if (response.sucesso) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Bem-vindo(a), ${response.usuario?.nome ?? email}! Autenticado com Microsoft.',
+              ),
+              backgroundColor: Colors.green,
+            ),
+          );
+          widget.onLoginSuccess?.call();
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(response.erro ?? 'Erro ao vincular conta Microsoft'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Autenticação Microsoft: ${e.toString()}'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 6),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
   Future<void> _handleResetPassword() async {
     if (_emailController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -354,20 +395,20 @@ class _LoginScreenState extends State<LoginScreen> {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // Background Video
-          if (_videoInitialized)
-            SizedBox.expand(
-              child: FittedBox(
-                fit: BoxFit.cover,
-                child: SizedBox(
-                  width: _videoController.value.size.width,
-                  height: _videoController.value.size.height,
-                  child: VideoPlayer(_videoController),
-                ),
+          // Background
+          Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Color(0xFF0F172A),
+                  AxiaColors.purple,
+                  AxiaColors.grey1,
+                ],
               ),
-            )
-          else
-            Container(color: AxiaColors.grey1),
+            ),
+          ),
 
           // Glass / Blur Overlay
           Positioned.fill(
@@ -424,18 +465,18 @@ class _LoginScreenState extends State<LoginScreen> {
                                   letterSpacing: 1.2,
                                 ),
                               ),
-                              const SizedBox(height: 8),
-                              Text(
-                                _isLoginMode
-                                    ? 'O novo vem com energia'
-                                    : 'Crie sua conta',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  color: Colors.white.withOpacity(0.8),
-                                  fontWeight: FontWeight.w300,
+                              if (!_isLoginMode) ...[
+                                const SizedBox(height: 8),
+                                Text(
+                                  'Crie sua conta',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    color: Colors.white.withOpacity(0.8),
+                                    fontWeight: FontWeight.w300,
+                                  ),
                                 ),
-                              ),
+                              ],
                             ],
                           ),
                         ),
@@ -459,17 +500,137 @@ class _LoginScreenState extends State<LoginScreen> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
-                                  // Campo Email
+                                  // Seletor de Modo de Autenticação (Padrão ou AD Chesf)
+                                  Container(
+                                    decoration: BoxDecoration(
+                                      color: Colors.black.withOpacity(0.25),
+                                      borderRadius: BorderRadius.circular(14),
+                                      border: Border.all(
+                                        color: Colors.white.withOpacity(0.1),
+                                      ),
+                                    ),
+                                    padding: const EdgeInsets.all(4),
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: GestureDetector(
+                                            onTap: () {
+                                              setState(() {
+                                                _isAdLogin = false;
+                                                _emailController.clear();
+                                                _passwordController.clear();
+                                              });
+                                            },
+                                            child: Container(
+                                              padding: const EdgeInsets.symmetric(
+                                                vertical: 10,
+                                              ),
+                                              decoration: BoxDecoration(
+                                                color: !_isAdLogin
+                                                    ? AxiaColors.primaryBlue
+                                                    : Colors.transparent,
+                                                borderRadius:
+                                                    BorderRadius.circular(10),
+                                              ),
+                                              child: const Row(
+                                                mainAxisAlignment:
+                                                    MainAxisAlignment.center,
+                                                children: [
+                                                  Icon(
+                                                    Icons.mail_outline,
+                                                    size: 16,
+                                                    color: Colors.white,
+                                                  ),
+                                                  SizedBox(width: 6),
+                                                  Text(
+                                                    'Email Task Flow',
+                                                    style: TextStyle(
+                                                      color: Colors.white,
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                      fontSize: 12,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                        Expanded(
+                                          child: GestureDetector(
+                                            onTap: () {
+                                              setState(() {
+                                                _isAdLogin = true;
+                                                _isLoginMode = true;
+                                                _emailController.clear();
+                                                _passwordController.clear();
+                                              });
+                                            },
+                                            child: Container(
+                                              padding: const EdgeInsets.symmetric(
+                                                vertical: 10,
+                                              ),
+                                              decoration: BoxDecoration(
+                                                color: _isAdLogin
+                                                    ? const Color(0xFF0078D4)
+                                                    : Colors.transparent,
+                                                borderRadius:
+                                                    BorderRadius.circular(10),
+                                              ),
+                                              child: const Row(
+                                                mainAxisAlignment:
+                                                    MainAxisAlignment.center,
+                                                children: [
+                                                  Icon(
+                                                    Icons.domain,
+                                                    size: 16,
+                                                    color: Colors.white,
+                                                  ),
+                                                  SizedBox(width: 6),
+                                                  Text(
+                                                    'Rede Chesf (AD)',
+                                                    style: TextStyle(
+                                                      color: Colors.white,
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                      fontSize: 12,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(height: 24),
+
+                                  // Campo Usuário / Email
                                   _buildTextField(
                                     controller: _emailController,
-                                    label: 'Email',
-                                    icon: Icons.email_outlined,
-                                    keyboardType: TextInputType.emailAddress,
+                                    label: _isAdLogin
+                                        ? 'Usuário de Rede (AD)'
+                                        : 'Email',
+                                    icon: _isAdLogin
+                                        ? Icons.badge_outlined
+                                        : Icons.email_outlined,
+                                    keyboardType: _isAdLogin
+                                        ? TextInputType.text
+                                        : TextInputType.emailAddress,
+                                    hintText: _isAdLogin
+                                        ? 'Ex: matrícula ou login de rede'
+                                        : 'seu.email@empresa.com',
+                                    helperText: _isAdLogin
+                                        ? 'Domínio: redechesf.local'
+                                        : null,
                                     validator: (value) {
-                                      if (value == null || value.isEmpty) {
-                                        return 'Digite seu email';
+                                      if (value == null || value.trim().isEmpty) {
+                                        return _isAdLogin
+                                            ? 'Digite seu usuário de rede'
+                                            : 'Digite seu email';
                                       }
-                                      if (!value.contains('@')) {
+                                      if (!_isAdLogin && !value.contains('@')) {
                                         return 'Email inválido';
                                       }
                                       return null;
@@ -527,8 +688,9 @@ class _LoginScreenState extends State<LoginScreen> {
                                         : _handleSubmit,
                                     style:
                                         ElevatedButton.styleFrom(
-                                          backgroundColor:
-                                              AxiaColors.primaryBlue,
+                                          backgroundColor: _isAdLogin
+                                              ? const Color(0xFF0078D4)
+                                              : AxiaColors.primaryBlue,
                                           foregroundColor: Colors.white,
                                           padding: const EdgeInsets.symmetric(
                                             vertical: 20,
@@ -539,18 +701,6 @@ class _LoginScreenState extends State<LoginScreen> {
                                             ),
                                           ),
                                           elevation: 0,
-                                        ).copyWith(
-                                          backgroundColor:
-                                              WidgetStateProperty.resolveWith((
-                                                states,
-                                              ) {
-                                                if (states.contains(
-                                                  WidgetState.pressed,
-                                                )) {
-                                                  return AxiaColors.blue1;
-                                                }
-                                                return AxiaColors.primaryBlue;
-                                              }),
                                         ),
                                     child: _isLoading
                                         ? const SizedBox(
@@ -564,55 +714,165 @@ class _LoginScreenState extends State<LoginScreen> {
                                                   ),
                                             ),
                                           )
-                                        : const Text(
-                                            'ENTRAR',
-                                            style: TextStyle(
-                                              fontSize: 16,
+                                        : Text(
+                                            _isAdLogin
+                                                ? 'ENTRAR COM REDE CHESF'
+                                                : 'ENTRAR',
+                                            style: const TextStyle(
+                                              fontSize: 15,
                                               fontWeight: FontWeight.bold,
-                                              letterSpacing: 2.0,
+                                              letterSpacing: 1.5,
                                             ),
                                           ),
                                   ),
 
-                                  const SizedBox(height: 20),
+                                  if (_azureLoginEnabled) ...[
+                                    const SizedBox(height: 20),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Divider(
+                                            color: Colors.white.withOpacity(0.2),
+                                          ),
+                                        ),
+                                        Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 16,
+                                          ),
+                                          child: Text(
+                                            'OU',
+                                            style: TextStyle(
+                                              color: Colors.white.withOpacity(0.5),
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                          ),
+                                        ),
+                                        Expanded(
+                                          child: Divider(
+                                            color: Colors.white.withOpacity(0.2),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 20),
 
-                                  // Link para alternar
-                                  TextButton(
-                                    onPressed: _isLoading
-                                        ? null
-                                        : () {
-                                            setState(() {
-                                              _isLoginMode = !_isLoginMode;
-                                              _passwordController.clear();
-                                              _nomeController.clear();
-                                            });
-                                          },
-                                    child: Text(
-                                      _isLoginMode
-                                          ? 'CRIAR UMA CONTA'
-                                          : 'JÁ TENHO UMA CONTA',
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w600,
-                                        letterSpacing: 1.0,
+                                    // Botão Microsoft Entra ID
+                                    OutlinedButton(
+                                      onPressed: _isLoading
+                                          ? null
+                                          : _handleMicrosoftLogin,
+                                      style: OutlinedButton.styleFrom(
+                                        foregroundColor: Colors.white,
+                                        backgroundColor:
+                                            Colors.white.withOpacity(0.06),
+                                        side: BorderSide(
+                                          color: Colors.white.withOpacity(0.2),
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                          vertical: 18,
+                                        ),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(16),
+                                        ),
+                                      ),
+                                      child: Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: [
+                                          // 4 cores Microsoft
+                                          SizedBox(
+                                            width: 16,
+                                            height: 16,
+                                            child: Wrap(
+                                              spacing: 2,
+                                              runSpacing: 2,
+                                              children: const [
+                                                ColoredBox(
+                                                  color: Color(0xFFF25022),
+                                                  child: SizedBox(
+                                                    width: 7,
+                                                    height: 7,
+                                                  ),
+                                                ),
+                                                ColoredBox(
+                                                  color: Color(0xFF7FBA00),
+                                                  child: SizedBox(
+                                                    width: 7,
+                                                    height: 7,
+                                                  ),
+                                                ),
+                                                ColoredBox(
+                                                  color: Color(0xFF00A4EF),
+                                                  child: SizedBox(
+                                                    width: 7,
+                                                    height: 7,
+                                                  ),
+                                                ),
+                                                ColoredBox(
+                                                  color: Color(0xFFFFB900),
+                                                  child: SizedBox(
+                                                    width: 7,
+                                                    height: 7,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          const SizedBox(width: 12),
+                                          const Text(
+                                            'Entrar com Microsoft (Entra ID)',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w600,
+                                              letterSpacing: 0.5,
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
-                                  ),
+                                  ],
 
-                                  if (_isLoginMode) ...[
+                                  if (!_isAdLogin) ...[
+                                    const SizedBox(height: 20),
+                                    // Link para alternar
                                     TextButton(
                                       onPressed: _isLoading
                                           ? null
-                                          : _handleResetPassword,
+                                          : () {
+                                              setState(() {
+                                                _isLoginMode = !_isLoginMode;
+                                                _passwordController.clear();
+                                                _nomeController.clear();
+                                              });
+                                            },
                                       child: Text(
-                                        'ESQUECEU A SENHA?',
-                                        style: TextStyle(
-                                          color: Colors.white.withOpacity(0.5),
-                                          fontSize: 11,
+                                        _isLoginMode
+                                            ? 'CRIAR UMA CONTA'
+                                            : 'JÁ TENHO UMA CONTA',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                          letterSpacing: 1.0,
                                         ),
                                       ),
                                     ),
+
+                                    if (_isLoginMode) ...[
+                                      TextButton(
+                                        onPressed: _isLoading
+                                            ? null
+                                            : _handleResetPassword,
+                                        child: Text(
+                                          'ESQUECEU A SENHA?',
+                                          style: TextStyle(
+                                            color: Colors.white.withOpacity(0.5),
+                                            fontSize: 11,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ],
                                 ],
                               ),
@@ -657,6 +917,8 @@ class _LoginScreenState extends State<LoginScreen> {
     bool obscureText = false,
     Widget? suffixIcon,
     TextInputType? keyboardType,
+    String? hintText,
+    String? helperText,
     String? Function(String?)? validator,
   }) {
     return TextFormField(
@@ -667,6 +929,10 @@ class _LoginScreenState extends State<LoginScreen> {
       style: const TextStyle(color: Colors.white),
       decoration: InputDecoration(
         labelText: label,
+        hintText: hintText,
+        helperText: helperText,
+        hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
+        helperStyle: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 11),
         labelStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
         prefixIcon: Icon(icon, color: Colors.white70),
         suffixIcon: suffixIcon,

@@ -11,6 +11,7 @@ import 'html_stub.dart' as html if (dart.library.html) 'dart:html';
 import 'mobile/core/responsive/tf_mobile_responsive.dart';
 import 'mobile/core/config/mobile_feature_flags.dart';
 import 'models/task.dart';
+import 'models/task_sort_rule.dart';
 import 'services/task_service.dart';
 import 'services/performance_monitor.dart';
 import 'services/conflict_service.dart';
@@ -836,6 +837,7 @@ class _MainScreenState extends State<MainScreen> {
     // Sincronizar scroll entre tabela e Gantt (100% sincronizado)
     _tableScrollController.addListener(_syncTableToGantt);
     _ganttScrollController.addListener(_syncGanttToTable);
+    TaskSortService.instance.rulesNotifier.addListener(_onSortRulesChanged);
 
     // Inicializar UnreadChatManager de forma suave após o primeiro frame (sem bloquear renderização de tarefas)
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -873,10 +875,23 @@ class _MainScreenState extends State<MainScreen> {
     // Remover listeners antes de dispor
     _tableScrollController.removeListener(_syncTableToGantt);
     _ganttScrollController.removeListener(_syncGanttToTable);
+    TaskSortService.instance.rulesNotifier.removeListener(_onSortRulesChanged);
     _tableScrollController.dispose();
     _ganttScrollController.dispose();
     _chatCountTimer?.cancel();
     super.dispose();
+  }
+
+  void _onSortRulesChanged() {
+    if (mounted) {
+      setState(() {
+        _sortColumn = TaskSortService.instance.primaryColumn;
+        _sortAscending = TaskSortService.instance.primaryAscending;
+        _tasks = _sortTasks(_tasks);
+        _tasksSemFiltros = _sortTasks(_tasksSemFiltros);
+        _applyFilters(_currentFilters);
+      });
+    }
   }
 
   /// Recarrega o snapshot de mensagens não lidas no manager (reconciliação sob demanda).
@@ -890,145 +905,88 @@ class _MainScreenState extends State<MainScreen> {
 
   // Função para ordenar tarefas por período (data de início e fim)
   // Estado de ordenação
-  String _sortColumn = 'LOCAL'; // Coluna padrão ajustada para LOCAL
-  bool _sortAscending = true; // Direção padrão: crescente
+  String _sortColumn = TaskSortService.instance.primaryColumn; // Coluna padrão ajustada para LOCAL
+  bool _sortAscending = TaskSortService.instance.primaryAscending; // Direção padrão: crescente
   
+  int _compareTasksByColumn(Task a, Task b, String column) {
+    DateTime getStart(Task t) {
+      if (t.ganttSegments.isNotEmpty) {
+        return t.ganttSegments.first.dataInicio;
+      }
+      return t.dataInicio;
+    }
+
+    DateTime getEnd(Task t) {
+      if (t.ganttSegments.isNotEmpty) {
+        return t.ganttSegments.first.dataFim;
+      }
+      return t.dataFim;
+    }
+
+    switch (column) {
+      case 'PERÍODO':
+        DateTime aStart, aEnd, bStart, bEnd;
+        if (a.ganttSegments.isNotEmpty) {
+          aStart = a.ganttSegments.first.dataInicio;
+          aEnd = a.ganttSegments.first.dataFim;
+        } else {
+          aStart = a.dataInicio;
+          aEnd = a.dataFim;
+        }
+        if (b.ganttSegments.isNotEmpty) {
+          bStart = b.ganttSegments.first.dataInicio;
+          bEnd = b.ganttSegments.first.dataFim;
+        } else {
+          bStart = b.dataInicio;
+          bEnd = b.dataFim;
+        }
+        final compStart = aStart.compareTo(bStart);
+        if (compStart != 0) return compStart;
+        return aEnd.compareTo(bEnd);
+
+      case 'STATUS':
+        final statusA = a.statusNome.isNotEmpty ? a.statusNome : a.status;
+        final statusB = b.statusNome.isNotEmpty ? b.statusNome : b.status;
+        return statusA.compareTo(statusB);
+
+      case 'LOCAL':
+        final localA = a.locais.isNotEmpty ? a.locais.first : '';
+        final localB = b.locais.isNotEmpty ? b.locais.first : '';
+        return localA.compareTo(localB);
+
+      case 'TIPO':
+        return a.tipo.compareTo(b.tipo);
+
+      case 'TAREFA':
+        return a.tarefa.compareTo(b.tarefa);
+
+      case 'EXECUTOR':
+        return a.executor.compareTo(b.executor);
+
+      case 'COORDENADOR':
+        return a.coordenador.compareTo(b.coordenador);
+
+      default:
+        return a.dataInicio.compareTo(b.dataInicio);
+    }
+  }
+
   List<Task> _sortTasks(List<Task> tasks) {
     if (tasks.isEmpty) return [];
     final sortedTasks = List<Task>.from(tasks);
-    
+    final rules = TaskSortService.instance.rules;
+
     sortedTasks.sort((a, b) {
-      int comparison = 0;
-
-      DateTime getStart(Task t) {
-        if (t.ganttSegments.isNotEmpty) {
-          return t.ganttSegments.first.dataInicio;
+      for (final rule in rules) {
+        final comp = _compareTasksByColumn(a, b, rule.column);
+        if (comp != 0) {
+          return rule.ascending ? comp : -comp;
         }
-        return t.dataInicio;
       }
-
-      DateTime getEnd(Task t) {
-        if (t.ganttSegments.isNotEmpty) {
-          return t.ganttSegments.first.dataFim;
-        }
-        return t.dataFim;
-      }
-      
-      switch (_sortColumn) {
-        case 'PERÍODO':
-          // Obter o primeiro segmento de cada tarefa (ou usar dataInicio/dataFim da tarefa se não houver segmentos)
-          DateTime aStart, aEnd, bStart, bEnd;
-          
-          if (a.ganttSegments.isNotEmpty) {
-            aStart = a.ganttSegments.first.dataInicio;
-            aEnd = a.ganttSegments.first.dataFim;
-          } else {
-            aStart = a.dataInicio;
-            aEnd = a.dataFim;
-          }
-          
-          if (b.ganttSegments.isNotEmpty) {
-            bStart = b.ganttSegments.first.dataInicio;
-            bEnd = b.ganttSegments.first.dataFim;
-          } else {
-            bStart = b.dataInicio;
-            bEnd = b.dataFim;
-          }
-          
-          // Primeiro ordenar por data de início
-          comparison = aStart.compareTo(bStart);
-          if (comparison != 0) {
-            return _sortAscending ? comparison : -comparison;
-          }
-          
-          // Se as datas de início forem iguais, ordenar por data de fim
-          comparison = aEnd.compareTo(bEnd);
-          break;
-          
-        case 'STATUS':
-          final statusA = a.statusNome.isNotEmpty ? a.statusNome : a.status;
-          final statusB = b.statusNome.isNotEmpty ? b.statusNome : b.status;
-          comparison = statusA.compareTo(statusB);
-          if (comparison == 0) {
-            final aStart = getStart(a);
-            final bStart = getStart(b);
-            comparison = aStart.compareTo(bStart);
-            if (comparison == 0) {
-              comparison = getEnd(a).compareTo(getEnd(b));
-            }
-          }
-          break;
-          
-        case 'LOCAL':
-          final localA = a.locais.isNotEmpty ? a.locais.first : '';
-          final localB = b.locais.isNotEmpty ? b.locais.first : '';
-          comparison = localA.compareTo(localB);
-          if (comparison == 0) {
-            final aStart = getStart(a);
-            final bStart = getStart(b);
-            comparison = aStart.compareTo(bStart);
-            if (comparison == 0) {
-              comparison = getEnd(a).compareTo(getEnd(b));
-            }
-          }
-          break;
-          
-        case 'TIPO':
-          comparison = a.tipo.compareTo(b.tipo);
-          if (comparison == 0) {
-            final aStart = getStart(a);
-            final bStart = getStart(b);
-            comparison = aStart.compareTo(bStart);
-            if (comparison == 0) {
-              comparison = getEnd(a).compareTo(getEnd(b));
-            }
-          }
-          break;
-          
-        case 'TAREFA':
-          comparison = a.tarefa.compareTo(b.tarefa);
-          if (comparison == 0) {
-            final aStart = getStart(a);
-            final bStart = getStart(b);
-            comparison = aStart.compareTo(bStart);
-            if (comparison == 0) {
-              comparison = getEnd(a).compareTo(getEnd(b));
-            }
-          }
-          break;
-          
-        case 'EXECUTOR':
-          comparison = a.executor.compareTo(b.executor);
-          if (comparison == 0) {
-            final aStart = getStart(a);
-            final bStart = getStart(b);
-            comparison = aStart.compareTo(bStart);
-            if (comparison == 0) {
-              comparison = getEnd(a).compareTo(getEnd(b));
-            }
-          }
-          break;
-          
-        case 'COORDENADOR':
-          comparison = a.coordenador.compareTo(b.coordenador);
-          if (comparison == 0) {
-            final aStart = getStart(a);
-            final bStart = getStart(b);
-            comparison = aStart.compareTo(bStart);
-            if (comparison == 0) {
-              comparison = getEnd(a).compareTo(getEnd(b));
-            }
-          }
-          break;
-          
-        default:
-          // Fallback para período
-          comparison = a.dataInicio.compareTo(b.dataInicio);
-      }
-      
-      return _sortAscending ? comparison : -comparison;
+      // Se empatar em todos os critérios configurados, desempata pelo período (data início)
+      return _compareTasksByColumn(a, b, 'PERÍODO');
     });
-    
+
     return sortedTasks;
   }
 
@@ -1128,6 +1086,7 @@ class _MainScreenState extends State<MainScreen> {
       _sortColumn = column;
       _sortAscending = ascending;
     });
+    TaskSortService.instance.setPrimaryRule(column, ascending);
     print('🔄 main.dart: _sortColumn atualizado para $_sortColumn');
   }
 

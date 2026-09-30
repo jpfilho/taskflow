@@ -147,7 +147,9 @@ class _PerfilUsuarioViewState extends State<PerfilUsuarioView> {
         await _loadData();
         
         // Navegar de volta e passar resultado para recarregar tarefas
-        Navigator.pop(context, true); // true indica que o perfil foi atualizado
+        if (context.mounted) {
+          Navigator.pop(context, true); // true indica que o perfil foi atualizado
+        }
       }
     } catch (e) {
       print('Erro ao salvar perfil: $e');
@@ -294,13 +296,33 @@ class _PerfilUsuarioViewState extends State<PerfilUsuarioView> {
               onSelectionChanged: (selectedIds) {
                 setState(() {
                   _selectedRegionalIds = selectedIds;
+
+                  // Atualizar divisões válidas pelas novas regionais selecionadas
+                  final validDivisaoIds = _todasDivisoes
+                      .where((d) =>
+                          d.regionalIds.any((rId) => selectedIds.contains(rId)) ||
+                          selectedIds.contains(d.regionalId))
+                      .map((d) => d.id)
+                      .toSet();
+
+                  // Desmarcar divisões que não pertencem mais a nenhuma regional selecionada
+                  _selectedDivisaoIds = _selectedDivisaoIds.intersection(validDivisaoIds);
+
+                  // Atualizar segmentos válidos pelas divisões restantes
+                  final validSegmentoIds = _todasDivisoes
+                      .where((d) => _selectedDivisaoIds.contains(d.id))
+                      .expand((d) => d.segmentoIds)
+                      .toSet();
+
+                  // Desmarcar segmentos que não pertencem mais a nenhuma divisão selecionada
+                  _selectedSegmentoIds = _selectedSegmentoIds.intersection(validSegmentoIds);
                 });
               },
             ),
             
             const SizedBox(height: 24),
             
-            // Divisões
+            // Divisões (habilitadas apenas as cadastradas para as regionais selecionadas)
             _buildSection(
               title: 'Divisões',
               icon: Icons.business,
@@ -308,16 +330,36 @@ class _PerfilUsuarioViewState extends State<PerfilUsuarioView> {
               items: _todasDivisoes.map((d) => d.divisao).toList(),
               selectedIds: _selectedDivisaoIds,
               allItems: _todasDivisoes,
+              isItemEnabled: (Divisao d) {
+                if (_selectedRegionalIds.isEmpty) return false;
+                return d.regionalIds.any((rId) => _selectedRegionalIds.contains(rId)) ||
+                    _selectedRegionalIds.contains(d.regionalId);
+              },
+              disabledTooltip: _selectedRegionalIds.isEmpty
+                  ? 'Selecione uma Regional primeiro'
+                  : 'Divisão não cadastrada para a(s) regional(is) selecionada(s)',
+              emptyParentMessage: _selectedRegionalIds.isEmpty
+                  ? 'Selecione ao menos uma Regional acima para habilitar as divisões correspondentes.'
+                  : null,
               onSelectionChanged: (selectedIds) {
                 setState(() {
                   _selectedDivisaoIds = selectedIds;
+
+                  // Atualizar segmentos válidos pelas novas divisões selecionadas
+                  final validSegmentoIds = _todasDivisoes
+                      .where((d) => selectedIds.contains(d.id))
+                      .expand((d) => d.segmentoIds)
+                      .toSet();
+
+                  // Desmarcar segmentos que não pertencem mais a nenhuma divisão selecionada
+                  _selectedSegmentoIds = _selectedSegmentoIds.intersection(validSegmentoIds);
                 });
               },
             ),
             
             const SizedBox(height: 24),
             
-            // Segmentos
+            // Segmentos (habilitados apenas os cadastrados para as divisões selecionadas)
             _buildSection(
               title: 'Segmentos',
               icon: Icons.category,
@@ -325,6 +367,20 @@ class _PerfilUsuarioViewState extends State<PerfilUsuarioView> {
               items: _todosSegmentos.map((s) => s.segmento).toList(),
               selectedIds: _selectedSegmentoIds,
               allItems: _todosSegmentos,
+              isItemEnabled: (Segmento s) {
+                if (_selectedDivisaoIds.isEmpty) return false;
+                return _todasDivisoes
+                    .where((d) => _selectedDivisaoIds.contains(d.id))
+                    .any((d) => d.segmentoIds.contains(s.id));
+              },
+              disabledTooltip: _selectedDivisaoIds.isEmpty
+                  ? 'Selecione uma Divisão primeiro'
+                  : 'Segmento não cadastrado para a(s) divisão(ões) selecionada(s)',
+              emptyParentMessage: _selectedDivisaoIds.isEmpty
+                  ? (_selectedRegionalIds.isEmpty
+                      ? 'Selecione uma Regional e uma Divisão para habilitar os segmentos.'
+                      : 'Selecione ao menos uma Divisão acima para habilitar os segmentos correspondentes.')
+                  : null,
               onSelectionChanged: (selectedIds) {
                 setState(() {
                   _selectedSegmentoIds = selectedIds;
@@ -368,8 +424,20 @@ class _PerfilUsuarioViewState extends State<PerfilUsuarioView> {
     required Set<String> selectedIds,
     required List<T> allItems,
     required Function(Set<String>) onSelectionChanged,
+    bool Function(T item)? isItemEnabled,
+    String? disabledTooltip,
+    String? emptyParentMessage,
   }) {
+    final availableCount = isItemEnabled != null
+        ? allItems.where((item) => isItemEnabled(item)).length
+        : allItems.length;
+
     return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(10),
+        side: BorderSide(color: Colors.grey[200]!),
+      ),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -377,26 +445,51 @@ class _PerfilUsuarioViewState extends State<PerfilUsuarioView> {
           children: [
             Row(
               children: [
-                Icon(icon, color: color),
+                Icon(icon, color: color, size: 20),
                 const SizedBox(width: 8),
                 Text(
                   title,
                   style: const TextStyle(
-                    fontSize: 18,
+                    fontSize: 16,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
                 const Spacer(),
                 Text(
-                  '${selectedIds.length} selecionado(s)',
+                  isItemEnabled != null
+                      ? '${selectedIds.length} selecionado(s) • $availableCount disponível(is)'
+                      : '${selectedIds.length} selecionado(s)',
                   style: TextStyle(
-                    fontSize: 14,
+                    fontSize: 13,
                     color: Colors.grey[600],
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 16),
+            if (emptyParentMessage != null && availableCount == 0) ...[
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.amber[50],
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: Colors.amber[200]!),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline, size: 15, color: Colors.amber[800]),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        emptyParentMessage,
+                        style: TextStyle(fontSize: 12, color: Colors.amber[900]),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            const SizedBox(height: 14),
             if (items.isEmpty)
               Padding(
                 padding: const EdgeInsets.all(16),
@@ -413,29 +506,58 @@ class _PerfilUsuarioViewState extends State<PerfilUsuarioView> {
                 runSpacing: 8,
                 children: items.asMap().entries.map((entry) {
                   final index = entry.key;
-                  final item = entry.value;
-                  final itemId = _getItemId(allItems[index]);
+                  final itemLabel = entry.value;
+                  final rawItem = allItems[index];
+                  final itemId = _getItemId(rawItem);
                   final isSelected = selectedIds.contains(itemId);
-                  
-                  return FilterChip(
-                    label: Text(item),
+                  final isEnabled = isItemEnabled == null || isItemEnabled(rawItem);
+
+                  Widget chip = FilterChip(
+                    label: Text(itemLabel),
                     selected: isSelected,
-                    onSelected: (selected) {
-                      final newSelection = Set<String>.from(selectedIds);
-                      if (selected) {
-                        newSelection.add(itemId);
-                      } else {
-                        newSelection.remove(itemId);
-                      }
-                      onSelectionChanged(newSelection);
-                    },
-                    selectedColor: color.withOpacity(0.2),
+                    onSelected: isEnabled
+                        ? (selected) {
+                            final newSelection = Set<String>.from(selectedIds);
+                            if (selected) {
+                              newSelection.add(itemId);
+                            } else {
+                              newSelection.remove(itemId);
+                            }
+                            onSelectionChanged(newSelection);
+                          }
+                        : null,
+                    selectedColor: color.withValues(alpha: 0.18),
                     checkmarkColor: color,
+                    backgroundColor: isEnabled ? Colors.white : Colors.grey[100],
+                    disabledColor: Colors.grey[100],
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      side: BorderSide(
+                        color: isSelected
+                            ? color
+                            : (isEnabled ? Colors.grey[300]! : Colors.grey[200]!),
+                        width: isSelected ? 1.5 : 1.0,
+                      ),
+                    ),
                     labelStyle: TextStyle(
-                      color: isSelected ? color : Colors.black87,
+                      color: isSelected
+                          ? color
+                          : (isEnabled ? Colors.black87 : Colors.grey[400]),
                       fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                     ),
                   );
+
+                  if (!isEnabled) {
+                    return Opacity(
+                      opacity: 0.38,
+                      child: Tooltip(
+                        message: disabledTooltip ?? 'Não disponível para a seleção atual',
+                        child: chip,
+                      ),
+                    );
+                  }
+
+                  return chip;
                 }).toList(),
               ),
           ],

@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import '../config/supabase_config.dart';
 import 'usuario_service.dart';
 import 'package:uuid/uuid.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -88,6 +91,72 @@ class AuthServiceSimples {
       return AuthResponse(
         sucesso: false,
         erro: e.toString(),
+      );
+    }
+  }
+
+  /// Fazer login com credenciais do Active Directory (Rede Chesf)
+  Future<AuthResponse> signInWithAD({
+    required String username,
+    required String password,
+  }) async {
+    try {
+      final url = Uri.parse('${SupabaseConfig.apiBaseUrl}/auth/ad-login');
+      final payload = jsonEncode({
+        'username': username.trim(),
+        'password': password,
+      });
+
+      final response = await http.post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: payload,
+      ).timeout(
+        const Duration(seconds: 15),
+        onTimeout: () {
+          throw Exception(
+            'Tempo limite ao contatar o servidor de autenticação de rede. Verifique se o backend está acessível.',
+          );
+        },
+      );
+
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+
+      if (response.statusCode != 200 || data['ok'] != true) {
+        return AuthResponse(
+          sucesso: false,
+          erro: data['error'] as String? ?? 'Credenciais de rede inválidas ou erro no AD.',
+        );
+      }
+
+      final userData = data['usuario'] as Map<String, dynamic>;
+      final usuarioBase = Usuario.fromMap(userData);
+
+      // Carregar perfil completo (regionais, divisões, segmentos)
+      Usuario usuarioCompleto = usuarioBase;
+      if (usuarioBase.id != null) {
+        try {
+          final perfilCarregado = await _usuarioService.obterUsuarioPorId(usuarioBase.id!);
+          if (perfilCarregado != null) {
+            usuarioCompleto = perfilCarregado;
+          }
+        } catch (_) {}
+      }
+
+      _usuarioAtual = usuarioCompleto;
+      await _saveSession(usuarioCompleto);
+      await _authCache.saveUser(usuarioCompleto);
+      // Salva no banco local para permitir sessões offline
+      await _usuarioService.salvarUsuarioLocalComSenha(usuarioCompleto, password);
+
+      return AuthResponse(
+        usuario: usuarioCompleto,
+        sucesso: true,
+      );
+    } catch (e) {
+      return AuthResponse(
+        sucesso: false,
+        erro: 'Erro ao autenticar com a rede Chesf: $e',
       );
     }
   }

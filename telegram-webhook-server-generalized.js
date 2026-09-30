@@ -5,6 +5,7 @@ const FormData = require('form-data');
 const axios = require('axios');
 const cron = require('node-cron');
 const geo = require('./geo_ingestors');
+const { authenticateAD } = require('./ad_auth');
 
 // ==========================================
 // CONFIGURAÇÃO
@@ -146,6 +147,108 @@ app.use((err, req, res, next) => {
     return res.status(400).json({ error: 'JSON inválido', details: err.message });
   }
   next();
+});
+
+// ==========================================
+// AUTENTICAÇÃO ACTIVE DIRECTORY (CHESF)
+// ==========================================
+app.post('/auth/ad-login', async (req, res) => {
+  const { username, password } = req.body || {};
+
+  if (!username || !password) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Informe o usuário e a senha de rede.',
+    });
+  }
+
+  console.log(`🔐 [AD Auth] Tentativa de login para usuário: ${username}`);
+
+  try {
+    const authResult = await authenticateAD(username, password);
+
+    if (!authResult.success) {
+      console.warn(`❌ [AD Auth] Falha na autenticação para ${username}:`, authResult.error);
+      return res.status(401).json({
+        ok: false,
+        error: authResult.error || 'Credenciais inválidas.',
+      });
+    }
+
+    const adUser = authResult.user;
+    console.log(`✅ [AD Auth] Usuário autenticado no AD:`, adUser);
+
+    // Buscar usuário no Supabase pela tabela usuarios
+    const emailLower = (adUser.email || `${adUser.username}@chesf.gov.br`).toLowerCase();
+    
+    // Tenta encontrar por email
+    const { data: existingUsers, error: searchError } = await supabase
+      .from('usuarios')
+      .select('*')
+      .or(`email.ilike.${emailLower},email.ilike.${adUser.username}@%`)
+      .limit(1);
+
+    if (searchError) {
+      console.error('❌ [AD Auth] Erro ao buscar usuário no Supabase:', searchError);
+    }
+
+    let finalUser = null;
+
+    if (existingUsers && existingUsers.length > 0) {
+      finalUser = existingUsers[0];
+      // Atualizar nome se veio do AD
+      if (adUser.nome && adUser.nome !== finalUser.nome) {
+        await supabase
+          .from('usuarios')
+          .update({ nome: adUser.nome, updated_at: new Date().toISOString() })
+          .eq('id', finalUser.id);
+        finalUser.nome = adUser.nome;
+      }
+    } else {
+      // Provisiona usuário automaticamente no Task Flow
+      const novoId = require('crypto').randomUUID();
+      const novoUsuario = {
+        id: novoId,
+        email: emailLower,
+        nome: adUser.nome || adUser.username,
+        senha_hash: 'AD_AUTHENTICATED',
+        ativo: true,
+        is_root: false,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      const { data: inserted, error: insertError } = await supabase
+        .from('usuarios')
+        .insert(novoUsuario)
+        .select()
+        .single();
+
+      if (insertError) {
+        console.error('❌ [AD Auth] Erro ao criar usuário no Supabase:', insertError);
+        finalUser = novoUsuario;
+      } else {
+        finalUser = inserted;
+      }
+    }
+
+    return res.json({
+      ok: true,
+      usuario: finalUser,
+      ad_info: {
+        username: adUser.username,
+        nome: adUser.nome,
+        email: adUser.email,
+        departamento: adUser.departamento,
+      },
+    });
+  } catch (err) {
+    console.error('💥 [AD Auth] Exceção inesperada no AD login:', err);
+    return res.status(500).json({
+      ok: false,
+      error: `Erro interno no servidor de autenticação: ${err.message}`,
+    });
+  }
 });
 
 // ==========================================

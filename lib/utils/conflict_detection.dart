@@ -1,15 +1,17 @@
-import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 
 import '../models/task.dart';
 
-/// Evento diário de execução: um executor está alocado a uma tarefa em um local em um dia.
-/// Conflito = dois ou mais eventos no mesmo (executor, dia) com locais distintos.
+/// Evento diário de execução: um executor está alocado a uma tarefa em um local em um dia com horário.
+/// Conflito = dois ou mais eventos no mesmo (executor, dia) com locais distintos e sobreposição de horário.
 class ExecutionEvent {
   final String executorId;
   final DateTime day;
   final String locationKey;
   final String taskId;
   final String description;
+  final DateTime? startTime;
+  final DateTime? endTime;
 
   const ExecutionEvent({
     required this.executorId,
@@ -17,6 +19,8 @@ class ExecutionEvent {
     required this.locationKey,
     required this.taskId,
     required this.description,
+    this.startTime,
+    this.endTime,
   });
 }
 
@@ -117,17 +121,15 @@ class ConflictDetection {
     DateTime dayStart,
     DateTime dayEnd,
   ) {
-    return periodStart.isBefore(dayEnd) && periodEnd.isAfter(dayStart);
+    return periodStart.isBefore(dayEnd) && !periodEnd.isBefore(dayStart);
   }
 
   /// Instrumentação temporária: listar tarefas que geram ExecutionEvent para EDMUNDO no dia 07 e a fonte.
   /// Desligar após confirmar que TSD não gera evento para EDMUNDO no dia 07.
   static const bool _debugDay07Edmundo = true;
 
-  /// Prioridade: executorPeriods da tarefa → executorPeriods do pai → filhos → ganttSegments.
-  /// Regra de ouro: se existir executorPeriods (na tarefa ou no pai) para este executor e NÃO
-  /// houver segmento EXECUCAO que intercepte o dia, NÃO há execução (nunca cair em ganttSegments).
-  static bool taskHasExecutionOnDayForExecutor(
+  /// Retorna os intervalos efetivos de execução no dia para o executor.
+  static List<DateTimeRange> getExecutionIntervalsOnDayForExecutor(
     Task task,
     String executorId,
     DateTime dayStart,
@@ -135,8 +137,21 @@ class ConflictDetection {
     List<Task> allTasks, {
     List<String>? debugSourceOut,
   }) {
-    // 1. executorPeriods da PRÓPRIA tarefa: execução é definida explicitamente por executor.
-    // Se existir executorPeriods mas NÃO houver período para este executor → retornar false (não seguir para pai/filhos/ganttSegments).
+    DateTimeRange clampPeriodToDay(DateTime start, DateTime end) {
+      if (start.hour == 0 && start.minute == 0 && end.hour == 0 && end.minute == 0) {
+        return DateTimeRange(
+          start: dayStart,
+          end: dayEnd.subtract(const Duration(milliseconds: 1)),
+        );
+      }
+      final s = start.isAfter(dayStart) ? start : dayStart;
+      final e = end.isBefore(dayEnd) ? end : dayEnd.subtract(const Duration(milliseconds: 1));
+      return DateTimeRange(start: s, end: e.isBefore(s) ? s : e);
+    }
+
+    final intervals = <DateTimeRange>[];
+
+    // 1. executorPeriods da PRÓPRIA tarefa
     if (task.executorPeriods.isNotEmpty) {
       ExecutorPeriod? epForExecutor;
       for (final ep in task.executorPeriods) {
@@ -145,20 +160,18 @@ class ConflictDetection {
           break;
         }
       }
-      if (epForExecutor == null) return false;
+      if (epForExecutor == null) return intervals;
       for (final period in epForExecutor.periods) {
         if (period.tipoPeriodo.toUpperCase() != 'EXECUCAO') continue;
         if (_overlapsDay(period.dataInicio, period.dataFim, dayStart, dayEnd)) {
-          if (debugSourceOut != null) {
-            debugSourceOut.add('executorPeriods_tarefa');
-          }
-          return true;
+          debugSourceOut?.add('executorPeriods_tarefa');
+          intervals.add(clampPeriodToDay(period.dataInicio, period.dataFim));
         }
       }
-      return false; // tem período para o executor mas nenhum EXECUCAO neste dia
+      return intervals;
     }
 
-    // 2. Subtarefa: executorPeriods do PAI. Se o pai tem executorPeriods mas não tem período para este executor → retornar false (não cair em ganttSegments).
+    // 2. Subtarefa: executorPeriods do PAI
     if (task.parentId != null) {
       Task? parent;
       for (final t in allTasks) {
@@ -175,28 +188,19 @@ class ConflictDetection {
             break;
           }
         }
-        if (parentEpForExecutor == null) return false;
+        if (parentEpForExecutor == null) return intervals;
         for (final period in parentEpForExecutor.periods) {
           if (period.tipoPeriodo.toUpperCase() != 'EXECUCAO') continue;
-          if (_overlapsDay(
-            period.dataInicio,
-            period.dataFim,
-            dayStart,
-            dayEnd,
-          )) {
-            if (debugSourceOut != null) {
-              debugSourceOut.add('executorPeriods_pai');
-            }
-            return true;
+          if (_overlapsDay(period.dataInicio, period.dataFim, dayStart, dayEnd)) {
+            debugSourceOut?.add('executorPeriods_pai');
+            intervals.add(clampPeriodToDay(period.dataInicio, period.dataFim));
           }
         }
-        return false; // pai tem período para o executor mas nenhum EXECUCAO neste dia
+        return intervals;
       }
     }
 
-    // 3. Tarefa PAI sem executorPeriods (para este executor): só conta se algum FILHO DO MESMO executor tiver EXECUÇÃO no dia.
-    // Regra de ouro: NÃO considerar execução de filhos de outros executores; NÃO cair em ganttSegments do pai.
-    // Se a tarefa tem filhos, o pai NUNCA pode cair em ganttSegments (bloco 4).
+    // 3. Tarefa PAI sem executorPeriods: filhos do mesmo executor
     final children = allTasks.where((t) => t.parentId == task.id).toList();
     if (children.isNotEmpty) {
       final hasStructuredIds = task.executorIds.any((id) => id.trim().isNotEmpty) ||
@@ -238,26 +242,24 @@ class ConflictDetection {
                 );
           }
           if (!childInvolves) continue;
-          if (taskHasExecutionOnDayForExecutor(
+          final childIntervals = getExecutionIntervalsOnDayForExecutor(
             child,
             executorId,
             dayStart,
             dayEnd,
             allTasks,
-          )) {
-            if (debugSourceOut != null) debugSourceOut.add('filhos');
-            return true;
+          );
+          if (childIntervals.isNotEmpty) {
+            debugSourceOut?.add('filhos');
+            intervals.addAll(childIntervals);
           }
         }
-        return false; // nenhum filho deste executor tem execução no dia => pai NÃO tem
+        return intervals;
       }
-      return false; // tarefa tem filhos mas não envolve este executor → não cair em ganttSegments
+      return intervals;
     }
 
-    // 4. ganttSegments da tarefa (somente quando não há executorPeriods, nem pai com executorPeriods, e não há filhos)
-    // IMPORTANTE: se a tarefa tiver múltiplos executores e não houver executorPeriods
-    // para diferenciá-los, não é possível atribuir EXECUÇÃO a um executor específico.
-    // Nesses casos, NÃO considerar execução individual pelo ganttSegments (evita falsos positivos).
+    // 4. ganttSegments da tarefa
     final idsAll = getExecutorIdsForTask(
       task,
     ).where((e) => e.trim().isNotEmpty).toSet();
@@ -268,15 +270,36 @@ class ConflictDetection {
         .where((e) => e.isNotEmpty)
         .toSet();
     final multipleExecutors = uuidSet.length > 1 || nameSet.length > 1;
-    if (multipleExecutors) return false;
+    if (multipleExecutors) return intervals;
     for (final segment in task.ganttSegments) {
       if (segment.tipoPeriodo.toUpperCase() != 'EXECUCAO') continue;
       if (_overlapsDay(segment.dataInicio, segment.dataFim, dayStart, dayEnd)) {
-        if (debugSourceOut != null) debugSourceOut.add('ganttSegments');
-        return true;
+        debugSourceOut?.add('ganttSegments');
+        intervals.add(clampPeriodToDay(segment.dataInicio, segment.dataFim));
       }
     }
-    return false;
+    return intervals;
+  }
+
+  /// Prioridade: executorPeriods da tarefa → executorPeriods do pai → filhos → ganttSegments.
+  /// Regra de ouro: se existir executorPeriods (na tarefa ou no pai) para este executor e NÃO
+  /// houver segmento EXECUCAO que intercepte o dia, NÃO há execução (nunca cair em ganttSegments).
+  static bool taskHasExecutionOnDayForExecutor(
+    Task task,
+    String executorId,
+    DateTime dayStart,
+    DateTime dayEnd,
+    List<Task> allTasks, {
+    List<String>? debugSourceOut,
+  }) {
+    return getExecutionIntervalsOnDayForExecutor(
+      task,
+      executorId,
+      dayStart,
+      dayEnd,
+      allTasks,
+      debugSourceOut: debugSourceOut,
+    ).isNotEmpty;
   }
 
   /// Conjunto de identificadores de executor (id ou nome) que estão alocados à tarefa.
@@ -325,8 +348,8 @@ class ConflictDetection {
     return '$localLabel — $tarefa (Status: $statusStr)';
   }
 
-  /// Gera eventos de execução (executor, dia, local, tarefa) para o dia, considerando apenas EXECUÇÃO
-  /// e a prioridade executorPeriods → pai → filhos → ganttSegments. Tarefas excluídas por status são ignoradas.
+  /// Gera eventos de execução (executor, dia, local, tarefa) para o dia, considerando apenas EXECUÇÃO,
+  /// intervalos de horários e a prioridade executorPeriods → pai → filhos → ganttSegments.
   /// [allTasks] usado para resolver parent/children; se null, usa [tasks].
   static List<ExecutionEvent> getExecutionEventsForDay(
     List<Task> tasks,
@@ -349,28 +372,33 @@ class ConflictDetection {
             _normalizeExecutorKey(executorId) ==
                 _normalizeExecutorKey('EDMUNDO');
         final sourceOut = isDebug ? <String>[] : null;
-        if (!taskHasExecutionOnDayForExecutor(
+        
+        final intervals = getExecutionIntervalsOnDayForExecutor(
           task,
           executorId,
           dayStart,
           dayEnd,
           resolved,
           debugSourceOut: sourceOut,
-        )) {
-          continue;
-        }
+        );
+        if (intervals.isEmpty) continue;
 
         final locKey = taskLocationKey(task);
         final locationKey = locKey.isNotEmpty ? locKey : 'task-${task.id}';
-        events.add(
-          ExecutionEvent(
-            executorId: executorId,
-            day: day,
-            locationKey: locationKey,
-            taskId: task.id,
-            description: _eventDescription(task),
-          ),
-        );
+        
+        for (final interval in intervals) {
+          events.add(
+            ExecutionEvent(
+              executorId: executorId,
+              day: day,
+              locationKey: locationKey,
+              taskId: task.id,
+              description: _eventDescription(task),
+              startTime: interval.start,
+              endTime: interval.end,
+            ),
+          );
+        }
         if (isDebug && sourceOut != null && sourceOut.isNotEmpty) {
           debugPrint(
             'ConflictDetection DEBUG dia 07 EDMUNDO: tarefa=${task.tarefa} (${task.id}) fonte=${sourceOut.single}',
@@ -381,7 +409,8 @@ class ConflictDetection {
     return events;
   }
 
-  /// Agrupa eventos por (executor, dia). Conflito existe se há dois ou mais locais distintos no mesmo (executor, dia).
+  /// Agrupa eventos por (executor, dia). Conflito existe se há dois ou mais locais distintos no mesmo (executor, dia)
+  /// E com sobreposição real de horário entre os eventos.
   /// [allTasks] usado para resolver parent/children; se null, usa [tasks].
   static bool hasConflictOnDayForExecutor(
     List<Task> tasks,
@@ -390,19 +419,45 @@ class ConflictDetection {
     List<Task>? allTasks,
   ]) {
     final events = getExecutionEventsForDay(tasks, day, allTasks);
-    final locations = events
+    final execEvents = events
         .where(
           (e) =>
               _normalizeExecutorKey(e.executorId) ==
               _normalizeExecutorKey(executorId),
         )
+        .toList();
+
+    final locations = execEvents
         .map((e) => e.locationKey)
         .where((k) => k.isNotEmpty)
         .toSet();
-    return locations.length > 1;
+    if (locations.length <= 1) return false;
+
+    // Verificar se existe sobreposição de horário entre eventos de locais distintos
+    for (int i = 0; i < execEvents.length; i++) {
+      for (int j = i + 1; j < execEvents.length; j++) {
+        final ev1 = execEvents[i];
+        final ev2 = execEvents[j];
+        if (ev1.locationKey == ev2.locationKey) continue;
+        if (ev1.taskId == ev2.taskId) continue;
+
+        final start1 = ev1.startTime ?? DateTime(day.year, day.month, day.day, 0, 0);
+        final end1 = ev1.endTime ?? DateTime(day.year, day.month, day.day, 23, 59, 59);
+        final start2 = ev2.startTime ?? DateTime(day.year, day.month, day.day, 0, 0);
+        final end2 = ev2.endTime ?? DateTime(day.year, day.month, day.day, 23, 59, 59);
+
+        // Intervalos se sobrepõem no tempo se: start1 < end2 AND end1 > start2
+        if (start1.isBefore(end2) && end1.isAfter(start2)) {
+          return true;
+        }
+      }
+    }
+
+    return false;
   }
 
   /// Descrições "LOCAL — Tarefa (Status: ...)" para tooltip de conflito no dia/executor, opcionalmente excluindo uma tarefa.
+  /// Inclui apenas as tarefas que realmente participam de um conflito de horário.
   /// [allTasks] usado para resolver parent/children; se null, usa [tasks].
   static List<String> getConflictDescriptionsForDay(
     List<Task> tasks,
@@ -413,8 +468,33 @@ class ConflictDetection {
   }) {
     final events = getExecutionEventsForDay(tasks, day, allTasks);
     final keyNorm = _normalizeExecutorKey(executorId);
-    return events
+    final execEvents = events
         .where((e) => _normalizeExecutorKey(e.executorId) == keyNorm)
+        .toList();
+
+    // Identificar as tarefas que realmente colidem em horário
+    final conflictingTaskIds = <String>{};
+    for (int i = 0; i < execEvents.length; i++) {
+      for (int j = i + 1; j < execEvents.length; j++) {
+        final ev1 = execEvents[i];
+        final ev2 = execEvents[j];
+        if (ev1.locationKey == ev2.locationKey) continue;
+        if (ev1.taskId == ev2.taskId) continue;
+
+        final start1 = ev1.startTime ?? DateTime(day.year, day.month, day.day, 0, 0);
+        final end1 = ev1.endTime ?? DateTime(day.year, day.month, day.day, 23, 59, 59);
+        final start2 = ev2.startTime ?? DateTime(day.year, day.month, day.day, 0, 0);
+        final end2 = ev2.endTime ?? DateTime(day.year, day.month, day.day, 23, 59, 59);
+
+        if (start1.isBefore(end2) && end1.isAfter(start2)) {
+          conflictingTaskIds.add(ev1.taskId);
+          conflictingTaskIds.add(ev2.taskId);
+        }
+      }
+    }
+
+    return execEvents
+        .where((e) => conflictingTaskIds.contains(e.taskId))
         .where((e) => excludeTaskId == null || e.taskId != excludeTaskId)
         .map((e) => e.description)
         .where((s) => s.isNotEmpty)

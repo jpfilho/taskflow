@@ -33,3 +33,4 @@ test/test_storage_upload.dart
 scratch/
 .DS_Store
 **/.DS_Store
+node_modules/

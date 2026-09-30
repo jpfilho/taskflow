@@ -22,6 +22,7 @@ import '../providers/theme_provider.dart';
 import '../services/theme_service.dart';
 import 'color_picker_dialog.dart';
 import 'cluster_ativos_view.dart';
+import 'common/task_table_column_picker_dialog.dart';
 
 class ConfiguracaoView extends StatefulWidget {
   final ThemeProvider? themeProvider;
@@ -204,6 +205,15 @@ class _ConfiguracaoViewState extends State<ConfiguracaoView> {
         'icon': Icons.settings,
         'color': Colors.grey,
         'cadastros': [
+          {
+            'icon': Icons.tune_rounded,
+            'title': 'Colunas & Presets do Gantt',
+            'subtitle': 'Personalize as colunas da tabela e gerencie presets salvos em preferências.',
+            'color': Colors.blue[700]!,
+            'onTap': () {
+              TaskTableColumnPickerDialog.show(context, isMobile: isMobile);
+            },
+          },
           {
             'icon': Icons.pending_actions,
             'title': 'Status',

@@ -22,6 +22,8 @@ import '../utils/responsive.dart';
 import '../features/warnings/warnings.dart';
 import '../design_system/taskflow_design_system.dart';
 import '../utils/clipboard_helper.dart';
+import '../models/task_table_column.dart';
+import 'common/task_table_column_picker_dialog.dart';
 
 class TaskTable extends StatefulWidget {
   final List<Task> tasks;
@@ -133,6 +135,7 @@ class _TaskTableState extends State<TaskTable> {
         widget.horizontalController ?? ScrollController();
     _ownsBodyController = widget.horizontalController == null;
     _headerHorizontalController = ScrollController();
+    TaskTableColumnService.instance.columnsNotifier.addListener(_onColumnsChanged);
     // Corpo dirige o cabeçalho
     _bodyHorizontalController.addListener(() {
       if (!_headerHorizontalController.hasClients) return;
@@ -151,10 +154,15 @@ class _TaskTableState extends State<TaskTable> {
     });
   }
 
+  void _onColumnsChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
     _emptyTimer?.cancel();
     _statusChangeSubscription?.cancel();
+    TaskTableColumnService.instance.columnsNotifier.removeListener(_onColumnsChanged);
     if (_ownsBodyController) {
       _bodyHorizontalController.dispose();
     }
@@ -219,8 +227,9 @@ class _TaskTableState extends State<TaskTable> {
             _loadedSubtasks.containsKey(task.id) &&
             _loadedSubtasks[task.id]!.isNotEmpty;
         final hasExecutorPeriods = task.executorPeriods.isNotEmpty;
+        final hasFrotaPeriods = task.frotaPeriods.isNotEmpty;
 
-        if (hasSubtasks || hasExecutorPeriods) {
+        if (hasSubtasks || hasExecutorPeriods || hasFrotaPeriods) {
           tasksToToggle.add(task.id);
         }
       }
@@ -485,30 +494,30 @@ class _TaskTableState extends State<TaskTable> {
   }
 
   Color _getStatusBackgroundColor(String status) {
-    // ANDA (Andamento) e PROG (Programado) devem ter fundo branco
-    if (status == 'ANDA' || status == 'PROG') {
+    // Apenas PROG (Programado) deve ter fundo branco
+    if (status == 'PROG') {
       return Colors.white;
     }
 
     // Buscar status cadastrado
     final statusObj = _statusMap[status];
     if (statusObj != null) {
-      // Verificar se o código do status é ANDA ou PROG
-      if (statusObj.codigo == 'ANDA' || statusObj.codigo == 'PROG') {
+      // Verificar se o código do status é PROG
+      if (statusObj.codigo == 'PROG') {
         return Colors.white;
       }
-      // Usar a cor do status com opacidade bem reduzida para fundo
-      return statusObj.color.withOpacity(0.5); // Bem clarinha
+      // Usar a cor do status com opacidade suave para fundo
+      return statusObj.color.withValues(alpha: 0.20);
     }
 
     // Fallback para cores padrão se não encontrar
     switch (status) {
-      case 'ANDA':
+      case 'PROG':
         return Colors.white;
       case 'CONC':
         return Colors.green[50]!;
-      case 'PROG':
-        return Colors.white;
+      case 'ANDA':
+        return Colors.orange[50]!;
       default:
         return Colors.grey[50]!;
     }
@@ -558,13 +567,14 @@ class _TaskTableState extends State<TaskTable> {
         }
       }
 
-      // Se a tarefa está expandida, criar linhas virtuais para períodos por executor e por frota
+      // Se a tarefa está expandida, criar linhas virtuais agrupadas por período para executores e frota
       if (isExpanded) {
         if (mainTask.executorPeriods.isNotEmpty) {
-          for (var executorPeriod in mainTask.executorPeriods) {
-            final virtualTaskId =
-                '${mainTask.id}_executor_${executorPeriod.executorId}';
+          // Agrupar executores que possuem o mesmo período
+          final Map<String, List<ExecutorPeriod>> groupedExecutors = {};
+          final Map<String, ({DateTime minDate, DateTime maxDate})> groupDates = {};
 
+          for (var executorPeriod in mainTask.executorPeriods) {
             DateTime? minDate;
             DateTime? maxDate;
             for (var period in executorPeriod.periods) {
@@ -575,6 +585,53 @@ class _TaskTableState extends State<TaskTable> {
                 maxDate = period.dataFim;
               }
             }
+            minDate ??= mainTask.dataInicio;
+            maxDate ??= mainTask.dataFim;
+
+            final periodKey =
+                '${minDate.year}-${minDate.month.toString().padLeft(2, '0')}-${minDate.day.toString().padLeft(2, '0')}_'
+                '${maxDate.year}-${maxDate.month.toString().padLeft(2, '0')}-${maxDate.day.toString().padLeft(2, '0')}';
+
+            groupedExecutors.putIfAbsent(periodKey, () => []).add(executorPeriod);
+            groupDates[periodKey] = (minDate: minDate, maxDate: maxDate);
+          }
+
+          for (var entry in groupedExecutors.entries) {
+            final periodKey = entry.key;
+            final group = entry.value;
+            final dates = groupDates[periodKey]!;
+
+            final executorNomes = group
+                .map((e) => e.executorNome.trim())
+                .where((n) => n.isNotEmpty)
+                .toSet()
+                .toList();
+            final nomesJuntos = executorNomes.join(', ');
+            final executorIds = group.map((e) => e.executorId).toList();
+
+            // Combinar períodos de gantt evitando duplicatas
+            final List<GanttSegment> combinedSegments = [];
+            for (var ep in group) {
+              for (var seg in ep.periods) {
+                final exists = combinedSegments.any((s) =>
+                    s.dataInicio.isAtSameMomentAs(seg.dataInicio) &&
+                    s.dataFim.isAtSameMomentAs(seg.dataFim));
+                if (!exists) {
+                  combinedSegments.add(seg);
+                }
+              }
+            }
+            if (combinedSegments.isEmpty) {
+              combinedSegments.add(GanttSegment(
+                dataInicio: dates.minDate,
+                dataFim: dates.maxDate,
+                label: 'EXECUCAO',
+                tipo: 'EXECUCAO',
+              ));
+            }
+
+            final virtualTaskId =
+                '${mainTask.id}_executor_${group.first.executorId}_${dates.minDate.millisecondsSinceEpoch}';
 
             final virtualTask = Task(
               id: virtualTaskId,
@@ -584,7 +641,7 @@ class _TaskTableState extends State<TaskTable> {
               divisaoId: mainTask.divisaoId,
               segmentoId: mainTask.segmentoId,
               localIds: mainTask.localIds,
-              executorIds: [executorPeriod.executorId],
+              executorIds: executorIds,
               equipeIds: mainTask.equipeIds,
               frotaIds: mainTask.frotaIds,
               localId: mainTask.localId,
@@ -596,16 +653,16 @@ class _TaskTableState extends State<TaskTable> {
               locais: mainTask.locais,
               tipo: mainTask.tipo,
               ordem: mainTask.ordem,
-              tarefa: '${executorPeriod.executorNome} - ${mainTask.tarefa}',
-              executores: [executorPeriod.executorNome],
+              tarefa: nomesJuntos,
+              executores: executorNomes,
               equipes: mainTask.equipes,
-              executor: executorPeriod.executorNome,
+              executor: nomesJuntos,
               frota: mainTask.frota,
               coordenador: mainTask.coordenador,
               si: mainTask.si,
-              dataInicio: minDate ?? mainTask.dataInicio,
-              dataFim: maxDate ?? mainTask.dataFim,
-              ganttSegments: executorPeriod.periods,
+              dataInicio: dates.minDate,
+              dataFim: dates.maxDate,
+              ganttSegments: combinedSegments,
               executorPeriods: const [],
               frotaPeriods: const [],
               observacoes: mainTask.observacoes,
@@ -619,9 +676,11 @@ class _TaskTableState extends State<TaskTable> {
         }
 
         if (mainTask.frotaPeriods.isNotEmpty) {
-          for (var frotaPeriod in mainTask.frotaPeriods) {
-            final virtualTaskId = '${mainTask.id}_frota_${frotaPeriod.frotaId}';
+          // Agrupar frotas que possuem o mesmo período
+          final Map<String, List<FrotaPeriod>> groupedFrota = {};
+          final Map<String, ({DateTime minDate, DateTime maxDate})> groupDates = {};
 
+          for (var frotaPeriod in mainTask.frotaPeriods) {
             DateTime? minDate;
             DateTime? maxDate;
             for (var period in frotaPeriod.periods) {
@@ -632,6 +691,53 @@ class _TaskTableState extends State<TaskTable> {
                 maxDate = period.dataFim;
               }
             }
+            minDate ??= mainTask.dataInicio;
+            maxDate ??= mainTask.dataFim;
+
+            final periodKey =
+                '${minDate.year}-${minDate.month.toString().padLeft(2, '0')}-${minDate.day.toString().padLeft(2, '0')}_'
+                '${maxDate.year}-${maxDate.month.toString().padLeft(2, '0')}-${maxDate.day.toString().padLeft(2, '0')}';
+
+            groupedFrota.putIfAbsent(periodKey, () => []).add(frotaPeriod);
+            groupDates[periodKey] = (minDate: minDate, maxDate: maxDate);
+          }
+
+          for (var entry in groupedFrota.entries) {
+            final periodKey = entry.key;
+            final group = entry.value;
+            final dates = groupDates[periodKey]!;
+
+            final frotaNomes = group
+                .map((f) => f.frotaNome.trim())
+                .where((n) => n.isNotEmpty)
+                .toSet()
+                .toList();
+            final veiculosJuntos = frotaNomes.join(', ');
+            final frotaIds = group.map((f) => f.frotaId).toList();
+
+            // Combinar períodos de gantt evitando duplicatas
+            final List<GanttSegment> combinedSegments = [];
+            for (var fp in group) {
+              for (var seg in fp.periods) {
+                final exists = combinedSegments.any((s) =>
+                    s.dataInicio.isAtSameMomentAs(seg.dataInicio) &&
+                    s.dataFim.isAtSameMomentAs(seg.dataFim));
+                if (!exists) {
+                  combinedSegments.add(seg);
+                }
+              }
+            }
+            if (combinedSegments.isEmpty) {
+              combinedSegments.add(GanttSegment(
+                dataInicio: dates.minDate,
+                dataFim: dates.maxDate,
+                label: 'EXECUCAO',
+                tipo: 'EXECUCAO',
+              ));
+            }
+
+            final virtualTaskId =
+                '${mainTask.id}_frota_${group.first.frotaId}_${dates.minDate.millisecondsSinceEpoch}';
 
             final virtualTask = Task(
               id: virtualTaskId,
@@ -643,7 +749,7 @@ class _TaskTableState extends State<TaskTable> {
               localIds: mainTask.localIds,
               executorIds: mainTask.executorIds,
               equipeIds: mainTask.equipeIds,
-              frotaIds: [frotaPeriod.frotaId],
+              frotaIds: frotaIds,
               localId: mainTask.localId,
               equipeId: mainTask.equipeId,
               status: mainTask.status,
@@ -653,16 +759,16 @@ class _TaskTableState extends State<TaskTable> {
               locais: mainTask.locais,
               tipo: mainTask.tipo,
               ordem: mainTask.ordem,
-              tarefa: '${frotaPeriod.frotaNome} - ${mainTask.tarefa}',
+              tarefa: veiculosJuntos,
               executores: mainTask.executores,
               equipes: mainTask.equipes,
               executor: mainTask.executor,
-              frota: frotaPeriod.frotaNome,
+              frota: veiculosJuntos,
               coordenador: mainTask.coordenador,
               si: mainTask.si,
-              dataInicio: minDate ?? mainTask.dataInicio,
-              dataFim: maxDate ?? mainTask.dataFim,
-              ganttSegments: frotaPeriod.periods,
+              dataInicio: dates.minDate,
+              dataFim: dates.maxDate,
+              ganttSegments: combinedSegments,
               executorPeriods: const [],
               frotaPeriods: const [],
               observacoes: mainTask.observacoes,
@@ -793,7 +899,56 @@ class _TaskTableState extends State<TaskTable> {
       decoration: BoxDecoration(border: Border.all(color: colors.borderSubtle)),
       child: Column(
         children: [
-          SizedBox(height: Responsive.kActivitiesHeaderTopHeight),
+          Container(
+            height: Responsive.kActivitiesHeaderTopHeight,
+            decoration: BoxDecoration(
+              color: Colors.grey[100],
+              border: Border(bottom: BorderSide(color: Colors.grey[300]!, width: 1)),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Center(
+                    child: Text(
+                      'ATIVIDADES',
+                      style: TextStyle(
+                        fontSize: isMobile ? 9 : 10,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.grey[600],
+                        letterSpacing: 1.0,
+                      ),
+                    ),
+                  ),
+                ),
+                Tooltip(
+                  message: 'Personalizar colunas (expandir área do Gantt)',
+                  child: InkWell(
+                    onTap: () => TaskTableColumnPickerDialog.show(context, isMobile: isMobile),
+                    borderRadius: BorderRadius.circular(4),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.tune_rounded, size: isMobile ? 13 : 15, color: Colors.blue[800]),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Colunas',
+                            style: TextStyle(
+                              fontSize: isMobile ? 9 : 11,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.blue[800],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
           // Cabeçalho da tabela: mesma altura que a linha de dias do Gantt (kActivitiesHeaderRowHeight)
           Container(
             height: Responsive.kActivitiesHeaderRowHeight,
@@ -850,12 +1005,12 @@ class _TaskTableState extends State<TaskTable> {
                             ? hierarchicalTasks[index - 1]
                             : null;
 
-                        final isSubtask = task.parentId != null;
+                        final isExecutorRow = task.id.contains('_executor_');
+                        final isFrotaRow = task.id.contains('_frota_');
+                        final isSubtask = task.parentId != null && !isExecutorRow && !isFrotaRow;
                         final hasSubtasks = _loadedSubtasks.containsKey(task.id)
                             ? _loadedSubtasks[task.id]!.isNotEmpty
                             : false;
-                        final isExecutorRow = task.id.contains('_executor_');
-                        final isFrotaRow = task.id.contains('_frota_');
 
                         // Verificar se mudou o grupo (apenas se não for PERÍODO e se não for subtarefa/executor)
                         bool mudouGrupo = false;
@@ -886,7 +1041,13 @@ class _TaskTableState extends State<TaskTable> {
                         final hasExecutorPeriods =
                             !isSubtask &&
                             !isExecutorRow &&
+                            !isFrotaRow &&
                             task.executorPeriods.isNotEmpty;
+                        final hasFrotaPeriods =
+                            !isSubtask &&
+                            !isExecutorRow &&
+                            !isFrotaRow &&
+                            task.frotaPeriods.isNotEmpty;
                         final statusBackgroundColor = _getStatusBackgroundColor(
                           task.status,
                         );
@@ -920,17 +1081,17 @@ class _TaskTableState extends State<TaskTable> {
                                       left: isExecutorRow
                                           ? BorderSide(
                                               color: Colors.orange[400]!,
-                                              width: 3,
+                                              width: 4,
                                             )
                                           : isFrotaRow
                                           ? BorderSide(
-                                              color: Colors.green[400]!,
-                                              width: 3,
+                                              color: Colors.green[500]!,
+                                              width: 4,
                                             )
                                           : isSubtask
                                           ? BorderSide(
-                                              color: Colors.blue[300]!,
-                                              width: 3,
+                                              color: Colors.blue[400]!,
+                                              width: 4,
                                             )
                                           : BorderSide.none,
                                     ),
@@ -944,6 +1105,7 @@ class _TaskTableState extends State<TaskTable> {
                                     isExecutorRow,
                                     isFrotaRow,
                                     hasExecutorPeriods,
+                                    hasFrotaPeriods,
                                     statusBackgroundColor,
                                     minWidth,
                                     effectiveWarnings,
@@ -966,78 +1128,230 @@ class _TaskTableState extends State<TaskTable> {
   }
 
   double _calculateTotalTableWidth(bool isMobile) {
-    final acoesWidth = isMobile ? 50.0 : 60.0;
-    final statusWidth = isMobile ? 60.0 : 70.0;
-    final localWidth = isMobile ? 80.0 : 90.0;
-    final tipoWidth = isMobile ? 90.0 : 100.0;
-    final tarefaWidth = isMobile ? 150.0 : 184.0;
-    final executorWidth = isMobile ? 120.0 : 150.0;
-    final coordenadorWidth = isMobile ? 85.0 : 110.0;
-    final frotaWidth = isMobile ? 45.0 : 50.0;
-    final chatWidth = isMobile ? 45.0 : 50.0;
-    final anexosWidth = isMobile ? 45.0 : 50.0;
-    final notasSAPWidth = isMobile ? 45.0 : 50.0;
-    final ordensWidth = isMobile ? 45.0 : 50.0;
-    final atsWidth = isMobile ? 38.0 : 42.0;
-    final sisWidth = isMobile ? 38.0 : 42.0;
-    final alertasWidth = isMobile ? 45.0 : 50.0;
-    // Botão foi movido para a legenda, não precisa mais incluir aqui
-    // Adiciona uma margem de segurança maior para evitar overflow por arredondamentos/paddings
-    const double safetyPadding = 32.0;
-    return acoesWidth +
-        statusWidth +
-        localWidth +
-        tipoWidth +
-        tarefaWidth +
-        executorWidth +
-        coordenadorWidth +
-        frotaWidth +
-        chatWidth +
-        anexosWidth +
-        notasSAPWidth +
-        ordensWidth +
-        atsWidth +
-        sisWidth +
-        alertasWidth +
-        safetyPadding;
+    return TaskTableColumnService.instance.calculateTotalWidth(isMobile);
   }
 
   Widget _buildHeaderRow(bool isMobile) {
-    // Definir larguras fixas para todas as colunas
-    final acoesWidth = isMobile ? 50.0 : 60.0;
-    final statusWidth = isMobile ? 60.0 : 70.0;
-    final localWidth = isMobile ? 80.0 : 90.0;
-    final tipoWidth = isMobile ? 90.0 : 100.0;
-    final tarefaWidth = isMobile ? 150.0 : 184.0;
-    final executorWidth = isMobile ? 120.0 : 150.0;
-    final coordenadorWidth = isMobile ? 85.0 : 110.0;
-    final frotaWidth = isMobile ? 45.0 : 50.0;
-    final chatWidth = isMobile ? 45.0 : 50.0;
-    final anexosWidth = isMobile ? 45.0 : 50.0;
-    final notasSAPWidth = isMobile ? 45.0 : 50.0;
-    final ordensWidth = isMobile ? 45.0 : 50.0;
-    final atsWidth = isMobile ? 38.0 : 42.0;
-    final sisWidth = isMobile ? 38.0 : 42.0;
-    final alertasWidth = isMobile ? 45.0 : 50.0;
+    final visibleCols = TaskTableColumnService.instance.visibleColumns;
 
     return Row(
       children: [
-        _buildHeaderCell('AÇÕES', acoesWidth, isMobile),
-        _buildHeaderCell('STATUS', statusWidth, isMobile),
-        _buildHeaderCell('LOCAL', localWidth, isMobile),
-        _buildHeaderCell('TIPO', tipoWidth, isMobile),
-        _buildHeaderCell('TAREFA', tarefaWidth, isMobile),
-        _buildHeaderCell('EXECUTOR', executorWidth, isMobile),
-        _buildHeaderCell('COORDENADOR', coordenadorWidth, isMobile),
-        _buildHeaderCell('FROTA', frotaWidth, isMobile),
-        _buildHeaderCell('CHAT', chatWidth, isMobile),
-        _buildHeaderCell('ANEXOS', anexosWidth, isMobile),
-        _buildHeaderCell('NOTA', notasSAPWidth, isMobile),
-        _buildHeaderCell('ORDEM', ordensWidth, isMobile),
-        _buildHeaderCell('AT', atsWidth, isMobile),
-        _buildHeaderCell('SI', sisWidth, isMobile),
-        _buildHeaderCell('ALERTAS', alertasWidth, isMobile),
+        if (visibleCols.contains(TaskTableColumn.acoes))
+          _buildHeaderCell('AÇÕES', TaskTableColumn.acoes.width(isMobile), isMobile),
+        if (visibleCols.contains(TaskTableColumn.status))
+          _buildHeaderCell('STATUS', TaskTableColumn.status.width(isMobile), isMobile),
+        if (visibleCols.contains(TaskTableColumn.local))
+          _buildHeaderCell('LOCAL', TaskTableColumn.local.width(isMobile), isMobile),
+        if (visibleCols.contains(TaskTableColumn.tipo))
+          _buildHeaderCell('TIPO', TaskTableColumn.tipo.width(isMobile), isMobile),
+        if (visibleCols.contains(TaskTableColumn.tarefa))
+          _buildHeaderCell('TAREFA', TaskTableColumn.tarefa.width(isMobile), isMobile),
+        if (visibleCols.contains(TaskTableColumn.executor))
+          _buildHeaderCell('EXECUTOR', TaskTableColumn.executor.width(isMobile), isMobile),
+        if (visibleCols.contains(TaskTableColumn.coordenador))
+          _buildHeaderCell('COORDENADOR', TaskTableColumn.coordenador.width(isMobile), isMobile),
+        if (visibleCols.contains(TaskTableColumn.frota))
+          _buildHeaderCell('FROTA', TaskTableColumn.frota.width(isMobile), isMobile),
+        if (visibleCols.contains(TaskTableColumn.chat))
+          _buildHeaderCell('CHAT', TaskTableColumn.chat.width(isMobile), isMobile),
+        if (visibleCols.contains(TaskTableColumn.anexos))
+          _buildHeaderCell('ANEXOS', TaskTableColumn.anexos.width(isMobile), isMobile),
+        if (visibleCols.contains(TaskTableColumn.nota))
+          _buildHeaderCell('NOTA', TaskTableColumn.nota.width(isMobile), isMobile),
+        if (visibleCols.contains(TaskTableColumn.ordem))
+          _buildHeaderCell('ORDEM', TaskTableColumn.ordem.width(isMobile), isMobile),
+        if (visibleCols.contains(TaskTableColumn.at))
+          _buildHeaderCell('AT', TaskTableColumn.at.width(isMobile), isMobile),
+        if (visibleCols.contains(TaskTableColumn.si))
+          _buildHeaderCell('SI', TaskTableColumn.si.width(isMobile), isMobile),
+        if (visibleCols.contains(TaskTableColumn.alertas))
+          _buildHeaderCell('ALERTAS', TaskTableColumn.alertas.width(isMobile), isMobile),
       ],
+    );
+  }
+
+  String _formatDateRange(DateTime start, DateTime end) {
+    final sDay = start.day.toString().padLeft(2, '0');
+    final sMonth = start.month.toString().padLeft(2, '0');
+    final eDay = end.day.toString().padLeft(2, '0');
+    final eMonth = end.month.toString().padLeft(2, '0');
+    final days = end.difference(start).inDays + 1;
+    return '$sDay/$sMonth a $eDay/$eMonth (${days}d)';
+  }
+
+  Widget _buildTaskTitleCell(
+    Task task,
+    double width,
+    bool isMobile, {
+    required bool isSubtask,
+    required bool isExecutorRow,
+    required bool isFrotaRow,
+    required Color statusBg,
+  }) {
+    Widget content;
+
+    if (isExecutorRow) {
+      final periodStr = _formatDateRange(task.dataInicio, task.dataFim);
+      content = Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: Colors.orange[50],
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: Colors.orange[300]!, width: 0.8),
+            ),
+            child: Tooltip(
+              message: 'Período por executor',
+              child: Icon(
+                Icons.person,
+                size: isMobile ? 12 : 14,
+                color: Colors.orange[800],
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  task.executor.isNotEmpty ? task.executor : task.tarefa,
+                  style: TextStyle(
+                    fontSize: isMobile ? 10 : 11.5,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.black87,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  'Período: $periodStr',
+                  style: TextStyle(
+                    fontSize: isMobile ? 8.5 : 9.5,
+                    color: Colors.grey[600],
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    } else if (isFrotaRow) {
+      final periodStr = _formatDateRange(task.dataInicio, task.dataFim);
+      content = Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: Colors.green[50],
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: Colors.green[300]!, width: 0.8),
+            ),
+            child: Tooltip(
+              message: 'Período por frota',
+              child: Icon(
+                Icons.directions_car,
+                size: isMobile ? 12 : 14,
+                color: Colors.green[800],
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  task.frota.isNotEmpty ? task.frota : task.tarefa,
+                  style: TextStyle(
+                    fontSize: isMobile ? 10 : 11.5,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.black87,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  'Período: $periodStr',
+                  style: TextStyle(
+                    fontSize: isMobile ? 8.5 : 9.5,
+                    color: Colors.grey[600],
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    } else if (isSubtask) {
+      content = Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: Colors.blue[50],
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: Colors.blue[300]!, width: 0.8),
+            ),
+            child: Tooltip(
+              message: 'Subtarefa',
+              child: Icon(
+                Icons.subdirectory_arrow_right,
+                size: isMobile ? 12 : 14,
+                color: Colors.blue[800],
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              task.tarefa,
+              style: TextStyle(
+                fontSize: isMobile ? 10.5 : 11.5,
+                fontWeight: FontWeight.w500,
+                color: Colors.black87,
+              ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      );
+    } else {
+      content = Text(
+        task.tarefa,
+        style: TextStyle(
+          fontSize: isMobile ? 10 : 11.5,
+          fontWeight: (task.status == 'PROG' || task.status == 'ANDA') ? FontWeight.w600 : FontWeight.normal,
+          color: Colors.black87,
+        ),
+        maxLines: 2,
+        softWrap: true,
+        overflow: TextOverflow.fade,
+      );
+    }
+
+    return Container(
+      width: width,
+      height: 50,
+      padding: EdgeInsets.only(
+        left: (isSubtask || isExecutorRow || isFrotaRow) ? (isMobile ? 10 : 14) : (isMobile ? 4 : 6),
+        right: isMobile ? 4 : 6,
+        top: 4,
+        bottom: 4,
+      ),
+      alignment: Alignment.centerLeft,
+      decoration: BoxDecoration(
+        border: Border(right: BorderSide(color: Colors.grey[300]!, width: 0.5)),
+      ),
+      child: content,
     );
   }
 
@@ -1050,6 +1364,7 @@ class _TaskTableState extends State<TaskTable> {
     bool isExecutorRow,
     bool isFrotaRow,
     bool hasExecutorPeriods,
+    bool hasFrotaPeriods,
     Color statusBackgroundColor,
     double rowMinWidth,
     Map<String, List<TaskWarning>> effectiveWarnings,
@@ -1073,142 +1388,154 @@ class _TaskTableState extends State<TaskTable> {
     final atsWidth = isMobile ? 38.0 : 42.0;
     final sisWidth = isMobile ? 38.0 : 42.0;
     final alertasWidth = isMobile ? 45.0 : 50.0;
-    // Botão foi movido para a legenda, não precisa mais incluir aqui
+
+    final visibleCols = TaskTableColumnService.instance.visibleColumns;
 
     return SizedBox(
-      width: rowMinWidth,
+      width: _calculateTotalTableWidth(isMobile),
       height: 50,
       child: ClipRect(
         child: Row(
           children: [
             // Coluna de AÇÕES (primeira coluna)
-            _buildActionsCell(task, acoesWidth, isMobile),
+            if (visibleCols.contains(TaskTableColumn.acoes))
+              _buildActionsCell(task, acoesWidth, isMobile),
             // Coluna de STATUS com ícone de expansão
-            _buildStatusCell(
-              task.status,
-              statusWidth,
-              isMobile,
-              task,
-              hasSubtasks,
-              isSubtask || isFrotaRow,
-              isExecutorRow,
-              hasExecutorPeriods,
-            ),
-            _buildCell(
-              task.locais.isNotEmpty ? task.locais.join(', ') : '',
-              localWidth,
-              isMobile,
-              hasColoredBackground: statusBackgroundColor != Colors.white,
-              fontWeight: (task.status == 'PROG' || task.status == 'ANDA')
-                  ? FontWeight.w600
-                  : null,
-            ),
-            _buildCell(
-              task.tipo,
-              tipoWidth,
-              isMobile,
-              hasColoredBackground: statusBackgroundColor != Colors.white,
-            ),
-            // Coluna TAREFA com largura fixa
-            SizedBox(
-              width: tarefaWidth,
-              child: Container(
-                padding: EdgeInsets.only(
-                  left: (isSubtask || isExecutorRow || isFrotaRow)
-                      ? (isMobile ? 20 : 24)
-                      : 0,
-                ),
-                child: _buildCell(
-                  task.tarefa,
-                  0,
-                  isMobile,
-                  isSubtask: isSubtask || isFrotaRow,
-                  hasColoredBackground: statusBackgroundColor != Colors.white,
-                  maxLines: 2,
-                  softWrap: true,
-                  overflow: TextOverflow.fade,
-                  fontWeight: (task.status == 'PROG' || task.status == 'ANDA')
-                      ? FontWeight.w600
-                      : null,
-                ),
+            if (visibleCols.contains(TaskTableColumn.status))
+              _buildStatusCell(
+                task.status,
+                statusWidth,
+                isMobile,
+                task,
+                hasSubtasks,
+                isSubtask,
+                isExecutorRow,
+                isFrotaRow,
+                hasExecutorPeriods,
+                hasFrotaPeriods,
               ),
-            ),
-            // Coluna EXECUTOR com largura fixa
-            SizedBox(
-              width: executorWidth,
-              child: Tooltip(
-                message:
-                    task.equipeExecutores != null &&
-                        task.equipeExecutores!.isNotEmpty
-                    ? 'Equipe: ${task.equipes.isNotEmpty ? task.equipes.join(', ') : ''}\n\nExecutores:\n${task.equipeExecutores!.map((e) => '• ${e.executorNome} (${_getPapelLabel(e.papel)})').join('\n')}'
-                    : task.executores.isNotEmpty
-                    ? task.executores.join(', ')
-                    : task.executor,
-                child: _buildCell(
-                  task.equipeExecutores != null &&
-                          task.equipeExecutores!.isNotEmpty
-                      ? '${task.equipes.isNotEmpty ? task.equipes.join(', ') : ''} (${task.equipeExecutores!.length})'
-                      : task.executores.isNotEmpty
-                      ? task.executores.join(', ')
-                      : task.executor,
-                  0,
-                  isMobile,
-                  hasColoredBackground: statusBackgroundColor != Colors.white,
-                  maxLines: 2,
-                  softWrap: true,
-                  overflow: TextOverflow.fade,
-                ),
-              ),
-            ),
-            // Coluna COORDENADOR com largura fixa
-            SizedBox(
-              width: coordenadorWidth,
-              child: _buildCell(
-                task.coordenador,
-                0,
+            if (visibleCols.contains(TaskTableColumn.local))
+              _buildCell(
+                task.locais.isNotEmpty ? task.locais.join(', ') : '',
+                localWidth,
                 isMobile,
                 hasColoredBackground: statusBackgroundColor != Colors.white,
+                isSubtask: isExecutorRow || isFrotaRow,
+                fontWeight: (task.status == 'PROG' || task.status == 'ANDA')
+                    ? FontWeight.w600
+                    : null,
               ),
-            ),
+            if (visibleCols.contains(TaskTableColumn.tipo))
+              _buildCell(
+                task.tipo,
+                tipoWidth,
+                isMobile,
+                hasColoredBackground: statusBackgroundColor != Colors.white,
+                isSubtask: isExecutorRow || isFrotaRow,
+              ),
+            // Coluna TAREFA com largura fixa e apresentação limpa
+            if (visibleCols.contains(TaskTableColumn.tarefa))
+              _buildTaskTitleCell(
+                task,
+                tarefaWidth,
+                isMobile,
+                isSubtask: isSubtask,
+                isExecutorRow: isExecutorRow,
+                isFrotaRow: isFrotaRow,
+                statusBg: statusBackgroundColor,
+              ),
+            // Coluna EXECUTOR com largura fixa
+            if (visibleCols.contains(TaskTableColumn.executor))
+              isFrotaRow
+                  ? _buildCell('—', executorWidth, isMobile)
+                  : SizedBox(
+                      width: executorWidth,
+                      child: Tooltip(
+                        message:
+                            task.equipeExecutores != null &&
+                                    task.equipeExecutores!.isNotEmpty
+                                ? 'Equipe: ${task.equipes.isNotEmpty ? task.equipes.join(', ') : ''}\n\nExecutores:\n${task.equipeExecutores!.map((e) => '• ${e.executorNome} (${_getPapelLabel(e.papel)})').join('\n')}'
+                                : task.executores.isNotEmpty
+                                ? task.executores.join(', ')
+                                : task.executor,
+                        child: _buildCell(
+                          task.equipeExecutores != null &&
+                                  task.equipeExecutores!.isNotEmpty
+                              ? '${task.equipes.isNotEmpty ? task.equipes.join(', ') : ''} (${task.equipeExecutores!.length})'
+                              : task.executores.isNotEmpty
+                              ? task.executores.join(', ')
+                              : task.executor,
+                          0,
+                          isMobile,
+                          hasColoredBackground: statusBackgroundColor != Colors.white,
+                          maxLines: 2,
+                          softWrap: true,
+                          overflow: TextOverflow.fade,
+                          fontWeight: isExecutorRow ? FontWeight.bold : null,
+                        ),
+                      ),
+                    ),
+            // Coluna COORDENADOR com largura fixa
+            if (visibleCols.contains(TaskTableColumn.coordenador))
+              SizedBox(
+                width: coordenadorWidth,
+                child: _buildCell(
+                  task.coordenador,
+                  0,
+                  isMobile,
+                  hasColoredBackground: statusBackgroundColor != Colors.white,
+                  isSubtask: isExecutorRow || isFrotaRow,
+                ),
+              ),
             // Coluna de FROTA (clicável)
-            _buildFrotaCell(task, frotaWidth, isMobile, statusBackgroundColor),
+            if (visibleCols.contains(TaskTableColumn.frota))
+              isExecutorRow
+                  ? _buildCell('—', frotaWidth, isMobile)
+                  : _buildFrotaCell(task, frotaWidth, isMobile, statusBackgroundColor),
             // Coluna de CHAT (clicável)
-            _buildChatCell(task, chatWidth, isMobile, statusBackgroundColor),
+            if (visibleCols.contains(TaskTableColumn.chat))
+              _buildChatCell(task, chatWidth, isMobile, statusBackgroundColor),
             // Coluna de ANEXOS
-            _buildCell(
-              _anexosCount[task.id] != null && _anexosCount[task.id]! > 0
-                  ? '${_anexosCount[task.id]}'
-                  : '',
-              anexosWidth,
-              isMobile,
-              icon: Icons.attach_file,
-              iconColor:
-                  _anexosCount[task.id] != null && _anexosCount[task.id]! > 0
-                  ? Colors.green
-                  : Colors.grey[400],
-              hasColoredBackground: statusBackgroundColor != Colors.white,
-            ),
+            if (visibleCols.contains(TaskTableColumn.anexos))
+              _buildCell(
+                _anexosCount[task.id] != null && _anexosCount[task.id]! > 0
+                    ? '${_anexosCount[task.id]}'
+                    : '',
+                anexosWidth,
+                isMobile,
+                icon: Icons.attach_file,
+                iconColor:
+                    _anexosCount[task.id] != null && _anexosCount[task.id]! > 0
+                    ? Colors.green
+                    : Colors.grey[400],
+                hasColoredBackground: statusBackgroundColor != Colors.white,
+              ),
             // Coluna de NOTAS SAP (clicável)
-            _buildNotaSAPCell(
-              task,
-              notasSAPWidth,
-              isMobile,
-              statusBackgroundColor,
-            ),
+            if (visibleCols.contains(TaskTableColumn.nota))
+              _buildNotaSAPCell(
+                task,
+                notasSAPWidth,
+                isMobile,
+                statusBackgroundColor,
+              ),
             // Coluna de ORDENS (clicável)
-            _buildOrdemCell(task, ordensWidth, isMobile, statusBackgroundColor),
+            if (visibleCols.contains(TaskTableColumn.ordem))
+              _buildOrdemCell(task, ordensWidth, isMobile, statusBackgroundColor),
             // Coluna de ATs (clicável)
-            _buildATCell(task, atsWidth, isMobile, statusBackgroundColor),
+            if (visibleCols.contains(TaskTableColumn.at))
+              _buildATCell(task, atsWidth, isMobile, statusBackgroundColor),
             // Coluna de SIs (clicável)
-            _buildSICell(task, sisWidth, isMobile, statusBackgroundColor),
+            if (visibleCols.contains(TaskTableColumn.si))
+              _buildSICell(task, sisWidth, isMobile, statusBackgroundColor),
             // Coluna de ALERTAS (badge + drawer/bottom sheet)
-            _buildAlertasCell(
-              task,
-              alertasWidth,
-              isMobile,
-              statusBackgroundColor,
-              taskWarnings,
-            ),
+            if (visibleCols.contains(TaskTableColumn.alertas))
+              _buildAlertasCell(
+                task,
+                alertasWidth,
+                isMobile,
+                statusBackgroundColor,
+                taskWarnings,
+              ),
           ],
         ),
       ),
@@ -1440,16 +1767,20 @@ class _TaskTableState extends State<TaskTable> {
     bool hasSubtasks,
     bool isSubtask,
     bool isExecutorRow,
+    bool isFrotaRow,
     bool hasExecutorPeriods,
+    bool hasFrotaPeriods,
   ) {
     final badgeColor = _getStatusBadgeColor(status);
     final subtasksCount = _loadedSubtasks[task.id]?.length ?? 0;
-    final hasSubs = subtasksCount > 0;
+    final hasSubs = subtasksCount > 0 || hasSubtasks;
+    final hasChildren = hasSubs || hasExecutorPeriods || hasFrotaPeriods;
     final isExpanded = _expandedTasks.contains(task.id);
+    final isChildRow = isSubtask || isExecutorRow || isFrotaRow;
 
     final cellWidget = Container(
       padding: EdgeInsets.symmetric(
-        horizontal: isMobile ? 3 : 6,
+        horizontal: isMobile ? 2 : 4,
         vertical: isMobile ? 4 : 8,
       ),
       decoration: BoxDecoration(
@@ -1458,42 +1789,21 @@ class _TaskTableState extends State<TaskTable> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Ícone de expandir/colapsar ou indentação
-          if (hasSubs || hasSubtasks || hasExecutorPeriods)
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: Icon(
-                    isExpanded ? Icons.expand_less : Icons.expand_more,
-                    size: isMobile ? 16 : 18,
-                    color: Colors.blue[700],
-                  ),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  onPressed: () => _toggleExpand(task.id),
-                ),
-                if (hasSubs && !isExpanded)
-                  Container(
-                    padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.blue[100],
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Text(
-                      '$subtasksCount',
-                      style: TextStyle(
-                        fontSize: isMobile ? 8 : 9,
-                        color: Colors.blue[900],
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-              ],
+          // Ícone de expandir/colapsar
+          if (hasChildren)
+            IconButton(
+              icon: Icon(
+                isExpanded ? Icons.expand_less : Icons.expand_more,
+                size: isMobile ? 16 : 18,
+                color: Colors.blue[700],
+              ),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+              onPressed: () => _toggleExpand(task.id),
             )
-          else if (isSubtask)
+          else if (isChildRow)
             Padding(
-              padding: EdgeInsets.only(left: isMobile ? 16 : 20),
+              padding: EdgeInsets.only(left: isMobile ? 10 : 14),
               child: Icon(
                 Icons.subdirectory_arrow_right,
                 size: isMobile ? 14 : 16,
@@ -1502,12 +1812,13 @@ class _TaskTableState extends State<TaskTable> {
             )
           else
             const SizedBox(width: 8),
+          const SizedBox(width: 4),
           // Bolinha de status
           Tooltip(
             message: _getStatusLabel(status),
             child: Container(
-              width: isMobile ? 12 : 14,
-              height: isMobile ? 12 : 14,
+              width: isMobile ? 11 : 13,
+              height: isMobile ? 11 : 13,
               decoration: BoxDecoration(
                 color: badgeColor,
                 shape: BoxShape.circle,

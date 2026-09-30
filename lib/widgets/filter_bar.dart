@@ -3,6 +3,8 @@ import 'dart:async';
 import '../utils/responsive.dart';
 import '../models/task.dart';
 import 'multi_select_filter_dialog.dart';
+import '../models/task_sort_rule.dart';
+import 'common/task_sort_rules_dialog.dart';
 
 class FilterBar extends StatefulWidget {
   final Function(Map<String, String?>) onFiltersChanged;
@@ -754,9 +756,14 @@ class _FilterBarState extends State<FilterBar> {
     );
   }
 
+  void _onSortRulesChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
     _debounceTimer?.cancel();
+    TaskSortService.instance.rulesNotifier.removeListener(_onSortRulesChanged);
     super.dispose();
   }
 
@@ -849,6 +856,7 @@ class _FilterBarState extends State<FilterBar> {
     if (widget.teamMode && widget.teamFilterOptions != null) {
       _applyTeamFilterOptions();
     }
+    TaskSortService.instance.rulesNotifier.addListener(_onSortRulesChanged);
     // Carregar valores iniciais a partir das tarefas visíveis (se houver)
     Future.microtask(() => _loadFilterValues(loadTotais: true));
   }
@@ -1458,6 +1466,25 @@ class _FilterBarState extends State<FilterBar> {
           ),
           const PopupMenuDivider(),
           PopupMenuItem<String>(
+            value: '__multi_sort__',
+            child: Row(
+              children: [
+                Icon(
+                  Icons.low_priority_rounded,
+                  size: 16,
+                  color: Colors.blue[700],
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  TaskSortService.instance.rules.length > 1
+                      ? 'Sub-ordenações (${TaskSortService.instance.rules.length} níveis)...'
+                      : 'Sub-ordenações...',
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          PopupMenuItem<String>(
             value: '__toggle_order__',
             child: Row(
               children: [
@@ -1476,7 +1503,9 @@ class _FilterBarState extends State<FilterBar> {
           ),
         ],
         onSelected: (value) {
-          if (value == '__toggle_order__') {
+          if (value == '__multi_sort__') {
+            TaskSortRulesDialog.show(context, isMobile: true);
+          } else if (value == '__toggle_order__') {
             widget.onSortChanged?.call(currentSortColumn, !currentSortAscending);
           } else {
             widget.onSortChanged?.call(value, currentSortAscending);
@@ -1538,6 +1567,52 @@ class _FilterBarState extends State<FilterBar> {
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
             tooltip: currentSortAscending ? 'Crescente' : 'Decrescente',
+          ),
+          Container(
+            height: 16,
+            width: 1,
+            color: Colors.blue.withValues(alpha: 0.3),
+            margin: const EdgeInsets.symmetric(horizontal: 4),
+          ),
+          Tooltip(
+            message: TaskSortService.instance.rules.length > 1
+                ? 'Sub-ordenações ativas (${TaskSortService.instance.rules.length} níveis configurados)'
+                : 'Configurar sub-ordenações (desempates em múltiplos níveis)',
+            child: InkWell(
+              onTap: () => TaskSortRulesDialog.show(context, isMobile: isMobile),
+              borderRadius: BorderRadius.circular(4),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.low_priority_rounded,
+                      size: iconSz,
+                      color: Colors.blue[700],
+                    ),
+                    if (TaskSortService.instance.rules.length > 1) ...[
+                      const SizedBox(width: 4),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: Colors.blue[700],
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(
+                          '${TaskSortService.instance.rules.length}',
+                          style: const TextStyle(
+                            fontSize: 10,
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
           ),
         ],
       ),
