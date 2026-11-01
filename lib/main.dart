@@ -534,10 +534,15 @@ class _MainScreenState extends State<MainScreen> {
   /// Atualiza o índice da sidebar e, se estiver SAINDO do chat (index 15),
   /// recarrega o snapshot de mensagens não lidas no manager.
   void _setSidebarIndex(int newIndex) {
+    final previousIndex = _sidebarSelectedIndex;
     final wasInChat = _sidebarSelectedIndex == 15;
     _sidebarSelectedIndex = newIndex;
     if (wasInChat && newIndex != 15) {
       _unreadChatManager.refreshAll();
+    }
+    // Recarrega as tarefas ao retornar para a tela de Atividades vindo de outra tela
+    if (newIndex == 0 && previousIndex != 0) {
+      _loadTasks();
     }
   }
 
@@ -2899,19 +2904,51 @@ class _MainScreenState extends State<MainScreen> {
       _saveScrollPositions();
       
       print('🆕 Criando tarefa com ${result.ganttSegments.length} segmentos do Gantt');
-      final createdTask = await _taskService.createTask(result);
+      final createResult = await _taskService.createTaskWithResult(result);
+      final createdTask = createResult.task;
       print('✅ Tarefa criada: ${createdTask.id} com ${createdTask.ganttSegments.length} segmentos');
-      
-      // Verificar se há nota SAP para vincular (quando criada a partir da tela de notas SAP)
-      // Isso será feito na tela de notas SAP após receber a tarefa criada
-      
+
       // Adicionar a nova tarefa à lista sem recarregar tudo (evita o "pisca")
       await _addTaskToList(createdTask.id);
       
       // Restaurar posição do scroll após adicionar
       _restoreScrollPositions();
       
-      _showSuccessMessage('Atividade criada com sucesso!');
+      if (createResult.vinculacaoCompleta) {
+        _showSuccessMessage('Atividade criada com sucesso!');
+      } else {
+        final falhas = createResult.notasComFalha;
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Tarefa criada com sucesso, mas ${falhas.length} Nota(s) SAP não puderam ser vinculadas.',
+              ),
+              backgroundColor: Colors.orange,
+              duration: const Duration(seconds: 8),
+              action: SnackBarAction(
+                label: 'Tentar vincular',
+                textColor: Colors.white,
+                onPressed: () async {
+                  try {
+                    await NotaSAPService().vincularNotasATarefaBatch(
+                      taskId: createdTask.id,
+                      notaSapIds: falhas,
+                    );
+                    if (mounted) {
+                      _showSuccessMessage('Notas SAP vinculadas com sucesso!');
+                    }
+                  } catch (err) {
+                    if (mounted) {
+                      _showErrorMessage('Erro ao tentar vincular notas pendentes: $err');
+                    }
+                  }
+                },
+              ),
+            ),
+          );
+        }
+      }
     }
   }
 

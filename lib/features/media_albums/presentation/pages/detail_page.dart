@@ -241,6 +241,53 @@ class _DetailPageState extends State<DetailPage> {
   Future<void> _deleteImage() async {
     if (_image == null) return;
 
+    // 1. Pré-checagem de uso em Análises Técnicas (UX amigável)
+    final usos = await _repository.verificarUsoEmAnalises(_image!.id);
+    if (!mounted) return;
+
+    if (usos.isNotEmpty) {
+      final buffer = StringBuffer();
+      buffer.writeln('Esta fotografia está sendo utilizada como evidência em Análise Técnica:\n');
+      for (final u in usos.take(4)) {
+        final numNota = u['numero_nota'] ?? 'N/D';
+        final secao = u['tipo_vinculo'] ?? 'Evidência';
+        buffer.writeln('• Nota SAP $numNota — $secao');
+      }
+      if (usos.length > 4) {
+        buffer.writeln('• (+${usos.length - 4} outros vínculos)');
+      }
+      buffer.writeln('\nPara excluir a fotografia, remova primeiro o vínculo com a análise técnica.');
+
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.shield_outlined, color: Colors.amber, size: 24),
+              SizedBox(width: 8),
+              Text(
+                'Fotografia Vinculada à Análise',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          content: Text(
+            buffer.toString(),
+            style: const TextStyle(fontSize: 13, height: 1.4),
+          ),
+          actions: [
+            ElevatedButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Entendido'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    // 2. Confirmação do usuário
     final confirmed = await TFModalDialog.confirm(
       context: context,
       title: 'Excluir Imagem',
@@ -251,20 +298,23 @@ class _DetailPageState extends State<DetailPage> {
 
     if (confirmed == true) {
       try {
-        await _repository.deleteFile(_image!.filePath);
-        if (_image!.thumbPath != null) {
-          await _repository.deleteFile(_image!.thumbPath!);
-        }
-        await _repository.deleteMediaImage(_image!.id);
+        // 3. Ordem race-safe: banco primeiro -> storage depois
+        await _repository.deleteMediaImageSafe(_image!);
 
         if (mounted) {
           Navigator.of(context).pop(true);
         }
       } catch (e) {
         if (mounted) {
+          final isRestrict = e.toString().toLowerCase().contains('violates foreign key') ||
+              e.toString().toLowerCase().contains('fk_') ||
+              e.toString().toLowerCase().contains('restrict');
+          final msg = isRestrict
+              ? 'Esta imagem não pode ser excluída pois foi vinculada como evidência em uma análise técnica.'
+              : 'Erro ao deletar imagem: $e';
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Erro ao deletar imagem: $e'),
+              content: Text(msg),
               backgroundColor: Colors.red,
             ),
           );

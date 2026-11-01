@@ -209,6 +209,8 @@ class Task {
   final String? parentId;
   final bool precisaSi;
   final bool hasConflict;
+  // Notas SAP selecionadas para vinculação conjunta na criação/edição
+  final List<String> notaSapIdsParaVincular;
 
   Task({
     required this.id,
@@ -252,6 +254,7 @@ class Task {
     this.parentId,
     this.precisaSi = false,
     this.hasConflict = false,
+    this.notaSapIdsParaVincular = const [],
   });
 
   // Getter para verificar se é uma tarefa principal (não subtarefa)
@@ -300,6 +303,7 @@ class Task {
     String? parentId,
     bool? precisaSi,
     bool? hasConflict,
+    List<String>? notaSapIdsParaVincular,
   }) {
     return Task(
       id: id ?? this.id,
@@ -343,6 +347,7 @@ class Task {
       parentId: parentId ?? this.parentId,
       precisaSi: precisaSi ?? this.precisaSi,
       hasConflict: hasConflict ?? this.hasConflict,
+      notaSapIdsParaVincular: notaSapIdsParaVincular ?? this.notaSapIdsParaVincular,
     );
   }
 

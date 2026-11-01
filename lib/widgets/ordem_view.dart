@@ -109,6 +109,7 @@ class _OrdemViewState extends State<OrdemView> {
   bool _exibirGantt = false;
   GanttScale _ganttScale = GanttScale.daily;
   final ScrollController _tableVerticalScrollController = ScrollController();
+  final ScrollController _tableHorizontalScrollController = ScrollController();
   final ScrollController _ganttVerticalScrollController = ScrollController();
 
   void _sincronizarScrolls() {
@@ -258,6 +259,7 @@ class _OrdemViewState extends State<OrdemView> {
   void dispose() {
     _statusChangeSubscription?.cancel();
     _tableVerticalScrollController.dispose();
+    _tableHorizontalScrollController.dispose();
     _ganttVerticalScrollController.dispose();
     super.dispose();
   }
@@ -2990,11 +2992,29 @@ class _OrdemViewState extends State<OrdemView> {
       color: colors.textPrimary,
     );
 
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: SingleChildScrollView(
+    return Scrollbar(
+      controller: _tableHorizontalScrollController,
+      thumbVisibility: true,
+      trackVisibility: true,
+      thickness: 10,
+      radius: const Radius.circular(5),
+      notificationPredicate: (notif) => notif.metrics.axis == Axis.horizontal,
+      child: Scrollbar(
         controller: _tableVerticalScrollController,
-        child: DataTable(
+        thumbVisibility: true,
+        trackVisibility: true,
+        thickness: 10,
+        radius: const Radius.circular(5),
+        notificationPredicate: (notif) => notif.metrics.axis == Axis.vertical,
+        child: SingleChildScrollView(
+          controller: _tableHorizontalScrollController,
+          scrollDirection: Axis.horizontal,
+          physics: const AlwaysScrollableScrollPhysics(),
+          child: SingleChildScrollView(
+            controller: _tableVerticalScrollController,
+            scrollDirection: Axis.vertical,
+            physics: const AlwaysScrollableScrollPhysics(),
+            child: DataTable(
           headingRowColor: WidgetStateProperty.all(colors.surfaceSecondary),
           columns: [
             DataColumn(
@@ -3339,7 +3359,9 @@ class _OrdemViewState extends State<OrdemView> {
           }).toList(),
         ),
       ),
-    );
+    ),
+  ),
+);
   }
 
   void _mostrarDetalhesOrdem(Ordem ordem) {

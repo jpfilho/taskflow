@@ -2,12 +2,13 @@
 """
 Script para criar as tabelas no Supabase usando a API REST
 """
+import os
 import requests
 import json
 
 # Configurações do Supabase
-SUPABASE_URL = "https://srv750497.hstgr.cloud"
-SERVICE_ROLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UiLCJpYXQiOjE3NjU4MTc5ODMsImV4cCI6MjA4MTE3Nzk4M30.MYcuHsPkBgYg_M1WVHKbtO3MQYalYNYOppr0Q3ynUgw"
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://srv750497.hstgr.cloud")
+SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 
 # Headers para requisições
 headers = {

@@ -9,6 +9,8 @@ import '../services/anexo_service.dart';
 import '../models/anexo.dart';
 import '../services/unread_chat_manager.dart';
 import '../models/task.dart';
+import '../models/nota_sap.dart';
+import 'nota_analise_workspace.dart';
 import '../services/task_service.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -491,8 +493,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final hasObservacoes = _tarefaAssociada!.observacoes != null &&
         _tarefaAssociada!.observacoes!.trim().isNotEmpty;
     final hasAnexos = _anexosTarefa.isNotEmpty;
+    final hasNotas = _notasDisponiveis.isNotEmpty;
 
-    if (!hasObservacoes && !hasAnexos) return const SizedBox.shrink();
+    if (!hasObservacoes && !hasAnexos && !hasNotas) return const SizedBox.shrink();
 
     final observacoesTexto = _tarefaAssociada!.observacoes?.trim() ?? '';
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -804,6 +807,56 @@ class _ChatScreenState extends State<ChatScreen> {
                           );
                         },
                       ),
+                    ),
+                  ],
+                  if (_notasDisponiveis.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: _notasDisponiveis.map((notaMap) {
+                        final numeroNota = notaMap['nota']?.toString() ?? '';
+                        return Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1E3A5F).withOpacity(0.08),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: const Color(0xFF1E3A5F).withOpacity(0.2)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.assignment_outlined, size: 14, color: Color(0xFF1E3A5F)),
+                              const SizedBox(width: 6),
+                              Text(
+                                'Nota SAP vinculada: $numeroNota',
+                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF1E3A5F)),
+                              ),
+                              const SizedBox(width: 8),
+                              InkWell(
+                                onTap: () {
+                                  final notaObj = NotaSAP(
+                                    id: notaMap['id']?.toString() ?? '',
+                                    nota: numeroNota,
+                                    descricao: notaMap['descricao']?.toString(),
+                                    sala: notaMap['sala']?.toString(),
+                                  );
+                                  NotaAnaliseWorkspace.abrir(context, nota: notaObj, readOnly: true);
+                                },
+                                child: const Text(
+                                  'Ver análise técnica',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.blue,
+                                    decoration: TextDecoration.underline,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }).toList(),
                     ),
                   ],
                 ],

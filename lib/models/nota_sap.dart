@@ -84,6 +84,21 @@ class NotaSAP {
     this.diasRestantes,
   });
 
+  /// Identifica se a nota está aberta no SAP (em planejamento/análise/execução).
+  bool get estaAberta {
+    final s = (statusSistema ?? '').toUpperCase();
+    return (s.contains('MSPN') || s.contains('MSPR')) &&
+        !s.contains('CONC') &&
+        !s.contains('ENCE') &&
+        !s.contains('CANC');
+  }
+
+  /// Identifica se a nota já foi concluída ou encerrada no SAP.
+  bool get estaConcluida => !estaAberta;
+
+  /// Data em que a nota foi concluída/encerrada no SAP (encerramento, fim de avaria ou data de referência).
+  DateTime? get dataConclusao => encerramento ?? fimAvaria ?? dataReferencia;
+
   // Função auxiliar para normalizar strings com problemas de encoding
   // Tenta corrigir caracteres que foram corrompidos durante a importação
   static String? _normalizeString(String? value) {
@@ -151,6 +166,7 @@ class NotaSAP {
           }
           return DateTime.parse(value);
         } catch (e) {
+          // ignore: avoid_print
           print('⚠️ Erro ao parsear data: $value - $e');
           return null;
         }

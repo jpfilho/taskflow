@@ -66,7 +66,11 @@ void main() {
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 200));
 
-        expect(find.text('Ordens'), findsOneWidget);
+        if (width >= 1024) {
+          expect(find.text('Ordens'), findsOneWidget);
+        } else {
+          expect(find.byType(SegmentedButton<String?>), findsNWidgets(2));
+        }
         await tester.pump(const Duration(seconds: 4));
       }
     });

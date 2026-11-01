@@ -1,4 +1,7 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:excel/excel.dart' hide Border;
+import '../utils/file_export_helper.dart';
 import '../utils/platform_utils.dart' as platform;
 import '../models/nota_sap.dart';
 import '../models/ordem.dart';
@@ -74,6 +77,7 @@ class ActivityReportView extends StatefulWidget {
 
 class _ActivityReportViewState extends State<ActivityReportView> {
   bool _isLoading = true;
+  bool _isExportingExcel = false;
   String? _error;
   List<_NotaRow> _notaRows = [];
   List<_OrdemRow> _ordemRows = [];
@@ -309,6 +313,173 @@ class _ActivityReportViewState extends State<ActivityReportView> {
     );
   }
 
+  // ── Ação de exportar Excel ────────────────────────────────────────────────
+  Future<void> _exportExcel() async {
+    if (_isExportingExcel) return;
+
+    setState(() => _isExportingExcel = true);
+
+    try {
+      final excel = Excel.createExcel();
+      excel.delete('Sheet1');
+
+      final headerStyleNotas = CellStyle(
+        bold: true,
+        backgroundColorHex: '#1E3A5F',
+        fontColorHex: '#FFFFFF',
+      );
+
+      final headerStyleOrdens = CellStyle(
+        bold: true,
+        backgroundColorHex: '#0D5C75',
+        fontColorHex: '#FFFFFF',
+      );
+
+      // ── Aba 1: Notas SAP ──
+      final sheetNotas = excel['Notas SAP'];
+      final notasHeaders = [
+        '#', 'Nota', 'Tipo', 'Descrição', 'Local Instalação', 'Sala',
+        'Prioridade', 'Status Nota', 'Atividade', 'Status Ativ.',
+        'Executor(es)', 'Coordenador', 'Início', 'Fim', 'Observação'
+      ];
+
+      for (int i = 0; i < notasHeaders.length; i++) {
+        final cell = sheetNotas.cell(
+          CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0),
+        );
+        cell.value = notasHeaders[i];
+        cell.cellStyle = headerStyleNotas;
+      }
+
+      for (int row = 0; row < _notaRows.length; row++) {
+        final r = _notaRows[row];
+        final n = r.nota;
+        final t = r.task;
+        final data = [
+          '${row + 1}',
+          n.nota,
+          n.tipo ?? '',
+          n.descricao ?? '',
+          n.localInstalacao ?? '',
+          n.sala ?? '',
+          n.textPrioridade ?? '',
+          n.statusSistema ?? '',
+          t.tarefa,
+          t.status,
+          _executores(t),
+          t.coordenador,
+          _fmtDate(t.dataInicio),
+          _fmtDate(t.dataFim),
+          '',
+        ];
+
+        for (int col = 0; col < data.length; col++) {
+          final cell = sheetNotas.cell(
+            CellIndex.indexByColumnRow(columnIndex: col, rowIndex: row + 1),
+          );
+          cell.value = data[col];
+        }
+      }
+
+      // ── Aba 2: Ordens SAP ──
+      final sheetOrdens = excel['Ordens SAP'];
+      final ordensHeaders = [
+        '#', 'Ordem', 'Tipo', 'Texto Breve', 'Local Instalação', 'Sala',
+        'Status Sistema', 'GPM', 'Atividade', 'Executor(es)',
+        'Coordenador', 'Início', 'Fim', 'Observação'
+      ];
+
+      for (int i = 0; i < ordensHeaders.length; i++) {
+        final cell = sheetOrdens.cell(
+          CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0),
+        );
+        cell.value = ordensHeaders[i];
+        cell.cellStyle = headerStyleOrdens;
+      }
+
+      for (int row = 0; row < _ordemRows.length; row++) {
+        final r = _ordemRows[row];
+        final o = r.ordem;
+        final t = r.task;
+        final data = [
+          '${row + 1}',
+          o.ordem,
+          o.tipo ?? '',
+          o.textoBreve ?? '',
+          o.localInstalacao ?? '',
+          o.sala ?? '',
+          o.statusSistema ?? '',
+          o.gpm ?? '',
+          t.tarefa,
+          _executores(t),
+          t.coordenador,
+          _fmtDate(t.dataInicio),
+          _fmtDate(t.dataFim),
+          '',
+        ];
+
+        for (int col = 0; col < data.length; col++) {
+          final cell = sheetOrdens.cell(
+            CellIndex.indexByColumnRow(columnIndex: col, rowIndex: row + 1),
+          );
+          cell.value = data[col];
+        }
+      }
+
+      final bytes = excel.encode();
+      if (bytes == null) {
+        throw Exception('Falha ao codificar dados para a planilha Excel.');
+      }
+
+      final now = DateTime.now();
+      final nowStr =
+          '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}';
+      final filename = 'relatorio_atividades_$nowStr.xlsx';
+
+      final result = await FileExportHelper.exportBytes(
+        bytes: Uint8List.fromList(bytes),
+        filename: filename,
+        mimeType:
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        subject: 'Relatório de Atividades Programadas (Excel)',
+      );
+
+      if (!mounted) return;
+
+      if (result.success) {
+        await FileExportHelper.showExportSuccessDialog(
+          context,
+          result,
+          itemsCount: _notaRows.length + _ordemRows.length,
+          formatName: 'Excel (.xlsx)',
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+                'Erro ao exportar Excel: ${result.errorMessage ?? 'Falha desconhecida'}'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erro ao exportar para Excel: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isExportingExcel = false);
+      }
+    }
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
   // Build
   // ─────────────────────────────────────────────────────────────────────────
@@ -363,12 +534,31 @@ class _ActivityReportViewState extends State<ActivityReportView> {
                 ),
                 const SizedBox(width: 16),
                 FilledButton.icon(
+                  onPressed: _isExportingExcel ? null : _exportExcel,
+                  icon: _isExportingExcel
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.table_chart_outlined, size: 18),
+                  label: Text(_isExportingExcel ? 'Exportando...' : 'Exportar Excel'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF1E7145),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                FilledButton.icon(
                   onPressed: _print,
                   icon: const Icon(Icons.print, size: 18),
                   label: const Text('Imprimir / Salvar PDF'),
                   style: FilledButton.styleFrom(
                     backgroundColor: Colors.blueGrey[700],
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                   ),
                 ),
               ],

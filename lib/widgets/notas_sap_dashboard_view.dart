@@ -2,20 +2,36 @@ import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../design_system/taskflow_design_system.dart';
 import '../models/nota_sap.dart';
+import '../models/nota_sap_analise.dart';
+import '../models/nota_sap_indicadores.dart';
 import '../utils/responsive.dart';
+import 'dashboard/notas_sap_analise_dashboard_section.dart';
 
 class NotasSAPDashboardView extends StatelessWidget {
   final List<NotaSAP> notas;
+  final Map<String, NotaSapResumoAnalise>? resumosAnalise;
+  final Set<String>? notasProgramadasIds;
+  final OnDrillDownAnalise? onDrillDown;
+  final VoidCallback? onRefresh;
 
   const NotasSAPDashboardView({
     super.key,
     required this.notas,
+    this.resumosAnalise,
+    this.notasProgramadasIds,
+    this.onDrillDown,
+    this.onRefresh,
   });
 
   @override
   Widget build(BuildContext context) {
     final isMobile = Responsive.isMobile(context);
     final stats = _calculateStats(notas);
+    final indicadores = NotaSapIndicadores.calcular(
+      notas: notas,
+      resumos: resumosAnalise ?? const {},
+      notasProgramadasIds: notasProgramadasIds ?? const {},
+    );
 
     return SingleChildScrollView(
       padding: EdgeInsets.all(isMobile ? TFSpacing.s8 : TFSpacing.s16),
@@ -23,7 +39,13 @@ class NotasSAPDashboardView extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _buildOverviewCards(context, stats, isMobile),
-          const SizedBox(height: TFSpacing.s16),
+          const SizedBox(height: TFSpacing.s24),
+          NotasSapAnaliseDashboardSection(
+            indicadores: indicadores,
+            onDrillDown: onDrillDown,
+            onRefresh: onRefresh,
+          ),
+          const SizedBox(height: TFSpacing.s24),
           if (!isMobile)
             IntrinsicHeight(
               child: Row(

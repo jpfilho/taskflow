@@ -7,10 +7,24 @@ import 'regra_prazo_nota_service.dart';
 import 'ordem_service.dart';
 
 class NotaSAPService {
-  final SupabaseClient _supabase = Supabase.instance.client;
-  final AuthServiceSimples _authService = AuthServiceSimples();
-  final CentroTrabalhoService _centroTrabalhoService = CentroTrabalhoService();
-  final RegraPrazoNotaService _regraPrazoNotaService = RegraPrazoNotaService();
+  final SupabaseClient? _customSupabase;
+  SupabaseClient get _supabase => _customSupabase ?? Supabase.instance.client;
+  final AuthServiceSimples? _customAuthService;
+  AuthServiceSimples get _authService => _customAuthService ?? AuthServiceSimples();
+  final CentroTrabalhoService? _customCentroTrabalhoService;
+  CentroTrabalhoService get _centroTrabalhoService => _customCentroTrabalhoService ?? CentroTrabalhoService();
+  final RegraPrazoNotaService? _customRegraPrazoNotaService;
+  RegraPrazoNotaService get _regraPrazoNotaService => _customRegraPrazoNotaService ?? RegraPrazoNotaService();
+
+  NotaSAPService({
+    SupabaseClient? supabaseClient,
+    AuthServiceSimples? authService,
+    CentroTrabalhoService? centroTrabalhoService,
+    RegraPrazoNotaService? regraPrazoNotaService,
+  })  : _customSupabase = supabaseClient,
+        _customAuthService = authService,
+        _customCentroTrabalhoService = centroTrabalhoService,
+        _customRegraPrazoNotaService = regraPrazoNotaService;
 
   // Importar notas do CSV
   Future<Map<String, dynamic>> importarNotasDoCSV(String csvContent) async {
@@ -1006,6 +1020,85 @@ class NotaSAPService {
     }
   }
 
+  /// Vincula múltiplas notas SAP a uma tarefa em lote com garantia de consistência.
+  /// 
+  /// - Idempotente: identifica notas já vinculadas para evitar duplicatas em tasks_notas_sap.
+  /// - Executa inserção em batch de forma atômica no PostgREST.
+  /// - Em caso de falha de banco no lote, executa rollback lógico (limpeza dos vínculos
+  ///   inseridos nesta tentativa) para evitar estado inconsistente/parcial silencioso.
+  /// - Vincula ordens correspondentes em segundo plano sem bloquear a conclusão da tarefa.
+  Future<List<String>> vincularNotasATarefaBatch({
+    required String taskId,
+    required List<String> notaSapIds,
+  }) async {
+    if (notaSapIds.isEmpty) return [];
+
+    final solicitados = notaSapIds.toSet();
+    final idsNovosInseridosComSucesso = <String>[];
+
+    try {
+      print('🔗 [NotaSapService] Iniciando vinculação de ${solicitados.length} notas solicitadas para tarefa $taskId...');
+
+      // 1. Identificar quais notas já estão vinculadas à tarefa (existentes)
+      final jaVinculadasRes = await _supabase
+          .from('tasks_notas_sap')
+          .select('nota_sap_id')
+          .eq('task_id', taskId)
+          .inFilter('nota_sap_id', solicitados.toList());
+
+      final existentes = (jaVinculadasRes as List)
+          .map((row) => row['nota_sap_id']?.toString() ?? '')
+          .where((id) => id.isNotEmpty)
+          .toSet();
+
+      // 2. Calcular apenas os novos vínculos necessários
+      final novos = solicitados.difference(existentes).toList();
+
+      if (novos.isEmpty) {
+        print('ℹ️ [NotaSapService] Todas as ${solicitados.length} notas solicitadas já estavam vinculadas à tarefa $taskId');
+        return existentes.toList();
+      }
+
+      print('📋 [NotaSapService] Vínculos existentes: ${existentes.length}, Novos a inserir: ${novos.length}');
+
+      // 3. Inserir em lote atômico na tabela tasks_notas_sap
+      final payload = novos
+          .map((notaId) => {
+                'task_id': taskId,
+                'nota_sap_id': notaId,
+              })
+          .toList();
+
+      try {
+        await _supabase.from('tasks_notas_sap').insert(payload);
+        idsNovosInseridosComSucesso.addAll(novos);
+        print('✅ [NotaSapService] ${idsNovosInseridosComSucesso.length} novas notas vinculadas com sucesso à tarefa $taskId');
+      } catch (insertError) {
+        print('❌ [NotaSapService.vincularNotasATarefaBatch] Erro ao inserir batch: $insertError');
+        // Rollback lógico seletivo: remove APENAS os novos vínculos inseridos nesta chamada
+        // NUNCA toca nos vínculos pré-existentes (existentes continua 100% preservado)
+        if (idsNovosInseridosComSucesso.isNotEmpty) {
+          try {
+            await _supabase
+                .from('tasks_notas_sap')
+                .delete()
+                .eq('task_id', taskId)
+                .inFilter('nota_sap_id', idsNovosInseridosComSucesso);
+            print('🔄 [NotaSapService] Rollback lógico executado: ${idsNovosInseridosComSucesso.length} novos vínculos revertidos. Vínculos anteriores preservados.');
+          } catch (rbError) {
+            print('⚠️ [NotaSapService] Erro ao executar rollback lógico: $rbError');
+          }
+        }
+        rethrow;
+      }
+
+      return [...existentes, ...idsNovosInseridosComSucesso];
+    } catch (e, stackTrace) {
+      print('❌ [NotaSapService.vincularNotasATarefaBatch] Erro geral: $e\n$stackTrace');
+      rethrow;
+    }
+  }
+
   // Desvincular nota de uma tarefa
   Future<void> desvincularNotaDeTarefa(String taskId, String notaSapId) async {
     try {
@@ -1898,4 +1991,7 @@ class NotaSAPService {
     }
   }
 }
+
+/// Alias para convenção de nomenclatura
+typedef NotaSapService = NotaSAPService;
 

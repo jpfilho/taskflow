@@ -1312,7 +1312,32 @@ class SupabaseMediaRepository {
     }
   }
 
-  /// Deleta uma imagem
+  /// Consulta em tempo real se a imagem de ID [mediaImageId] está vinculada como evidência em Análises Técnicas
+  Future<List<Map<String, dynamic>>> verificarUsoEmAnalises(String mediaImageId) async {
+    try {
+      final response = await _supabase
+          .from('notas_sap_analise_evidencias')
+          .select('id, tipo_vinculo, nota_sap_id, notas_sap(numero_nota)')
+          .eq('media_image_id', mediaImageId);
+
+      final list = (response as List<dynamic>?) ?? [];
+      return list.map((item) {
+        final map = item as Map<String, dynamic>;
+        final notaMap = map['notas_sap'] as Map<String, dynamic>?;
+        return {
+          'id': map['id'],
+          'tipo_vinculo': map['tipo_vinculo'],
+          'nota_sap_id': map['nota_sap_id'],
+          'numero_nota': notaMap?['numero_nota']?.toString() ?? 'N/D',
+        };
+      }).toList();
+    } catch (e) {
+      debugPrint('⚠️ Erro ao verificar uso da imagem $mediaImageId em análises: $e');
+      return [];
+    }
+  }
+
+  /// Deleta uma imagem no banco diretamente (respeita FK RESTRICT)
   Future<void> deleteMediaImage(String id) async {
     try {
       await _supabase
@@ -1323,6 +1348,45 @@ class SupabaseMediaRepository {
       throw Exception('Erro ao deletar imagem: $e');
     }
   }
+
+  /// Exclui uma imagem garantindo a ordem race-safe obrigatória:
+  /// 1. Tenta DELETE da linha em media_images (banco primeiro!)
+  /// 2. Se o banco rejeitar (ex: FK ON DELETE RESTRICT por vínculo com análise), o STORAGE NÃO É TOCADO.
+  /// 3. Somente se o banco confirmar a exclusão, remove os arquivos físicos do Storage.
+  /// 4. Se a remoção do Storage falhar, registra pendência de limpeza física sem corromper a integridade.
+  Future<void> deleteMediaImageSafe(MediaImage image) async {
+    // 1. DELETE NO BANCO PRIMEIRO
+    try {
+      await deleteMediaImage(image.id);
+    } catch (e) {
+      // Regra obrigatória: DB DELETE FAIL -> STORAGE NÃO É TOCADO
+      debugPrint('❌ Falha ao excluir media_image ${image.id} do banco: $e');
+      rethrow;
+    }
+
+    // 2. SOMENTE SE O BANCO PERMITIU: Limpeza do Storage
+    final storageErrors = <String>[];
+    try {
+      await deleteFile(image.filePath);
+    } catch (e) {
+      storageErrors.add('arquivo principal (${image.filePath}): $e');
+    }
+
+    if (image.thumbPath != null && image.thumbPath!.isNotEmpty) {
+      try {
+        await deleteFile(image.thumbPath!);
+      } catch (e) {
+        storageErrors.add('thumbnail (${image.thumbPath}): $e');
+      }
+    }
+
+    if (storageErrors.isNotEmpty) {
+      debugPrint(
+        '⚠️ Não foi possível remover o arquivo físico. A referência foi excluída, mas a limpeza do Storage está pendente: ${storageErrors.join(", ")}',
+      );
+    }
+  }
+
 
   // ============================================
   // MEDIA ANNOTATIONS (JSON + export PNG)

@@ -9,6 +9,7 @@ import '../utils/responsive.dart';
 import 'task_form_dialog.dart';
 import 'task_selection_dialog.dart';
 import '../services/task_service.dart';
+import '../services/nota_sap_grupo_service.dart';
 import '../models/task.dart';
 import '../models/status.dart';
 import '../services/status_service.dart';
@@ -20,17 +21,29 @@ import 'notas_sap_calendar_view.dart';
 import 'notas_sap_dashboard_view.dart';
 import 'gantt_chart.dart';
 import 'resizable_panel.dart';
+import 'nota_analise_workspace.dart';
+import 'planejamento_macro/planejamento_macro_view.dart';
+import '../models/nota_sap_analise.dart';
+import '../services/nota_sap_analise_service.dart';
+import 'nota_workspace/nota_analise_badge.dart';
+import '../models/nota_sap_tag.dart';
+import '../services/nota_sap_tag_service.dart';
+import 'nota_workspace/nota_tags_admin_dialog.dart';
 
 class NotasSAPView extends StatefulWidget {
   final String? searchQuery;
   final String? modoVisualizacao;
   final ValueChanged<String>? onModoChange;
+  final NotaSapAnaliseService? analiseService;
+  final NotaSapTagService? tagService;
 
   const NotasSAPView({
     super.key,
     this.searchQuery,
     this.modoVisualizacao,
     this.onModoChange,
+    this.analiseService,
+    this.tagService,
   });
 
   @override
@@ -40,6 +53,16 @@ class NotasSAPView extends StatefulWidget {
 class _NotasSAPViewState extends State<NotasSAPView> {
   final NotaSAPService _service = NotaSAPService();
   final StatusService _statusService = StatusService();
+  late final NotaSapAnaliseService _analiseService;
+  late final NotaSapTagService _tagService;
+  Map<String, List<NotaSapTag>> _tagsMap = {};
+  Set<String> _filtroTags = {};
+  List<String> _tagsDisponiveisParaFiltro = [];
+  Map<String, NotaSapResumoAnalise> _resumosAnalise = {};
+  String? _filtroAnaliseStatus; // null = todas, 'sem_analise', 'nao_iniciada', 'em_analise', 'aguardando_informacao', 'concluida', 'cancelada'
+  bool _filtroComAnexos = false;
+  bool _filtroComComentarios = false;
+  bool _filtroComMateriais = false;
   List<NotaSAP> _notas = [];
   List<NotaSAP> _todasNotas = []; // Todas as notas para calcular estatísticas
   Set<String> _notasProgramadasIds = {}; // IDs das notas vinculadas a tarefas
@@ -81,7 +104,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
   String _searchQuery = ''; // Termo de busca do HeaderBar
   List<NotaSAP> _todasNotasOrdenadas = []; // Todas as notas ordenadas (para paginação)
   bool _ordenacaoAscendente = true; // Direção da ordenação
-  int _sortColumnIndex = 8; // Coluna de ordenação: 8 = Prazo (padrão)
+  int _sortColumnIndex = 9; // Coluna de ordenação: 9 = Prazo (padrão)
   bool _canEditTasks = false; // Permissão para criar/editar tarefas
   bool _canEditTasksChecked = false; // Indica se a permissão já foi verificada
   bool _isCheckingTaskPermission = false; // Evita múltiplas verificações simultâneas
@@ -91,6 +114,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
   bool _exibirGantt = false;
   GanttScale _ganttScale = GanttScale.daily;
   final ScrollController _tableVerticalScrollController = ScrollController();
+  final ScrollController _tableHorizontalScrollController = ScrollController();
   final ScrollController _ganttVerticalScrollController = ScrollController();
   bool _isScrolling = false;
 
@@ -120,7 +144,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
   }
 
   int _totalFiltrosAtivos() {
-    return _filtroLocais.length +
+    int count = _filtroLocais.length +
         _filtroSalas.length +
         _filtroTipos.length +
         _filtroNotas.length +
@@ -128,7 +152,13 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         _filtroStatusUsuario.length +
         _filtroResponsaveis.length +
         _filtroGPMs.length +
-        _filtroStatusTarefa.length;
+        _filtroStatusTarefa.length +
+        _filtroTags.length;
+    if (_filtroAnaliseStatus != null) count++;
+    if (_filtroComAnexos) count++;
+    if (_filtroComComentarios) count++;
+    if (_filtroComMateriais) count++;
+    return count;
   }
 
   /// Retorna true se todas as listas de opções dos filtros estão vazias.
@@ -142,7 +172,8 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         _statusUsuarioDisponiveis.isEmpty &&
         _responsaveisDisponiveis.isEmpty &&
         _gpmsDisponiveis.isEmpty &&
-        _statusTarefaDisponiveis.isEmpty;
+        _statusTarefaDisponiveis.isEmpty &&
+        _tagsDisponiveisParaFiltro.isEmpty;
   }
 
   List<String> _getOpcoesParaFiltro(String label) {
@@ -165,6 +196,8 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         return _gpmsDisponiveis;
       case 'Status (Tarefa)':
         return _statusTarefaDisponiveis;
+      case 'Tags':
+        return _tagsDisponiveisParaFiltro;
       default:
         return [];
     }
@@ -208,6 +241,8 @@ class _NotasSAPViewState extends State<NotasSAPView> {
   @override
   void initState() {
     super.initState();
+    _analiseService = widget.analiseService ?? NotaSapAnaliseService();
+    _tagService = widget.tagService ?? NotaSapTagService();
     _sincronizarScrolls();
     if (widget.modoVisualizacao != null) {
       _modoVisualizacao = widget.modoVisualizacao!;
@@ -239,6 +274,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
   @override
   void dispose() {
     _tableVerticalScrollController.dispose();
+    _tableHorizontalScrollController.dispose();
     _ganttVerticalScrollController.dispose();
     super.dispose();
   }
@@ -597,9 +633,163 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         }
       }
     }
+    _atualizarTagsDisponiveisFiltro();
   }
 
-  Future<void> _loadNotas() async {
+  Future<void> _atualizarTagsDisponiveisFiltro() async {
+    final tagNomesSet = <String>{};
+    // 1. Tags já presentes nas notas carregadas no universo atual
+    for (final tagsList in _tagsMap.values) {
+      for (final tag in tagsList) {
+        if (tag.nome.isNotEmpty) {
+          tagNomesSet.add(tag.nome);
+        }
+      }
+    }
+
+    // 2. Tags do catálogo (todas ativas disponíveis para filtros na visão de notas)
+    try {
+      final catalogo = await _tagService.listarTodasTagsAtivas();
+      for (final tag in catalogo) {
+        if (tag.nome.isNotEmpty) {
+          tagNomesSet.add(tag.nome);
+        }
+      }
+    } catch (e) {
+      debugPrint('⚠️ [NotasSAPView] Erro ao carregar catálogo para filtro: $e');
+    }
+
+    if (mounted) {
+      setState(() {
+        _tagsDisponiveisParaFiltro = tagNomesSet.toList()..sort();
+      });
+    }
+  }
+
+  Future<void> _carregarTagsNotasVisiveis({bool forceRefresh = false}) async {
+    final notasAlvo = _modoVisualizacao == 'dashboard'
+        ? _todasNotasOrdenadas
+        : _notas;
+    if (notasAlvo.isEmpty) return;
+    try {
+      final ids = notasAlvo.map((n) => n.id).toList();
+      final tagsMap = await _tagService.buscarTagsEmLote(
+        ids,
+        forceRefresh: forceRefresh,
+      );
+      if (mounted) {
+        setState(() {
+          _tagsMap = {
+            ..._tagsMap,
+            ...tagsMap,
+          };
+        });
+        _atualizarTagsDisponiveisFiltro();
+      }
+    } catch (e) {
+      debugPrint('⚠️ [NotasSAPView] Erro ao carregar tags das notas visíveis: $e');
+    }
+  }
+
+  Future<void> _atualizarTagsNotaCirurgico(String notaId) async {
+    try {
+      final tags = await _tagService.listarTagsDaNota(notaId);
+      if (mounted) {
+        setState(() {
+          _tagsMap[notaId] = tags;
+        });
+        _atualizarTagsDisponiveisFiltro();
+      }
+    } catch (e) {
+      debugPrint('⚠️ [NotasSAPView] Erro ao atualizar tags cirúrgico da nota $notaId: $e');
+    }
+  }
+
+  Color _corDaTag(String? hex) {
+    if (hex == null || hex.isEmpty) return Colors.blueGrey;
+    try {
+      final cleaned = hex.replaceAll('#', '');
+      return Color(int.parse('0xFF$cleaned'));
+    } catch (_) {
+      return Colors.blueGrey;
+    }
+  }
+
+  Widget _buildTagsChips(List<NotaSapTag> tags, {bool showEmptyPlaceholder = true}) {
+    if (tags.isEmpty) {
+      if (!showEmptyPlaceholder) return const SizedBox.shrink();
+      return Text('-', style: TextStyle(color: Colors.grey.shade400, fontSize: 12));
+    }
+
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    const maxVisible = 3;
+    final visiveis = tags.take(maxVisible).toList();
+    final restantes = tags.skip(maxVisible).toList();
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ...visiveis.map((tag) {
+          final cor = _corDaTag(tag.cor);
+          return Padding(
+            padding: const EdgeInsets.only(right: 4),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: cor.withAlpha(25),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: cor.withAlpha(90), width: 0.8),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: cor,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    tag.nome,
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      color: isDark ? Colors.white.withAlpha(220) : Colors.black87,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }),
+        if (restantes.isNotEmpty)
+          Tooltip(
+            message: restantes.map((t) => t.nome).join(', '),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+              decoration: BoxDecoration(
+                color: isDark ? Colors.white12 : Colors.grey.shade200,
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: isDark ? Colors.white24 : Colors.grey.shade400, width: 0.8),
+              ),
+              child: Text(
+                '+${restantes.length}',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  color: isDark ? Colors.white70 : Colors.grey.shade800,
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _loadNotas({bool forceRefreshResumos = false}) async {
     final totalSw = Stopwatch()..start();
     print('⏱ [NotasSAPView] _loadNotas iniciado | pagina=$_paginaAtual | itensPorPagina=$_itensPorPagina');
     
@@ -684,6 +874,86 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         }).toList();
       }
 
+      // Aplicar filtros de análise técnica caso ativos
+      final temFiltroAnalise = _filtroAnaliseStatus != null ||
+          _filtroComAnexos ||
+          _filtroComComentarios ||
+          _filtroComMateriais;
+
+      if (temFiltroAnalise && todasNotas.isNotEmpty) {
+        try {
+          final idsTodas = todasNotas.map((n) => n.id).toList();
+          final resumos = await _analiseService.buscarResumoAnalises(
+            idsTodas,
+            forceRefresh: forceRefreshResumos,
+          );
+          _resumosAnalise = {
+            ..._resumosAnalise,
+            ...resumos,
+          };
+
+          todasNotas = todasNotas.where((nota) {
+            final resumo = _resumosAnalise[nota.id];
+            
+            if (_filtroAnaliseStatus != null) {
+              if (_filtroAnaliseStatus == 'sem_analise') {
+                if (resumo != null && resumo.status != NotaAnaliseStatus.naoIniciada) {
+                  return false;
+                }
+              } else if (_filtroAnaliseStatus == 'nao_iniciada') {
+                if (resumo != null && resumo.status != NotaAnaliseStatus.naoIniciada) {
+                  return false;
+                }
+              } else {
+                final statusStr = resumo?.status.name;
+                if (statusStr != _filtroAnaliseStatus) {
+                  return false;
+                }
+              }
+            }
+
+            if (_filtroComAnexos && (resumo == null || resumo.totalAnexos == 0)) {
+              return false;
+            }
+            if (_filtroComComentarios && (resumo == null || resumo.totalComentarios == 0)) {
+              return false;
+            }
+            if (_filtroComMateriais && (resumo == null || resumo.totalMateriais == 0)) {
+              return false;
+            }
+
+            return true;
+          }).toList();
+        } catch (e) {
+          print('⚠️ [NotasSAPView] Erro ao carregar resumos para filtro de análise: $e');
+        }
+      }
+
+      // Aplicar filtro de Tags caso ativo (Requisitos 44, 45, 46, 47, 48)
+      if (_filtroTags.isNotEmpty && todasNotas.isNotEmpty) {
+        try {
+          final idsTodas = todasNotas.map((n) => n.id).toList();
+          final tagsMap = await _tagService.buscarTagsEmLote(
+            idsTodas,
+            forceRefresh: forceRefreshResumos,
+          );
+          _tagsMap = {
+            ..._tagsMap,
+            ...tagsMap,
+          };
+
+          todasNotas = todasNotas.where((nota) {
+            final tagsDaNota = _tagsMap[nota.id] ?? [];
+            // Semântica: OR entre Tags selecionadas
+            return tagsDaNota.any((t) =>
+                _filtroTags.contains(t.nome) ||
+                (t.id != null && _filtroTags.contains(t.id)));
+          }).toList();
+        } catch (e) {
+          print('⚠️ [NotasSAPView] Erro ao aplicar filtro de tags: $e');
+        }
+      }
+
       filterSw.stop();
       print('⏱ [NotasSAPView] Filtros aplicados em ${filterSw.elapsedMilliseconds}ms | notas=${todasNotas.length}');
 
@@ -763,6 +1033,11 @@ class _NotasSAPViewState extends State<NotasSAPView> {
       // Recarregar filtros DEPOIS de atualizar _todasNotasOrdenadas
       // Isso garante que os valores disponíveis reflitam apenas as opções válidas
       _loadFiltros();
+
+      // Carregar resumos de análise das notas visíveis em segundo momento (não bloqueante)
+      _carregarResumosNotasVisiveis(forceRefresh: forceRefreshResumos);
+      // Carregar tags das notas visíveis em segundo momento (não bloqueante)
+      _carregarTagsNotasVisiveis(forceRefresh: forceRefreshResumos);
     } catch (e, stackTrace) {
       print('❌ DEBUG _loadNotas: Erro: $e');
       print('   Stack trace: $stackTrace');
@@ -780,6 +1055,52 @@ class _NotasSAPViewState extends State<NotasSAPView> {
     }
   }
 
+  /// Carrega os resumos das notas atualmente visíveis na tela em segundo plano.
+  Future<void> _carregarResumosNotasVisiveis({bool forceRefresh = false}) async {
+    final notasAlvo = _modoVisualizacao == 'dashboard'
+        ? _todasNotasOrdenadas
+        : _notas;
+    if (notasAlvo.isEmpty) return;
+    try {
+      final ids = notasAlvo.map((n) => n.id).toList();
+      final resumos = await _analiseService.buscarResumoAnalises(
+        ids,
+        forceRefresh: forceRefresh,
+      );
+      if (mounted) {
+        setState(() {
+          _resumosAnalise = {
+            ..._resumosAnalise,
+            ...resumos,
+          };
+        });
+      }
+    } catch (e) {
+      // Requisito 5: Se falhar, tabela continua normalmente sem quebrar a tela
+      print('⚠️ [NotasSAPView] Falha silenciosa ao carregar resumos de análise: $e');
+    }
+  }
+
+  /// Atualiza de forma cirúrgica apenas a nota editada após fechar o Workspace.
+  Future<void> _atualizarResumoNotaCirurgico(String notaId) async {
+    try {
+      final resumos = await _analiseService.buscarResumoAnalises(
+        [notaId],
+        forceRefresh: true,
+      );
+      if (mounted && resumos.containsKey(notaId)) {
+        setState(() {
+          _resumosAnalise = {
+            ..._resumosAnalise,
+            notaId: resumos[notaId]!,
+          };
+        });
+      }
+    } catch (e) {
+      print('⚠️ [NotasSAPView] Falha ao atualizar resumo cirúrgico da nota $notaId: $e');
+    }
+  }
+
   // Aplicar ordenação e paginação nas notas já carregadas
   void _aplicarOrdenacaoEPaginacao() {
     if (_todasNotasOrdenadas.isEmpty) {
@@ -791,7 +1112,12 @@ class _NotasSAPViewState extends State<NotasSAPView> {
     _todasNotasOrdenadas.sort((a, b) {
       int cmp;
       switch (_sortColumnIndex) {
-        case 2: // Status tarefa — notas programadas primeiro
+        case 2: // Análise Técnica
+          final sa = _resumosAnalise[a.id]?.status.index ?? 0;
+          final sb = _resumosAnalise[b.id]?.status.index ?? 0;
+          cmp = sa.compareTo(sb);
+          break;
+        case 3: // Status tarefa — notas programadas primeiro
           final sa = _notasProgramadasInfo[a.id]?.isNotEmpty == true
               ? (_notasProgramadasInfo[a.id]!.first['tarefa']?['status'] ?? '')
               : '';
@@ -800,19 +1126,19 @@ class _NotasSAPViewState extends State<NotasSAPView> {
               : '';
           cmp = (sa as String).compareTo(sb as String);
           break;
-        case 4: // Local
+        case 5: // Local
           cmp = (a.local ?? '').compareTo(b.local ?? '');
           break;
-        case 5: // Sala
+        case 6: // Sala
           cmp = (a.sala ?? '').compareTo(b.sala ?? '');
           break;
-        case 6: // Descrição
+        case 7: // Descrição
           cmp = (a.descricao ?? '').compareTo(b.descricao ?? '');
           break;
-        case 7: // Tipo
+        case 8: // Tipo
           cmp = (a.tipo ?? '').compareTo(b.tipo ?? '');
           break;
-        case 8: // Prazo (dias restantes)
+        case 9: // Prazo (dias restantes)
           final diasA = a.diasRestantes;
           final diasB = b.diasRestantes;
           if (diasA == null && diasB == null) return 0;
@@ -820,38 +1146,38 @@ class _NotasSAPViewState extends State<NotasSAPView> {
           if (diasB == null) return _ordenacaoAscendente ? -1 : 1;
           cmp = diasA.compareTo(diasB);
           break;
-        case 9: // Nota (número)
+        case 10: // Nota (número)
           final ia = int.tryParse(a.nota) ?? 0;
           final ib = int.tryParse(b.nota) ?? 0;
           cmp = ia.compareTo(ib);
           break;
-        case 10: // Criado em
+        case 11: // Criado em
           final ca = a.criadoEm ?? DateTime(1900);
           final cb = b.criadoEm ?? DateTime(1900);
           cmp = ca.compareTo(cb);
           break;
-        case 11: // Prioridade
+        case 12: // Prioridade
           cmp = (a.textPrioridade ?? '').compareTo(b.textPrioridade ?? '');
           break;
-        case 12: // Status Usuário
+        case 13: // Status Usuário
           cmp = (a.statusUsuario ?? '').compareTo(b.statusUsuario ?? '');
           break;
-        case 13: // Responsável
+        case 14: // Responsável
           cmp = (a.denominacaoExecutor ?? '').compareTo(b.denominacaoExecutor ?? '');
           break;
-        case 14: // Local da Instalação
+        case 15: // Local da Instalação
           cmp = (a.localInstalacao ?? '').compareTo(b.localInstalacao ?? '');
           break;
-        case 15: // Ordem
+        case 16: // Ordem
           cmp = (a.ordem ?? '').compareTo(b.ordem ?? '');
           break;
-        case 16: // Centro Trabalho
+        case 17: // Centro Trabalho
           cmp = (a.centroTrabalhoResponsavel ?? '').compareTo(b.centroTrabalhoResponsavel ?? '');
           break;
-        case 17: // GPM
+        case 18: // GPM
           cmp = (a.gpm ?? '').compareTo(b.gpm ?? '');
           break;
-        case 18: // Status do Sistema
+        case 19: // Status do Sistema
           cmp = (a.statusSistema ?? '').compareTo(b.statusSistema ?? '');
           break;
         default:
@@ -868,6 +1194,9 @@ class _NotasSAPViewState extends State<NotasSAPView> {
     setState(() {
       _notas = notas;
     });
+
+    // Atualizar resumos para a nova página
+    _carregarResumosNotasVisiveis();
   }
 
   // Função auxiliar para decodificar bytes como UTF-8
@@ -939,6 +1268,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
     final viewOptions = [
       ('tabela', Icons.table_chart, 'Tabela'),
       ('cards', Icons.view_module, 'Cards'),
+      ('planejamento_macro', Icons.calendar_month, 'Planejamento Macro'),
       ('calendario', Icons.calendar_today, 'Calendário'),
       ('dashboard', Icons.dashboard, 'Dashboard'),
     ];
@@ -989,51 +1319,53 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                     'Notas SAP',
                     style: typography.sectionTitle,
                   ),
-                SegmentedButton<String?>(
-                  segments: tipoNotaSegments,
-                  selected: {_filtroTipoNota},
-                  onSelectionChanged: (Set<String?> newSelection) {
-                    setState(() {
-                      _filtroTipoNota = newSelection.first;
-                      _paginaAtual = 0;
-                    });
-                    _loadNotas();
-                    _loadTodasNotasParaEstatisticas();
-                  },
-                  style: SegmentedButton.styleFrom(
-                    backgroundColor: colors.surfaceSecondary,
-                    selectedBackgroundColor: colors.primary,
-                    selectedForegroundColor: Colors.white,
-                    foregroundColor: colors.textSecondary,
-                    side: BorderSide(color: colors.borderSubtle, width: 1),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(TFRadius.r8),
+                if (_modoVisualizacao != 'planejamento_macro' && _modoVisualizacao != 'dashboard') ...[
+                  SegmentedButton<String?>(
+                    segments: tipoNotaSegments,
+                    selected: {_filtroTipoNota},
+                    onSelectionChanged: (Set<String?> newSelection) {
+                      setState(() {
+                        _filtroTipoNota = newSelection.first;
+                        _paginaAtual = 0;
+                      });
+                      _loadNotas();
+                      _loadTodasNotasParaEstatisticas();
+                    },
+                    style: SegmentedButton.styleFrom(
+                      backgroundColor: colors.surfaceSecondary,
+                      selectedBackgroundColor: colors.primary,
+                      selectedForegroundColor: Colors.white,
+                      foregroundColor: colors.textSecondary,
+                      side: BorderSide(color: colors.borderSubtle, width: 1),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(TFRadius.r8),
+                      ),
                     ),
                   ),
-                ),
-                SegmentedButton<String?>(
-                  segments: programacaoSegments,
-                  selected: {_filtroProgramacao},
-                  onSelectionChanged: (Set<String?> newSelection) {
-                    setState(() {
-                      _filtroProgramacao = newSelection.first;
-                      _paginaAtual = 0;
-                    });
-                    _loadNotas();
-                    _loadTodasNotasParaEstatisticas();
-                  },
-                  style: SegmentedButton.styleFrom(
-                    backgroundColor: colors.surfaceSecondary,
-                    selectedBackgroundColor: colors.primary,
-                    selectedForegroundColor: Colors.white,
-                    foregroundColor: colors.textSecondary,
-                    side: BorderSide(color: colors.borderSubtle, width: 1),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(TFRadius.r8),
+                  SegmentedButton<String?>(
+                    segments: programacaoSegments,
+                    selected: {_filtroProgramacao},
+                    onSelectionChanged: (Set<String?> newSelection) {
+                      setState(() {
+                        _filtroProgramacao = newSelection.first;
+                        _paginaAtual = 0;
+                      });
+                      _loadNotas();
+                      _loadTodasNotasParaEstatisticas();
+                    },
+                    style: SegmentedButton.styleFrom(
+                      backgroundColor: colors.surfaceSecondary,
+                      selectedBackgroundColor: colors.primary,
+                      selectedForegroundColor: Colors.white,
+                      foregroundColor: colors.textSecondary,
+                      side: BorderSide(color: colors.borderSubtle, width: 1),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(TFRadius.r8),
+                      ),
                     ),
                   ),
-                ),
-                if (!isCompact) _buildTipoToggle(),
+                  if (!isCompact) _buildTipoToggle(),
+                ],
                 if (!isCompact)
                   SegmentedButton<String>(
                     segments: viewOptions.map((opt) {
@@ -1041,14 +1373,21 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                         value: opt.$1,
                         icon: Icon(opt.$2),
                         label: Text(opt.$3),
+                        tooltip: opt.$1 == 'planejamento_macro'
+                            ? 'Planejamento mensal dos grupos de Notas SAP'
+                            : null,
                       );
                     }).toList(),
                     selected: {_modoVisualizacao},
                     onSelectionChanged: (Set<String> newSelection) {
+                      final novoModo = newSelection.first;
                       setState(() {
-                        _modoVisualizacao = newSelection.first;
+                        _modoVisualizacao = novoModo;
                         _visualizacaoTabela = _modoVisualizacao == 'tabela';
                       });
+                      if (novoModo == 'dashboard') {
+                        _carregarResumosNotasVisiveis();
+                      }
                       if (widget.onModoChange != null) {
                         widget.onModoChange!(_modoVisualizacao);
                       }
@@ -1098,6 +1437,9 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                               _modoVisualizacao = newValue;
                               _visualizacaoTabela = _modoVisualizacao == 'tabela';
                             });
+                            if (newValue == 'dashboard') {
+                              _carregarResumosNotasVisiveis();
+                            }
                             if (widget.onModoChange != null) {
                               widget.onModoChange!(_modoVisualizacao);
                             }
@@ -1126,77 +1468,102 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                     },
                   ),
                 */
-                ElevatedButton.icon(
-                  onPressed: () async {
-                    setState(() {
-                      _paginaAtual = 0;
-                    });
-                    await _loadNotasProgramadas();
-                    await _loadNotas();
-                    _loadTodasNotasParaEstatisticas();
-                  },
-                  icon: const Icon(Icons.refresh, size: 18),
-                  label: isCompact ? const SizedBox.shrink() : const Text('Atualizar'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: colors.primary,
-                    foregroundColor: Colors.white,
-                    minimumSize: Size(isCompact ? 40 : 0, 36),
-                    padding: EdgeInsets.symmetric(
-                      horizontal: isCompact ? 10 : 16,
-                      vertical: 10,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(TFRadius.r8),
+                if (_modoVisualizacao != 'planejamento_macro') ...[
+                  ElevatedButton.icon(
+                    onPressed: () async {
+                      setState(() {
+                        _paginaAtual = 0;
+                      });
+                      await _loadNotasProgramadas();
+                      await _loadNotas(forceRefreshResumos: true);
+                      _loadTodasNotasParaEstatisticas();
+                    },
+                    icon: const Icon(Icons.refresh, size: 18),
+                    label: isCompact ? const SizedBox.shrink() : const Text('Atualizar'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: colors.primary,
+                      foregroundColor: Colors.white,
+                      minimumSize: Size(isCompact ? 40 : 0, 36),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: isCompact ? 10 : 16,
+                        vertical: 10,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(TFRadius.r8),
+                      ),
                     ),
                   ),
-                ),
-                OutlinedButton.icon(
-                  icon: const Icon(Icons.filter_list, size: 18),
-                  label: isCompact
-                      ? const SizedBox.shrink()
-                      : Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Text('Filtros'),
-                            if (_totalFiltrosAtivos() > 0) ...[
-                              const SizedBox(width: 6),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: colors.primary,
-                                  borderRadius: BorderRadius.circular(10),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.filter_list, size: 18),
+                    label: isCompact
+                        ? const SizedBox.shrink()
+                        : Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Text('Filtros'),
+                              if (_totalFiltrosAtivos() > 0) ...[
+                                const SizedBox(width: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: colors.primary,
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Text(
+                                    '${_totalFiltrosAtivos()}',
+                                    style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                                  ),
                                 ),
-                                child: Text(
-                                  '${_totalFiltrosAtivos()}',
-                                  style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
-                                ),
-                              ),
+                              ],
                             ],
-                          ],
-                        ),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: colors.textPrimary,
-                    side: BorderSide(color: colors.borderDefault),
-                    minimumSize: Size(isCompact ? 40 : 0, 36),
-                    padding: EdgeInsets.symmetric(
-                      horizontal: isCompact ? 10 : 16,
-                      vertical: 10,
+                          ),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: colors.textPrimary,
+                      side: BorderSide(color: colors.borderDefault),
+                      minimumSize: Size(isCompact ? 40 : 0, 36),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: isCompact ? 10 : 16,
+                        vertical: 10,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(TFRadius.r8),
+                      ),
                     ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(TFRadius.r8),
-                    ),
+                    onPressed: () {
+                      final willExpand = !_filtrosExpandidos;
+                      setState(() {
+                        _filtrosExpandidos = willExpand;
+                      });
+                      if (willExpand && _opcoesFiltrosEstaoVazias()) {
+                        _loadFiltros();
+                      }
+                    },
                   ),
-                  onPressed: () {
-                    final willExpand = !_filtrosExpandidos;
-                    setState(() {
-                      _filtrosExpandidos = willExpand;
-                    });
-                    if (willExpand && _opcoesFiltrosEstaoVazias()) {
-                      _loadFiltros();
-                    }
-                  },
-                ),
-                if (!isCompact)
+                  if (_authService.currentUser?.isRoot == true) ...[
+                    OutlinedButton.icon(
+                      icon: const Icon(Icons.sell_outlined, size: 18),
+                      label: isCompact ? const SizedBox.shrink() : const Text('Tags'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: colors.textPrimary,
+                        side: BorderSide(color: colors.borderDefault),
+                        minimumSize: Size(isCompact ? 40 : 0, 36),
+                        padding: EdgeInsets.symmetric(
+                          horizontal: isCompact ? 10 : 16,
+                          vertical: 10,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(TFRadius.r8),
+                        ),
+                      ),
+                      onPressed: () async {
+                        await NotaSapTagsAdminDialog.show(context, tagService: _tagService);
+                        _atualizarTagsDisponiveisFiltro();
+                        _carregarTagsNotasVisiveis(forceRefresh: true);
+                      },
+                    ),
+                  ],
+                ],
+                if (!isCompact && _modoVisualizacao != 'planejamento_macro')
                   Text(
                     _filtrosExpandidos ? 'Ocultar' : 'Mostrar',
                     style: typography.caption.copyWith(color: colors.textSecondary),
@@ -1206,7 +1573,8 @@ class _NotasSAPViewState extends State<NotasSAPView> {
           ),
 
           // Filtros (versão revertida; pode gerar overflow no mobile)
-          AnimatedCrossFade(
+          if (_modoVisualizacao != 'planejamento_macro')
+            AnimatedCrossFade(
             firstChild: const SizedBox.shrink(),
             secondChild: Container(
               padding: EdgeInsets.all(isMobile ? 8 : 16),
@@ -1361,16 +1729,33 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                   child: _buildMultiSelectFilterField(
                     'Status (Tarefa)',
                     _filtroStatusTarefa,
-                  _statusTarefaDisponiveis,
+                    _statusTarefaDisponiveis,
                     (values) {
                       setState(() {
                         _filtroStatusTarefa = values;
-                      _paginaAtual = 0;
+                        _paginaAtual = 0;
                       });
-                    _loadNotas();
-                    _loadTodasNotasParaEstatisticas();
+                      _loadNotas();
+                      _loadTodasNotasParaEstatisticas();
                     },
-                  searchHint: 'Pesquisar status da tarefa...',
+                    searchHint: 'Pesquisar status da tarefa...',
+                  ),
+                ),
+                SizedBox(
+                  width: isMobile ? double.infinity : 150,
+                  child: _buildMultiSelectFilterField(
+                    'Tags',
+                    _filtroTags,
+                    _tagsDisponiveisParaFiltro,
+                    (values) {
+                      setState(() {
+                        _filtroTags = values;
+                        _paginaAtual = 0;
+                      });
+                      _loadNotas();
+                      _loadTodasNotasParaEstatisticas();
+                    },
+                    searchHint: 'Pesquisar tag...',
                   ),
                 ),
               OutlinedButton.icon(
@@ -1384,7 +1769,12 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                         _filtroStatusUsuario.clear();
                         _filtroResponsaveis.clear();
                         _filtroGPMs.clear();
-                    _filtroStatusTarefa.clear();
+                        _filtroStatusTarefa.clear();
+                        _filtroTags.clear();
+                        _filtroAnaliseStatus = null;
+                        _filtroComAnexos = false;
+                        _filtroComComentarios = false;
+                        _filtroComMateriais = false;
                         _paginaAtual = 0;
                       });
                       _loadNotas();
@@ -1397,6 +1787,74 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(TFRadius.r8)),
                 ),
                   ),
+                SizedBox(
+                  width: isMobile ? double.infinity : 190,
+                  child: DropdownButtonFormField<String?>(
+                    initialValue: _filtroAnaliseStatus,
+                    decoration: InputDecoration(
+                      labelText: 'Análise Técnica',
+                      labelStyle: typography.labelMedium.copyWith(color: colors.textSecondary),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(TFRadius.r8)),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(TFRadius.r8),
+                        borderSide: BorderSide(color: colors.borderSubtle),
+                      ),
+                      isDense: true,
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: null, child: Text('Todas análises')),
+                      DropdownMenuItem(value: 'sem_analise', child: Text('Sem análise')),
+                      DropdownMenuItem(value: 'em_analise', child: Text('Em análise')),
+                      DropdownMenuItem(value: 'aguardando_informacao', child: Text('Aguardando info')),
+                      DropdownMenuItem(value: 'concluida', child: Text('Concluídas')),
+                      DropdownMenuItem(value: 'cancelada', child: Text('Análise cancelada')),
+                    ],
+                    onChanged: (val) {
+                      setState(() {
+                        _filtroAnaliseStatus = val;
+                        _paginaAtual = 0;
+                      });
+                      _loadNotas();
+                    },
+                  ),
+                ),
+                FilterChip(
+                  selected: _filtroComAnexos,
+                  avatar: Icon(Icons.attach_file, size: 16, color: _filtroComAnexos ? Colors.white : colors.textSecondary),
+                  label: const Text('Com anexos'),
+                  onSelected: (val) {
+                    setState(() {
+                      _filtroComAnexos = val;
+                      _paginaAtual = 0;
+                    });
+                    _loadNotas();
+                  },
+                ),
+                FilterChip(
+                  selected: _filtroComComentarios,
+                  avatar: Icon(Icons.chat_bubble_outline, size: 16, color: _filtroComComentarios ? Colors.white : colors.textSecondary),
+                  label: const Text('Com comentários'),
+                  onSelected: (val) {
+                    setState(() {
+                      _filtroComComentarios = val;
+                      _paginaAtual = 0;
+                    });
+                    _loadNotas();
+                  },
+                ),
+                FilterChip(
+                  selected: _filtroComMateriais,
+                  avatar: Icon(Icons.inventory_2_outlined, size: 16, color: _filtroComMateriais ? Colors.white : colors.textSecondary),
+                  label: const Text('Com materiais'),
+                  onSelected: (val) {
+                    setState(() {
+                      _filtroComMateriais = val;
+                      _paginaAtual = 0;
+                    });
+                    _loadNotas();
+                  },
+                ),
               ],
             ),
         ),
@@ -1404,8 +1862,8 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         duration: const Duration(milliseconds: 200),
           ),
 
-          // Contador de resultados (não mostrar no dashboard; ocultar no mobile)
-          if (_modoVisualizacao != 'dashboard' && !Responsive.isMobile(context))
+          // Contador de resultados (não mostrar no dashboard nem no planejamento macro; ocultar no mobile)
+          if (_modoVisualizacao != 'dashboard' && _modoVisualizacao != 'planejamento_macro' && !Responsive.isMobile(context))
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               decoration: BoxDecoration(
@@ -1511,7 +1969,9 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                               : null,
                         ),
                       )
-                    : _modoVisualizacao == 'calendario'
+                    : _modoVisualizacao == 'planejamento_macro'
+                        ? const PlanejamentoMacroView()
+                        : _modoVisualizacao == 'calendario'
                         ? NotasSAPCalendarView(
                             notas: _todasNotasOrdenadas,
                             onNotaTap: (nota) => _mostrarDetalhesNota(nota),
@@ -1520,6 +1980,43 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                             ? NotasSAPDashboardView(
                                 key: ValueKey('dashboard_${_todasNotasOrdenadas.length}_${_filtroTipoNota}_${_filtroLocais.length}_${_filtroTipos.length}_${_filtroNotas.length}_${_filtroPrioridades.length}_${_filtroStatusUsuario.length}_${_filtroResponsaveis.length}_${_filtroGPMs.length}_$_searchQuery'),
                                 notas: _todasNotasOrdenadas,
+                                resumosAnalise: _resumosAnalise,
+                                notasProgramadasIds: _notasProgramadasIds,
+                                onDrillDown: ({
+                                  String? statusAnalise,
+                                  bool? comAnexos,
+                                  bool? comMateriais,
+                                  bool? comComentarios,
+                                  String? centroTrabalho,
+                                }) {
+                                  setState(() {
+                                    _modoVisualizacao = 'tabela';
+                                    _visualizacaoTabela = true;
+                                    if (statusAnalise != null) {
+                                      _filtroAnaliseStatus = statusAnalise;
+                                    }
+                                    if (comAnexos != null) {
+                                      _filtroComAnexos = comAnexos;
+                                    }
+                                    if (comMateriais != null) {
+                                      _filtroComMateriais = comMateriais;
+                                    }
+                                    if (comComentarios != null) {
+                                      _filtroComComentarios = comComentarios;
+                                    }
+                                    if (centroTrabalho != null &&
+                                        centroTrabalho.trim().isNotEmpty &&
+                                        centroTrabalho != 'Não informado') {
+                                      _filtroResponsaveis.clear();
+                                      _filtroResponsaveis.add(centroTrabalho);
+                                    }
+                                    _paginaAtual = 0;
+                                    _aplicarOrdenacaoEPaginacao();
+                                  });
+                                },
+                                onRefresh: () {
+                                  _loadNotas(forceRefreshResumos: true);
+                                },
                               )
                             : _visualizacaoTabela
                                 ? (_exibirGantt ? _buildSplitTabelaGanttView() : _buildTabelaView())
@@ -1533,8 +2030,8 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                               ),
           ),
 
-          // Paginação (não mostrar no dashboard)
-          if (_modoVisualizacao != 'dashboard' && _totalNotas > _itensPorPagina)
+          // Paginação (não mostrar no dashboard nem no planejamento macro)
+          if (_modoVisualizacao != 'dashboard' && _modoVisualizacao != 'planejamento_macro' && _totalNotas > _itensPorPagina)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
@@ -1769,6 +2266,20 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                 ],
               ],
             ),
+            const SizedBox(height: 6),
+            NotaAnaliseBadge(
+              resumo: _resumosAnalise[nota.id],
+              compact: true,
+              onTapStatus: () => _mostrarDetalhesNota(nota, initialTab: 1),
+              onTapMateriais: () => _mostrarDetalhesNota(nota, initialTab: 2),
+              onTapAnexos: () => _mostrarDetalhesNota(nota, initialTab: 3),
+              onTapComentarios: () => _mostrarDetalhesNota(nota, initialTab: 4),
+              onTapGlobal: () => _mostrarDetalhesNota(nota, initialTab: 0),
+            ),
+            if ((_tagsMap[nota.id] ?? []).isNotEmpty) ...[
+              const SizedBox(height: 6),
+              _buildTagsChips(_tagsMap[nota.id]!),
+            ],
           ],
         ),
         children: [
@@ -1897,8 +2408,19 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
-                  ElevatedButton.icon(
-                    onPressed: _canEditTasks ? () => _criarTarefaDaNota(nota) : null,
+                    OutlinedButton.icon(
+                      onPressed: () => _mostrarDetalhesNota(nota),
+                      icon: const Icon(Icons.analytics_outlined, size: 18),
+                      label: const Text('Análise'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: colors.primary,
+                        side: BorderSide(color: colors.borderSubtle),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(TFRadius.r8)),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    ElevatedButton.icon(
+                      onPressed: _canEditTasks ? () => _criarTarefaDaNota(nota) : null,
                       icon: const Icon(Icons.add_task, size: 18),
                       label: const Text('Criar Tarefa'),
                       style: ElevatedButton.styleFrom(
@@ -2127,6 +2649,12 @@ class _NotasSAPViewState extends State<NotasSAPView> {
 
     // Função para calcular valores disponíveis dinamicamente a partir de _todasNotasOrdenadas
     List<String> calcularOpcoesDisponiveis(String campo) {
+      if (campo == 'Tags') {
+        return _tagsDisponiveisParaFiltro.isNotEmpty ? _tagsDisponiveisParaFiltro : options;
+      }
+      if (campo == 'Status (Tarefa)') {
+        return _statusTarefaDisponiveis.isNotEmpty ? _statusTarefaDisponiveis : options;
+      }
       if (_todasNotasOrdenadas.isEmpty) {
         return options; // Fallback para valores iniciais
       }
@@ -2169,6 +2697,10 @@ class _NotasSAPViewState extends State<NotasSAPView> {
     
     return InkWell(
       onTap: () async {
+        // Se for o filtro de Tags, garantir sincronização das opções do catálogo
+        if (label == 'Tags') {
+          await _atualizarTagsDisponiveisFiltro();
+        }
         // Calcular opções disponíveis dinamicamente no momento de abrir o diálogo
         var opcoesAtualizadas = calcularOpcoesDisponiveis(label);
         // No mobile, se opções vazias e notas ainda não carregadas, forçar carregamento dos filtros
@@ -2235,6 +2767,49 @@ class _NotasSAPViewState extends State<NotasSAPView> {
     return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
   }
 
+  Future<void> _editarTarefaVinculada(Task task) async {
+    if (!await _ensureCanEditTasks()) return;
+    try {
+      final taskService = TaskService();
+      final taskAtualizada = await taskService.getTaskById(task.id) ?? task;
+      if (!mounted) return;
+
+      final result = await showDialog<Task>(
+        context: context,
+        builder: (context) => TaskFormDialog(
+          task: taskAtualizada,
+          startDate: taskAtualizada.dataInicio,
+          endDate: taskAtualizada.dataFim,
+        ),
+      );
+
+      if (result != null) {
+        final updated = await taskService.updateTask(taskAtualizada.id, result);
+        if (updated != null) {
+          await _loadNotasProgramadas();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Atividade atualizada com sucesso!'),
+                backgroundColor: Colors.green,
+              ),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      print('⚠️ Erro ao editar tarefa vinculada: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erro ao editar tarefa: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _navegarParaTarefa(String? taskId) async {
     if (taskId == null) return;
     
@@ -2247,6 +2822,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
           context: context,
           builder: (context) => TaskViewDialog(
             task: task,
+            onEdit: (t) => _editarTarefaVinculada(t),
             onUpdated: (updatedTask) {
               _loadNotasProgramadas();
             },
@@ -2520,14 +3096,34 @@ class _NotasSAPViewState extends State<NotasSAPView> {
     final colors = context.tfColors;
     final typography = context.tfTypography;
 
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: SingleChildScrollView(
+    return Scrollbar(
+      controller: _tableHorizontalScrollController,
+      thumbVisibility: true,
+      trackVisibility: true,
+      thickness: 10,
+      radius: const Radius.circular(5),
+      notificationPredicate: (notif) => notif.metrics.axis == Axis.horizontal,
+      child: Scrollbar(
         controller: _tableVerticalScrollController,
-        child: DataTable(
+        thumbVisibility: true,
+        trackVisibility: true,
+        thickness: 10,
+        radius: const Radius.circular(5),
+        notificationPredicate: (notif) => notif.metrics.axis == Axis.vertical,
+        child: SingleChildScrollView(
+          controller: _tableHorizontalScrollController,
+          scrollDirection: Axis.horizontal,
+          physics: const AlwaysScrollableScrollPhysics(),
+          child: SingleChildScrollView(
+            controller: _tableVerticalScrollController,
+            scrollDirection: Axis.vertical,
+            physics: const AlwaysScrollableScrollPhysics(),
+            child: DataTable(
           sortColumnIndex: _sortColumnIndex,
           sortAscending: _ordenacaoAscendente,
           headingRowColor: WidgetStateProperty.all(colors.surfaceSecondary),
+          dataRowMinHeight: 48,
+          dataRowMaxHeight: 68,
           columns: [
             DataColumn( // 0. Checkbox "selecionar todos" — sem onSort
               label: Checkbox(
@@ -2544,7 +3140,11 @@ class _NotasSAPViewState extends State<NotasSAPView> {
               ),
             ),
             DataColumn(label: Text('Ações', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary))), // 1. Ações (não ordena)
-            DataColumn( // 2. Status tarefa
+            DataColumn( // 2. Análise técnica e Tags
+              label: Text('Análise / Tags', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary)),
+              onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
+            ),
+            DataColumn( // 3. Status tarefa
               label: Text('Status', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary)),
               onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
             ),
@@ -2610,6 +3210,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
               onSort: (col, asc) => setState(() { _sortColumnIndex = col; _ordenacaoAscendente = asc; _paginaAtual = 0; _aplicarOrdenacaoEPaginacao(); }),
             ),
             DataColumn(label: Text('Detalhes', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary))), // 19. Detalhes (não ordena)
+            DataColumn(label: Text('Tags', style: typography.labelMedium.copyWith(fontWeight: FontWeight.bold, color: colors.textPrimary))), // 20. Tags (não ordena)
           ],
           rows: _notas.map((nota) {
             final isProgramada = _notasProgramadasIds.contains(nota.id);
@@ -2718,7 +3319,37 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                     ],
                   ),
                 ),
-                // 2. STATUS
+                // 2. ANÁLISE TÉCNICA E TAGS
+                DataCell(
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        NotaAnaliseBadge(
+                          resumo: _resumosAnalise[nota.id],
+                          compact: true,
+                          onTapStatus: () => _mostrarDetalhesNota(nota, initialTab: 1),
+                          onTapMateriais: () => _mostrarDetalhesNota(nota, initialTab: 2),
+                          onTapAnexos: () => _mostrarDetalhesNota(nota, initialTab: 3),
+                          onTapComentarios: () => _mostrarDetalhesNota(nota, initialTab: 4),
+                          onTapGlobal: () => _mostrarDetalhesNota(nota, initialTab: 0),
+                        ),
+                        if ((_tagsMap[nota.id] ?? []).isNotEmpty) ...[
+                          const SizedBox(height: 3),
+                          InkWell(
+                            onTap: () => _mostrarDetalhesNota(nota, initialTab: 0),
+                            borderRadius: BorderRadius.circular(4),
+                            child: _buildTagsChips(_tagsMap[nota.id]!),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+                // 3. STATUS DA TAREFA
                 DataCell(
                   isProgramada && tarefaStatus != null
                       ? Row(
@@ -3034,12 +3665,18 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                     ),
                   ),
                 ),
+                // 20. TAGS
+                DataCell(
+                  _buildTagsChips(_tagsMap[nota.id] ?? []),
+                ),
               ],
             );
           }).toList(),
         ),
       ),
-    );
+    ),
+  ),
+);
   }
 
   // Construir badge de prazo
@@ -3079,93 +3716,92 @@ class _NotasSAPViewState extends State<NotasSAPView> {
     );
   }
 
-  void _mostrarDetalhesNota(NotaSAP nota) {
-    final colors = context.tfColors;
-    final typography = context.tfTypography;
+  Future<void> _mostrarDetalhesNota(NotaSAP nota, {int initialTab = 0}) async {
+    final listaContexto = _todasNotasOrdenadas.isNotEmpty
+        ? _todasNotasOrdenadas
+        : _notas;
 
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: colors.surface,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(TFRadius.r12),
-          side: BorderSide(color: colors.borderSubtle),
-        ),
-        title: Row(
-          children: [
-            Expanded(
-              child: Text(
-                'Detalhes da Nota SAP: ${nota.nota}',
-                style: typography.sectionTitle.copyWith(color: colors.textPrimary),
-              ),
-            ),
-            IconButton(
-              icon: Icon(Icons.copy, size: 18, color: colors.primary),
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(),
-              onPressed: () => _copiarNota(nota.nota),
-              tooltip: 'Copiar nota',
-            ),
-          ],
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _buildInfoRow('Tipo', nota.tipo),
-              _buildInfoRow('Descrição', nota.descricao),
-              _buildInfoRow('Detalhes', nota.detalhes),
-              _buildInfoRow('Status Sistema', nota.statusSistema),
-              _buildInfoRow('Status Usuário', nota.statusUsuario),
-              _buildInfoRow('Prioridade', nota.textPrioridade),
-              _buildInfoRow('Ordem', nota.ordem),
-              _buildInfoRow('Local de Instalação', nota.localInstalacao),
-              _buildInfoRow('Local', nota.local),
-              _buildInfoRow('Sala', nota.sala),
-              _buildInfoRow('Equipamento', nota.equipamento),
-              _buildInfoRow('Centro', nota.centro),
-              _buildInfoRow('Centro Trabalho Responsável', nota.centroTrabalhoResponsavel),
-              _buildInfoRow('Executor', nota.denominacaoExecutor),
-              _buildInfoRow('GPM', nota.gpm),
-              if (nota.criadoEm != null)
-                _buildInfoRow('Criado em', _formatDate(nota.criadoEm!)),
-              if (nota.inicioDesejado != null)
-                _buildInfoRow('Início Desejado', _formatDate(nota.inicioDesejado!)),
-              if (nota.conclusaoDesejada != null)
-                _buildInfoRow('Conclusão Desejada', _formatDate(nota.conclusaoDesejada!)),
-              if (nota.dataReferencia != null)
-                _buildInfoRow('Data Referência', _formatDate(nota.dataReferencia!)),
-              if (nota.inicioAvaria != null)
-                _buildInfoRow('Início Avaria', _formatDate(nota.inicioAvaria!)),
-              if (nota.fimAvaria != null)
-                _buildInfoRow('Fim Avaria', _formatDate(nota.fimAvaria!)),
-              if (nota.encerramento != null)
-                _buildInfoRow('Encerramento', _formatDate(nota.encerramento!)),
-              if (nota.modificadoEm != null)
-                _buildInfoRow('Modificado em', _formatDate(nota.modificadoEm!)),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: Text('Fechar', style: TextStyle(color: colors.primary)),
-          ),
-        ],
-      ),
+    await NotaAnaliseWorkspace.abrir(
+      context,
+      nota: nota,
+      listaNotas: listaContexto,
+      notasSelecionadasIniciais: _notasSelecionadas,
+      onNotasSelecionadasMudou: (novas) {
+        if (mounted) {
+          setState(() {
+            _notasSelecionadas = Set.from(novas);
+          });
+        }
+      },
+      onNotaMudou: (novaNota) {
+        if (mounted) {
+          _atualizarResumoNotaCirurgico(novaNota.id);
+          _atualizarTagsNotaCirurgico(novaNota.id);
+          _atualizarTagsDisponiveisFiltro();
+        }
+      },
+      onProgramarTarefa: () => _criarTarefaDaNota(nota),
+      onProgramarTarefaComNota: (n) => _criarTarefaDaNota(n),
+      onProgramarMultiplasNotas: (notas) {
+        if (mounted && notas.isNotEmpty) {
+          setState(() {
+            _notasSelecionadas = notas.map((n) => n.id).toSet();
+          });
+          _criarTarefaDaNota(notas.first);
+        }
+      },
+      onVincularTarefaExistente: () => _vincularNotaComGrupoATarefaExistente(nota),
+      onVincularTarefaExistenteComNota: (n) => _vincularNotaComGrupoATarefaExistente(n),
+      onVincularMultiplasNotas: (notas) {
+        if (mounted && notas.isNotEmpty) {
+          setState(() {
+            _notasSelecionadas = notas.map((n) => n.id).toSet();
+          });
+          _vincularMultiplasNotas(notas.map((n) => n.id).toList());
+        }
+      },
+      initialTab: initialTab,
     );
+
+    if (mounted) {
+      _tagService.limparCacheTotal();
+      await _carregarTagsNotasVisiveis(forceRefresh: true);
+      await _atualizarTagsDisponiveisFiltro();
+      await _atualizarResumoNotaCirurgico(nota.id);
+      setState(() {});
+    }
   }
 
-  // Criar tarefa a partir de uma nota SAP (ou múltiplas notas selecionadas)
+  // Criar tarefa a partir de uma nota SAP (ou múltiplas notas selecionadas / grupo ativo)
   Future<void> _criarTarefaDaNota(NotaSAP nota) async {
     try {
       if (!await _ensureCanEditTasks()) return;
       
-      // Verificar se há notas selecionadas
-      final notasParaVincular = _notasSelecionadas.isNotEmpty 
-          ? _notas.where((n) => _notasSelecionadas.contains(n.id)).toList()
-          : [nota];
+      // Verificar se há notas selecionadas ou se a nota possui um grupo ativo
+      List<NotaSAP> notasParaVincular = [nota];
+      if (_notasSelecionadas.isNotEmpty) {
+        notasParaVincular = _notas.where((n) => _notasSelecionadas.contains(n.id)).toList();
+      } else {
+        try {
+          final grupoService = NotaSapGrupoService();
+          final grupoAtivo = await grupoService.buscarGrupoAtivoDaNota(nota.id);
+          if (grupoAtivo != null) {
+            final itens = await grupoService.buscarNotasDoGrupo(grupoAtivo.id);
+            final notasGrupo = <NotaSAP>[];
+            for (final it in itens) {
+              if (it.nota != null && (!it.isProgramada || it.notaSapId == nota.id)) {
+                notasGrupo.add(it.nota!);
+              }
+            }
+            if (notasGrupo.isNotEmpty) {
+              notasGrupo.removeWhere((n) => n.id == nota.id);
+              notasParaVincular = [nota, ...notasGrupo];
+            }
+          }
+        } catch (e) {
+          debugPrint('⚠️ Erro ao buscar grupo ativo da nota: $e');
+        }
+      }
       
       // Se há múltiplas notas selecionadas, usar a primeira para pré-preencher o formulário
       final notaPrincipal = notasParaVincular.first;
@@ -3174,13 +3810,14 @@ class _NotasSAPViewState extends State<NotasSAPView> {
       final dataInicio = notaPrincipal.inicioDesejado ?? DateTime.now();
       final dataFim = notaPrincipal.conclusaoDesejada ?? dataInicio.add(const Duration(days: 1));
       
-      // Mostrar formulário de criação de tarefa pré-preenchido com dados da nota principal
+      // Mostrar formulário de criação de tarefa pré-preenchido com dados da nota principal e todas as notas do grupo
       final taskCriada = await showDialog<Task>(
         context: context,
         builder: (context) => TaskFormDialog(
           startDate: dataInicio,
           endDate: dataFim,
-          notaSAP: notaPrincipal, // Passar a nota SAP principal para pré-preencher o formulário
+          notaSAP: notaPrincipal,
+          notasSAPIniciais: notasParaVincular,
         ),
       );
       
@@ -3259,42 +3896,20 @@ class _NotasSAPViewState extends State<NotasSAPView> {
             setDialogState!(() {});
           }
           
-          final createdTask = await taskService.createTask(taskCriada);
-          notasProcessadas++;
-          
-          // Atualizar progresso: tarefa criada, iniciando vinculação
-          if (notasParaVincular.length > 1 && setDialogState != null) {
-            statusAtual = 'Vinculando notas...';
-            setDialogState!(() {});
-          }
-          
-          // Vincular todas as notas selecionadas (ou apenas a nota clicada)
-          int vinculadasComSucesso = 0;
-          int vinculadasComErro = 0;
-          
-          for (final notaParaVincular in notasParaVincular) {
-            try {
-              await _service.vincularNotaATarefa(createdTask.id, notaParaVincular.id);
-              vinculadasComSucesso++;
-              notasProcessadas++;
-              
-              // Atualizar progresso no diálogo
-              if (notasParaVincular.length > 1 && setDialogState != null) {
-                statusAtual = 'Vinculando notas... ($notasProcessadas/${notasParaVincular.length + 1})';
-                setDialogState!(() {});
-              }
-            } catch (e) {
-              print('❌ Erro ao vincular nota ${notaParaVincular.nota}: $e');
-              vinculadasComErro++;
-              notasProcessadas++;
-              
-              // Atualizar progresso mesmo em caso de erro
-              if (notasParaVincular.length > 1 && setDialogState != null) {
-                statusAtual = 'Vinculando notas... ($notasProcessadas/${notasParaVincular.length + 1})';
-                setDialogState!(() {});
-              }
-            }
-          }
+          // Consolidar notas da seleção e do grupo selecionado no TaskFormDialog
+          final idsParaVincular = <String>{
+            ...notasParaVincular.map((n) => n.id),
+            ...taskCriada.notaSapIdsParaVincular,
+          }.toList();
+
+          final taskComNotas = taskCriada.copyWith(
+            notaSapIdsParaVincular: idsParaVincular,
+          );
+
+          // TaskService é o único dono da persistência da tarefa e de tasks_notas_sap
+          final taskResult = await taskService.createTaskWithResult(taskComNotas);
+          final createdTask = taskResult.task;
+          notasProcessadas = idsParaVincular.length;
           
           // Fechar diálogo de progresso se foi aberto
           if (notasParaVincular.length > 1 && mounted) {
@@ -3313,26 +3928,59 @@ class _NotasSAPViewState extends State<NotasSAPView> {
           
           if (mounted) {
             final scaffoldMessenger = ScaffoldMessenger.of(context);
-            if (vinculadasComErro == 0) {
+            if (taskResult.vinculacaoCompleta) {
+              final totalVinculadas = taskResult.notasVinculadas.length;
               scaffoldMessenger.showSnackBar(
                 SnackBar(
                   content: Text(
-                    vinculadasComSucesso == 1
+                    totalVinculadas <= 1
                         ? 'Tarefa criada e vinculada à nota ${notaPrincipal.nota} com sucesso!'
-                        : 'Tarefa criada e $vinculadasComSucesso notas vinculadas com sucesso!',
+                        : 'Tarefa criada e $totalVinculadas notas vinculadas com sucesso!',
                   ),
                   backgroundColor: Colors.green,
                   duration: const Duration(seconds: 3),
                 ),
               );
             } else {
+              // Tarefa criada com falha parcial nos vínculos
+              final falhas = taskResult.notasComFalha;
               scaffoldMessenger.showSnackBar(
                 SnackBar(
                   content: Text(
-                    'Tarefa criada. $vinculadasComSucesso nota(s) vinculada(s) com sucesso. $vinculadasComErro erro(s).',
+                    'Tarefa criada com sucesso, mas ${falhas.length} Nota(s) não puderam ser vinculadas.',
                   ),
                   backgroundColor: Colors.orange,
-                  duration: const Duration(seconds: 3),
+                  duration: const Duration(seconds: 8),
+                  action: SnackBarAction(
+                    label: 'Tentar vincular',
+                    textColor: Colors.white,
+                    onPressed: () async {
+                      try {
+                        final retryRes = await NotaSAPService().vincularNotasATarefaBatch(
+                          taskId: createdTask.id,
+                          notaSapIds: falhas,
+                        );
+                        if (mounted) {
+                          await _loadNotasProgramadas();
+                          scaffoldMessenger.showSnackBar(
+                            SnackBar(
+                              content: Text('Vínculo concluído: ${retryRes.length} nota(s) vinculada(s).'),
+                              backgroundColor: Colors.green,
+                            ),
+                          );
+                        }
+                      } catch (err) {
+                        if (mounted) {
+                          scaffoldMessenger.showSnackBar(
+                            SnackBar(
+                              content: Text('Falha ao tentar vincular novamente: $err'),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
+                        }
+                      }
+                    },
+                  ),
                 ),
               );
             }
@@ -3366,6 +4014,32 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         );
       }
     }
+  }
+
+  // Vincular nota (e todas as notas não programadas do seu grupo ativo) a uma tarefa existente
+  Future<void> _vincularNotaComGrupoATarefaExistente(NotaSAP nota) async {
+    try {
+      final grupoService = NotaSapGrupoService();
+      final grupoAtivo = await grupoService.buscarGrupoAtivoDaNota(nota.id);
+      if (grupoAtivo != null) {
+        final itens = await grupoService.buscarNotasDoGrupo(grupoAtivo.id);
+        final idsNaoProgramados = itens
+            .where((it) => !it.isProgramada || it.notaSapId == nota.id)
+            .map((it) => it.notaSapId)
+            .toSet()
+            .toList();
+
+        if (idsNaoProgramados.length > 1) {
+          await _vincularMultiplasNotas(idsNaoProgramados);
+          return;
+        }
+      }
+    } catch (e) {
+      debugPrint('⚠️ Erro ao buscar grupo ativo para vincular tarefa existente: $e');
+    }
+
+    // Se não pertencer a grupo ativo ou for apenas 1 nota
+    await _vincularNotaATarefaExistente(nota);
   }
 
   // Vincular notas selecionadas (ou apenas a nota clicada se nenhuma estiver selecionada)

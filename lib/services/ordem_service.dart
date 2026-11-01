@@ -699,7 +699,11 @@ class OrdemService {
   }
 
   // Vincular ordem a uma tarefa
-  Future<void> vincularOrdemATarefa(String taskId, String ordemId) async {
+  Future<void> vincularOrdemATarefa(
+    String taskId,
+    String ordemId, {
+    bool autoVincularNotas = true,
+  }) async {
     try {
       print('🔗 Iniciando vinculação de ordem $ordemId à tarefa $taskId...');
       
@@ -766,9 +770,10 @@ class OrdemService {
         throw Exception('Erro ao vincular ordem à tarefa: $e');
       }
       
-      // VINCULAÇÃO AUTOMÁTICA DE NOTAS (se falhar, apenas loga, não interrompe)
-      try {
-        // Buscar o número da ordem
+      // VINCULAÇÃO AUTOMÁTICA DE NOTAS (apenas quando solicitado explicitamente)
+      if (autoVincularNotas) {
+        try {
+          // Buscar o número da ordem
         print('🔍 Buscando ordem $ordemId para obter número da ordem...');
         final ordemResponse = await _supabase
             .from('ordens')
@@ -881,6 +886,7 @@ class OrdemService {
         print('⚠️ Erro na vinculação automática de notas (não crítico): $e');
         print('   Stack trace: $stackTrace');
       }
+    } // Fim if (autoVincularNotas)
     } catch (e, stackTrace) {
       print('❌ Erro ao vincular ordem: $e');
       print('❌ Stack trace: $stackTrace');

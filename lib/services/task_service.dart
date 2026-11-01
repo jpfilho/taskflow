@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../models/task.dart';
+import '../models/task_create_result.dart';
 import '../models/nota_sap.dart';
+import 'nota_sap_service.dart';
 import 'performance_monitor.dart';
 import '../config/supabase_config.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -2190,6 +2192,20 @@ class TaskService {
   }
 
   Future<Task> createTask(Task task) async {
+    final result = await createTaskWithResult(task);
+    if (result.hasFalhaParcial) {
+      throw TaskCreatedWithVinculoException(result);
+    }
+    return result.task;
+  }
+
+  /// Cria a tarefa e orquestra a vinculação das Notas SAP selecionadas,
+  /// retornando um [TaskCreateResult] estruturado.
+  /// 
+  /// Se a criação da [Task] tiver sucesso mas a vinculação de Notas falhar,
+  /// a tarefa é preservada e os detalhes da falha parcial são informados
+  /// sem duplicar a tarefa.
+  Future<TaskCreateResult> createTaskWithResult(Task task) async {
     _clearCache();
     // Filtrar períodos específicos por executor para conter apenas os selecionados
     final cleanExecutorPeriods = task.executorPeriods
@@ -2211,7 +2227,14 @@ class TaskService {
     if (!_useSupabase) {
       final taskWithId = newTask.copyWith(id: 'TASK_${_nextId++}');
       _tasks.add(taskWithId);
-      return taskWithId;
+      return TaskCreateResult(
+        task: taskWithId,
+        taskCriada: true,
+        notasSolicitadas: newTask.notaSapIdsParaVincular,
+        notasVinculadas: newTask.notaSapIdsParaVincular,
+        notasComFalha: const [],
+        vinculacaoCompleta: true,
+      );
     }
 
     try {
@@ -2316,6 +2339,30 @@ class TaskService {
         print(
           '💾 Salvando ${frotasData.length} frotas para tarefa $createdTaskId',
         );
+      }
+
+      // Notas SAP (relação oficial tasks_notas_sap — único dono da persistência na criação)
+      List<String> notasVinculadas = [];
+      List<String> notasComFalha = [];
+      Object? erroVinculacao;
+
+      if (newTask.notaSapIdsParaVincular.isNotEmpty) {
+        try {
+          print(
+            '🔗 [TaskService] Salvando ${newTask.notaSapIdsParaVincular.length} notas SAP vinculadas para tarefa $createdTaskId',
+          );
+          final notaSapService = NotaSAPService();
+          notasVinculadas = await notaSapService.vincularNotasATarefaBatch(
+            taskId: createdTaskId,
+            notaSapIds: newTask.notaSapIdsParaVincular,
+          );
+        } catch (e) {
+          erroVinculacao = e;
+          print('⚠️ [TaskService] Falha ao vincular notas SAP na criação da tarefa: $e');
+          notasComFalha = newTask.notaSapIdsParaVincular
+              .where((id) => !notasVinculadas.contains(id))
+              .toList();
+        }
       }
 
       // Carregar tarefa completa com joins
@@ -2463,7 +2510,15 @@ class TaskService {
         }
       }
 
-      return finalTask;
+      return TaskCreateResult(
+        task: finalTask,
+        taskCriada: true,
+        notasSolicitadas: newTask.notaSapIdsParaVincular,
+        notasVinculadas: notasVinculadas,
+        notasComFalha: notasComFalha,
+        vinculacaoCompleta: notasComFalha.isEmpty,
+        erroVinculacao: erroVinculacao,
+      );
     } catch (e) {
       print('Erro ao criar tarefa no Supabase: $e');
       // Se offline ou erro, salvar apenas no banco local
@@ -2497,7 +2552,15 @@ class TaskService {
         }
       }
 
-      return taskWithId;
+      return TaskCreateResult(
+        task: taskWithId,
+        taskCriada: true,
+        notasSolicitadas: newTask.notaSapIdsParaVincular,
+        notasVinculadas: const [],
+        notasComFalha: newTask.notaSapIdsParaVincular,
+        vinculacaoCompleta: newTask.notaSapIdsParaVincular.isEmpty,
+        erroVinculacao: e,
+      );
     }
   }
 

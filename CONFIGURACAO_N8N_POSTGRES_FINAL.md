@@ -21,7 +21,7 @@ Execute `/conninfo` no psql ou verifique a configuração.
 - **Valor:** `postgres`
 
 ### 4. Password
-- **Valor:** `KhVAFkxwia0BttKJ0Z3gnbauuc9z3W5YmVd70WVuA`
+- **Valor:** `${POSTGRES_PASSWORD}`
 
 ### 5. Port
 - **Valor:** `5433`
@@ -52,7 +52,7 @@ Host: localhost
 Port: 5433
 Database: postgres
 User: postgres
-Password: KhVAFkxwia0BttKJ0Z3gnbauuc9z3W5YmVd70WVuA
+Password: ${POSTGRES_PASSWORD}
 Ignore SSL Issues: ✅ Ativado
 SSL: Disable
 SSH Tunnel: ❌ Desativado
@@ -65,7 +65,7 @@ Host: 212.85.0.249
 Port: 5433
 Database: postgres
 User: postgres
-Password: KhVAFkxwia0BttKJ0Z3gnbauuc9z3W5YmVd70WVuA
+Password: ${POSTGRES_PASSWORD}
 Ignore SSL Issues: ✅ Ativado
 SSL: Disable
 SSH Tunnel: ❌ Desativado
@@ -83,7 +83,7 @@ SSH Tunnel: ❌ Desativado
 2. **Teste a conexão diretamente do servidor:**
    ```bash
    ssh root@212.85.0.249
-   PGPASSWORD='KhVAFkxwia0BttKJ0Z3gnbauuc9z3W5YmVd70WVuA' psql -h localhost -p 5433 -U postgres -d postgres -c "SELECT version();"
+   PGPASSWORD='${POSTGRES_PASSWORD}' psql -h localhost -p 5433 -U postgres -d postgres -c "SELECT version();"
    ```
 
 3. **Verifique os logs do N8N:**

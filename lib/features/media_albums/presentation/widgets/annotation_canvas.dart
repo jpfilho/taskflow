@@ -1,4 +1,5 @@
 import 'dart:math' show sqrt;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../../data/models/annotation_models.dart';
@@ -32,6 +33,54 @@ class _AnnotationCanvasState extends State<AnnotationCanvas> {
   Size? _imageSize;
   bool _resolutionStarted = false;
 
+  late final TransformationController _transformationController;
+
+  @override
+  void initState() {
+    super.initState();
+    _transformationController = TransformationController();
+  }
+
+  @override
+  void dispose() {
+    _transformationController.dispose();
+    super.dispose();
+  }
+
+  void _zoomAt(Offset focalPoint, double factor) {
+    final matrix = _transformationController.value.clone();
+    final currentScale = matrix.getMaxScaleOnAxis();
+    final targetScale = (currentScale * factor).clamp(0.2, 8.0);
+    final actualFactor = targetScale / currentScale;
+
+    if ((actualFactor - 1.0).abs() < 0.001) return;
+
+    final focalTransform = Matrix4.identity()
+      ..multiply(Matrix4.translationValues(focalPoint.dx, focalPoint.dy, 0.0))
+      ..multiply(Matrix4.diagonal3Values(actualFactor, actualFactor, 1.0))
+      ..multiply(Matrix4.translationValues(-focalPoint.dx, -focalPoint.dy, 0.0));
+
+    _transformationController.value = focalTransform * matrix;
+  }
+
+  void _zoomAtCenter(double factor) {
+    final box = context.findRenderObject() as RenderBox?;
+    final size = box?.size ?? const Size(800, 600);
+    _zoomAt(Offset(size.width / 2, size.height / 2), factor);
+  }
+
+  void _resetZoom() {
+    _transformationController.value = Matrix4.identity();
+  }
+
+  void _handlePointerSignal(PointerSignalEvent event) {
+    if (event is! PointerScrollEvent) return;
+    final delta = event.scrollDelta.dy;
+    if (delta == 0) return;
+    final factor = delta < 0 ? 1.15 : (1.0 / 1.15);
+    _zoomAt(event.localPosition, factor);
+  }
+
   RenderBox? get _contentBox =>
       _contentKey.currentContext?.findRenderObject() as RenderBox?;
 
@@ -63,110 +112,195 @@ class _AnnotationCanvasState extends State<AnnotationCanvas> {
       listenable: widget.controller,
       builder: (context, _) {
         final isPanMode = widget.controller.isPanMode;
-        return Listener(
-          onPointerDown: (e) {
-            final local = _localPosition(e.position);
-            if (local == null) return;
-            if (widget.controller.tool == AnnotationTool.select) {
-              widget.controller.selectAt(local);
-              _dragSelectionStarted = widget.controller.hasSelection;
-              return;
-            }
-            if (widget.controller.tool == AnnotationTool.text) {
-              widget.onTextTap?.call(local);
-              return;
-            }
-            widget.controller.startDraw(local);
-          },
-          onPointerMove: (e) {
-            final local = _localPosition(e.position);
-            if (local == null) return;
-            if (widget.controller.tool == AnnotationTool.select && _dragSelectionStarted && widget.controller.hasSelection) {
-              widget.controller.moveSelectedBy(local);
-              return;
-            }
-            widget.controller.updateDraw(local);
-          },
-          onPointerUp: (e) {
-            _dragSelectionStarted = false;
-            final local = _localPosition(e.position);
-            if (local != null) widget.controller.endDraw(local);
-          },
-          onPointerCancel: (_) {
-            _dragSelectionStarted = false;
-            widget.controller.endDraw(Offset.zero);
-          },
-          child: InteractiveViewer(
-            minScale: 0.5,
-            maxScale: 4.0,
-            panEnabled: isPanMode,
-            scaleEnabled: true,
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-              final w = constraints.maxWidth;
-              final h = constraints.maxHeight;
-              if (w <= 0 || h <= 0) return const SizedBox.shrink();
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: Listener(
+                onPointerSignal: _handlePointerSignal,
+                onPointerDown: (e) {
+                  final local = _localPosition(e.position);
+                  if (local == null) return;
+                  if (widget.controller.tool == AnnotationTool.select) {
+                    widget.controller.selectAt(local);
+                    _dragSelectionStarted = widget.controller.hasSelection;
+                    return;
+                  }
+                  if (widget.controller.tool == AnnotationTool.text) {
+                    widget.onTextTap?.call(local);
+                    return;
+                  }
+                  widget.controller.startDraw(local);
+                },
+                onPointerMove: (e) {
+                  final local = _localPosition(e.position);
+                  if (local == null) return;
+                  if (widget.controller.tool == AnnotationTool.select && _dragSelectionStarted && widget.controller.hasSelection) {
+                    widget.controller.moveSelectedBy(local);
+                    return;
+                  }
+                  widget.controller.updateDraw(local);
+                },
+                onPointerUp: (e) {
+                  _dragSelectionStarted = false;
+                  final local = _localPosition(e.position);
+                  if (local != null) widget.controller.endDraw(local);
+                },
+                onPointerCancel: (_) {
+                  _dragSelectionStarted = false;
+                  widget.controller.endDraw(Offset.zero);
+                },
+                child: InteractiveViewer(
+                  transformationController: _transformationController,
+                  minScale: 0.2,
+                  maxScale: 8.0,
+                  panEnabled: isPanMode,
+                  scaleEnabled: true,
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final w = constraints.maxWidth;
+                      final h = constraints.maxHeight;
+                      if (w <= 0 || h <= 0) return const SizedBox.shrink();
 
-              // Resolver dimensões da imagem uma vez (para aspect ratio igual ao original na exportação)
-              _resolveImageSize();
+                      // Resolver dimensões da imagem uma vez (para aspect ratio igual ao original na exportação)
+                      _resolveImageSize();
 
-              double contentW = w;
-              double contentH = h;
-              if (_imageSize != null && _imageSize!.width > 0 && _imageSize!.height > 0) {
-                final scaleW = w / _imageSize!.width;
-                final scaleH = h / _imageSize!.height;
-                final scaleUsed = scaleW < scaleH ? scaleW : scaleH;
-                contentW = _imageSize!.width * scaleUsed;
-                contentH = _imageSize!.height * scaleUsed;
-              }
+                      double contentW = w;
+                      double contentH = h;
+                      if (_imageSize != null && _imageSize!.width > 0 && _imageSize!.height > 0) {
+                        final scaleW = w / _imageSize!.width;
+                        final scaleH = h / _imageSize!.height;
+                        final scaleUsed = scaleW < scaleH ? scaleW : scaleH;
+                        contentW = _imageSize!.width * scaleUsed;
+                        contentH = _imageSize!.height * scaleUsed;
+                      }
 
-              return Center(
-                child: RepaintBoundary(
-                  key: widget.repaintBoundaryKey ?? GlobalKey(),
-                  child: SizedBox(
-                    key: _contentKey,
-                    width: contentW,
-                    height: contentH,
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        CachedNetworkImage(
-                          imageUrl: widget.imageUrl,
-                          fit: BoxFit.cover,
-                          placeholder: (_, __) => const Center(
-                            child: CircularProgressIndicator(),
-                          ),
-                          errorWidget: (_, __, ___) => const Icon(
-                            Icons.broken_image_outlined,
-                            size: 48,
+                      return Center(
+                        child: RepaintBoundary(
+                          key: widget.repaintBoundaryKey ?? GlobalKey(),
+                          child: SizedBox(
+                            key: _contentKey,
+                            width: contentW,
+                            height: contentH,
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                CachedNetworkImage(
+                                  imageUrl: widget.imageUrl,
+                                  fit: BoxFit.cover,
+                                  placeholder: (_, __) => const Center(
+                                    child: CircularProgressIndicator(),
+                                  ),
+                                  errorWidget: (_, __, ___) => const Icon(
+                                    Icons.broken_image_outlined,
+                                    size: 48,
+                                  ),
+                                ),
+                                ListenableBuilder(
+                                  listenable: widget.controller,
+                                  builder: (context, _) {
+                                    return CustomPaint(
+                                      size: Size(contentW, contentH),
+                                      painter: _AnnotationPainter(
+                                        items: widget.controller.items,
+                                        selectedIndex: widget.controller.selectedIndex,
+                                        currentPoints: widget.controller.currentStrokePoints,
+                                        arrowStart: widget.controller.arrowStart,
+                                        arrowEnd: widget.controller.currentArrowEnd,
+                                        currentColor: widget.controller.colorValue,
+                                        currentStrokeWidth: widget.controller.strokeWidth,
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ],
+                            ),
                           ),
                         ),
-                        ListenableBuilder(
-                          listenable: widget.controller,
-                          builder: (context, _) {
-                            return CustomPaint(
-                              size: Size(contentW, contentH),
-                              painter: _AnnotationPainter(
-                                items: widget.controller.items,
-                                selectedIndex: widget.controller.selectedIndex,
-                                currentPoints: widget.controller.currentStrokePoints,
-                                arrowStart: widget.controller.arrowStart,
-                                arrowEnd: widget.controller.currentArrowEnd,
-                                currentColor: widget.controller.colorValue,
-                                currentStrokeWidth: widget.controller.strokeWidth,
-                              ),
-                            );
-                          },
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ),
+
+            // Controles flutuantes de Zoom no canto inferior direito
+            Positioned(
+              right: 16,
+              bottom: 16,
+              child: ValueListenableBuilder<Matrix4>(
+                valueListenable: _transformationController,
+                builder: (context, matrix, _) {
+                  final scale = matrix.getMaxScaleOnAxis();
+                  final scalePercent = (scale * 100).round();
+
+                  return Container(
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF252526).withAlpha(235),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: Colors.white24),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Colors.black45,
+                          blurRadius: 10,
+                          offset: Offset(0, 4),
                         ),
                       ],
                     ),
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-      );
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.remove, size: 18, color: Colors.white),
+                          tooltip: 'Afastar (Zoom -)',
+                          padding: const EdgeInsets.all(6),
+                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                          onPressed: () => _zoomAtCenter(0.8),
+                        ),
+                        InkWell(
+                          borderRadius: BorderRadius.circular(999),
+                          onTap: _resetZoom,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            child: Text(
+                              '$scalePercent%',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.add, size: 18, color: Colors.white),
+                          tooltip: 'Aproximar (Zoom +)',
+                          padding: const EdgeInsets.all(6),
+                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                          onPressed: () => _zoomAtCenter(1.25),
+                        ),
+                        Container(
+                          width: 1,
+                          height: 16,
+                          color: Colors.white24,
+                          margin: const EdgeInsets.symmetric(horizontal: 2),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.fit_screen_outlined,
+                              size: 18, color: Colors.white70),
+                          tooltip: 'Ajustar à Tela (0)',
+                          padding: const EdgeInsets.all(6),
+                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                          onPressed: _resetZoom,
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        );
       },
     );
   }

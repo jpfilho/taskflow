@@ -16,6 +16,7 @@ import 'task_form_dialog.dart';
 import '../services/task_service.dart';
 import '../services/executor_service.dart';
 import '../utils/clipboard_helper.dart';
+import 'task/task_sap_notes_section.dart';
 
 class TaskViewDialog extends StatefulWidget {
   final Task task;
@@ -130,17 +131,20 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
         return;
       }
 
+      if (!mounted) return;
+      // Capturar o navegador raiz e o contexto antes de fechar este diálogo
+      final nav = Navigator.of(context, rootNavigator: true);
+      final parentContext = nav.context;
+
       // Fechar o diálogo de visualização primeiro
       Navigator.of(context).pop();
       
-      // Aguardar um frame para garantir que o diálogo foi fechado
-      await Future.delayed(const Duration(milliseconds: 200));
+      // Aguardar um momento para garantir que a rota foi desempilhada
+      await Future.delayed(const Duration(milliseconds: 150));
+      if (!parentContext.mounted) return;
       
-      // Buscar o contexto raiz para abrir o novo diálogo
-      // Usar o contexto do widget pai (que chamou este diálogo)
-      final rootContext = Navigator.of(context, rootNavigator: true).context;
       final result = await showDialog<Task>(
-        context: rootContext,
+        context: parentContext,
         builder: (context) => TaskFormDialog(
           task: taskAtualizada,
           startDate: taskAtualizada.dataInicio,
@@ -154,12 +158,14 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
           if (widget.onUpdated != null) {
             widget.onUpdated!(updated);
           }
-          ScaffoldMessenger.of(rootContext).showSnackBar(
-            const SnackBar(
-              content: Text('Atividade atualizada com sucesso!'),
-              backgroundColor: Colors.green,
-            ),
-          );
+          if (parentContext.mounted) {
+            ScaffoldMessenger.of(parentContext).showSnackBar(
+              const SnackBar(
+                content: Text('Atividade atualizada com sucesso!'),
+                backgroundColor: Colors.green,
+              ),
+            );
+          }
         }
       }
     } catch (e) {
@@ -422,61 +428,63 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Itens SAP Vinculados',
-          style: TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
-            color: Color(0xFF1E3A5F),
+        if (_notasSAP.isNotEmpty) ...[
+          TaskSapNotesSection(
+            notasSAP: _notasSAP,
+            task: widget.task,
+            readOnly: !_canEdit,
           ),
-        ),
-        const SizedBox(height: 8),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Colors.grey[50],
-            borderRadius: BorderRadius.circular(4),
-            border: Border.all(color: Colors.grey[300]!),
+          const SizedBox(height: 16),
+        ],
+        if (_ordens.isNotEmpty || _ats.isNotEmpty || _sis.isNotEmpty) ...[
+          const Text(
+            'Outros Itens SAP Vinculados',
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF1E3A5F),
+            ),
           ),
-          child: Wrap(
-            spacing: 12,
-            runSpacing: 12,
-            children: [
-              if (_notasSAP.isNotEmpty)
-                _buildSAPItem(
-                  icon: Icons.description,
-                  label: 'Notas SAP',
-                  count: _notasSAP.length,
-                  color: Colors.blue,
-                  onTap: () => _mostrarDialogNotasSAP(_notasSAP, widget.task),
-                ),
-              if (_ordens.isNotEmpty)
-                _buildSAPItem(
-                  icon: Icons.receipt_long,
-                  label: 'Ordens',
-                  count: _ordens.length,
-                  color: Colors.orange,
-                  onTap: () => _mostrarDialogOrdens(_ordens, widget.task),
-                ),
-              if (_ats.isNotEmpty)
-                _buildSAPItem(
-                  icon: Icons.assignment,
-                  label: 'ATs',
-                  count: _ats.length,
-                  color: Colors.purple,
-                  onTap: () => _mostrarDialogATs(_ats, widget.task),
-                ),
-              if (_sis.isNotEmpty)
-                _buildSAPItem(
-                  icon: Icons.info,
-                  label: 'SIs',
-                  count: _sis.length,
-                  color: Colors.teal,
-                  onTap: () => _mostrarDialogSIs(_sis, widget.task),
-                ),
-            ],
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.grey[50],
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: Colors.grey[300]!),
+            ),
+            child: Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                if (_ordens.isNotEmpty)
+                  _buildSAPItem(
+                    icon: Icons.receipt_long,
+                    label: 'Ordens',
+                    count: _ordens.length,
+                    color: Colors.orange,
+                    onTap: () => _mostrarDialogOrdens(_ordens, widget.task),
+                  ),
+                if (_ats.isNotEmpty)
+                  _buildSAPItem(
+                    icon: Icons.assignment,
+                    label: 'ATs',
+                    count: _ats.length,
+                    color: Colors.purple,
+                    onTap: () => _mostrarDialogATs(_ats, widget.task),
+                  ),
+                if (_sis.isNotEmpty)
+                  _buildSAPItem(
+                    icon: Icons.info,
+                    label: 'SIs',
+                    count: _sis.length,
+                    color: Colors.teal,
+                    onTap: () => _mostrarDialogSIs(_sis, widget.task),
+                  ),
+              ],
+            ),
           ),
-        ),
+        ],
       ],
     );
   }
@@ -609,86 +617,6 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
     );
   }
 
-  void _mostrarDialogNotasSAP(List<NotaSAP> notas, Task task) {
-    showDialog(
-      context: context,
-      builder: (context) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        child: Container(
-          width: MediaQuery.of(context).size.width * 0.9,
-          constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
-          child: Column(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [Colors.blue[600]!, Colors.blue[400]!],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(16),
-                    topRight: Radius.circular(16),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: const Icon(Icons.description, color: Colors.white, size: 24),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Notas SAP Vinculadas',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          Text(
-                            'Tarefa: ${task.tarefa}',
-                            style: TextStyle(
-                              color: Colors.white.withOpacity(0.9),
-                              fontSize: 14,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close, color: Colors.white),
-                      onPressed: () => Navigator.of(context).pop(),
-                    ),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: ListView.builder(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: notas.length,
-                  itemBuilder: (context, index) {
-                    final nota = notas[index];
-                    return _buildNotaSAPCard(nota, index);
-                  },
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   Future<void> _copiarParaAreaTransferencia(String texto, String mensagemSucesso) async {
     await ClipboardHelper.copyAndNotify(
       context,
@@ -724,209 +652,6 @@ class _TaskViewDialogState extends State<TaskViewDialog> {
     if (status.contains('MSPN')) return Colors.blue;
     if (status.contains('MECE') || status.contains('CONC')) return Colors.green;
     return const Color(0xFF1E3A5F);
-  }
-
-  Widget _buildNotaSAPCard(NotaSAP nota, int index) {
-    final statusSis = nota.statusSistema?.trim();
-    final statusUsu = nota.statusUsuario?.trim();
-    final sala = nota.sala?.trim();
-    final descricao = nota.descricao?.trim();
-    final local = nota.localInstalacao?.trim();
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.06),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-        border: Border.all(color: Colors.blue.withOpacity(0.2)),
-      ),
-      child: ExpansionTile(
-        tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-        childrenPadding: EdgeInsets.zero,
-        leading: Container(
-          width: 36,
-          height: 36,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: const Color(0xFF1E3A5F).withOpacity(0.08),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: const Icon(Icons.description_outlined, color: Color(0xFF1E3A5F), size: 20),
-        ),
-        title: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          child: Row(
-            children: [
-              Expanded(
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 4,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    Text(
-                      'Nota: ${nota.nota}',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 15,
-                        color: Color(0xFF1E3A5F),
-                      ),
-                    ),
-                    if (nota.tipo != null && nota.tipo!.isNotEmpty)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: Colors.grey[200],
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          nota.tipo!,
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.grey[800],
-                          ),
-                        ),
-                      ),
-                    if (statusSis != null && statusSis.isNotEmpty)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: _getStatusSistemaColor(statusSis).withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(
-                            color: _getStatusSistemaColor(statusSis).withOpacity(0.4),
-                          ),
-                        ),
-                        child: Text(
-                          statusSis,
-                          style: TextStyle(
-                            color: _getStatusSistemaColor(statusSis),
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    if (statusUsu != null && statusUsu.isNotEmpty)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: _getStatusUsuarioColor(statusUsu),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          statusUsu,
-                          style: TextStyle(
-                            color: _getStatusUsuarioTextColor(statusUsu),
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    if (sala != null && sala.isNotEmpty)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: Colors.indigo.withOpacity(0.08),
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: Colors.indigo.withOpacity(0.25)),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.meeting_room_outlined, size: 13, color: Colors.indigo),
-                            const SizedBox(width: 4),
-                            Text(
-                              'Sala: $sala',
-                              style: const TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.indigo,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    if (descricao != null && descricao.isNotEmpty)
-                      Text(
-                        descricao,
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.grey[850],
-                        ),
-                      ),
-                    if (local != null && local.isNotEmpty)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: Colors.grey[100],
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: Colors.grey[300]!),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.location_on_outlined, size: 13, color: Colors.grey[700]),
-                            const SizedBox(width: 4),
-                            Text(
-                              local,
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w500,
-                                color: Colors.grey[700],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.copy_rounded, size: 18, color: Colors.blue),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-                onPressed: () => _copiarParaAreaTransferencia(nota.nota, 'Nota copiada!'),
-                tooltip: 'Copiar nota',
-              ),
-            ],
-          ),
-        ),
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Divider(height: 1),
-                const SizedBox(height: 12),
-                _buildInfoRowModern('Tipo', nota.tipo),
-                _buildInfoRowModern('Status Sistema', nota.statusSistema),
-                _buildInfoRowModern('Status Usuário', nota.statusUsuario),
-                _buildInfoRowModern('Descrição', nota.descricao),
-                _buildInfoRowModern('Detalhes', nota.detalhes),
-                _buildInfoRowModern('Local Instalação', nota.localInstalacao),
-                _buildInfoRowModern('Sala', nota.sala),
-                _buildInfoRowModern('Ordem', nota.ordem),
-                _buildInfoRowModern('GPM', nota.gpm),
-                _buildInfoRowModern('Centro Trabalho', nota.centroTrabalhoResponsavel),
-                if (nota.inicioDesejado != null)
-                  _buildInfoRowModern('Início Desejado', _formatDate(nota.inicioDesejado!)),
-                if (nota.conclusaoDesejada != null)
-                  _buildInfoRowModern('Conclusão Desejada', _formatDate(nota.conclusaoDesejada!)),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
   }
 
   void _mostrarDialogOrdens(List<Ordem> ordens, Task task) {

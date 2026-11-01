@@ -29,6 +29,9 @@ test_db.dart
 test_locais.dart
 test_notas.dart
 test/test_storage_upload.dart
+test/scratch_*.dart
+testar_ad_login.js
+testar_entra_id.js
 .agents/
 scratch/
 .DS_Store

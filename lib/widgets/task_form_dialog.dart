@@ -45,6 +45,13 @@ import '../services/si_service.dart';
 import '../services/conflict_service.dart';
 import '../design_system/components/inputs/tf_date_range_picker.dart';
 import 'pex_apr_crc_view.dart';
+import 'nota_workspace/nota_sap_analysis_panel.dart';
+import 'nota_analise_workspace.dart';
+import 'task_form/notas_grupo_programacao_panel.dart';
+import '../services/nota_sap_grupo_service.dart';
+import '../models/nota_sap_grupo.dart';
+import '../services/nota_sap_analise_service.dart';
+import '../models/nota_sap_analise.dart';
 
 class TaskFormDialog extends StatefulWidget {
   final Task? task; // null para criar, Task para editar
@@ -52,6 +59,7 @@ class TaskFormDialog extends StatefulWidget {
   final DateTime endDate;
   final String? parentTaskId; // ID da tarefa pai (se for criar subtarefa)
   final NotaSAP? notaSAP; // Nota SAP para pré-preencher o formulário
+  final List<NotaSAP>? notasSAPIniciais; // Grupo ou lista de notas SAP a vincular
   final Ordem? ordem; // Ordem para pré-preencher o formulário
 
   const TaskFormDialog({
@@ -61,6 +69,7 @@ class TaskFormDialog extends StatefulWidget {
     required this.endDate,
     this.parentTaskId,
     this.notaSAP,
+    this.notasSAPIniciais,
     this.ordem,
     this.initialTabIndex,
     this.initialExecutorIdToEdit,
@@ -202,10 +211,24 @@ class _TaskFormDialogState extends State<TaskFormDialog>
     ];
   }
 
+  // Controllers para campos integrados com a análise da Nota SAP
+  late final TextEditingController _tarefaController;
+  late final TextEditingController _observacoesController;
+
   // Notas SAP vinculadas
   List<NotaSAP> _notasSAPVinculadas = [];
   bool _isLoadingNotasSAP = false;
   bool _isAdicionandoNotaSAP = false;
+
+  // Integração com Grupos de Notas SAP e Previsão Macro
+  final NotaSapGrupoService _notaGrupoService = NotaSapGrupoService();
+  final NotaSapAnaliseService _notaAnaliseService = NotaSapAnaliseService();
+  NotaSapGrupo? _grupoAtivo;
+  List<NotaSapGrupoItem> _itensGrupo = [];
+  Map<String, NotaSapAnalise> _analisesGrupo = {};
+  bool _isLoadingGrupo = false;
+  String? _erroCarregamentoGrupo;
+  Set<String> _selectedNotasGrupoIds = {};
 
   // Ordens vinculadas
   final OrdemService _ordemService = OrdemService();
@@ -230,6 +253,8 @@ class _TaskFormDialogState extends State<TaskFormDialog>
 
   @override
   void dispose() {
+    _tarefaController.dispose();
+    _observacoesController.dispose();
     _tabController.dispose();
     // Limpar todos os ScrollControllers
     for (var controller in _scrollControllers.values) {
@@ -423,10 +448,14 @@ class _TaskFormDialogState extends State<TaskFormDialog>
         _si = nota.nota;
         _dataInicio = nota.inicioDesejado ?? widget.startDate;
         _dataFim = nota.conclusaoDesejada ?? widget.endDate;
-        // A nota SAP será vinculada após criar a tarefa
-        _notasSAPVinculadas = [
-          nota,
-        ]; // Adicionar à lista para mostrar no formulário
+        // A(s) nota(s) SAP serão vinculadas após criar a tarefa
+        if (widget.notasSAPIniciais != null && widget.notasSAPIniciais!.isNotEmpty) {
+          _notasSAPVinculadas = List.from(widget.notasSAPIniciais!);
+          _selectedNotasGrupoIds = _notasSAPVinculadas.map((n) => n.id).toSet();
+        } else {
+          _notasSAPVinculadas = [nota];
+          _selectedNotasGrupoIds = {nota.id};
+        }
       }
 
       // Se há uma ordem, pré-preencher campos
@@ -439,6 +468,11 @@ class _TaskFormDialogState extends State<TaskFormDialog>
         _dataFim = ordem.fimBase ?? widget.endDate;
       }
     }
+
+    _tarefaController = TextEditingController(text: _tarefa);
+    _observacoesController = TextEditingController(text: _observacoes ?? '');
+    _tarefaController.addListener(() => _tarefa = _tarefaController.text);
+    _observacoesController.addListener(() => _observacoes = _observacoesController.text);
 
     // Carregar dados e, se for subtarefa, herdar campos da tarefa pai
     // Usar WidgetsBinding para garantir que o primeiro frame foi renderizado
@@ -464,6 +498,11 @@ class _TaskFormDialogState extends State<TaskFormDialog>
             tipoPeriodo: 'EXECUCAO',
           ),
         ];
+      }
+
+      // Se iniciou a partir de uma nota SAP, carregar grupo ativo em background
+      if (widget.notaSAP != null) {
+        _carregarGrupoAtivoDaNota(widget.notaSAP!.id);
       }
 
       // Carregar notas SAP, ordens, ATs e SIs vinculadas (apenas para tarefas existentes)
@@ -564,6 +603,11 @@ class _TaskFormDialogState extends State<TaskFormDialog>
         _notasSAPVinculadas = notas;
         _isLoadingNotasSAP = false;
       });
+
+      // Se há notas vinculadas, verificar se alguma pertence a grupo ativo
+      if (notas.isNotEmpty) {
+        _carregarGrupoAtivoParaEdicao(notas);
+      }
     } catch (e, stackTrace) {
       print('❌ Erro ao carregar notas SAP: $e');
       print('   Stack trace: $stackTrace');
@@ -571,6 +615,171 @@ class _TaskFormDialogState extends State<TaskFormDialog>
         _isLoadingNotasSAP = false;
       });
     }
+  }
+
+  // Carregar grupo ativo para uma nota de origem (em background, não bloqueante)
+  Future<void> _carregarGrupoAtivoDaNota(String notaSapId) async {
+    if (!mounted) return;
+    setState(() {
+      _isLoadingGrupo = true;
+      _erroCarregamentoGrupo = null;
+    });
+
+    try {
+      final grupo = await _notaGrupoService.buscarGrupoAtivoDaNota(notaSapId);
+      if (grupo != null && mounted) {
+        final itens = await _notaGrupoService.buscarNotasDoGrupo(grupo.id);
+
+        // Buscar análises técnicas das notas em batch
+        final notaIds = itens.map((i) => i.notaSapId).toList();
+        Map<String, NotaSapAnalise> analises = {};
+        try {
+          analises = await _notaAnaliseService.buscarAnalises(notaIds);
+        } catch (analiseErr) {
+          print('⚠️ [TaskFormDialog] Falha ao carregar análises em batch: $analiseErr');
+        }
+
+        if (mounted) {
+          setState(() {
+            _grupoAtivo = grupo;
+            _itensGrupo = itens;
+            _analisesGrupo = analises;
+            _isLoadingGrupo = false;
+            // Selecionar e vincular todas as notas do grupo ainda não programadas
+            final notasGrupoNaoProg = itens
+                .where((i) => !i.isProgramada && i.nota != null)
+                .map((i) => i.nota!)
+                .toList();
+
+            final Map<String, NotaSAP> notasMap = {
+              for (final n in _notasSAPVinculadas) n.id: n,
+            };
+            if (widget.notaSAP != null) {
+              notasMap[widget.notaSAP!.id] = widget.notaSAP!;
+            }
+            for (final n in notasGrupoNaoProg) {
+              notasMap[n.id] = n;
+            }
+            _notasSAPVinculadas = notasMap.values.toList();
+            _selectedNotasGrupoIds = {
+              ...notasMap.keys,
+              ...itens.where((i) => !i.isProgramada).map((i) => i.notaSapId),
+            };
+          });
+        }
+      } else if (mounted) {
+        setState(() {
+          _grupoAtivo = null;
+          _itensGrupo = [];
+          _analisesGrupo = {};
+          _isLoadingGrupo = false;
+        });
+      }
+    } catch (e) {
+      print('⚠️ [TaskFormDialog] Erro ao carregar grupo ativo da nota: $e');
+      if (mounted) {
+        setState(() {
+          _isLoadingGrupo = false;
+          _erroCarregamentoGrupo = 'Não foi possível carregar as Notas vinculadas.';
+        });
+      }
+    }
+  }
+
+  // Carregar grupo ativo para tarefa existente em edição
+  Future<void> _carregarGrupoAtivoParaEdicao(List<NotaSAP> notas) async {
+    if (!mounted || notas.isEmpty) return;
+    setState(() {
+      _isLoadingGrupo = true;
+      _erroCarregamentoGrupo = null;
+    });
+
+    try {
+      NotaSapGrupo? grupoEncontrado;
+      for (final n in notas) {
+        final g = await _notaGrupoService.buscarGrupoAtivoDaNota(n.id);
+        if (g != null) {
+          grupoEncontrado = g;
+          break;
+        }
+      }
+
+      if (grupoEncontrado != null && mounted) {
+        final itens = await _notaGrupoService.buscarNotasDoGrupo(grupoEncontrado.id);
+        final notaIds = itens.map((i) => i.notaSapId).toList();
+        Map<String, NotaSapAnalise> analises = {};
+        try {
+          analises = await _notaAnaliseService.buscarAnalises(notaIds);
+        } catch (_) {}
+
+        if (mounted) {
+          setState(() {
+            _grupoAtivo = grupoEncontrado;
+            _itensGrupo = itens;
+            _analisesGrupo = analises;
+            _isLoadingGrupo = false;
+            // Marcar inicialmente as notas desta tarefa que pertencem ao grupo
+            final notasJaVinculadasIds = notas.map((n) => n.id).toSet();
+            _selectedNotasGrupoIds = itens
+                .map((i) => i.notaSapId)
+                .where((id) => notasJaVinculadasIds.contains(id))
+                .toSet();
+          });
+        }
+      } else if (mounted) {
+        setState(() {
+          _grupoAtivo = null;
+          _itensGrupo = [];
+          _analisesGrupo = {};
+          _isLoadingGrupo = false;
+        });
+      }
+    } catch (e) {
+      print('⚠️ [TaskFormDialog] Erro ao carregar grupo para edição: $e');
+      if (mounted) {
+        setState(() {
+          _isLoadingGrupo = false;
+          _erroCarregamentoGrupo = 'Não foi possível carregar as Notas vinculadas.';
+        });
+      }
+    }
+  }
+
+  // Sincronizar seleção do grupo de notas
+  void _onGrupoNotasSelectionChanged(Set<String> novaSelecao) {
+    setState(() {
+      _selectedNotasGrupoIds = novaSelecao;
+
+      final todasNotasMap = <String, NotaSAP>{};
+      if (widget.notaSAP != null) {
+        todasNotasMap[widget.notaSAP!.id] = widget.notaSAP!;
+      }
+      for (final item in _itensGrupo) {
+        if (item.nota != null) {
+          todasNotasMap[item.nota!.id] = item.nota!;
+        }
+      }
+      for (final n in _notasSAPVinculadas) {
+        todasNotasMap[n.id] = n;
+      }
+
+      final novasNotasVinculadas = <NotaSAP>[];
+      for (final id in novaSelecao) {
+        if (todasNotasMap.containsKey(id)) {
+          novasNotasVinculadas.add(todasNotasMap[id]!);
+        }
+      }
+
+      // Preservar notas já vinculadas à tarefa que não pertencem ao grupo
+      for (final n in _notasSAPVinculadas) {
+        if (!_itensGrupo.any((i) => i.notaSapId == n.id) &&
+            !novasNotasVinculadas.any((item) => item.id == n.id)) {
+          novasNotasVinculadas.add(n);
+        }
+      }
+
+      _notasSAPVinculadas = novasNotasVinculadas;
+    });
   }
 
   // Carregar tarefa pai e herdar todos os campos
@@ -2160,6 +2369,7 @@ class _TaskFormDialogState extends State<TaskFormDialog>
                                     _tarefa,
                                     (value) => _tarefa = value,
                                     maxLines: 3,
+                                    controller: _tarefaController,
                                   ),
                                 ),
                               ],
@@ -2275,6 +2485,7 @@ class _TaskFormDialogState extends State<TaskFormDialog>
                           _observacoes ?? '',
                           (value) => _observacoes = value,
                           maxLines: 10,
+                          controller: _observacoesController,
                         ),
                       ),
                     ),
@@ -3670,9 +3881,11 @@ class _TaskFormDialogState extends State<TaskFormDialog>
     String? value,
     ValueChanged<String> onChanged, {
     int maxLines = 1,
+    TextEditingController? controller,
   }) {
     return TextFormField(
-      initialValue: value ?? '',
+      controller: controller,
+      initialValue: controller == null ? (value ?? '') : null,
       decoration: InputDecoration(
         labelText: label,
         labelStyle: TextStyle(
@@ -3880,7 +4093,7 @@ class _TaskFormDialogState extends State<TaskFormDialog>
     );
   }
 
-  void _save() {
+  Future<void> _save() async {
     // Validar se pelo menos um local foi selecionado
     if (_selectedLocalIds.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -4039,11 +4252,25 @@ class _TaskFormDialogState extends State<TaskFormDialog>
         prioridade: null,
         parentId: widget.parentTaskId ?? widget.task?.parentId,
         precisaSi: _precisaSi,
+        notaSapIdsParaVincular: _notasSAPVinculadas.map((n) => n.id).toList(),
       );
+
+      // Se for edição de tarefa existente, vincular em lote notas adicionais selecionadas
+      if (widget.task != null && _notasSAPVinculadas.isNotEmpty) {
+        try {
+          await _notaSAPService.vincularNotasATarefaBatch(
+            taskId: widget.task!.id,
+            notaSapIds: _notasSAPVinculadas.map((n) => n.id).toList(),
+          );
+        } catch (e) {
+          print('⚠️ [TaskFormDialog] Erro ao vincular notas adicionais do grupo na edição: $e');
+        }
+      }
 
       // Salvar posição do scroll antes de fechar o dialog
       _saveScrollPositions();
 
+      if (!mounted) return;
       Navigator.of(context).pop(task);
     }
   }
@@ -5898,6 +6125,19 @@ class _TaskFormDialogState extends State<TaskFormDialog>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (_grupoAtivo != null && _itensGrupo.isNotEmpty) ...[
+            NotasGrupoProgramacaoPanel(
+              notaOrigem: widget.notaSAP,
+              grupo: _grupoAtivo!,
+              itens: _itensGrupo,
+              analises: _analisesGrupo,
+              selectedNotaIds: _selectedNotasGrupoIds,
+              onSelectionChanged: _onGrupoNotasSelectionChanged,
+              dataProgramadaTarefa: _dataInicio,
+              isEdicao: widget.task != null,
+            ),
+            const SizedBox(height: 16),
+          ],
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -6038,6 +6278,36 @@ class _TaskFormDialogState extends State<TaskFormDialog>
                     ),
                     onTap: () => _visualizarNotaSAP(nota),
                   ),
+                );
+              },
+            ),
+            const SizedBox(height: 16),
+            NotaSapAnalysisPanel(
+              notas: _notasSAPVinculadas,
+              currentEscopo: _tarefaController.text,
+              currentObservacoes: _observacoesController.text,
+              currentHoras: _horasPrevistas,
+              onUsarEscopo: (novoEscopo) {
+                setState(() {
+                  _tarefaController.text = novoEscopo;
+                  _tarefa = novoEscopo;
+                });
+              },
+              onUsarDiagnostico: (novoDiag) {
+                setState(() {
+                  _observacoesController.text = novoDiag;
+                  _observacoes = novoDiag;
+                });
+              },
+              onUsarEstimativa: (horas) {
+                setState(() {
+                  _horasPrevistas = horas;
+                });
+              },
+              onAbrirWorkspace: (nota) async {
+                await NotaAnaliseWorkspace.abrir(
+                  context,
+                  nota: nota,
                 );
               },
             ),
