@@ -1,21 +1,22 @@
 # GUIA DE DEPLOY EM PRODUÇÃO — TASKFLOW (10.140.50.12)
 **Data:** 01/11/2026  
-**Commit Release:** `5231157` (com suporte explícito a `--dart-define=ENVIRONMENT=production` em `a009f40`)  
+**Commit Release:** `5231157` (com suporte explícito a `--dart-define=ENVIRONMENT=production` e base href `/`)  
 **Servidor Alvo:** `10.140.50.12` (Rede Corporativa)  
+**Porta Alvo:** `8085` (Contêiner `taskflow-web-teste`)  
+**Diretório Alvo:** `/home/jpfilho/taskflow/build/web`  
 
 ---
 
 ## 1. Visão Geral da Situação
 
 - **Servidor Corporativo:** `10.140.50.12`
-- **Código Fonte no Servidor:** `/home/jpfilho/taskflow-release-20261101`
-- **Diretório Ativo Web:** `/home/jpfilho/taskflow/build/web` (compartilhado pelos contêineres Nginx 8080 e 8085)
-- **Backup Validado:** `/home/jpfilho/backups_taskflow/20261101_153023/postgres.dump`
+- **Contêiner Ativo Web:** `taskflow-web-teste` (porta `8085`)
+- **Diretório Ativo Web:** `/home/jpfilho/taskflow/build/web`
+- **Base Href:** `/` (raiz, compatível com a rota do Nginx na porta 8085)
 - **Endpoints de Produção Configurados no Build:**
   - Supabase / Kong: `http://10.140.50.12:8000`
   - API Node: `http://10.140.50.12:3001`
-  - Base Href: `/task2026/`
-  - Autenticação Microsoft Entra ID integrada via MSAL JS
+  - Autenticação Microsoft Entra ID compatível com a URL de produção na raiz
 
 ---
 
@@ -25,7 +26,11 @@ O diretório `release_20261101_producao/` contém:
 
 ```text
 release_20261101_producao/
-├── taskflow_web_prod_20261101.tar.gz  # Build Flutter Web Release compilado para produção
+├── taskflow_web_prod_20261101.tar.gz  # Build Flutter Web Release limpo compilado com base-href="/"
+├── scripts/
+│   ├── publicar_web_producao.sh          # Script de publicação web definitivo (porta 8085 / taskflow-web-teste)
+│   ├── deploy_docker_producao.sh         # Script alternativo de deploy geral
+│   └── rollback_producao.sh              # Script de rollback imediato do frontend e instruções DB
 ├── sql/
 │   ├── 01_pre_requisitos_e_analise_base.sql
 │   ├── 02_grupos_previsao.sql
@@ -34,104 +39,78 @@ release_20261101_producao/
 │   ├── 05_tags_hierarquicas.sql
 │   ├── 06_recarregar_schema_postgrest.sql
 │   ├── migracao_producao_notas_sap_20261101.sql  # SQL consolidado sequencial
+│   ├── rollback_migracao_notas_sap.sql           # Rollback cirúrgico e seguro do banco
 │   └── validar_pos_migracao.sql                  # Bateria de testes de integridade
-├── scripts/
-│   ├── executar_migracao_producao.sh             # Script automatizado de migração do banco
-│   ├── deploy_docker_producao.sh                 # Deploy Docker com teste na porta 8088
-│   └── rollback_producao.sh                      # Rollback imediato do frontend e instruções DB
 ├── docs/
 │   └── PROCEDIMENTO_DEPLOY_PRODUCAO.md           # Este manual
-└── SHA256SUMS.txt                                # Hashes de integridade dos arquivos
+└── SHA256SUMS.txt                                # Hashes de integridade de todos os arquivos
 ```
 
 ---
 
-## 3. Passo 1 — Transferência do Pacote para o Servidor
+## 3. Instruções de Execução no Servidor Corporativo (`10.140.50.12`)
 
-No seu computador local, transfira o pacote compactado para o servidor corporativo:
+Como a transferência ocorre via Git no servidor corporativo:
 
 ```bash
-# Compactar o pacote de release para envio:
-tar -czf release_20261101_producao.tar.gz release_20261101_producao/
+# 1. Acessar o diretório do projeto no servidor corporativo:
+cd /home/jpfilho/taskflow-release-20261101
 
-# Transferir via SCP para o servidor corporativo:
-scp release_20261101_producao.tar.gz jpfilho@10.140.50.12:/home/jpfilho/
+# 2. Obter as atualizações mais recentes do GitHub:
+git fetch origin release/production-20261101
+git checkout release/production-20261101
+git pull origin release/production-20261101
 
-# No servidor corporativo:
-ssh jpfilho@10.140.50.12
-tar -xzf release_20261101_producao.tar.gz
+# 3. Entrar na pasta do pacote de produção:
 cd release_20261101_producao
+
+# 4. Executar a publicação web definitiva:
+bash scripts/publicar_web_producao.sh
 ```
 
 ---
 
-## 4. Passo 2 — Execução das Migrations no PostgreSQL
+## 4. O que o Script `publicar_web_producao.sh` Executa Automaticamente:
 
-Execute o script de automação, que:
-1. Valida se o backup `/home/jpfilho/backups_taskflow/20261101_153023/postgres.dump` está íntegro.
-2. Aplica as 6 etapas na ordem estrita de dependências com `ON_ERROR_STOP=1`.
-3. Executa a bateria de testes de validação pós-migração.
-4. Gera log com timestamp em `logs/migracao_prod_YYYYMMDD_HHMMSS.log`.
-
-```bash
-bash scripts/executar_migracao_producao.sh
-```
-
-> **Critério de Aceite:** O script deve finalizar com a mensagem `RESULTADO GLOBAL: ✅ TODAS AS VALIDAÇÕES FORAM CONCLUÍDAS COM SUCESSO!`. Se houver qualquer erro, a execução é interrompida imediatamente sem avançar.
-
----
-
-## 5. Passo 3 — Deploy Controlado do Frontend Docker
-
-O script `deploy_docker_producao.sh` executa o procedimento seguro sem risco de indisponibilidade:
-
-1. Extrai o build em `/home/jpfilho/taskflow/build/releases/release_20261101_<timestamp>/`.
-2. Sobe um contêiner temporário Nginx na **porta 8088** apontando para a nova versão.
-3. Executa um teste automatizado (`curl` e validação de `<base href="/task2026/">`).
-4. Finaliza o contêiner temporário após o teste aprovado.
-5. Faz backup da versão anterior em `/home/jpfilho/taskflow/build/web_backup_<timestamp>/`.
-6. Atualiza o diretório oficial `/home/jpfilho/taskflow/build/web` via sincronização atômica (`rsync`).
-7. Testa a resposta dos dois contêineres oficiais (portas 8080 e 8085).
-
-Comando de execução:
-
-```bash
-bash scripts/deploy_docker_producao.sh
-```
+1. **Validação do Pacote:** Testa se `taskflow_web_prod_20261101.tar.gz` está íntegro.
+2. **Backup Prévio:** Salva o conteúdo anterior em `/home/jpfilho/taskflow/build/web_backup_<timestamp>`.
+3. **Extração Isolada:** Extrai em diretório dedicado sem misturar arquivos de builds anteriores.
+4. **Verificação Estrutural:** Valida a presença de `index.html` (com `<base href="/">`), `main.dart.js` e `flutter_bootstrap.js`.
+5. **Publicação Atômica:** Atualiza `/home/jpfilho/taskflow/build/web` e define permissões 755.
+6. **Recarga do Contêiner:** Envia comando de reload gracioso do Nginx para o contêiner `taskflow-web-teste`.
+7. **Bateria de Testes HTTP:**
+   - Verifica HTTP 200 para `http://127.0.0.1:8085/`
+   - Verifica HTTP 200 para `http://127.0.0.1:8085/main.dart.js`
+   - Verifica HTTP 200 para `http://127.0.0.1:8085/flutter_bootstrap.js`
+8. **Conferência Criptográfica:** Valida se os hashes dos arquivos publicados conferem com o build gerado.
+9. **Rollback Automático:** Caso ocorra qualquer falha durante as validações, restaura a versão anterior imediatamente.
 
 ---
 
-## 6. Procedimento de Rollback (Se Necessário)
+## 5. Procedimento de Rollback Manual (Se Necessário)
 
-### Reversão do Frontend Web:
-Caso identifique qualquer problema visual ou funcional após a atualização, execute:
+Caso precise reverter para a versão anterior a qualquer momento:
 
 ```bash
-# Reverte para o último backup criado automaticamente
 bash scripts/rollback_producao.sh
 ```
 
-### Reversão Segura do Banco de Dados:
-⚠️ **REGRA DE SEGURANÇA:** NUNCA execute `pg_restore --clean` diretamente sobre o banco ativo, pois isso apagaria notas, ordens e tarefas criadas pelos usuários após o horário do backup.
-
-**Procedimento Cirúrgico Recomendado:**
-Execute o script de rollback seletivo, que remove apenas as novas estruturas criadas nas migrations de outubro/novembro 2026, mantendo todas as tabelas e dados operacionais intocados:
-
-```bash
-docker exec -i supabase-db psql -U postgres -d postgres < sql/rollback_migracao_notas_sap.sql
-# (ou caso necessário sudo):
-sudo docker exec -i supabase-db psql -U postgres -d postgres < sql/rollback_migracao_notas_sap.sql
-```
-
 ---
 
-## 7. Checklist Final de Validação em Produção
+## 6. Checklist de Validação pelo Navegador Corporativo
 
-Acesse pelo navegador corporativo:
-1. `http://10.140.50.12:8085/task2026/` (ou `http://10.140.50.12:8080/task2026/`).
-2. Efetue login com as credenciais corporativas / Microsoft Entra ID.
-3. Acesse a tela de **Notas SAP**:
-   - Abra o drawer/modal de uma nota e verifique a aba de **Análise Prévia**.
-   - Verifique a seção de **Materiais/Peças**, **Fotos/Anexos** e **Comentários**.
-   - Verifique o campo de **Tags** e teste a atribuição/filtro de Tags hierárquicas.
-   - Verifique a seção de **Grupos de Previsão**.
+Acesse:
+`http://10.140.50.12:8085/`
+
+1. Faça um **Hard Refresh** no navegador (`Ctrl + F5` ou `Cmd + Shift + R`) para atualizar os caches do Service Worker.
+2. Faça login com a conta corporativa.
+3. Abra a tela de **Notas SAP**:
+   - Verifique a coluna de **Tags** e os chips de tags coloridas na tabela.
+   - Abra os detalhes de uma nota (clicando no badge de análise ou no botão de ações).
+   - Verifique o modal completo **Workspace da Nota**:
+     - Aba **Análise Técnica**
+     - Aba **Materiais e Peças**
+     - Aba **Fotos e Anexos**
+     - Aba **Comentários / Timeline**
+     - Seletor e Gestor de **Tags Hierárquicas**
+     - Gestão de **Grupos e Previsão Macro**

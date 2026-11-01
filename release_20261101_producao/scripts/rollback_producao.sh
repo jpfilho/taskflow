@@ -51,7 +51,12 @@ else
     cp -r "$BACKUP_DIR"/* "$WEB_TARGET"/
 fi
 
-# Recarregar Nginx nos contêineres 8080 e 8085
+# Recarregar Nginx no contêiner taskflow-web-teste e nos contêineres 8080/8085
+if $DOCKER_CMD ps --format '{{.Names}}' 2>/dev/null | grep -wq "taskflow-web-teste"; then
+    echo "  🔄 Recarregando contêiner taskflow-web-teste..."
+    $DOCKER_CMD exec taskflow-web-teste nginx -s reload 2>/dev/null || $DOCKER_CMD restart taskflow-web-teste
+fi
+
 for cname in $($DOCKER_CMD ps --format '{{.Names}}' 2>/dev/null); do
     PORTS_INFO=$($DOCKER_CMD port "$cname" 2>/dev/null || true)
     if echo "$PORTS_INFO" | grep -qE "8080|8085"; then
