@@ -14,8 +14,8 @@ class SupabaseConfig {
   static const String _env = String.fromEnvironment('ENVIRONMENT', defaultValue: '');
 
   static String get supabaseUrl {
+    if (_env == 'production' || _env == 'prod') return _prodSupabaseUrl;
     if (_env == 'dev') return _devSupabaseUrl;
-    if (_env == 'prod') return _prodSupabaseUrl;
     if (kIsWeb) {
       final host = Uri.base.host;
       if (host.contains('212.85.0.249') || host.contains('localhost') || host.contains('127.0.0.1')) {
@@ -29,8 +29,8 @@ class SupabaseConfig {
   }
 
   static String get apiBaseUrl {
+    if (_env == 'production' || _env == 'prod') return _prodApiBaseUrl;
     if (_env == 'dev') return _devApiBaseUrl;
-    if (_env == 'prod') return _prodApiBaseUrl;
     if (kIsWeb) {
       final host = Uri.base.host;
       if (host.contains('212.85.0.249') || host.contains('localhost') || host.contains('127.0.0.1')) {
