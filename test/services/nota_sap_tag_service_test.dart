@@ -489,16 +489,52 @@ void main() {
       expect(tagsDaNota.length, 2);
     });
 
-    test('31. Filtro mostra Tag existente fora do escopo de atribuição', () {
-      final tagsDasNotasCarregadas = [
-        NotaSapTag(id: 't_sf6', nome: 'SF6', escopoTipo: NotaSapTagEscopo.segmento, segmentoId: 'seg_se')
-      ];
+    test('31. Filtro respeita escopo do usuário e NÃO mostra Tag fora do seu perfil', () {
+      final tagSF6 = NotaSapTag(
+        id: 't_sf6',
+        nome: 'SF6',
+        escopoTipo: NotaSapTagEscopo.segmento,
+        segmentoId: 'seg_se',
+        ativo: true,
+      );
+      final tagGlobal = NotaSapTag(
+        id: 't_urgente',
+        nome: 'Urgente',
+        escopoTipo: NotaSapTagEscopo.global,
+        ativo: true,
+      );
+      final tagLT = NotaSapTag(
+        id: 't_lt',
+        nome: 'Faixa de Servidão',
+        escopoTipo: NotaSapTagEscopo.segmento,
+        segmentoId: 'seg_lt',
+        ativo: true,
+      );
+
+      final usuarioLT = Usuario(
+        id: 'u_lt',
+        nome: 'Operador LT',
+        email: 'lt@teste.com',
+        isRoot: false,
+        regionalIds: ['reg_norte'],
+        divisaoIds: ['div_teresina'],
+        segmentoIds: ['seg_lt'],
+        segmentos: ['Linhas'],
+      );
+
+      final tagsCandidatas = [tagSF6, tagGlobal, tagLT];
       final tagsDisponiveisParaFiltro = <String>{};
-      for (final t in tagsDasNotasCarregadas) {
-        tagsDisponiveisParaFiltro.add(t.nome);
+      for (final t in tagsCandidatas) {
+        if (t.isDisponivelParaUsuario(usuarioLT)) {
+          tagsDisponiveisParaFiltro.add(t.nome);
+        }
       }
 
-      expect(tagsDisponiveisParaFiltro, contains('SF6'));
+      // Deve conter tags Global e do Segmento LT do usuário
+      expect(tagsDisponiveisParaFiltro, contains('Urgente'));
+      expect(tagsDisponiveisParaFiltro, contains('Faixa de Servidão'));
+      // NÃO deve conter tag do Segmento SE
+      expect(tagsDisponiveisParaFiltro.contains('SF6'), isFalse);
     });
 
     test('32. Seletor de atribuição NÃO mostra essa mesma Tag para usuário de outro segmento', () {

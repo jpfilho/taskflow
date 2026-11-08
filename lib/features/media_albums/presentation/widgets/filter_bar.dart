@@ -161,7 +161,7 @@ class FilterBar extends StatelessWidget {
                   value: selectedLocalId,
                   items: locais.map((l) => DropdownMenuItem(value: l.id, child: Text(l.local))).toList(),
                   onChanged: onLocalChanged,
-                  enabled: selectedSegmentId != null,
+                  enabled: locais.isNotEmpty,
                 ),
                 SizedBox(width: spacing.xs),
                 _buildDropdown(
@@ -170,7 +170,7 @@ class FilterBar extends StatelessWidget {
                   value: _effectiveRoomId(selectedRoomId, rooms),
                   items: _roomItemsDeduped(rooms),
                   onChanged: onRoomChanged,
-                  enabled: selectedLocalId != null,
+                  enabled: rooms.isNotEmpty,
                 ),
                 if (statusAlbums.isNotEmpty) ...[
                   SizedBox(width: spacing.xs),

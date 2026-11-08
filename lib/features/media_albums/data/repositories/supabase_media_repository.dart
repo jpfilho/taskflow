@@ -9,6 +9,7 @@ import '../models/room.dart';
 import '../models/media_image.dart';
 import '../models/status_album.dart';
 import '../models/annotation_models.dart';
+import '../../../../models/local.dart';
 
 class SupabaseMediaRepository {
   final SupabaseClient _supabase = SupabaseConfig.client;
@@ -1768,6 +1769,258 @@ class SupabaseMediaRepository {
     } catch (e) {
       debugPrint('⚠️ Erro ao buscar pastas disponíveis: $e');
       return [];
+    }
+  }
+
+  /// Retorna as opções de filtros (Segmentos, Locais e Salas) com dados que DE FATO possuem
+  /// imagens cadastradas em media_images, respeitando as restrições do perfil do usuário logado (regional, divisão, segmentos).
+  Future<Map<String, dynamic>> getAvailableFilterOptions({
+    List<String>? userRegionalIds,
+    List<String>? userDivisaoIds,
+    List<String>? userSegmentoIds,
+  }) async {
+    try {
+      final distinctSegmentIds = <String>{};
+      final distinctLocalIds = <String>{};
+      final distinctRoomIds = <String>{};
+      final roomsByLocalId = <String, Set<String>>{};
+      final localSegmentMap = <String, String>{};
+
+      int offset = 0;
+      const int limit = 1000;
+      bool hasMore = true;
+
+      while (hasMore) {
+        var queryBuilder = _supabase
+            .from('media_images')
+            .select('segment_id, local_id, room_id, regional_id, divisao_id');
+
+        if (userRegionalIds != null && userRegionalIds.isNotEmpty) {
+          queryBuilder = queryBuilder.inFilter('regional_id', userRegionalIds);
+        }
+        if (userDivisaoIds != null && userDivisaoIds.isNotEmpty) {
+          queryBuilder = queryBuilder.inFilter('divisao_id', userDivisaoIds);
+        }
+        if (userSegmentoIds != null && userSegmentoIds.isNotEmpty) {
+          queryBuilder = queryBuilder.inFilter('segment_id', userSegmentoIds);
+        }
+
+        final response = await queryBuilder.order('created_at').range(offset, offset + limit - 1);
+
+        for (var row in response) {
+          final segId = row['segment_id'] as String?;
+          final localId = row['local_id'] as String?;
+          final roomId = row['room_id'] as String?;
+
+          if (segId != null && segId.trim().isNotEmpty) {
+            distinctSegmentIds.add(segId.trim());
+          }
+          if (localId != null && localId.trim().isNotEmpty) {
+            final trimmedLocal = localId.trim();
+            distinctLocalIds.add(trimmedLocal);
+            if (segId != null && segId.trim().isNotEmpty) {
+              localSegmentMap[trimmedLocal] = segId.trim();
+            }
+            if (roomId != null && roomId.trim().isNotEmpty) {
+              final trimmedRoom = roomId.trim();
+              distinctRoomIds.add(trimmedRoom);
+              roomsByLocalId.putIfAbsent(trimmedLocal, () => <String>{}).add(trimmedRoom);
+            }
+          }
+        }
+
+        if (response.length < limit) {
+          hasMore = false;
+        } else {
+          offset += limit;
+        }
+      }
+
+      // 1) Resolver Segmentos
+      final List<Segment> segments = [];
+      if (distinctSegmentIds.isNotEmpty) {
+        try {
+          final segRows = await _supabase
+              .from('segmentos')
+              .select('id, segmento')
+              .inFilter('id', distinctSegmentIds.toList());
+          for (var row in segRows) {
+            final id = row['id'] as String;
+            final name = row['segmento'] as String? ?? 'Segmento';
+            segments.add(Segment(
+              id: id,
+              name: name,
+              segmentoId: id,
+              createdAt: DateTime.now(),
+              updatedAt: DateTime.now(),
+            ));
+          }
+        } catch (e) {
+          debugPrint('⚠️ Erro ao resolver nomes de segmentos para filtros: $e');
+        }
+
+        final missingSegIds = distinctSegmentIds.where((id) => !segments.any((s) => s.id == id)).toList();
+        if (missingSegIds.isNotEmpty) {
+          try {
+            final sRows = await _supabase
+                .from('segments')
+                .select('id, name')
+                .inFilter('id', missingSegIds);
+            for (var row in sRows) {
+              segments.add(Segment(
+                id: row['id'] as String,
+                name: row['name'] as String? ?? 'Segmento',
+                segmentoId: row['id'] as String,
+                createdAt: DateTime.now(),
+                updatedAt: DateTime.now(),
+              ));
+            }
+          } catch (_) {}
+        }
+        segments.sort((a, b) => a.name.compareTo(b.name));
+      }
+
+      // 2) Resolver Locais
+      final List<Local> locais = [];
+      if (distinctLocalIds.isNotEmpty) {
+        final listIds = distinctLocalIds.toList();
+        for (var i = 0; i < listIds.length; i += 100) {
+          final chunk = listIds.sublist(i, (i + 100 > listIds.length) ? listIds.length : i + 100);
+          try {
+            final localRows = await _supabase
+                .from('locais')
+                .select('id, local, local_instalacao_sap, segmento_id, divisao_id, regional_id')
+                .inFilter('id', chunk);
+            for (var row in localRows) {
+              final id = row['id'] as String;
+              final rId = row['regional_id'] as String?;
+              final dId = row['divisao_id'] as String?;
+              final segId = (row['segmento_id'] as String?) ?? localSegmentMap[id];
+
+              // Validar estritamente contra o perfil do usuário logado (Regional, Divisão e Segmentos)
+              if (userRegionalIds != null && userRegionalIds.isNotEmpty) {
+                if (rId == null || !userRegionalIds.contains(rId)) continue;
+              }
+              if (userDivisaoIds != null && userDivisaoIds.isNotEmpty) {
+                if (dId == null || !userDivisaoIds.contains(dId)) continue;
+              }
+              if (userSegmentoIds != null && userSegmentoIds.isNotEmpty) {
+                if (segId == null || !userSegmentoIds.contains(segId)) continue;
+              }
+
+              locais.add(Local(
+                id: id,
+                local: row['local'] as String? ?? 'Local sem nome',
+                localInstalacaoSap: row['local_instalacao_sap'] as String?,
+                segmentoId: segId,
+                divisaoId: dId,
+                regionalId: rId,
+              ));
+            }
+          } catch (e) {
+            debugPrint('⚠️ Erro ao resolver nomes de locais para filtros: $e');
+          }
+        }
+        locais.sort((a, b) => a.local.compareTo(b.local));
+
+        // Filtrar mapeamento de salas para manter apenas locais permitidos pelo perfil
+        final allowedLocalIds = locais.map((l) => l.id).toSet();
+        roomsByLocalId.removeWhere((localId, _) => !allowedLocalIds.contains(localId));
+      }
+
+      // 3) Resolver Salas
+      final Map<String, Room> roomMap = {};
+      if (distinctRoomIds.isNotEmpty) {
+        final listIds = distinctRoomIds.toList();
+        for (var i = 0; i < listIds.length; i += 100) {
+          final chunk = listIds.sublist(i, (i + 100 > listIds.length) ? listIds.length : i + 100);
+          try {
+            final roomRows = await _supabase
+                .from('rooms')
+                .select('id, name')
+                .inFilter('id', chunk);
+            for (var row in roomRows) {
+              final id = row['id'] as String;
+              roomMap[id] = Room(
+                id: id,
+                equipmentId: (row['equipment_id'] as String?) ?? '',
+                name: row['name'] as String? ?? 'Sala',
+                localizacao: row['localizacao'] as String?,
+                createdAt: DateTime.now(),
+                updatedAt: DateTime.now(),
+              );
+            }
+          } catch (e) {
+            debugPrint('⚠️ Erro ao resolver rooms para filtros: $e');
+          }
+        }
+
+        final missingRoomIds = distinctRoomIds.where((id) => !roomMap.containsKey(id)).toList();
+        if (missingRoomIds.isNotEmpty) {
+          try {
+            final equipamentosSap = await _supabase
+                .from('equipamentos_sap')
+                .select('sala, local_instalacao, localizacao')
+                .or('sala.not.is.null,localizacao.not.is.null');
+
+            for (final item in equipamentosSap) {
+              final sala = item['sala'] as String?;
+              final localizacao = item['localizacao'] as String?;
+              final localInstalacao = item['local_instalacao'] as String?;
+
+              if (sala != null && sala.trim().isNotEmpty) {
+                if (localizacao != null && localizacao.trim().isNotEmpty) {
+                  final gid = Room.generateDeterministicUuid('room:${sala.trim()}:${localizacao.trim()}');
+                  if (missingRoomIds.contains(gid) && !roomMap.containsKey(gid)) {
+                    roomMap[gid] = Room.fromEquipamentosSap(sala.trim(), localizacao.trim());
+                  }
+                }
+                if (localInstalacao != null && localInstalacao.trim().isNotEmpty) {
+                  final gidLI = Room.generateDeterministicUuid('room:${sala.trim()}:${localInstalacao.trim()}');
+                  if (missingRoomIds.contains(gidLI) && !roomMap.containsKey(gidLI)) {
+                    roomMap[gidLI] = Room.fromEquipamentosSap(sala.trim(), localInstalacao.trim());
+                  }
+                }
+                final gidFallback = Room.generateDeterministicUuid('room:${sala.trim()}:');
+                if (missingRoomIds.contains(gidFallback) && !roomMap.containsKey(gidFallback)) {
+                  roomMap[gidFallback] = Room.fromEquipamentosSap(sala.trim(), '');
+                }
+              }
+            }
+          } catch (e) {
+            debugPrint('⚠️ Erro ao resolver salas em equipamentos_sap para filtros: $e');
+          }
+        }
+      }
+
+      final Map<String, List<Room>> roomsByLocal = {};
+      for (var entry in roomsByLocalId.entries) {
+        final localId = entry.key;
+        final roomList = entry.value
+            .map((rId) => roomMap[rId])
+            .whereType<Room>()
+            .toList()
+          ..sort((a, b) => a.name.compareTo(b.name));
+        roomsByLocal[localId] = roomList;
+      }
+
+      final allRooms = roomMap.values.toList()..sort((a, b) => a.name.compareTo(b.name));
+
+      return {
+        'segments': segments,
+        'locais': locais,
+        'roomsByLocal': roomsByLocal,
+        'rooms': allRooms,
+      };
+    } catch (e, stackTrace) {
+      debugPrint('❌ Erro em getAvailableFilterOptions: $e');
+      debugPrint('   Stack trace: $stackTrace');
+      return {
+        'segments': <Segment>[],
+        'locais': <Local>[],
+        'roomsByLocal': <String, List<Room>>{},
+        'rooms': <Room>[],
+      };
     }
   }
 }

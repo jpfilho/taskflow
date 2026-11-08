@@ -76,6 +76,7 @@ class _NotaSapSimilaridadePanelState extends State<NotaSapSimilaridadePanel> {
     if (widget.dadosIniciais != null) {
       _resultado = widget.dadosIniciais;
       _isLoading = false;
+      _modoPrincipal = ModoVisaoPainelPrincipal.similaridadeDemandas;
       _carregarGruposVinculados();
     } else {
       _carregarSimilaridades();

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/task.dart';
+import '../services/conflict_service.dart';
 
 /// Evento diário de execução: um executor está alocado a uma tarefa em um local em um dia com horário.
 /// Conflito = dois ou mais eventos no mesmo (executor, dia) com locais distintos e sobreposição de horário.
@@ -501,5 +502,139 @@ class ConflictDetection {
         .toSet()
         .toList()
       ..sort();
+  }
+
+  /// Resolve o conjunto de tarefas em conflito para [task] no [day],
+  /// priorizando ID sobre Nome e backend sobre local.
+  ///
+  /// Regras implementadas:
+  /// 1. Prioridade de match: executorId exato / case-insensitive primeiro.
+  ///    Nome é utilizado SOMENTE como fallback se não houver IDs disponíveis.
+  /// 2. Evita colisão por nomes duplicados / homônimos quando IDs reais existem.
+  /// 3. Backend primeiro: se eventsByDayFromBackend estiver disponível, usa como fonte primária.
+  /// 4. Fallback local: se backend não confirmar, valida via ConflictDetection local.
+  /// 5. Task atual sempre inclusa se o conflito for confirmado.
+  /// 6. Se o conflito não for confirmado, retorna conjunto vazio (sem retornar null).
+  static Set<String> resolveConflictTaskIds({
+    required Task task,
+    required DateTime day,
+    String? targetExecutorId,
+    String? targetExecutorNome,
+    Map<String, List<ExecutionEventFromBackend>>? eventsByDayFromBackend,
+    bool useBackendConflicts = false,
+    List<Task>? allTasks,
+  }) {
+    // 1. Identificar taskId real (desembrulhar linhas sintéticas de executor/frota)
+    final realTaskId = (task.id.contains('_executor_') || task.id.contains('_frota_'))
+        ? (task.parentId ?? task.id)
+        : task.id;
+
+    // 2. Coletar IDs e Nomes de executores da tarefa
+    final targetIds = <String>{};
+    if (targetExecutorId != null && targetExecutorId.trim().isNotEmpty) {
+      targetIds.add(targetExecutorId.trim().toLowerCase());
+    } else {
+      for (final id in task.executorIds) {
+        if (id.trim().isNotEmpty) targetIds.add(id.trim().toLowerCase());
+      }
+      for (final ep in task.executorPeriods) {
+        if (ep.executorId.trim().isNotEmpty) targetIds.add(ep.executorId.trim().toLowerCase());
+      }
+      final execTrim = task.executor.trim();
+      if (execTrim.isNotEmpty && (_uuidRegex.hasMatch(execTrim) || RegExp(r'^\d+$').hasMatch(execTrim))) {
+        targetIds.add(execTrim.toLowerCase());
+      }
+    }
+
+    final targetNames = <String>{};
+    if (targetExecutorNome != null && targetExecutorNome.trim().isNotEmpty) {
+      targetNames.add(_normalizeExecutorKey(targetExecutorNome));
+    } else {
+      for (final n in task.executores) {
+        final k = _normalizeExecutorKey(n);
+        if (k.isNotEmpty) targetNames.add(k);
+      }
+      for (final ep in task.executorPeriods) {
+        final k = _normalizeExecutorKey(ep.executorNome);
+        if (k.isNotEmpty) targetNames.add(k);
+      }
+      if (task.executor.trim().isNotEmpty) {
+        for (final part in task.executor.split(',')) {
+          final k = _normalizeExecutorKey(part);
+          if (k.isNotEmpty) targetNames.add(k);
+        }
+      }
+    }
+
+    // Regra estrita de prioridade (Itens 3, 4, 35):
+    // Se targetIds existe, usar SOMENTE ID.
+    // NUNCA usar match por nome quando IDs existirem.
+    final useIdOnly = targetIds.isNotEmpty;
+
+    // 3. Backend Primeiro (Item 29)
+    if (useBackendConflicts && eventsByDayFromBackend != null) {
+      final dayKey =
+          '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+      final events = eventsByDayFromBackend[dayKey] ?? [];
+      final matchedEvents = events.where((e) {
+        if (useIdOnly) {
+          return targetIds.contains(e.executorId.trim().toLowerCase());
+        } else {
+          return targetNames.contains(_normalizeExecutorKey(e.executorNome));
+        }
+      }).toList();
+
+      final taskIds = matchedEvents.map((e) => e.taskId).where((id) => id.isNotEmpty).toSet();
+      final locationKeys = matchedEvents.map((e) => e.locationKey).where((k) => k.isNotEmpty).toSet();
+
+      // Conflito confirmado se há múltiplas tarefas ou locais distintos
+      if (taskIds.length > 1 || locationKeys.length > 1) {
+        taskIds.add(realTaskId);
+        return taskIds;
+      }
+    }
+
+    // 4. Fallback Local (Item 30)
+    final pool = allTasks ?? <Task>[];
+    final tasksWithCurrent = pool.any((t) => t.id == task.id || t.id == realTaskId)
+        ? pool
+        : [...pool, task];
+
+    final localEvents = getExecutionEventsForDay(tasksWithCurrent, day, tasksWithCurrent);
+    final matchedLocalEvents = localEvents.where((e) {
+      if (useIdOnly) {
+        return targetIds.contains(e.executorId.trim().toLowerCase());
+      } else {
+        return targetNames.contains(_normalizeExecutorKey(e.executorId));
+      }
+    }).toList();
+
+    final conflictingTaskIds = <String>{};
+    for (int i = 0; i < matchedLocalEvents.length; i++) {
+      for (int j = i + 1; j < matchedLocalEvents.length; j++) {
+        final ev1 = matchedLocalEvents[i];
+        final ev2 = matchedLocalEvents[j];
+        if (ev1.locationKey == ev2.locationKey) continue;
+        if (ev1.taskId == ev2.taskId) continue;
+
+        final start1 = ev1.startTime ?? DateTime(day.year, day.month, day.day, 0, 0);
+        final end1 = ev1.endTime ?? DateTime(day.year, day.month, day.day, 23, 59, 59);
+        final start2 = ev2.startTime ?? DateTime(day.year, day.month, day.day, 0, 0);
+        final end2 = ev2.endTime ?? DateTime(day.year, day.month, day.day, 23, 59, 59);
+
+        if (start1.isBefore(end2) && end1.isAfter(start2)) {
+          conflictingTaskIds.add(ev1.taskId);
+          conflictingTaskIds.add(ev2.taskId);
+        }
+      }
+    }
+
+    if (conflictingTaskIds.isNotEmpty) {
+      conflictingTaskIds.add(realTaskId);
+      return conflictingTaskIds;
+    }
+
+    // 5. Se não confirmou conflito, retorna conjunto vazio (Item 7, 8)
+    return <String>{};
   }
 }

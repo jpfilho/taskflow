@@ -87,10 +87,13 @@ class NotaSAP {
   /// Identifica se a nota está aberta no SAP (em planejamento/análise/execução).
   bool get estaAberta {
     final s = (statusSistema ?? '').toUpperCase();
-    return (s.contains('MSPN') || s.contains('MSPR')) &&
-        !s.contains('CONC') &&
-        !s.contains('ENCE') &&
-        !s.contains('CANC');
+    if (s.contains('MSEN') ||
+        s.contains('CONC') ||
+        s.contains('ENCE') ||
+        s.contains('CANC')) {
+      return false;
+    }
+    return s.contains('MSPN') || s.contains('MSPR') || s.isEmpty;
   }
 
   /// Identifica se a nota já foi concluída ou encerrada no SAP.

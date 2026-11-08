@@ -263,9 +263,9 @@ class _StatusAlbumFormDialogState extends State<StatusAlbumFormDialog> {
     required Color color,
     required String hexValue,
     required VoidCallback onTap,
-    required dynamic colors,
-    required dynamic typography,
-    required dynamic spacing,
+    required TFSemanticColors colors,
+    required TFTypography typography,
+    required TFSpacing spacing,
   }) {
     return InkWell(
       onTap: onTap,

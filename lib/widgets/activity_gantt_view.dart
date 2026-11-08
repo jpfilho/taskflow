@@ -55,6 +55,7 @@ import 'chat_view.dart';
 import '../design_system/taskflow_design_system.dart';
 import '../models/task_table_column.dart';
 import 'common/task_table_column_picker_dialog.dart';
+import 'notas_sap_vinculadas_dialog.dart';
 
 /// Widget unificado: tabela de atividades + Gantt numa única rolagem vertical.
 class ActivityGanttView extends StatefulWidget {
@@ -730,32 +731,40 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
     final List<Task> result = [];
     
     Set<String>? finalFilterIds;
+    Set<String>? contextParentIds;
     if (widget.conflictFilterTaskIds != null) {
       finalFilterIds = Set<String>.from(widget.conflictFilterTaskIds!);
-      // If a subtask is in the conflict filter, ensure its parent is also included so it can be rendered
+      contextParentIds = <String>{};
+      // Separar conflictTaskIds (semântico) de contextParentIds (apenas estrutura de renderização - Itens 13-16)
       for (final t in widget.tasks) {
         if (widget.conflictFilterTaskIds!.contains(t.id) && t.parentId != null) {
-          finalFilterIds.add(t.parentId!);
+          contextParentIds.add(t.parentId!);
         }
       }
       for (final sublist in _loadedSubtasks.values) {
         for (final sub in sublist) {
           if (widget.conflictFilterTaskIds!.contains(sub.id) && sub.parentId != null) {
-            finalFilterIds.add(sub.parentId!);
+            contextParentIds.add(sub.parentId!);
           }
         }
       }
     }
     
     final sourceTasks = finalFilterIds != null 
-        ? widget.tasks.where((t) => finalFilterIds!.contains(t.id)).toList()
+        ? widget.tasks.where((t) => finalFilterIds!.contains(t.id) || contextParentIds!.contains(t.id)).toList()
         : widget.tasks;
         
     final mainTasks = sourceTasks.where((t) => t.parentId == null).toList();
 
     for (final main in mainTasks) {
       result.add(main);
-      final isExpanded = _expandedTasks.contains(main.id);
+      
+      // Auto-expansão transitória de tarefas no filtro de conflitos (Itens 17, 18, 19, 20):
+      // Garante que se main for pai de subtarefa conflitante ou tarefa conflitante com linhas de executores,
+      // fique aberto na tela sem alterar permanentemente _expandedTasks do usuário.
+      final hasConflictActive = finalFilterIds != null &&
+          (finalFilterIds.contains(main.id) || (contextParentIds != null && contextParentIds.contains(main.id)));
+      final isExpanded = _expandedTasks.contains(main.id) || hasConflictActive;
 
       if (isExpanded && _loadedSubtasks.containsKey(main.id)) {
         final subs = _loadedSubtasks[main.id]!;
@@ -1335,22 +1344,56 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
   /// Tooltip de conflito apenas para um dia (para mostrar só o dia sob o cursor).
   /// Agrupa por nome do executor para evitar linhas duplicadas (mesmo executor com ID e nome).
   String? _getConflictDetailsMessageForSingleDay(Task task, DateTime day) {
-    final executorIds = _getExecutorIdsForConflictLookup(task);
-    if (executorIds.isEmpty) return null;
-
     if (widget.conflictService != null && _useBackendConflicts && _eventsByDayFromBackend != null) {
       final key = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
       final allEvents = _eventsByDayFromBackend![key] ?? [];
       if (allEvents.isEmpty) return null;
 
-      final relevantEvents = allEvents.where((e) => executorIds.contains(e.executorId)).toList();
+      final targetIds = <String>{};
+      for (final id in task.executorIds) {
+        if (id.trim().isNotEmpty) targetIds.add(id.trim().toLowerCase());
+      }
+      for (final ep in task.executorPeriods) {
+        if (ep.executorId.trim().isNotEmpty) targetIds.add(ep.executorId.trim().toLowerCase());
+      }
+      if (task.executor.trim().isNotEmpty && !task.executor.contains(',')) {
+        targetIds.add(task.executor.trim().toLowerCase());
+      }
+
+      final targetNames = <String>{};
+      for (final n in task.executores) {
+        final k = ConflictService.normalizeExecutorKey(n);
+        if (k.isNotEmpty) targetNames.add(k);
+      }
+      for (final ep in task.executorPeriods) {
+        final k = ConflictService.normalizeExecutorKey(ep.executorNome);
+        if (k.isNotEmpty) targetNames.add(k);
+      }
+      if (task.executor.trim().isNotEmpty) {
+        for (final part in task.executor.split(',')) {
+          final k = ConflictService.normalizeExecutorKey(part);
+          if (k.isNotEmpty) targetNames.add(k);
+        }
+      }
+
+      final useIdOnly = targetIds.isNotEmpty;
+      final relevantEvents = allEvents.where((e) {
+        if (useIdOnly) {
+          return targetIds.contains(e.executorId.trim().toLowerCase());
+        } else {
+          return targetNames.contains(ConflictService.normalizeExecutorKey(e.executorNome));
+        }
+      }).toList();
+
       if (relevantEvents.isEmpty) return null;
 
       final idToName = _executorIdToNameMap();
       final nameToDescriptions = <String, Set<String>>{};
       for (final e in relevantEvents) {
         if (e.taskId == task.id) continue;
-        final nome = idToName[e.executorId] ?? e.executorId;
+        final nome = (e.executorNome.trim().isNotEmpty)
+            ? e.executorNome.trim()
+            : (idToName[e.executorId] ?? e.executorId);
         nameToDescriptions.putIfAbsent(nome, () => {}).add(e.description);
       }
       if (nameToDescriptions.isEmpty) return null;
@@ -1369,26 +1412,13 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
   }
 
   Set<String> _getConflictTaskIdsForSingleDay(Task task, DateTime day) {
-    final executorIds = _getExecutorIdsForConflictLookup(task);
-    if (executorIds.isEmpty) return {};
-
-    if (widget.conflictService != null && _useBackendConflicts && _eventsByDayFromBackend != null) {
-      final key = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
-      final allEvents = _eventsByDayFromBackend![key] ?? [];
-      if (allEvents.isEmpty) return {};
-
-      final relevantEvents = allEvents.where((e) => executorIds.contains(e.executorId)).toList();
-      return relevantEvents.map((e) => e.taskId).toSet();
-    }
-    
-    final events = ConflictDetection.getExecutionEventsForDay(
-      _taskList, day, _taskList,
+    return ConflictDetection.resolveConflictTaskIds(
+      task: task,
+      day: day,
+      eventsByDayFromBackend: _eventsByDayFromBackend,
+      useBackendConflicts: widget.conflictService != null && _useBackendConflicts && _eventsByDayFromBackend != null,
+      allTasks: widget.tasksForConflictDetection ?? widget.tasks,
     );
-    return events
-        .where((e) => executorIds.contains(e.executorId))
-        .map((e) => e.taskId)
-        .where((s) => s.isNotEmpty)
-        .toSet();
   }
 
   String? _getFleetConflictDetailsMessageForSingleDay(Task task, DateTime day) {
@@ -2826,9 +2856,9 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                             onDragStart: _onSegmentDragStart,
                             onDragEnd: _onSegmentDragEnd,
                             conflictsVersionNotifier: _conflictsVersionNotifier,
-                            onFilterConflictTasks: (Set<String> taskIds) {
+                            onFilterConflictTasks: (Set<String>? taskIds) {
                               if (widget.onFilterConflictTasks != null) {
-                                widget.onFilterConflictTasks!(taskIds.isEmpty ? null : taskIds);
+                                widget.onFilterConflictTasks!(taskIds);
                               }
                             },
                             isConflictFilterActive: widget.conflictFilterTaskIds != null,
@@ -3133,83 +3163,7 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
     );
   }
   void _mostrarDialogNotasSAP(List<NotaSAP> notas, Task task) {
-    showDialog(
-      context: context,
-      builder: (context) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        child: Container(
-          width: MediaQuery.of(context).size.width * 0.9,
-          constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
-          child: Column(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [Colors.blue[600]!, Colors.blue[400]!],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(16),
-                    topRight: Radius.circular(16),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: const Icon(Icons.description, color: Colors.white, size: 24),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Notas SAP Vinculadas',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          Text(
-                            'Tarefa: ${task.tarefa}',
-                            style: TextStyle(
-                              color: Colors.white.withOpacity(0.9),
-                              fontSize: 14,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close, color: Colors.white),
-                      onPressed: () => Navigator.of(context).pop(),
-                    ),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: ListView.builder(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: notas.length,
-                  itemBuilder: (context, index) {
-                    final nota = notas[index];
-                    return _buildNotaSAPCard(nota, index);
-                  },
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+    NotasSapVinculadasDialog.mostrar(context, notas: notas, task: task);
   }
 
   Future<void> _copiarParaAreaTransferencia(String texto, String mensagemSucesso) async {

@@ -304,6 +304,37 @@ class NotaSapAnaliseService {
     }
   }
 
+  /// Lista anexos para múltiplas Notas SAP em batch agrupadas por nota_sap_id.
+  Future<Map<String, List<NotaSapAnexo>>> listarAnexosPorNotas(List<String> notaSapIds) async {
+    if (notaSapIds.isEmpty) return {};
+    try {
+      final response = await _supabase
+          .from('notas_sap_anexos')
+          .select()
+          .inFilter('nota_sap_id', notaSapIds)
+          .isFilter('anexo_derivado_de_id', null)
+          .order('created_at', ascending: false);
+
+      final list = (response as List)
+          .map((a) => NotaSapAnexo.fromMap(a as Map<String, dynamic>))
+          .toList();
+
+      final ids = list.map((a) => a.id).whereType<String>().toList();
+      final versoes = ids.isNotEmpty ? await obterUltimasVersoesAnotacoes(ids) : <String, int>{};
+
+      final map = <String, List<NotaSapAnexo>>{};
+      for (final a in list) {
+        final v = a.id != null ? (versoes[a.id!] ?? 0) : 0;
+        final anexoComVersao = a.copyWith(versaoAnotacao: v);
+        map.putIfAbsent(a.notaSapId, () => []).add(anexoComVersao);
+      }
+      return map;
+    } catch (e) {
+      debugPrint('❌ [NotaSapAnaliseService.listarAnexosPorNotas] Erro: $e');
+      return {};
+    }
+  }
+
   /// Lista evidências derivadas associadas a um anexo original específico
   Future<List<NotaSapAnexo>> listarDerivadas(String anexoOriginalId) async {
     try {

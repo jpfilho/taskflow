@@ -15,6 +15,7 @@ import '../models/status.dart';
 import '../services/status_service.dart';
 import '../services/auth_service_simples.dart';
 import '../services/executor_service.dart';
+import '../models/executor.dart';
 import 'task_view_dialog.dart';
 import 'multi_select_filter_dialog.dart';
 import 'notas_sap_calendar_view.dart';
@@ -29,6 +30,10 @@ import 'nota_workspace/nota_analise_badge.dart';
 import '../models/nota_sap_tag.dart';
 import '../services/nota_sap_tag_service.dart';
 import 'nota_workspace/nota_tags_admin_dialog.dart';
+import 'previsao_dialog.dart';
+import '../services/carteira_service.dart';
+import '../models/equipe.dart';
+import '../services/equipe_service.dart';
 
 class NotasSAPView extends StatefulWidget {
   final String? searchQuery;
@@ -82,6 +87,8 @@ class _NotasSAPViewState extends State<NotasSAPView> {
   Set<String> _filtroResponsaveis = {}; // Multi-seleção para RESPONSAVEL
   Set<String> _filtroGPMs = {}; // Multi-seleção para GPM
   Set<String> _filtroStatusTarefa = {}; // Multi-seleção para STATUS da TAREFA
+  Set<String> _filtroEquipesTarefa = {}; // Multi-seleção para EQUIPES da TAREFA
+  Set<String> _filtroExecutoresTarefa = {}; // Multi-seleção para EXECUTORES da TAREFA
   bool _filtrosExpandidos = false;
   int _totalNotas = 0;
   int _paginaAtual = 0;
@@ -95,6 +102,10 @@ class _NotasSAPViewState extends State<NotasSAPView> {
   List<String> _responsaveisDisponiveis = [];
   List<String> _gpmsDisponiveis = [];
   List<String> _statusTarefaDisponiveis = [];
+  List<String> _equipesTarefaDisponiveis = [];
+  List<String> _executoresTarefaDisponiveis = [];
+  List<Equipe> _todasEquipes = [];
+  List<Executor> _todosExecutoresPerfil = [];
   bool _visualizacaoTabela = false; // false = cards, true = tabela
   String _modoVisualizacao = 'tabela'; // 'tabela', 'cards', 'calendario', 'dashboard'
   String? _tipoFiltro; // null = todos, 'vegetacao', 'trator', 'manutencao'
@@ -153,6 +164,8 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         _filtroResponsaveis.length +
         _filtroGPMs.length +
         _filtroStatusTarefa.length +
+        _filtroEquipesTarefa.length +
+        _filtroExecutoresTarefa.length +
         _filtroTags.length;
     if (_filtroAnaliseStatus != null) count++;
     if (_filtroComAnexos) count++;
@@ -173,6 +186,8 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         _responsaveisDisponiveis.isEmpty &&
         _gpmsDisponiveis.isEmpty &&
         _statusTarefaDisponiveis.isEmpty &&
+        _equipesTarefaDisponiveis.isEmpty &&
+        _executoresTarefaDisponiveis.isEmpty &&
         _tagsDisponiveisParaFiltro.isEmpty;
   }
 
@@ -196,6 +211,10 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         return _gpmsDisponiveis;
       case 'Status (Tarefa)':
         return _statusTarefaDisponiveis;
+      case 'Equipe (Tarefa)':
+        return _equipesTarefaDisponiveis;
+      case 'Executor (Tarefa)':
+        return _executoresTarefaDisponiveis;
       case 'Tags':
         return _tagsDisponiveisParaFiltro;
       default:
@@ -228,6 +247,164 @@ class _NotasSAPViewState extends State<NotasSAPView> {
     });
   }
 
+  Future<void> _carregarEquipesSistema() async {
+    try {
+      final usuario = _authService.currentUser;
+      List<Equipe> equipes = [];
+
+      if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
+        equipes = await EquipeService().getEquipesPorPerfilUsuario(
+          regionalIds: usuario.regionalIds,
+          divisaoIds: usuario.divisaoIds,
+          segmentoIds: usuario.segmentoIds,
+        );
+      } else {
+        equipes = await EquipeService().getEquipesAtivas();
+      }
+
+      if (mounted) {
+        setState(() {
+          _todasEquipes = equipes;
+        });
+      }
+    } catch (e) {
+      debugPrint('⚠️ [NotasSAPView] Não foi possível carregar equipes do perfil do usuário: $e');
+    }
+  }
+
+  Future<void> _carregarExecutoresSistema() async {
+    try {
+      final usuario = _authService.currentUser;
+      List<Executor> executores = [];
+
+      if (usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado()) {
+        executores = await _executorService.getExecutoresPorPerfilUsuario(
+          regionalIds: usuario.regionalIds,
+          divisaoIds: usuario.divisaoIds,
+          segmentoIds: usuario.segmentoIds,
+        );
+      } else {
+        executores = await _executorService.getExecutoresAtivos();
+      }
+
+      if (mounted) {
+        setState(() {
+          _todosExecutoresPerfil = executores;
+        });
+      }
+    } catch (e) {
+      debugPrint('⚠️ [NotasSAPView] Não foi possível carregar executores do perfil do usuário: $e');
+    }
+  }
+
+  void _atualizarEquipesEExecutoresTarefaDisponiveis() {
+    final usuario = _authService.currentUser;
+    final temRestricaoPerfil = usuario != null && !usuario.isRoot && usuario.temPerfilConfigurado();
+
+    final equipesSet = <String>{};
+    final executoresSet = <String>{};
+
+    // 1. Equipes do perfil do usuário
+    for (final eq in _todasEquipes) {
+      final n = eq.nome.trim();
+      if (n.isNotEmpty) equipesSet.add(n);
+      for (final ee in eq.executores) {
+        final en = ee.executorNome.trim();
+        if (en.isNotEmpty) executoresSet.add(en);
+      }
+    }
+
+    // 2. Executores do perfil do usuário
+    for (final ex in _todosExecutoresPerfil) {
+      final n = ex.nome.trim();
+      if (n.isNotEmpty) executoresSet.add(n);
+    }
+
+    // Conjuntos para restringir estritamente pelo perfil quando houver restrição
+    final Set<String> equipesPermitidas = temRestricaoPerfil
+        ? _todasEquipes.map((e) => e.nome.trim().toLowerCase()).toSet()
+        : const {};
+    final Set<String> executoresPermitidos = temRestricaoPerfil
+        ? {
+            ..._todosExecutoresPerfil.map((e) => e.nome.trim().toLowerCase()),
+            ..._todasEquipes.expand((eq) => eq.executores.map((ee) => ee.executorNome.trim().toLowerCase())),
+          }
+        : const {};
+
+    // 3. Equipes e executores vinculados às tarefas das notas
+    for (final entry in _notasProgramadasInfo.values) {
+      for (final vinc in entry) {
+        final tarefa = vinc['tarefa'] as Map<String, dynamic>?;
+        if (tarefa == null) continue;
+
+        // Validar tarefa pelo perfil (se houver regional/divisão gravada na tarefa)
+        if (temRestricaoPerfil) {
+          final tReg = tarefa['regional']?.toString().trim();
+          final tDiv = tarefa['divisao']?.toString().trim();
+          if (usuario.regionais.isNotEmpty && tReg != null && tReg.isNotEmpty) {
+            if (!usuario.regionais.any((r) => r.toLowerCase() == tReg.toLowerCase())) continue;
+          }
+          if (usuario.divisoes.isNotEmpty && tDiv != null && tDiv.isNotEmpty) {
+            if (!usuario.divisoes.any((d) => d.toLowerCase() == tDiv.toLowerCase())) continue;
+          }
+        }
+
+        final rawExec = tarefa['executor']?.toString() ?? '';
+        if (rawExec.isNotEmpty) {
+          for (final part in rawExec.split(',')) {
+            final t = part.trim();
+            if (t.isNotEmpty) {
+              if (!temRestricaoPerfil || executoresPermitidos.contains(t.toLowerCase())) {
+                executoresSet.add(t);
+              }
+            }
+          }
+        }
+
+        final listaExecs = tarefa['lista_executores'] as List?;
+        if (listaExecs != null) {
+          for (final e in listaExecs) {
+            final s = e.toString().trim();
+            if (s.isNotEmpty) {
+              if (!temRestricaoPerfil || executoresPermitidos.contains(s.toLowerCase())) {
+                executoresSet.add(s);
+              }
+            }
+          }
+        }
+
+        final listaEqs = tarefa['lista_equipes'] as List?;
+        if (listaEqs != null) {
+          for (final eq in listaEqs) {
+            final s = eq.toString().trim();
+            if (s.isNotEmpty) {
+              if (!temRestricaoPerfil || equipesPermitidas.contains(s.toLowerCase())) {
+                equipesSet.add(s);
+              }
+            }
+          }
+        }
+
+        final listaEqExecs = tarefa['lista_equipes_executores'] as List?;
+        if (listaEqExecs != null) {
+          for (final ee in listaEqExecs) {
+            final s = ee.toString().trim();
+            if (s.isNotEmpty) {
+              if (!temRestricaoPerfil || executoresPermitidos.contains(s.toLowerCase())) {
+                executoresSet.add(s);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    setState(() {
+      _equipesTarefaDisponiveis = equipesSet.toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+      _executoresTarefaDisponiveis = executoresSet.toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    });
+  }
+
   Future<void> _copiarNota(String notaNumero) async {
     await ClipboardHelper.copyAndNotify(
       context,
@@ -252,10 +429,7 @@ class _NotasSAPViewState extends State<NotasSAPView> {
     _loadTaskEditPermission();
     _verificarSegmentoLinhasTransmissao();
     _loadStatus();
-    _loadFiltros();
     _loadNotas();
-    _loadNotasProgramadas();
-    _loadTodasNotasParaEstatisticas();
     // No desktop, tabela é o padrão
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && Responsive.isDesktop(context)) {
@@ -466,26 +640,13 @@ class _NotasSAPViewState extends State<NotasSAPView> {
 
   Future<void> _loadNotasProgramadas() async {
     try {
-      final programadas = await _service.getNotasProgramadas();
-      final ids = <String>{};
+      final mapaVinculos = await _service.carregarMapaVinculosTarefas();
+      final ids = mapaVinculos.keys.toSet();
       final info = <String, List<Map<String, dynamic>>>{};
-      
-      for (final item in programadas) {
-        final nota = item['nota'] as NotaSAP?;
-        if (nota == null) continue;
-        ids.add(nota.id);
-        
-        // Adicionar à lista de vinculações desta nota
-        if (!info.containsKey(nota.id)) {
-          info[nota.id] = [];
-        }
-        info[nota.id]!.add(item);
-      }
-      print('⏱ [NotasSAPView] _loadNotasProgramadas: ${programadas.length} vínculos recebidos | ${ids.length} notas distintas');
-      
-      // Ordenar cada lista por data de vinculação (mais recente primeiro)
-      for (final notaId in info.keys) {
-        info[notaId]!.sort((a, b) {
+
+      for (final entry in mapaVinculos.entries) {
+        final lista = List<Map<String, dynamic>>.from(entry.value);
+        lista.sort((a, b) {
           DateTime? parseDate(dynamic v) {
             if (v == null) return null;
             if (v is DateTime) return v;
@@ -497,16 +658,25 @@ class _NotasSAPViewState extends State<NotasSAPView> {
           if (dataA == null && dataB == null) return 0;
           if (dataA == null) return 1;
           if (dataB == null) return -1;
-          return dataB.compareTo(dataA); // Mais recente primeiro
+          return dataB.compareTo(dataA);
         });
+        info[entry.key] = lista;
       }
-      
+
+      print('⏱ [NotasSAPView] _loadNotasProgramadas: ${ids.length} notas distintas programadas');
+
+      await Future.wait([
+        _carregarEquipesSistema(),
+        _carregarExecutoresSistema(),
+      ]);
+
       if (mounted) {
         setState(() {
           _notasProgramadasIds = ids;
           _notasProgramadasInfo = info;
         });
         _atualizarStatusTarefaDisponiveis();
+        _atualizarEquipesEExecutoresTarefaDisponiveis();
       }
     } catch (e) {
       if (mounted) {
@@ -638,18 +808,11 @@ class _NotasSAPViewState extends State<NotasSAPView> {
 
   Future<void> _atualizarTagsDisponiveisFiltro() async {
     final tagNomesSet = <String>{};
-    // 1. Tags já presentes nas notas carregadas no universo atual
-    for (final tagsList in _tagsMap.values) {
-      for (final tag in tagsList) {
-        if (tag.nome.isNotEmpty) {
-          tagNomesSet.add(tag.nome);
-        }
-      }
-    }
+    final usuario = _authService.currentUser;
 
-    // 2. Tags do catálogo (todas ativas disponíveis para filtros na visão de notas)
+    // 1. Tags do catálogo disponíveis estritamente de acordo com o perfil do usuário logado
     try {
-      final catalogo = await _tagService.listarTodasTagsAtivas();
+      final catalogo = await _tagService.listarTagsDisponiveisParaFiltro(usuario: usuario);
       for (final tag in catalogo) {
         if (tag.nome.isNotEmpty) {
           tagNomesSet.add(tag.nome);
@@ -659,9 +822,33 @@ class _NotasSAPViewState extends State<NotasSAPView> {
       debugPrint('⚠️ [NotasSAPView] Erro ao carregar catálogo para filtro: $e');
     }
 
+    // 2. Tags presentes nas notas carregadas no universo atual:
+    // SÓ incluir tags que estejam de acordo com o perfil do usuário logado (regional, divisão, segmentos ou global; ou todas se root).
+    for (final tagsList in _tagsMap.values) {
+      for (final tag in tagsList) {
+        if (tag.nome.isNotEmpty) {
+          final permitida = usuario == null
+              ? (tag.escopoTipo == NotaSapTagEscopo.global)
+              : (usuario.isRoot ||
+                  tag.isDisponivelParaAtribuicao(
+                    isRoot: usuario.isRoot,
+                    regionalIds: usuario.regionalIds,
+                    divisaoIds: usuario.divisaoIds,
+                    segmentoIds: usuario.segmentoIds,
+                  ));
+          if (permitida) {
+            tagNomesSet.add(tag.nome);
+          }
+        }
+      }
+    }
+
     if (mounted) {
       setState(() {
         _tagsDisponiveisParaFiltro = tagNomesSet.toList()..sort();
+        if (_filtroTags.isNotEmpty) {
+          _filtroTags.removeWhere((tag) => !tagNomesSet.contains(tag));
+        }
       });
     }
   }
@@ -787,6 +974,157 @@ class _NotasSAPViewState extends State<NotasSAPView> {
           ),
       ],
     );
+  }
+
+  List<NotaSAP> _aplicarFiltrosTarefasVinculadas(List<NotaSAP> lista) {
+    if (_filtroStatusTarefa.isEmpty &&
+        _filtroEquipesTarefa.isEmpty &&
+        _filtroExecutoresTarefa.isEmpty) {
+      return lista;
+    }
+
+    final selectedEquipeNomes =
+        _filtroEquipesTarefa.map((e) => e.trim().toLowerCase()).toSet();
+    final selectedEquipeExecutorNomes = <String>{};
+
+    if (selectedEquipeNomes.isNotEmpty) {
+      for (final eq in _todasEquipes) {
+        final eqNome = eq.nome.trim().toLowerCase();
+        final eqId = eq.id.trim().toLowerCase();
+        if (selectedEquipeNomes.any((sn) =>
+            eqNome == sn ||
+            eqId == sn ||
+            eqNome.contains(sn) ||
+            sn.contains(eqNome))) {
+          for (final ee in eq.executores) {
+            final execNome = ee.executorNome.trim().toLowerCase();
+            if (execNome.isNotEmpty) selectedEquipeExecutorNomes.add(execNome);
+          }
+        }
+      }
+    }
+
+    final selectedExecs =
+        _filtroExecutoresTarefa.map((e) => e.trim().toLowerCase()).toSet();
+
+    return lista.where((nota) {
+      final vinculos = _notasProgramadasInfo[nota.id];
+
+      // 1. Filtro de Status da Tarefa
+      if (_filtroStatusTarefa.isNotEmpty) {
+        if (vinculos == null || vinculos.isEmpty) {
+          final st = (nota.tarefaStatus ?? '').trim();
+          if (!_filtroStatusTarefa.contains(st)) return false;
+        } else {
+          final matchStatus = vinculos.any((v) {
+            final t = v['tarefa'] as Map<String, dynamic>?;
+            final st = (t?['status'] as String? ?? nota.tarefaStatus ?? '').trim();
+            return _filtroStatusTarefa.contains(st);
+          });
+          if (!matchStatus) return false;
+        }
+      }
+
+      // Se há filtro de Equipe ou Executor da Tarefa, a nota deve ter tarefas vinculadas
+      if (_filtroEquipesTarefa.isNotEmpty || _filtroExecutoresTarefa.isNotEmpty) {
+        if (vinculos == null || vinculos.isEmpty) return false;
+
+        // 2. Filtro de Equipes da Tarefa (com membros executores)
+        if (_filtroEquipesTarefa.isNotEmpty) {
+          final matchEquipe = vinculos.any((v) {
+            final tarefa = v['tarefa'] as Map<String, dynamic>?;
+            if (tarefa == null) return false;
+
+            // a) Match direto no nome das equipes vinculadas à tarefa
+            final listaEquipes = (tarefa['lista_equipes'] as List?)
+                    ?.map((e) => e.toString().toLowerCase())
+                    .toList() ??
+                [];
+            if (listaEquipes.any((eq) => selectedEquipeNomes.any(
+                (sn) => eq == sn || eq.contains(sn) || sn.contains(eq)))) {
+              return true;
+            }
+
+            // b) Match pelo campo de texto da equipe
+            final eqTexto = (tarefa['equipe']?.toString() ?? '').toLowerCase();
+            if (eqTexto.isNotEmpty &&
+                selectedEquipeNomes.any((sn) =>
+                    eqTexto.contains(sn) || sn.contains(eqTexto))) {
+              return true;
+            }
+
+            // c) Match por membros executores da equipe selecionada presentes na tarefa
+            if (selectedEquipeExecutorNomes.isNotEmpty) {
+              final rawExec =
+                  (tarefa['executor']?.toString() ?? '').toLowerCase();
+              if (selectedEquipeExecutorNomes.any((en) => rawExec.contains(en))) {
+                return true;
+              }
+
+              final listaExecs = (tarefa['lista_executores'] as List?)
+                      ?.map((e) => e.toString().toLowerCase())
+                      .toList() ??
+                  [];
+              if (listaExecs.any((ex) => selectedEquipeExecutorNomes
+                  .any((en) => ex.contains(en) || en.contains(ex)))) {
+                return true;
+              }
+
+              final listaEqExecs =
+                  (tarefa['lista_equipes_executores'] as List?)
+                          ?.map((e) => e.toString().toLowerCase())
+                          .toList() ??
+                      [];
+              if (listaEqExecs.any((ee) => selectedEquipeExecutorNomes
+                  .any((en) => ee.contains(en) || en.contains(ee)))) {
+                return true;
+              }
+            }
+
+            return false;
+          });
+
+          if (!matchEquipe) return false;
+        }
+
+        // 3. Filtro de Executores da Tarefa
+        if (_filtroExecutoresTarefa.isNotEmpty) {
+          final matchExecutor = vinculos.any((v) {
+            final tarefa = v['tarefa'] as Map<String, dynamic>?;
+            if (tarefa == null) return false;
+
+            final rawExec =
+                (tarefa['executor']?.toString() ?? '').toLowerCase();
+            if (selectedExecs.any((se) => rawExec.contains(se))) return true;
+
+            final listaExecs = (tarefa['lista_executores'] as List?)
+                    ?.map((e) => e.toString().toLowerCase())
+                    .toList() ??
+                [];
+            if (listaExecs.any((ex) =>
+                selectedExecs.any((se) => ex.contains(se) || se.contains(ex)))) {
+              return true;
+            }
+
+            final listaEqExecs =
+                (tarefa['lista_equipes_executores'] as List?)
+                        ?.map((e) => e.toString().toLowerCase())
+                        .toList() ??
+                    [];
+            if (listaEqExecs.any((ee) =>
+                selectedExecs.any((se) => ee.contains(se) || se.contains(ee)))) {
+              return true;
+            }
+
+            return false;
+          });
+
+          if (!matchExecutor) return false;
+        }
+      }
+
+      return true;
+    }).toList();
   }
 
   Future<void> _loadNotas({bool forceRefreshResumos = false}) async {
@@ -954,6 +1292,9 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         }
       }
 
+      // Aplicar filtros de tarefas vinculadas (Status, Equipes com executores, Executores)
+      todasNotas = _aplicarFiltrosTarefasVinculadas(todasNotas);
+
       filterSw.stop();
       print('⏱ [NotasSAPView] Filtros aplicados em ${filterSw.elapsedMilliseconds}ms | notas=${todasNotas.length}');
 
@@ -1030,9 +1371,10 @@ class _NotasSAPViewState extends State<NotasSAPView> {
       print('⏱ [NotasSAPView] setState concluído em ${setStateSw.elapsedMilliseconds}ms');
       print('⏱ [NotasSAPView] _loadNotas TOTAL: ${totalSw.elapsedMilliseconds}ms | notas=${notas.length} de $total');
       
-      // Recarregar filtros DEPOIS de atualizar _todasNotasOrdenadas
-      // Isso garante que os valores disponíveis reflitam apenas as opções válidas
+      // Recarregar filtros e estatísticas DEPOIS de atualizar _todasNotasOrdenadas
+      // Isso garante que os valores disponíveis reflitam apenas as opções válidas sem consulta redundante
       _loadFiltros();
+      _loadTodasNotasParaEstatisticas();
 
       // Carregar resumos de análise das notas visíveis em segundo momento (não bloqueante)
       _carregarResumosNotasVisiveis(forceRefresh: forceRefreshResumos);
@@ -1242,13 +1584,8 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         }
       }
 
-      // Filtro de status da tarefa vinculada
-      if (_filtroStatusTarefa.isNotEmpty) {
-        todasNotas = todasNotas.where((nota) {
-          final st = nota.tarefaStatus ?? '';
-          return _filtroStatusTarefa.isEmpty || _filtroStatusTarefa.contains(st);
-        }).toList();
-      }
+      // Aplicar filtros de tarefas vinculadas (Status, Equipes com executores, Executores)
+      todasNotas = _aplicarFiltrosTarefasVinculadas(todasNotas);
 
       if (mounted) {
         setState(() {
@@ -1742,6 +2079,40 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                   ),
                 ),
                 SizedBox(
+                  width: isMobile ? double.infinity : 180,
+                  child: _buildMultiSelectFilterField(
+                    'Equipe (Tarefa)',
+                    _filtroEquipesTarefa,
+                    _equipesTarefaDisponiveis,
+                    (values) {
+                      setState(() {
+                        _filtroEquipesTarefa = values;
+                        _paginaAtual = 0;
+                      });
+                      _loadNotas();
+                      _loadTodasNotasParaEstatisticas();
+                    },
+                    searchHint: 'Pesquisar equipe da tarefa...',
+                  ),
+                ),
+                SizedBox(
+                  width: isMobile ? double.infinity : 180,
+                  child: _buildMultiSelectFilterField(
+                    'Executor (Tarefa)',
+                    _filtroExecutoresTarefa,
+                    _executoresTarefaDisponiveis,
+                    (values) {
+                      setState(() {
+                        _filtroExecutoresTarefa = values;
+                        _paginaAtual = 0;
+                      });
+                      _loadNotas();
+                      _loadTodasNotasParaEstatisticas();
+                    },
+                    searchHint: 'Pesquisar executor da tarefa...',
+                  ),
+                ),
+                SizedBox(
                   width: isMobile ? double.infinity : 150,
                   child: _buildMultiSelectFilterField(
                     'Tags',
@@ -1770,6 +2141,8 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                         _filtroResponsaveis.clear();
                         _filtroGPMs.clear();
                         _filtroStatusTarefa.clear();
+                        _filtroEquipesTarefa.clear();
+                        _filtroExecutoresTarefa.clear();
                         _filtroTags.clear();
                         _filtroAnaliseStatus = null;
                         _filtroComAnexos = false;
@@ -1916,6 +2289,18 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                               ],
                             ),
                           ),
+                          const SizedBox(width: 8),
+                          ElevatedButton.icon(
+                            onPressed: _abrirPrevisaoEmLote,
+                            icon: const Icon(Icons.calendar_month, size: 14),
+                            label: const Text('Definir Previsão', style: TextStyle(fontSize: 12)),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: colors.primary,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(TFRadius.r8)),
+                            ),
+                          ),
                         ],
                       ],
                     ),
@@ -1970,7 +2355,27 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                         ),
                       )
                     : _modoVisualizacao == 'planejamento_macro'
-                        ? const PlanejamentoMacroView()
+                        ? PlanejamentoMacroView(
+                            onDrillDown: (filtroTipo, {valor}) {
+                              setState(() {
+                                _modoVisualizacao = 'tabela';
+                                _visualizacaoTabela = true;
+                                if (filtroTipo == 'sem_previsao') {
+                                  _filtroProgramacao = 'nao_programadas';
+                                } else if (filtroTipo == 'programadas') {
+                                  _filtroProgramacao = 'programadas';
+                                } else if (filtroTipo == 'risco_prazo') {
+                                  _sortColumnIndex = 9; // Ordenar por prazo
+                                  _ordenacaoAscendente = true; // Mais urgentes primeiro
+                                } else if (filtroTipo == 'todas') {
+                                  _filtroTipoNota = 'abertas';
+                                  _filtroProgramacao = null;
+                                }
+                                _paginaAtual = 0;
+                                _aplicarOrdenacaoEPaginacao();
+                              });
+                            },
+                          )
                         : _modoVisualizacao == 'calendario'
                         ? NotasSAPCalendarView(
                             notas: _todasNotasOrdenadas,
@@ -2409,6 +2814,17 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
                     OutlinedButton.icon(
+                      onPressed: () => _abrirPrevisaoIndividual(nota),
+                      icon: const Icon(Icons.calendar_month, size: 18),
+                      label: const Text('Previsão'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: colors.primary,
+                        side: BorderSide(color: colors.borderSubtle),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(TFRadius.r8)),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
                       onPressed: () => _mostrarDetalhesNota(nota),
                       icon: const Icon(Icons.analytics_outlined, size: 18),
                       label: const Text('Análise'),
@@ -2650,10 +3066,16 @@ class _NotasSAPViewState extends State<NotasSAPView> {
     // Função para calcular valores disponíveis dinamicamente a partir de _todasNotasOrdenadas
     List<String> calcularOpcoesDisponiveis(String campo) {
       if (campo == 'Tags') {
-        return _tagsDisponiveisParaFiltro.isNotEmpty ? _tagsDisponiveisParaFiltro : options;
+        return _tagsDisponiveisParaFiltro;
       }
       if (campo == 'Status (Tarefa)') {
         return _statusTarefaDisponiveis.isNotEmpty ? _statusTarefaDisponiveis : options;
+      }
+      if (campo == 'Equipe (Tarefa)') {
+        return _equipesTarefaDisponiveis.isNotEmpty ? _equipesTarefaDisponiveis : options;
+      }
+      if (campo == 'Executor (Tarefa)') {
+        return _executoresTarefaDisponiveis.isNotEmpty ? _executoresTarefaDisponiveis : options;
       }
       if (_todasNotasOrdenadas.isEmpty) {
         return options; // Fallback para valores iniciais
@@ -3312,6 +3734,26 @@ class _NotasSAPViewState extends State<NotasSAPView> {
                                       child: CircularProgressIndicator(strokeWidth: 2, color: colors.primary),
                                     )
                                   : Icon(Icons.link, size: 16, color: colors.info),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Tooltip(
+                        message: 'Previsão de Atendimento',
+                        child: Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: () => _abrirPrevisaoIndividual(nota),
+                            borderRadius: BorderRadius.circular(TFRadius.r4),
+                            child: Container(
+                              padding: const EdgeInsets.all(6),
+                              decoration: BoxDecoration(
+                                color: colors.surfaceSecondary,
+                                borderRadius: BorderRadius.circular(TFRadius.r4),
+                                border: Border.all(color: colors.borderSubtle),
+                              ),
+                              child: Icon(Icons.calendar_month, size: 16, color: colors.primary),
                             ),
                           ),
                         ),
@@ -4312,6 +4754,88 @@ class _NotasSAPViewState extends State<NotasSAPView> {
         });
       }
     }
+  }
+
+  // ===========================================================================
+  // GESTÃO ATIVA DA PREVISIBILIDADE (INDIVIDUAL E EM LOTE)
+  // ===========================================================================
+
+  Future<void> _abrirPrevisaoEmLote() async {
+    if (_notasSelecionadas.isEmpty) return;
+
+    final notasAlvo = _notas.where((n) => _notasSelecionadas.contains(n.id)).toList();
+    if (notasAlvo.isEmpty) return;
+
+    final Map<String, String> numeroPorNotaId = {
+      for (final n in notasAlvo) n.id: n.nota,
+    };
+    final Map<String, DateTime?> vencimentoPorNotaId = {
+      for (final n in notasAlvo) n.id: n.dataVencimento,
+    };
+
+    final loteId = await PrevisaoDialog.showLote(
+      context,
+      notaSapIds: notasAlvo.map((n) => n.id).toList(),
+      numeroPorNotaId: numeroPorNotaId,
+      vencimentoPorNotaId: vencimentoPorNotaId,
+    );
+
+    if (!mounted || loteId == null) return;
+
+    final totalAfetadas = notasAlvo.length;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Previsão atribuída a $totalAfetadas nota(s) com sucesso.'),
+        backgroundColor: Colors.green.shade700,
+        action: SnackBarAction(
+          label: 'DESFAZER',
+          textColor: Colors.amberAccent,
+          onPressed: () async {
+            final ok = await CarteiraService().desfazerAlteracaoLote(loteId: loteId);
+            if (mounted) {
+              if (ok) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Alteração em lote desfeita com sucesso!')),
+                );
+                _loadNotas();
+                _loadTodasNotasParaEstatisticas();
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Não foi possível desfazer a alteração em lote.')),
+                );
+              }
+            }
+          },
+        ),
+        duration: const Duration(seconds: 8),
+      ),
+    );
+
+    setState(() {
+      _notasSelecionadas.clear();
+    });
+    _loadNotas();
+    _loadTodasNotasParaEstatisticas();
+  }
+
+  Future<void> _abrirPrevisaoIndividual(NotaSAP nota) async {
+    final alterado = await PrevisaoDialog.showIndividual(
+      context,
+      notaSapId: nota.id,
+      numeroNota: nota.nota,
+      dataVencimento: nota.dataVencimento,
+    );
+
+    if (!mounted || alterado != true) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Previsão da nota ${nota.nota} atualizada com sucesso.'),
+        backgroundColor: Colors.green.shade700,
+      ),
+    );
+    _loadNotas();
+    _loadTodasNotasParaEstatisticas();
   }
 
   // Vincular nota a uma tarefa existente

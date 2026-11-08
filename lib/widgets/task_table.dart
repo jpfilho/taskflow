@@ -24,6 +24,7 @@ import '../design_system/taskflow_design_system.dart';
 import '../utils/clipboard_helper.dart';
 import '../models/task_table_column.dart';
 import 'common/task_table_column_picker_dialog.dart';
+import 'notas_sap_vinculadas_dialog.dart';
 
 class TaskTable extends StatefulWidget {
   final List<Task> tasks;
@@ -2701,89 +2702,7 @@ class _TaskTableState extends State<TaskTable> {
   }
 
   void _mostrarDialogNotasSAP(List<NotaSAP> notas, Task task) {
-    showDialog(
-      context: context,
-      builder: (context) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        child: Container(
-          width: MediaQuery.of(context).size.width * 0.9,
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(context).size.height * 0.8,
-          ),
-          child: Column(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [Colors.blue[600]!, Colors.blue[400]!],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(16),
-                    topRight: Radius.circular(16),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: const Icon(
-                        Icons.description,
-                        color: Colors.white,
-                        size: 24,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Notas SAP Vinculadas',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          Text(
-                            'Tarefa: ${task.tarefa}',
-                            style: TextStyle(
-                              color: Colors.white.withOpacity(0.9),
-                              fontSize: 14,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close, color: Colors.white),
-                      onPressed: () => Navigator.of(context).pop(),
-                    ),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: ListView.builder(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: notas.length,
-                  itemBuilder: (context, index) {
-                    final nota = notas[index];
-                    return _buildNotaSAPCard(nota, index);
-                  },
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+    NotasSapVinculadasDialog.mostrar(context, notas: notas, task: task);
   }
 
   Future<void> _copiarParaAreaTransferencia(

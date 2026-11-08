@@ -19,6 +19,46 @@ const Set<String> kStatusTaskQueContamComoProgramada = {
   'RPGR',
 };
 
+/// Classificação da aderência temporal entre a Previsão Gerencial Macro e a Programação Real.
+enum DivergenciaPrevisaoTask {
+  /// Programada no mesmo mês e ano da previsão
+  conformePrevisao,
+
+  /// Programada em mês/ano posterior à previsão
+  aposPrevisao,
+
+  /// Programada em mês/ano anterior à previsão
+  antecipada,
+
+  /// Nota possui task com data válida, mas não possuía previsão gerencial
+  programadaSemPrevisaoMacro,
+
+  /// Nota possui previsão gerencial, mas ainda não foi programada (ou tasks estão canceladas)
+  previstaNaoProgramada,
+
+  /// Nota sem previsão gerencial e sem programação operacional
+  semPrevisao,
+}
+
+extension DivergenciaPrevisaoTaskExtension on DivergenciaPrevisaoTask {
+  String get rotulo {
+    switch (this) {
+      case DivergenciaPrevisaoTask.conformePrevisao:
+        return 'Programada conforme previsão';
+      case DivergenciaPrevisaoTask.aposPrevisao:
+        return '⚠ Programada após a previsão';
+      case DivergenciaPrevisaoTask.antecipada:
+        return '⚡ Antecipada em relação à previsão';
+      case DivergenciaPrevisaoTask.programadaSemPrevisaoMacro:
+        return 'Programada sem previsão macro';
+      case DivergenciaPrevisaoTask.previstaNaoProgramada:
+        return 'Prevista, não programada';
+      case DivergenciaPrevisaoTask.semPrevisao:
+        return 'Sem previsão';
+    }
+  }
+}
+
 /// Informações resumidas de uma Task vinculada a uma Nota SAP.
 class BacklogTaskInfo {
   final String id;
@@ -65,6 +105,16 @@ class BacklogNotaItem {
   // Análise técnica
   final double? estimativaHoras;
   final String? statusAnalise;
+  final String? diagnosticoPrevio;
+
+  // Datas e Priorização
+  final DateTime? dataFimDesejada;
+  final DateTime? dataCriacao;
+  final String? grupoId;
+
+  // Previsão Gerencial Macro
+  final int? mesPrevisto;
+  final int? anoPrevisto;
 
   // Programação
   final List<BacklogTaskInfo> tasks;
@@ -82,8 +132,18 @@ class BacklogNotaItem {
     this.statusUsuario,
     this.estimativaHoras,
     this.statusAnalise,
+    this.diagnosticoPrevio,
+    this.dataFimDesejada,
+    this.dataCriacao,
+    this.grupoId,
+    this.mesPrevisto,
+    this.anoPrevisto,
     this.tasks = const [],
   });
+
+  /// Aliases de conveniência para integração com modelos de capacidade
+  String get notaSapId => id;
+  String get numeroNota => nota;
 
   /// Uma nota é considerada PROGRAMADA se possui pelo menos uma Task com status válido.
   bool get isProgramada => tasks.any((t) => t.isValida);
@@ -100,10 +160,124 @@ class BacklogNotaItem {
   /// Tasks canceladas associadas à nota
   List<BacklogTaskInfo> get tasksCanceladas => tasks.where((t) => t.isCancelada).toList();
 
+  /// Retorna a Task principal que representa a programação atual/relevante da Nota.
+  /// Hierarquia determinística de prioridade (Itens 9, 10, 11 e 12):
+  /// 1º: Em andamento (ANDA) - priorizando início mais recente;
+  /// 2º: Programadas / Reprogramadas ativas (PROG, RPAR, RPGR) - priorizando início mais recente;
+  /// 3º: Concluídas (CONC) - priorizando conclusão/início mais recente;
+  /// 4º: Canceladas (CANC) - histórico quando não houver nenhuma outra.
+  BacklogTaskInfo? get taskProgramacaoAtual {
+    if (tasks.isEmpty) return null;
+
+    // 1. Em andamento (ANDA)
+    final andamento = tasks.where((t) => t.status.toUpperCase().trim() == 'ANDA').toList();
+    if (andamento.isNotEmpty) {
+      andamento.sort((a, b) {
+        if (a.dataInicio != null && b.dataInicio != null) {
+          return b.dataInicio!.compareTo(a.dataInicio!);
+        }
+        if (a.dataInicio != null) return -1;
+        if (b.dataInicio != null) return 1;
+        return b.id.compareTo(a.id);
+      });
+      return andamento.first;
+    }
+
+    // 2. Programadas / Reprogramadas ativas (PROG, RPAR, RPGR)
+    final programadas = tasks.where((t) {
+      final st = t.status.toUpperCase().trim();
+      return st == 'PROG' || st == 'RPAR' || st == 'RPGR';
+    }).toList();
+    if (programadas.isNotEmpty) {
+      programadas.sort((a, b) {
+        if (a.dataInicio != null && b.dataInicio != null) {
+          return b.dataInicio!.compareTo(a.dataInicio!);
+        }
+        if (a.dataInicio != null) return -1;
+        if (b.dataInicio != null) return 1;
+        return b.id.compareTo(a.id);
+      });
+      return programadas.first;
+    }
+
+    // 3. Concluídas (CONC)
+    final concluidas = tasks.where((t) => t.status.toUpperCase().trim() == 'CONC').toList();
+    if (concluidas.isNotEmpty) {
+      concluidas.sort((a, b) {
+        final dataA = a.dataFim ?? a.dataInicio;
+        final dataB = b.dataFim ?? b.dataInicio;
+        if (dataA != null && dataB != null) {
+          return dataB.compareTo(dataA);
+        }
+        if (dataA != null) return -1;
+        if (dataB != null) return 1;
+        return b.id.compareTo(a.id);
+      });
+      return concluidas.first;
+    }
+
+    // 4. Canceladas (CANC) - histórico apenas
+    final canceladas = tasks.where((t) => t.isCancelada).toList();
+    if (canceladas.isNotEmpty) {
+      canceladas.sort((a, b) {
+        if (a.dataInicio != null && b.dataInicio != null) {
+          return b.dataInicio!.compareTo(a.dataInicio!);
+        }
+        return b.id.compareTo(a.id);
+      });
+      return canceladas.first;
+    }
+
+    // Fallback determinístico
+    return tasks.first;
+  }
+
+  /// Classifica a divergência temporal entre a Previsão Gerencial e a Programação Real.
+  DivergenciaPrevisaoTask classificarDivergencia({int? mesPrevisao, int? anoPrevisao}) {
+    final mPrev = mesPrevisao ?? mesPrevisto;
+    final aPrev = anoPrevisao ?? anoPrevisto;
+    final temPrevisao = mPrev != null && aPrev != null;
+
+    final task = taskProgramacaoAtual;
+    // Task cancelada NÃO conta como programação válida (Item 15 e 26)
+    final taskValidaComData = (task != null && task.isValida && task.dataInicio != null);
+
+    if (!temPrevisao && !taskValidaComData) {
+      return DivergenciaPrevisaoTask.semPrevisao;
+    }
+    if (temPrevisao && !taskValidaComData) {
+      return DivergenciaPrevisaoTask.previstaNaoProgramada;
+    }
+    if (!temPrevisao && taskValidaComData) {
+      return DivergenciaPrevisaoTask.programadaSemPrevisaoMacro;
+    }
+
+    final mesTask = task!.dataInicio!.month;
+    final anoTask = task.dataInicio!.year;
+
+    // Cálculo em base temporal contínua (ano * 12 + mes) para garantir tratamento correto de virada de ano
+    final pontosPrevisao = aPrev! * 12 + mPrev!;
+    final pontosTask = anoTask * 12 + mesTask;
+
+    if (pontosTask == pontosPrevisao) {
+      return DivergenciaPrevisaoTask.conformePrevisao;
+    } else if (pontosTask > pontosPrevisao) {
+      return DivergenciaPrevisaoTask.aposPrevisao;
+    } else {
+      return DivergenciaPrevisaoTask.antecipada;
+    }
+  }
+
   factory BacklogNotaItem.fromMap(
     Map<String, dynamic> map, {
     double? estimativaHoras,
     String? statusAnalise,
+    String? diagnosticoPrevio,
+    DateTime? dataFimDesejada,
+    DateTime? dataCriacao,
+    String? grupoId,
+    int? mesPrevisto,
+    int? anoPrevisto,
     List<BacklogTaskInfo> tasks = const [],
   }) {
     return BacklogNotaItem(
@@ -119,6 +293,14 @@ class BacklogNotaItem {
       statusUsuario: map['status_usuario']?.toString(),
       estimativaHoras: estimativaHoras,
       statusAnalise: statusAnalise,
+      diagnosticoPrevio: diagnosticoPrevio ?? map['diagnostico_previo']?.toString(),
+      dataFimDesejada: dataFimDesejada ??
+          (map['data_fim_desejada'] != null ? DateTime.tryParse(map['data_fim_desejada'].toString()) : null),
+      dataCriacao: dataCriacao ??
+          (map['data_criacao'] != null ? DateTime.tryParse(map['data_criacao'].toString()) : null),
+      grupoId: grupoId ?? map['grupo_id']?.toString(),
+      mesPrevisto: mesPrevisto,
+      anoPrevisto: anoPrevisto,
       tasks: tasks,
     );
   }
@@ -246,6 +428,7 @@ class BacklogMensalResumo {
   });
 
   bool get isSemPrevisao => mes == null || ano == null;
+  bool get temPrevisao => !isSemPrevisao;
 
   String get labelMesAno {
     if (isSemPrevisao) return 'SEM PREVISÃO';
@@ -379,6 +562,8 @@ class BacklogFiltro {
   final bool? apenasSemPrevisao;
   final bool? apenasUltrapassados;
   final String? buscaTexto;
+  final String? regionalId;
+  final String? divisaoId;
 
   const BacklogFiltro({
     this.ano,
@@ -391,6 +576,8 @@ class BacklogFiltro {
     this.apenasSemPrevisao,
     this.apenasUltrapassados,
     this.buscaTexto,
+    this.regionalId,
+    this.divisaoId,
   });
 
   bool get isEmpty =>
@@ -403,7 +590,9 @@ class BacklogFiltro {
       apenasComPrevisao == null &&
       apenasSemPrevisao == null &&
       apenasUltrapassados == null &&
-      (buscaTexto == null || buscaTexto!.trim().isEmpty);
+      (buscaTexto == null || buscaTexto!.trim().isEmpty) &&
+      regionalId == null &&
+      divisaoId == null;
 
   BacklogFiltro copyWith({
     int? ano,
@@ -416,6 +605,8 @@ class BacklogFiltro {
     bool? apenasSemPrevisao,
     bool? apenasUltrapassados,
     String? buscaTexto,
+    String? regionalId,
+    String? divisaoId,
     bool clearAnoMes = false,
   }) {
     return BacklogFiltro(
@@ -429,6 +620,8 @@ class BacklogFiltro {
       apenasSemPrevisao: apenasSemPrevisao ?? this.apenasSemPrevisao,
       apenasUltrapassados: apenasUltrapassados ?? this.apenasUltrapassados,
       buscaTexto: buscaTexto ?? this.buscaTexto,
+      regionalId: regionalId ?? this.regionalId,
+      divisaoId: divisaoId ?? this.divisaoId,
     );
   }
 }

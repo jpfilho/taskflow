@@ -6,6 +6,11 @@ import 'models/task_warning.dart';
 /// Serviço que busca alertas de tarefas via RPC Supabase (get_task_warnings_for_user).
 /// Usa o usuário da tabela [usuarios] (login no Flutter), não Supabase Auth.
 class TaskWarningsService {
+  static Map<String, List<TaskWarning>>? _cache;
+  static String? _cacheUserId;
+  static DateTime? _cacheTime;
+  static const Duration _cacheTtl = Duration(minutes: 2);
+
   /// Retorna mapa taskId -> lista de warnings visíveis ao usuário logado.
   /// Usuário = AuthServiceSimples.currentUser (tabela usuarios). Em caso de erro retorna mapa vazio.
   static Future<Map<String, List<TaskWarning>>> getWarningsByTaskId() async {
@@ -17,10 +22,17 @@ class TaskWarningsService {
       final idValido = userId != null && userId.trim().isNotEmpty;
       if (!idValido) return {};
 
+      if (_cache != null &&
+          _cacheUserId == userId &&
+          _cacheTime != null &&
+          DateTime.now().difference(_cacheTime!) < _cacheTtl) {
+        return _cache!;
+      }
+
       final response = await client.rpc(
         'get_task_warnings_for_user',
         params: {'p_user_id': userId},
-      ).timeout(const Duration(seconds: 25));
+      ).timeout(const Duration(seconds: 8));
       if (response == null) return {};
       // RPC que retorna TABLE devolve List. Às vezes vem dentro de chave (ex.: data).
       List<dynamic> list;
@@ -42,18 +54,20 @@ class TaskWarningsService {
         if (w.taskId.isEmpty) continue;
         map.putIfAbsent(w.taskId, () => []).add(w);
       }
+      _cache = map;
+      _cacheUserId = userId;
+      _cacheTime = DateTime.now();
       return map;
-    } catch (e, st) {
+    } catch (e) {
       if (kDebugMode) {
         final msg = e.toString();
-        if (msg.contains('57014') || msg.contains('statement timeout')) {
-          debugPrint('⚠️ TaskWarningsService: RPC get_task_warnings_for_user deu timeout. Aplique a migration 20260227 (timeout 60s + índices) no Supabase.');
+        if (msg.contains('57014') || msg.contains('statement timeout') || msg.contains('TimeoutException')) {
+          debugPrint('ℹ️ TaskWarningsService: RPC get_task_warnings_for_user indisponível/timeout (retornando vazio).');
         } else {
           debugPrint('⚠️ TaskWarningsService.getWarningsByTaskId: $e');
         }
-        debugPrint('$st');
       }
-      return {};
+      return _cache ?? {};
     }
   }
 }

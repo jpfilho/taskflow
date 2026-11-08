@@ -13,25 +13,19 @@ Future<List<Local>> getLocaisForUsuario(Usuario? usuario) async {
     final permitidos = <Local>[];
 
     for (final local in todosLocais) {
-      bool deveIncluir = false;
+      // O local deve atender cumulativamente ao perfil: Regional, Divisão e Segmento
+      final temRegionalPermitida = usuario.regionalIds.isEmpty ||
+          (local.regionalId != null && usuario.regionalIds.contains(local.regionalId));
 
-      if (local.paraTodaRegional && local.regionalId != null) {
-        if (usuario.regionalIds.contains(local.regionalId)) deveIncluir = true;
-      }
-      if (!deveIncluir && local.paraTodaDivisao && local.divisaoId != null) {
-        if (usuario.divisaoIds.contains(local.divisaoId)) deveIncluir = true;
-      }
-      if (!deveIncluir && local.segmentoId != null && local.segmentoId!.isNotEmpty) {
-        if (usuario.segmentoIds.contains(local.segmentoId)) deveIncluir = true;
-      }
-      if (!deveIncluir && local.divisaoId != null && local.divisaoId!.isNotEmpty) {
-        if (usuario.divisaoIds.contains(local.divisaoId)) deveIncluir = true;
-      }
-      if (!deveIncluir && local.regionalId != null && local.regionalId!.isNotEmpty) {
-        if (usuario.regionalIds.contains(local.regionalId)) deveIncluir = true;
-      }
+      final temDivisaoPermitida = usuario.divisaoIds.isEmpty ||
+          (local.divisaoId != null && usuario.divisaoIds.contains(local.divisaoId));
 
-      if (deveIncluir) permitidos.add(local);
+      final temSegmentoPermitido = usuario.segmentoIds.isEmpty ||
+          (local.segmentoId != null && usuario.segmentoIds.contains(local.segmentoId));
+
+      if (temRegionalPermitida && temDivisaoPermitida && temSegmentoPermitido) {
+        permitidos.add(local);
+      }
     }
 
     return permitidos;

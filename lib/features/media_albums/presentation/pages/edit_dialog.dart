@@ -393,9 +393,9 @@ class _EditDialogState extends State<EditDialog> {
 
   Widget _buildLocalDropdown(
     BuildContext context,
-    dynamic colors,
-    dynamic typography,
-    dynamic spacing,
+    TFSemanticColors colors,
+    TFTypography typography,
+    TFSpacing spacing,
   ) {
     final validLocalId = _getValidLocalValue();
     final selectedLocal = validLocalId != null
@@ -407,7 +407,7 @@ class _EditDialogState extends State<EditDialog> {
       children: [
         Text(
           'Local',
-          style: typography.label.copyWith(color: colors.textPrimary),
+          style: typography.labelMedium.copyWith(color: colors.textPrimary),
         ),
         SizedBox(height: spacing.xs),
         DropdownSearch<Local>(
@@ -468,7 +468,7 @@ class _EditDialogState extends State<EditDialog> {
             return Text(
               selectedItem?.local ?? 'Nenhum local selecionado',
               style: typography.bodyMedium.copyWith(
-                color: selectedItem != null ? colors.textPrimary : colors.textPlaceholder,
+                color: selectedItem != null ? colors.textPrimary : colors.textMuted,
               ),
               overflow: TextOverflow.ellipsis,
             );
@@ -480,9 +480,9 @@ class _EditDialogState extends State<EditDialog> {
 
   Widget _buildSalaDropdown(
     BuildContext context,
-    dynamic colors,
-    dynamic typography,
-    dynamic spacing,
+    TFSemanticColors colors,
+    TFTypography typography,
+    TFSpacing spacing,
   ) {
     final enabled = _editedImage.localId != null;
     final validRoomId = _getValidRoomValue();
@@ -495,7 +495,7 @@ class _EditDialogState extends State<EditDialog> {
       children: [
         Text(
           'Sala',
-          style: typography.label.copyWith(color: colors.textPrimary),
+          style: typography.labelMedium.copyWith(color: colors.textPrimary),
         ),
         SizedBox(height: spacing.xs),
         DropdownSearch<Room>(
@@ -561,7 +561,7 @@ class _EditDialogState extends State<EditDialog> {
             return Text(
               selectedItem?.name ?? (enabled ? 'Nenhuma sala selecionada' : 'Selecione um local primeiro'),
               style: typography.bodyMedium.copyWith(
-                color: selectedItem != null ? colors.textPrimary : colors.textPlaceholder,
+                color: selectedItem != null ? colors.textPrimary : colors.textMuted,
               ),
               overflow: TextOverflow.ellipsis,
             );
@@ -573,9 +573,9 @@ class _EditDialogState extends State<EditDialog> {
 
   Widget _buildStatusField(
     BuildContext context,
-    dynamic colors,
-    dynamic typography,
-    dynamic spacing,
+    TFSemanticColors colors,
+    TFTypography typography,
+    TFSpacing spacing,
   ) {
     final selectedStatusAlbumId = _editedImage.statusAlbumId;
     final selectedStatus = selectedStatusAlbumId != null && _statusAlbums.isNotEmpty
@@ -654,9 +654,9 @@ class _EditDialogState extends State<EditDialog> {
   }
 
   Widget _buildTagsContainer(
-    dynamic colors,
-    dynamic typography,
-    dynamic spacing,
+    TFSemanticColors colors,
+    TFTypography typography,
+    TFSpacing spacing,
   ) {
     return Container(
       padding: EdgeInsets.all(spacing.sm),
@@ -713,7 +713,7 @@ class _EditDialogState extends State<EditDialog> {
                       style: typography.bodyMedium.copyWith(color: colors.textPrimary),
                       decoration: InputDecoration(
                         hintText: 'Adicionar tag...',
-                        hintStyle: typography.bodySmall.copyWith(color: colors.textPlaceholder),
+                        hintStyle: typography.bodySmall.copyWith(color: colors.textMuted),
                         border: InputBorder.none,
                         contentPadding: EdgeInsets.symmetric(horizontal: spacing.xs),
                         isDense: true,

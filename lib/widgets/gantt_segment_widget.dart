@@ -48,7 +48,7 @@ class GanttSegmentWidget extends StatefulWidget {
   final VoidCallback? onDragStart;
   final VoidCallback? onDragEnd;
   final ValueNotifier<int>? conflictsVersionNotifier;
-  final void Function(Set<String>)? onFilterConflictTasks;
+  final void Function(Set<String>?)? onFilterConflictTasks;
   final bool isConflictFilterActive;
   final int subSegmentIndex;
 
@@ -1333,32 +1333,25 @@ class _GanttSegmentWidgetState extends State<GanttSegmentWidget> {
                   onAction: widget.onFilterConflictTasks != null && !isConflictDayFrota && isConflictDay
                       ? () {
                           if (widget.isConflictFilterActive) {
-                            widget.onFilterConflictTasks!(<String>{});
+                            // Remover filtro explicitamente via null (Itens 8, 24, 26)
+                            widget.onFilterConflictTasks!(null);
                           } else {
                             Set<String> ids = {};
                             if (widget.conflictTaskIdsByDay != null && widget.conflictTaskIdsByDay!.containsKey(day)) {
                               ids = widget.conflictTaskIdsByDay![day]!;
-                            } else if (widget.taskService != null) {
-                              final executorIds = <String>{};
-                              executorIds.addAll(widget.task.executorIds);
-                              for (var ep in widget.task.executorPeriods) {
-                                if (ep.executorId.isNotEmpty) executorIds.add(ep.executorId);
-                              }
-                              if (widget.task.executor.isNotEmpty) executorIds.add(widget.task.executor);
-                              
-                              for (final eid in executorIds) {
-                                final events = ConflictDetection.getExecutionEventsForDay(
-                                  widget.taskService!.tasks, day, widget.taskService!.tasks,
-                                );
-                                ids.addAll(
-                                  events
-                                      .where((e) => e.executorId.toLowerCase() == eid.toLowerCase())
-                                      .map((e) => e.taskId)
-                                      .where((s) => s.isNotEmpty)
-                                );
-                              }
                             }
-                            widget.onFilterConflictTasks!(ids);
+                            if (ids.isEmpty) {
+                              ids = ConflictDetection.resolveConflictTaskIds(
+                                task: widget.task,
+                                day: day,
+                                allTasks: widget.taskService?.tasks,
+                              );
+                            }
+                            if (ids.isNotEmpty) {
+                              widget.onFilterConflictTasks!(ids);
+                            } else {
+                              debugPrint('⚠️ [GanttSegmentWidget] Conflito não confirmado para o dia $day na tarefa ${widget.task.id}');
+                            }
                           }
                         }
                       : null,

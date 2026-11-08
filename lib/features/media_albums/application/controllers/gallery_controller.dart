@@ -9,7 +9,6 @@ import '../../data/models/status_album.dart';
 import '../../../../models/local.dart';
 import '../../../../services/auth_service_simples.dart';
 import '../../../../services/connectivity_service.dart';
-import '../../util/user_locais_helper.dart';
 
 class GalleryController extends ChangeNotifier {
   final SupabaseMediaRepository _repository = SupabaseMediaRepository();
@@ -40,7 +39,8 @@ class GalleryController extends ChangeNotifier {
 
   List<Segment> _segments = [];
   List<Local> _locais = [];
-  List<Room> _rooms = []; // Retirei o final da variavel
+  List<Room> _allAvailableRooms = [];
+  Map<String, List<Room>> _roomsByLocal = {};
   List<StatusAlbum> _statusAlbums = [];
   List<Map<String, String?>> _availableFolders = [];
   bool _loadingReferences = false;
@@ -61,20 +61,31 @@ class GalleryController extends ChangeNotifier {
   bool get groupByAlbumsByLocal => _viewModeIndex == 2;
   int get viewModeIndex => _viewModeIndex;
   List<Segment> get segments => _segments;
-  /// Locais do usuário; quando há segmento selecionado, apenas locais desse segmento.
+
+  /// Locais que possuem imagens cadastradas para o usuário.
+  /// Quando há segmento selecionado, apenas locais desse segmento.
   List<Local> get locais {
     if (_selectedSegmentId == null) return _locais;
     final seg = _segments.where((s) => s.id == _selectedSegmentId).toList();
     final segmentoId = seg.isNotEmpty && seg.first.segmentoId != null
         ? seg.first.segmentoId!
         : _selectedSegmentId;
-    return _locais.where((l) => l.segmentoId == segmentoId).toList();
+    return _locais.where((l) => l.segmentoId == segmentoId || l.segmentoId == _selectedSegmentId).toList();
   }
-  List<Room> get rooms => _rooms;
+
+  /// Salas que possuem imagens cadastradas para o local selecionado (ou todas se nenhum local selecionado).
+  List<Room> get rooms {
+    if (_selectedLocalId != null) {
+      return _roomsByLocal[_selectedLocalId] ?? [];
+    }
+    return _allAvailableRooms;
+  }
+
   List<StatusAlbum> get statusAlbums => _statusAlbums;
   bool get loadingReferences => _loadingReferences;
 
-  /// Carrega dados de referência (segments, locais, rooms)
+  /// Carrega dados de referência (segments, locais, rooms) que DE FATO possuem fotos
+  /// cadastradas em media_images, respeitando as restrições de perfil (Regional, Divisão, Segmentos).
   Future<void> loadReferences() async {
     if (_loadingReferences) return;
 
@@ -82,70 +93,42 @@ class GalleryController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      // Obter segmentos do perfil do usuário
-      // Importar AuthServiceSimples para obter o usuário atual
-      try {
-        final authService = AuthServiceSimples();
-        final usuario = authService.currentUser;
-        final userSegmentoIds = usuario?.segmentoIds;
-        
-        // Se usuário é root ou não tem perfil, mostrar todos os segmentos
-        // Caso contrário, filtrar pelos segmentos do perfil
-        _segments = await _repository.getSegments(
-          userSegmentoIds: (usuario?.isRoot ?? false) || (userSegmentoIds?.isEmpty ?? true)
-              ? null
-              : userSegmentoIds,
-        );
-      } catch (e) {
-        // Fallback: carregar todos os segmentos
-        _segments = await _repository.getSegments();
-      }
-      
-      // Locais do usuário (regional, divisão, segmento) — opções da coluna locais.local
-      try {
-        final authService = AuthServiceSimples();
-        final usuario = authService.currentUser;
-        _locais = await getLocaisForUsuario(usuario);
-      } catch (e) {
-        _locais = [];
-      }
+      final authService = AuthServiceSimples();
+      final usuario = authService.currentUser;
+      final userRegionalIds = (usuario?.isRoot ?? false) || (usuario?.regionalIds.isEmpty ?? true) ? null : usuario?.regionalIds;
+      final userDivisaoIds = (usuario?.isRoot ?? false) || (usuario?.divisaoIds.isEmpty ?? true) ? null : usuario?.divisaoIds;
+      final userSegmentoIds = (usuario?.isRoot ?? false) || (usuario?.segmentoIds.isEmpty ?? true) ? null : usuario?.segmentoIds;
 
-      // Se há segmento selecionado e o local atual não pertence a ele, limpar local e salas
-      if (_selectedSegmentId != null && _selectedLocalId != null) {
-        final seg = _segments.where((s) => s.id == _selectedSegmentId).toList();
-        final segmentoId = seg.isNotEmpty && seg.first.segmentoId != null ? seg.first.segmentoId! : _selectedSegmentId;
-        final pertenceAoSegmento = _locais.any((l) => l.id == _selectedLocalId && l.segmentoId == segmentoId);
-        if (!pertenceAoSegmento) {
-          _selectedLocalId = null;
-          _selectedRoomId = null;
-          _rooms.clear(); // Usar clear() para final List
-        }
-      }
-      // Salas dos equipamentos associados ao local escolhido (equipamentos_sap.local_instalacao = locais.local_instalacao_sap)
-      if (_selectedLocalId != null) {
-        final selectedLocal = _locais.where((l) => l.id == _selectedLocalId).toList();
-        if (selectedLocal.isNotEmpty && selectedLocal.first.localInstalacaoSap != null) {
-          try {
-            _rooms.clear(); // Limpar antes de adicionar
-            _rooms.addAll(await _repository.getRooms(
-              localInstalacao: selectedLocal.first.localInstalacaoSap,
-              userLocalNames: null,
-            ));
-          } catch (e) {
-            _rooms.clear();
-          }
-        } else {
-          _rooms.clear();
-        }
-      } else {
-        _rooms.clear();
-      }
-      // Manter selectedRoomId só se ainda estiver na lista (evita assertion no dropdown)
-      if (_selectedRoomId != null && !_rooms.any((r) => r.id == _selectedRoomId)) {
+      final filterData = await _repository.getAvailableFilterOptions(
+        userRegionalIds: userRegionalIds,
+        userDivisaoIds: userDivisaoIds,
+        userSegmentoIds: userSegmentoIds,
+      );
+
+      _segments = filterData['segments'] as List<Segment>;
+      _locais = filterData['locais'] as List<Local>;
+      _roomsByLocal = filterData['roomsByLocal'] as Map<String, List<Room>>;
+      _allAvailableRooms = filterData['rooms'] as List<Room>;
+
+      // Se há segmento selecionado que não existe mais nas fotos disponíveis, limpa
+      if (_selectedSegmentId != null && !_segments.any((s) => s.id == _selectedSegmentId)) {
+        _selectedSegmentId = null;
+        _selectedLocalId = null;
         _selectedRoomId = null;
       }
 
-      // Carregar status de álbuns da tabela
+      // Se há local selecionado que não existe mais nos locais do segmento/perfil, limpa
+      if (_selectedLocalId != null && !locais.any((l) => l.id == _selectedLocalId)) {
+        _selectedLocalId = null;
+        _selectedRoomId = null;
+      }
+
+      // Se há sala selecionada que não existe mais nas salas disponíveis, limpa
+      if (_selectedRoomId != null && !rooms.any((r) => r.id == _selectedRoomId)) {
+        _selectedRoomId = null;
+      }
+
+      // Status de álbuns da tabela
       try {
         _statusAlbums = await _statusRepository.getStatusAlbumsAtivos();
         debugPrint('✅ Status de álbuns carregados: ${_statusAlbums.length}');
@@ -161,17 +144,20 @@ class GalleryController extends ChangeNotifier {
     }
   }
 
-  /// Carrega a estrutura de pastas (sem imagens paginadas)
-  /// As imagens são carregadas sob demanda via [loadImagesForRoom] ao expandir cada sala.
+  /// Carrega a estrutura de pastas e as imagens paginadas quando no modo Grid Geral.
+  /// No modo Álbuns (1), as imagens são carregadas sob demanda via [loadImagesForRoom].
   Future<void> loadImages({bool refresh = false}) async {
     if (_isLoading && !refresh) return;
 
     if (refresh) {
+      _currentPage = 0;
       _images.clear();
+      _hasMore = true;
     }
 
     _isLoading = true;
     _error = null;
+    final searchAtRequest = _searchQuery;
     notifyListeners();
 
     try {
@@ -180,23 +166,78 @@ class GalleryController extends ChangeNotifier {
         _error = _images.isEmpty
             ? 'Offline: conecte-se para carregar álbuns'
             : 'Offline: exibindo álbuns já carregados';
+        _isLoading = false;
+        notifyListeners();
         return;
       }
 
-      // Carrega apenas a estrutura de pastas com contagens reais do servidor
+      // Carrega sempre a estrutura de pastas com contagens reais do servidor
       await _loadAvailableFolders();
 
-      // Notificar imediatamente com a estrutura de pastas para UI aparecer rápido
-      _isLoading = false;
-      _hasMore = false;
-      _totalImages = _availableFolders
+      final totalFromFolders = _availableFolders
           .where((f) {
             final localName = f['local_name']?.toString().trim() ?? '';
             return localName.isNotEmpty;
           })
           .fold<int>(0, (sum, f) => sum + (int.tryParse(f['count'] ?? '0') ?? 0));
-      notifyListeners();
-      return; // Sai antes do finally para evitar segundo notifyListeners
+
+      if (_viewModeIndex == 0) {
+        // Modo 0 (Grid Geral): Carrega as fotos paginadas diretamente do Supabase
+        final authService = AuthServiceSimples();
+        final usuario = authService.currentUser;
+        final userRegionalIds = (usuario?.isRoot ?? false) || (usuario?.regionalIds.isEmpty ?? true) ? null : usuario?.regionalIds;
+        final userDivisaoIds = (usuario?.isRoot ?? false) || (usuario?.divisaoIds.isEmpty ?? true) ? null : usuario?.divisaoIds;
+        final userSegmentoIds = (usuario?.isRoot ?? false) || (usuario?.segmentoIds.isEmpty ?? true) ? null : usuario?.segmentoIds;
+
+        List<String>? equipmentIds;
+        if (_selectedLocalId != null) {
+          final selectedLocalList = locais.where((l) => l.id == _selectedLocalId).toList();
+          if (selectedLocalList.isNotEmpty) {
+            final selectedLocal = selectedLocalList.first;
+            if (selectedLocal.localInstalacaoSap != null && selectedLocal.localInstalacaoSap!.trim().isNotEmpty) {
+              equipmentIds = await _repository.getEquipmentIdsForLocalInstalacaoSap(selectedLocal.localInstalacaoSap!);
+            }
+          }
+        }
+
+        final result = await _repository.getMediaImages(
+          page: _currentPage,
+          pageSize: _pageSize,
+          searchQuery: searchAtRequest.isEmpty ? null : searchAtRequest,
+          segmentId: _selectedSegmentId,
+          localId: _selectedLocalId,
+          equipmentIds: equipmentIds,
+          roomId: _selectedRoomId,
+          status: _selectedStatus,
+          statusAlbumId: _selectedStatusAlbumId,
+          userRegionalIds: userRegionalIds,
+          userDivisaoIds: userDivisaoIds,
+          userSegmentoIds: userSegmentoIds,
+        );
+
+        // Se a busca mudou no meio do caminho, descarta
+        if (searchAtRequest != _searchQuery) return;
+
+        final newImages = result['images'] as List<MediaImage>;
+        if (refresh) {
+          _images = newImages;
+        } else {
+          for (final img in newImages) {
+            if (!_images.any((existing) => existing.id == img.id)) {
+              _images.add(img);
+            }
+          }
+        }
+
+        final total = result['total'] as int;
+        _totalImages = total;
+        _hasMore = _images.length < total;
+        _currentPage++;
+      } else {
+        // Modo 1 ou 2 (Por Álbuns): Usa a contagem das pastas
+        _totalImages = totalFromFolders;
+        _hasMore = false;
+      }
     } catch (e) {
       _error = 'Erro ao carregar álbuns: $e';
     } finally {
@@ -235,12 +276,21 @@ class GalleryController extends ChangeNotifier {
     notifyListeners();
 
     try {
+      final authService = AuthServiceSimples();
+      final usuario = authService.currentUser;
+      final userRegionalIds = (usuario?.isRoot ?? false) || (usuario?.regionalIds.isEmpty ?? true) ? null : usuario?.regionalIds;
+      final userDivisaoIds = (usuario?.isRoot ?? false) || (usuario?.divisaoIds.isEmpty ?? true) ? null : usuario?.divisaoIds;
+      final userSegmentoIds = (usuario?.isRoot ?? false) || (usuario?.segmentoIds.isEmpty ?? true) ? null : usuario?.segmentoIds;
+
       debugPrint('📡 [LazyLoad] Buscando getMediaImages(localId=$localId, roomId=$roomId)');
       final result = await _repository.getMediaImages(
         page: 0,
         pageSize: 100,
         localId: localId,
         roomId: (roomId != null && roomId.isNotEmpty) ? roomId : null,
+        userRegionalIds: userRegionalIds,
+        userDivisaoIds: userDivisaoIds,
+        userSegmentoIds: userSegmentoIds,
       );
 
       final newImages = result['images'] as List<MediaImage>;
@@ -300,37 +350,23 @@ class GalleryController extends ChangeNotifier {
   Future<void> setSegmentId(String? segmentId) async {
     if (_selectedSegmentId != segmentId) {
       _selectedSegmentId = segmentId;
-      _selectedLocalId = null;
-      _selectedRoomId = null;
-      _rooms.clear(); // Usar clear() para final List
+      if (_selectedLocalId != null && !locais.any((l) => l.id == _selectedLocalId)) {
+        _selectedLocalId = null;
+        _selectedRoomId = null;
+      }
       notifyListeners();
       loadImages(refresh: true);
     }
   }
 
-  /// Atualiza o local selecionado; carrega salas dos equipamentos associados ao local.
+  /// Atualiza o local selecionado
   Future<void> setLocalId(String? localId) async {
     if (_selectedLocalId != localId) {
       _selectedLocalId = localId;
-      _selectedRoomId = null;
-      _rooms.clear(); // Usar clear() para final List
-      if (localId != null) {
-        final selectedLocal = locais.where((l) => l.id == localId).toList();
-        if (selectedLocal.isNotEmpty && selectedLocal.first.localInstalacaoSap != null && selectedLocal.first.localInstalacaoSap!.trim().isNotEmpty) {
-          try {
-            _rooms.addAll(await _repository.getRooms(
-              localInstalacao: selectedLocal.first.localInstalacaoSap,
-              userLocalNames: null,
-            ));
-          } catch (e) {
-            _rooms.clear();
-          }
-          if (_selectedRoomId != null && !_rooms.any((r) => r.id == _selectedRoomId)) {
-            _selectedRoomId = null;
-          }
-        }
-        notifyListeners();
+      if (_selectedRoomId != null && !rooms.any((r) => r.id == _selectedRoomId)) {
+        _selectedRoomId = null;
       }
+      notifyListeners();
       loadImages(refresh: true);
     }
   }
@@ -364,7 +400,11 @@ class GalleryController extends ChangeNotifier {
   /// Alterna agrupamento por hierarquia (compatibilidade)
   void toggleGroupByHierarchy() {
     _viewModeIndex = _viewModeIndex == 1 ? 0 : 1;
-    notifyListeners();
+    if (_viewModeIndex == 0) {
+      loadImages(refresh: true);
+    } else {
+      notifyListeners();
+    }
   }
 
   /// Define modo de visualização: 0 = grid, 1 = lista hierárquica, 2 = álbuns por local
@@ -372,7 +412,11 @@ class GalleryController extends ChangeNotifier {
     final newIndex = index.clamp(0, 2);
     if (_viewModeIndex != newIndex) {
       _viewModeIndex = newIndex;
-      notifyListeners();
+      if (_viewModeIndex == 0) {
+        loadImages(refresh: true);
+      } else {
+        notifyListeners();
+      }
     }
   }
 
@@ -463,7 +507,6 @@ class GalleryController extends ChangeNotifier {
     _selectedRoomId = null;
     _selectedStatus = null;
     _selectedStatusAlbumId = null;
-    _rooms = [];
     loadImages(refresh: true);
   }
 

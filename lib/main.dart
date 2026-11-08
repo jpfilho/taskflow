@@ -1023,9 +1023,18 @@ class _MainScreenState extends State<MainScreen> {
     return _sortTasks(_tasks);
   }
 
-  /// Tarefas para tabela/Gantt: se filtro "Com alerta" ativo, apenas tarefas com pelo menos um warning.
+  /// Tarefas para tabela/Gantt: se filtro de conflito ou filtro "Com alerta" ativo, filtra adequadamente.
   List<Task> get _tasksForTable {
-    final base = _sortedTasks;
+    var base = _sortedTasks;
+    if (_conflictFilterTaskIds != null && _conflictFilterTaskIds!.isNotEmpty) {
+      final contextParentIds = <String>{};
+      for (final t in base) {
+        if (_conflictFilterTaskIds!.contains(t.id) && t.parentId != null) {
+          contextParentIds.add(t.parentId!);
+        }
+      }
+      base = base.where((t) => _conflictFilterTaskIds!.contains(t.id) || contextParentIds.contains(t.id)).toList();
+    }
     if (!_filterOnlyWithWarnings || base.isEmpty) return base;
     final warningsMap = _warningsByTaskIdForTable;
     final idsWithWarnings = warningsMap.keys.where((id) => (warningsMap[id] ?? []).isNotEmpty).toSet();

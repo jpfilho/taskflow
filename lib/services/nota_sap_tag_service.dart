@@ -84,6 +84,35 @@ class NotaSapTagService {
     }
   }
 
+  /// Lista tags disponíveis para exibição no filtro de acordo com o perfil do usuário logado.
+  /// - Se usuario for root: todas as tags ativas.
+  /// - Se usuario não for root: apenas tags ativas com escopo Global, ou pertencentes
+  ///   às regionais, divisões ou segmentos do usuário.
+  /// - Se usuario for nulo: fallback para tags ativas com escopo Global.
+  Future<List<NotaSapTag>> listarTagsDisponiveisParaFiltro({Usuario? usuario}) async {
+    try {
+      final todas = await listarTodasTagsAtivas();
+
+      if (usuario == null) {
+        return todas.where((tag) => tag.escopoTipo == NotaSapTagEscopo.global).toList();
+      }
+
+      if (usuario.isRoot) {
+        return todas;
+      }
+
+      return todas.where((tag) => tag.isDisponivelParaAtribuicao(
+        isRoot: usuario.isRoot,
+        regionalIds: usuario.regionalIds,
+        divisaoIds: usuario.divisaoIds,
+        segmentoIds: usuario.segmentoIds,
+      )).toList();
+    } catch (e) {
+      debugPrint('⚠️ [NotaSapTagService] Erro ao listar tags para filtro: $e');
+      return [];
+    }
+  }
+
   /// Lista catálogo completo (ativas e inativas) com contagem de notas vinculadas.
   /// Exclusivo para administração por usuários isRoot.
   Future<List<NotaSapTag>> listarCatalogoCompletoAdmin({required Usuario usuario}) async {

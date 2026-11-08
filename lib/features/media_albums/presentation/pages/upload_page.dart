@@ -326,9 +326,9 @@ class _UploadPageState extends State<UploadPage> {
   }
 
   Widget _buildUploadProgress(
-    dynamic colors,
-    dynamic typography,
-    dynamic spacing,
+    TFSemanticColors colors,
+    TFTypography typography,
+    TFSpacing spacing,
   ) {
     return Center(
       child: Container(
@@ -390,9 +390,9 @@ class _UploadPageState extends State<UploadPage> {
   }
 
   Widget _buildMobileLayout(
-    dynamic colors,
-    dynamic typography,
-    dynamic spacing,
+    TFSemanticColors colors,
+    TFTypography typography,
+    TFSpacing spacing,
   ) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -411,9 +411,9 @@ class _UploadPageState extends State<UploadPage> {
   }
 
   Widget _buildDesktopLayout(
-    dynamic colors,
-    dynamic typography,
-    dynamic spacing,
+    TFSemanticColors colors,
+    TFTypography typography,
+    TFSpacing spacing,
   ) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -446,9 +446,9 @@ class _UploadPageState extends State<UploadPage> {
   }
 
   Widget _buildImagePicker(
-    dynamic colors,
-    dynamic typography,
-    dynamic spacing,
+    TFSemanticColors colors,
+    TFTypography typography,
+    TFSpacing spacing,
   ) {
     return TFCard(
       child: InkWell(
@@ -516,9 +516,9 @@ class _UploadPageState extends State<UploadPage> {
   }
 
   Widget _buildImagePreviews(
-    dynamic colors,
-    dynamic typography,
-    dynamic spacing,
+    TFSemanticColors colors,
+    TFTypography typography,
+    TFSpacing spacing,
   ) {
     if (_uploadController.selectedFiles.isEmpty) {
       return const SizedBox.shrink();
@@ -613,9 +613,9 @@ class _UploadPageState extends State<UploadPage> {
   }
 
   Widget _buildFormFields(
-    dynamic colors,
-    dynamic typography,
-    dynamic spacing,
+    TFSemanticColors colors,
+    TFTypography typography,
+    TFSpacing spacing,
   ) {
     return TFCard(
       child: Column(
@@ -706,7 +706,7 @@ class _UploadPageState extends State<UploadPage> {
           // Tags
           Text(
             'Tags',
-            style: typography.label.copyWith(
+            style: typography.labelMedium.copyWith(
               color: colors.textPrimary,
               fontWeight: FontWeight.w600,
             ),
@@ -720,9 +720,9 @@ class _UploadPageState extends State<UploadPage> {
 
   Widget _buildLocalDropdown(
     BuildContext context,
-    dynamic colors,
-    dynamic typography,
-    dynamic spacing,
+    TFSemanticColors colors,
+    TFTypography typography,
+    TFSpacing spacing,
   ) {
     final selectedLocal = _uploadController.selectedLocalId != null
         ? _locais.where((l) => l.id == _uploadController.selectedLocalId).firstOrNull
@@ -733,7 +733,7 @@ class _UploadPageState extends State<UploadPage> {
       children: [
         Text(
           'Local',
-          style: typography.label.copyWith(color: colors.textPrimary),
+          style: typography.labelMedium.copyWith(color: colors.textPrimary),
         ),
         SizedBox(height: spacing.xs),
         DropdownSearch<Local>(
@@ -794,7 +794,7 @@ class _UploadPageState extends State<UploadPage> {
             return Text(
               selectedItem?.local ?? 'Nenhum local selecionado',
               style: typography.bodyMedium.copyWith(
-                color: selectedItem != null ? colors.textPrimary : colors.textPlaceholder,
+                color: selectedItem != null ? colors.textPrimary : colors.textMuted,
               ),
               overflow: TextOverflow.ellipsis,
             );
@@ -806,9 +806,9 @@ class _UploadPageState extends State<UploadPage> {
 
   Widget _buildSalaDropdown(
     BuildContext context,
-    dynamic colors,
-    dynamic typography,
-    dynamic spacing,
+    TFSemanticColors colors,
+    TFTypography typography,
+    TFSpacing spacing,
   ) {
     final enabled = _uploadController.selectedLocalId != null;
     final selectedRoom = _uploadController.selectedRoomId != null
@@ -823,7 +823,7 @@ class _UploadPageState extends State<UploadPage> {
           children: [
             Text(
               'Sala',
-              style: typography.label.copyWith(color: colors.textPrimary),
+              style: typography.labelMedium.copyWith(color: colors.textPrimary),
             ),
             if (enabled)
               InkWell(
@@ -896,7 +896,7 @@ class _UploadPageState extends State<UploadPage> {
             return Text(
               selectedItem?.name ?? (enabled ? 'Nenhuma sala selecionada' : 'Selecione um local primeiro'),
               style: typography.bodyMedium.copyWith(
-                color: selectedItem != null ? colors.textPrimary : colors.textPlaceholder,
+                color: selectedItem != null ? colors.textPrimary : colors.textMuted,
               ),
               overflow: TextOverflow.ellipsis,
             );
@@ -908,9 +908,9 @@ class _UploadPageState extends State<UploadPage> {
 
   Widget _buildStatusField(
     BuildContext context,
-    dynamic colors,
-    dynamic typography,
-    dynamic spacing,
+    TFSemanticColors colors,
+    TFTypography typography,
+    TFSpacing spacing,
   ) {
     final selectedStatusAlbumId = _uploadController.statusAlbumId;
     final selectedStatus = selectedStatusAlbumId != null && _uploadController.statusAlbums.isNotEmpty
@@ -925,7 +925,7 @@ class _UploadPageState extends State<UploadPage> {
       children: [
         Text(
           'Status',
-          style: typography.label.copyWith(color: colors.textPrimary),
+          style: typography.labelMedium.copyWith(color: colors.textPrimary),
         ),
         SizedBox(height: spacing.xs),
         Container(
@@ -994,9 +994,9 @@ class _UploadPageState extends State<UploadPage> {
   }
 
   Widget _buildTagsContainer(
-    dynamic colors,
-    dynamic typography,
-    dynamic spacing,
+    TFSemanticColors colors,
+    TFTypography typography,
+    TFSpacing spacing,
   ) {
     return Container(
       padding: EdgeInsets.all(spacing.sm),
@@ -1053,7 +1053,7 @@ class _UploadPageState extends State<UploadPage> {
                       style: typography.bodyMedium.copyWith(color: colors.textPrimary),
                       decoration: InputDecoration(
                         hintText: 'Adicionar tag...',
-                        hintStyle: typography.bodySmall.copyWith(color: colors.textPlaceholder),
+                        hintStyle: typography.bodySmall.copyWith(color: colors.textMuted),
                         border: InputBorder.none,
                         contentPadding: EdgeInsets.symmetric(horizontal: spacing.xs),
                         isDense: true,
@@ -1077,7 +1077,7 @@ class _UploadPageState extends State<UploadPage> {
     );
   }
 
-  Widget _buildActionButtons(dynamic spacing) {
+  Widget _buildActionButtons(TFSpacing spacing) {
     return Row(
       children: [
         Expanded(
@@ -1102,9 +1102,9 @@ class _UploadPageState extends State<UploadPage> {
   }
 
   Widget _buildInfoCard(
-    dynamic colors,
-    dynamic typography,
-    dynamic spacing,
+    TFSemanticColors colors,
+    TFTypography typography,
+    TFSpacing spacing,
   ) {
     return Container(
       padding: EdgeInsets.all(spacing.md),

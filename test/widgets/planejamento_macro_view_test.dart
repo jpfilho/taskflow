@@ -6,7 +6,6 @@ import 'package:task2026/models/nota_sap_grupo.dart';
 import 'package:task2026/services/nota_sap_backlog_service.dart';
 import 'package:task2026/models/task.dart';
 import 'package:task2026/models/task_create_result.dart';
-import 'package:task2026/services/nota_sap_service.dart';
 import 'package:task2026/services/task_service.dart';
 import 'package:task2026/widgets/planejamento_macro/planejamento_macro_view.dart';
 
@@ -164,8 +163,8 @@ void main() {
     await tester.tap(grupoFinder);
     await tester.pumpAndSettle();
 
-    expect(find.text('11599101'), findsOneWidget);
-    expect(find.text('11565867'), findsOneWidget);
+    expect(find.textContaining('11599101'), findsOneWidget);
+    expect(find.textContaining('11565867'), findsOneWidget);
     expect(find.text('Programar Pendentes (1)'), findsOneWidget);
   });
 
@@ -220,7 +219,7 @@ void main() {
     await tester.pumpWidget(createWidgetUnderTest(mockService));
     await tester.pumpAndSettle();
 
-    expect(find.text('Programação concluída'), findsOneWidget);
+    expect(find.text('Todas as demandas estão programadas'), findsOneWidget);
 
     // Expandir
     final grupoFinder = find.byKey(const Key('grupo_g1'));

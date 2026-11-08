@@ -920,5 +920,22 @@ void main() {
       expect(find.text('1 selecionada'), findsNothing);
       expect(find.text('Selecionar'), findsOneWidget);
     });
+
+    testWidgets('Teste 21: Tipo de Nota é renderizado antes do nome Nota SAP no cabeçalho',
+        (tester) async {
+      final notaComTipo = notaMock.copyWith(tipo: 'PM');
+
+      await tester.pumpWidget(buildTestableWidget(
+        child: NotaAnaliseWorkspace(
+          nota: notaComTipo,
+          service: mockService,
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      // Valida que o tipo PM é exibido junto com Nota SAP (no badge do cabeçalho e na visualização)
+      expect(find.text('PM'), findsWidgets);
+      expect(find.text('Nota SAP: 20261003'), findsOneWidget);
+    });
   });
 }

@@ -907,17 +907,18 @@ class _NotaAnaliseWorkspaceState extends State<NotaAnaliseWorkspace>
           autofocus: true,
           child: Scaffold(
             backgroundColor: colors.surface,
-            appBar: PreferredSize(
-              preferredSize: Size.fromHeight(temDescricao ? 255 : 220),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: colors.surface,
-                  border: Border(bottom: BorderSide(color: colors.borderSubtle)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Padding(
+            body: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(
+                  decoration: BoxDecoration(
+                    color: colors.surface,
+                    border: Border(bottom: BorderSide(color: colors.borderSubtle)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Padding(
                       padding: EdgeInsets.symmetric(
                         horizontal: spacing.md,
                         vertical: spacing.sm,
@@ -944,6 +945,28 @@ class _NotaAnaliseWorkspaceState extends State<NotaAnaliseWorkspace>
                                   spacing: spacing.xs,
                                   runSpacing: 2,
                                   children: [
+                                    if (_notaAtual.tipo != null &&
+                                        _notaAtual.tipo!.trim().isNotEmpty) ...[
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 7, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF1E3A5F),
+                                          borderRadius:
+                                              BorderRadius.circular(TFRadius.r4),
+                                        ),
+                                        child: Text(
+                                          _notaAtual.tipo!.trim(),
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.white,
+                                            letterSpacing: 0.3,
+                                          ),
+                                        ),
+                                      ),
+                                      SizedBox(width: spacing.xs / 2),
+                                    ],
                                     Text(
                                       'Nota SAP: ${_notaAtual.nota}',
                                       style: typography.sectionTitle.copyWith(
@@ -1232,13 +1255,10 @@ class _NotaAnaliseWorkspaceState extends State<NotaAnaliseWorkspace>
                   ],
                 ),
               ),
-            ),
-            body: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _buildBarraDeTagsPersistente(colors, typography),
-                Expanded(
-                  child: TabBarView(
+              _buildPainelObservacoesPersistente(colors, typography, spacing),
+              _buildBarraDeTagsPersistente(colors, typography),
+              Expanded(
+                child: TabBarView(
                     controller: _tabController,
                     children: [
                       NotaWorkspaceOverviewTab(
@@ -1680,6 +1700,87 @@ class _NotaAnaliseWorkspaceState extends State<NotaAnaliseWorkspace>
     } catch (_) {
       return Colors.blueGrey;
     }
+  }
+
+  Widget _buildPainelObservacoesPersistente(
+    dynamic colors,
+    dynamic typography,
+    dynamic spacing,
+  ) {
+    final detalhes = _notaAtual.detalhes?.trim();
+    final temDetalhes = detalhes != null && detalhes.isNotEmpty;
+    final textoExibicao = temDetalhes
+        ? detalhes
+        : 'Nenhuma observação detalhada cadastrada para esta nota no SAP.';
+    final possuiTexto = temDetalhes;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: colors.surfaceSecondary,
+        border: Border(
+          bottom: BorderSide(color: colors.borderSubtle, width: 1),
+        ),
+      ),
+      padding: EdgeInsets.symmetric(
+        horizontal: spacing.md,
+        vertical: 8,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.notes_rounded, size: 16, color: colors.primary),
+              const SizedBox(width: 6),
+              Text(
+                'Descrição Detalhada / Observações SAP',
+                style: typography.caption.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: colors.primary,
+                  fontSize: 12.0,
+                ),
+              ),
+              const Spacer(),
+              if (possuiTexto)
+                IconButton(
+                  icon: Icon(Icons.copy, size: 14, color: colors.textSecondary),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  tooltip: 'Copiar texto das observações',
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: textoExibicao));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Descrição/observação SAP copiada!'),
+                        duration: Duration(seconds: 1),
+                      ),
+                    );
+                  },
+                ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          ConstrainedBox(
+            constraints: const BoxConstraints(
+              maxHeight: 110,
+            ),
+            child: SingleChildScrollView(
+              child: SelectableText(
+                textoExibicao,
+                style: typography.bodySmall.copyWith(
+                  color: possuiTexto
+                      ? colors.textPrimary
+                      : colors.textMuted,
+                  fontStyle: possuiTexto ? FontStyle.normal : FontStyle.italic,
+                  height: 1.35,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildBarraDeTagsPersistente(dynamic colors, dynamic typography) {

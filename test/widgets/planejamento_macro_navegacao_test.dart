@@ -162,7 +162,15 @@ void main() {
     expect(find.text('Manutenção Preventiva DJ 1'), findsOneWidget);
     expect(backlogMock.chamadasBuscar, 1);
 
-    // 2. Selecionar filtro de mês no carrossel de navegação
+    // 2. Expandir grupo na visão consolidada para ver opções
+    final grupoFinder = find.byKey(const Key('grupo_g1'));
+    await tester.tap(grupoFinder);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Programar Pendentes (1)'), findsOneWidget);
+    expect(find.text('Ver Grupo'), findsOneWidget);
+
+    // 3. Selecionar filtro de mês no carrossel de navegação (novo fluxo gerencial)
     final chipNov = find.text('Nov/26');
     expect(chipNov, findsOneWidget);
     await tester.tap(chipNov);
@@ -172,14 +180,6 @@ void main() {
     expect(backlogMock.chamadasBuscar, 2);
     expect(backlogMock.ultimoFiltro?.mes, 11);
     expect(backlogMock.ultimoFiltro?.ano, 2026);
-
-    // 3. Expandir grupo para ver opções
-    final grupoFinder = find.byKey(const Key('grupo_g1'));
-    await tester.tap(grupoFinder);
-    await tester.pumpAndSettle();
-
-    expect(find.text('Programar Pendentes (1)'), findsOneWidget);
-    expect(find.text('Ver Grupo'), findsOneWidget);
 
     // 4. Testar botão de atualização manual (Refresh)
     final refreshBtn = find.byTooltip('Atualizar dados (ignora cache)');

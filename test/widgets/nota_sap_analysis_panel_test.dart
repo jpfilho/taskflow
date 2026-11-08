@@ -143,7 +143,7 @@ void main() {
       expect(find.text('Copiar Diagnóstico'), findsOneWidget);
       expect(find.text('Usar Horas: 4.5h'), findsOneWidget);
       expect(find.text('3 materiais previstos'), findsOneWidget);
-      expect(find.text('2 anexos'), findsOneWidget);
+      expect(find.textContaining('2 arquivo'), findsOneWidget);
     });
 
     testWidgets('Teste A: Escopo com destino vazio preenche diretamente', (tester) async {
