@@ -112,7 +112,7 @@ fi
 echo ""
 echo "[2/4] Instalando dependências Node.js em $ROOT_DIR..."
 cd "$ROOT_DIR"
-npm install --omit=dev >/dev/null 2>&1 || npm install
+npm install --omit=dev --no-audit --no-fund
 echo "✅ Dependências instaladas."
 
 # 4. Criar/atualizar serviço systemd apontando para telegram-webhook-server-generalized.js
