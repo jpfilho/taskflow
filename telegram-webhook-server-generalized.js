@@ -52,6 +52,35 @@ pgPool.on('error', (err) => {
   console.error('❌ Erro no pool Postgres:', err);
 });
 
+// ==========================================
+// EXPRESS APP
+// ==========================================
+
+const app = express();
+
+// Middleware CORS - Permitir requisições do Flutter web
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, x-telegram-bot-api-secret-token');
+  
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  
+  next();
+});
+
+// Middleware para parsing JSON com tratamento de erro
+app.use(express.json({ limit: '10mb' }));
+app.use((err, req, res, next) => {
+  if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
+    console.error('❌ Erro ao fazer parse do JSON:', err.message);
+    return res.status(400).json({ error: 'JSON inválido', details: err.message });
+  }
+  next();
+});
+
 // Endpoint de detalhe para um evento de queimada com a feature KMZ mais próxima
 app.get('/eventos/queimadas/:id/detalhe', async (req, res) => {
   try {
@@ -119,35 +148,6 @@ app.get('/eventos/queimadas/:id/detalhe', async (req, res) => {
     console.error('❌ Erro no detalhe da queimada:', error);
     res.status(500).json({ ok: false, error: error.message });
   }
-});
-
-// ==========================================
-// EXPRESS APP
-// ==========================================
-
-const app = express();
-
-// Middleware CORS - Permitir requisições do Flutter web
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, x-telegram-bot-api-secret-token');
-  
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
-  }
-  
-  next();
-});
-
-// Middleware para parsing JSON com tratamento de erro
-app.use(express.json({ limit: '10mb' }));
-app.use((err, req, res, next) => {
-  if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
-    console.error('❌ Erro ao fazer parse do JSON:', err.message);
-    return res.status(400).json({ error: 'JSON inválido', details: err.message });
-  }
-  next();
 });
 
 // ==========================================
