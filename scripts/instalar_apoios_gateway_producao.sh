@@ -101,30 +101,34 @@ else
   echo "[1/4] Arquivo $ENV_FILE já existe — preservando configurações atuais."
 fi
 
-# 3. Instalar dependências Node
-echo ""
-echo "[2/4] Instalando dependências Node.js em $BACKEND_DIR..."
-cd "$BACKEND_DIR"
-if [ ! -f "package.json" ]; then
-  npm init -y >/dev/null 2>&1
+# 3. Garantir SUPABASE_URL_INTERNAL e SUPABASE_URL_PUBLIC no .env e instalar dependências na raiz
+if ! grep -q '^SUPABASE_URL_INTERNAL=' "$ENV_FILE"; then
+  echo 'SUPABASE_URL_INTERNAL=http://127.0.0.1:8000' >> "$ENV_FILE"
 fi
-npm install --omit=dev axios >/dev/null 2>&1 || npm install axios
+if ! grep -q '^SUPABASE_URL_PUBLIC=' "$ENV_FILE"; then
+  echo 'SUPABASE_URL_PUBLIC=http://10.140.50.12:8000' >> "$ENV_FILE"
+fi
+
+echo ""
+echo "[2/4] Instalando dependências Node.js em $ROOT_DIR..."
+cd "$ROOT_DIR"
+npm install --omit=dev >/dev/null 2>&1 || npm install
 echo "✅ Dependências instaladas."
 
-# 4. Criar/atualizar serviço systemd
+# 4. Criar/atualizar serviço systemd apontando para telegram-webhook-server-generalized.js
 echo ""
 echo "[3/4] Configurando serviço systemd (taskflow-apoios.service)..."
 sudo tee "$SERVICE_FILE" >/dev/null <<EOF
 [Unit]
-Description=TaskFlow Apoios Gateway e Worker de Notificacoes
+Description=TaskFlow API Node (Telegram + Apoios Gateway + Notificacoes)
 After=network.target
 
 [Service]
 Type=simple
 User=${RUN_USER}
-WorkingDirectory=${BACKEND_DIR}
+WorkingDirectory=${ROOT_DIR}
 EnvironmentFile=${ENV_FILE}
-ExecStart=${NODE_BIN} ${BACKEND_DIR}/apoios_gateway.js
+ExecStart=${NODE_BIN} ${ROOT_DIR}/telegram-webhook-server-generalized.js
 Restart=always
 RestartSec=5
 
