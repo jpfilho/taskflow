@@ -128,7 +128,7 @@ SELECT
   (SELECT count(*) FROM public.tasks) AS total_tasks,
   (SELECT count(*) FROM public.notas_sap) AS total_notas_sap,
   (SELECT count(*) FROM public.conflict_acceptances) AS total_conflict_acceptances,
-  (SELECT count(*) FROM public.apoio_tipos) AS total_apoio_tipos;
+  (SELECT count(*) FROM public.tasks_apoios_tipos) AS total_apoio_tipos;
 "
 
 echo ""
@@ -137,3 +137,4 @@ echo "  ✅ MIGRATIONS DE PRODUÇÃO CONCLUÍDAS COM SEGURANÇA!"
 echo "  Backup salvo em: $BACKUP_FILE"
 echo "  Log salvo em:    $LOG_FILE"
 echo "======================================================================="
+
