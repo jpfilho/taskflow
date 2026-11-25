@@ -30,8 +30,28 @@ echo "✅ Node detectado: $NODE_BIN ($(node -v))"
 # 2. Preparar backend/.env sem sobrescrever se já existir
 if [ ! -f "$ENV_FILE" ]; then
   echo ""
-  echo "[1/4] Criando $ENV_FILE a partir de .env.example..."
-  cp "$ENV_EXAMPLE" "$ENV_FILE"
+  echo "[1/4] Criando $ENV_FILE..."
+  if [ -f "$ENV_EXAMPLE" ]; then
+    cp "$ENV_EXAMPLE" "$ENV_FILE"
+  else
+    cat <<'EOF' > "$ENV_FILE"
+NODE_ENV=production
+PORT=3001
+SUPABASE_URL=http://127.0.0.1:8000
+SUPABASE_SERVICE_KEY=<PREENCHER_SERVICE_ROLE_KEY_DO_AMBIENTE>
+DB_HOST=127.0.0.1
+DB_PORT=5433
+DB_NAME=postgres
+DB_USER=postgres
+DB_PASSWORD=<PREENCHER_DB_PASSWORD>
+APOIOS_GATEWAY_SECRET=<PREENCHER>
+APOIOS_ENTRA_TENANT_ID=8a0ffb54-9716-4a93-9158-9e3a7206f18e
+APOIOS_ENTRA_API_AUDIENCE=
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_WEBHOOK_SECRET=
+CORS_ALLOWED_ORIGINS=http://10.140.50.12:8085,http://10.140.50.12:8080
+EOF
+  fi
 
   # Ajustar DB_PORT=5433 (supabase-db direto para LISTEN/NOTIFY)
   sed -i 's/^DB_PORT=.*/DB_PORT=5433/' "$ENV_FILE"
@@ -119,3 +139,4 @@ echo "======================================================================="
 echo "  ✅ SERVIÇO taskflow-apoios ATIVO NA PORTA 3001!"
 echo "  Para ver logs em tempo real: sudo journalctl -u taskflow-apoios -f"
 echo "======================================================================="
+
