@@ -34,6 +34,7 @@ class ConflictService {
   final Map<String, Map<String, List<ExecutionEventFromBackend>>> _executionEventsCache = {};
   final Map<String, Map<String, ConflictInfo>> _fleetConflictRangeCache = {};
   final Map<String, Map<String, List<FleetExecutionEventFromBackend>>> _fleetExecutionEventsCache = {};
+  List<ConflictAcceptance>? _activeAcceptancesCache;
   DateTime? _lastDataCacheTime;
   static const _dataCacheTtl = Duration(minutes: 5);
 
@@ -42,6 +43,7 @@ class ConflictService {
     _executionEventsCache.clear();
     _fleetConflictRangeCache.clear();
     _fleetExecutionEventsCache.clear();
+    _activeAcceptancesCache = null;
     _lastDataCacheTime = null;
     _isBackendAvailableCache = null;
     _lastAvailabilityCheck = null;
@@ -163,10 +165,10 @@ class ConflictService {
     final result = <String, List<ExecutionEventFromBackend>>{};
     try {
       List rawRows = [];
-      if (executorIds != null && executorIds.length > 100) {
+      if (executorIds != null && executorIds.length > 30) {
         final chunks = <List<String>>[];
-        for (var i = 0; i < executorIds.length; i += 100) {
-          chunks.add(executorIds.sublist(i, i + 100 > executorIds.length ? executorIds.length : i + 100));
+        for (var i = 0; i < executorIds.length; i += 30) {
+          chunks.add(executorIds.sublist(i, i + 30 > executorIds.length ? executorIds.length : i + 30));
         }
 
         final futures = chunks.map((chunk) async {
@@ -175,11 +177,12 @@ class ConflictService {
               .select('executor_id, executor_nome, day, location_key, task_id, description')
               .gte('day', start)
               .lte('day', end)
-              .inFilter('executor_id', chunk);
+              .inFilter('executor_id', chunk)
+              .limit(5000);
           return await query;
         }).toList();
 
-        final responses = await Future.wait(futures).timeout(const Duration(seconds: 4), onTimeout: () => []);
+        final responses = await Future.wait(futures).timeout(const Duration(seconds: 6), onTimeout: () => []);
         rawRows = responses.expand((r) => r as List).toList();
       } else {
         var query = _supabase
@@ -192,7 +195,7 @@ class ConflictService {
           query = query.inFilter('executor_id', executorIds);
         }
         
-        final res = await query.timeout(const Duration(seconds: 4), onTimeout: () => []);
+        final res = await query.limit(5000).timeout(const Duration(seconds: 6), onTimeout: () => []);
         rawRows = res as List;
       }
 
@@ -380,6 +383,200 @@ class ConflictService {
       _lastDataCacheTime = DateTime.now();
     } catch (_) {}
     return result;
+  }
+
+  // ---------- Aceite de Conflitos (conflict_acceptances) ----------
+
+  /// Busca todos os aceites de conflito ativos (não revogados).
+  Future<List<ConflictAcceptance>> getActiveAcceptances({bool forceRefresh = false}) async {
+    if (!forceRefresh &&
+        _activeAcceptancesCache != null &&
+        _lastDataCacheTime != null &&
+        DateTime.now().difference(_lastDataCacheTime!) < _dataCacheTtl) {
+      return List<ConflictAcceptance>.from(_activeAcceptancesCache!);
+    }
+
+    try {
+      final res = await _supabase
+          .from('conflict_acceptances')
+          .select('id, resource_type, resource_id, resource_nome, task_id_a, task_id_b, reason, accepted_by, accepted_by_name, accepted_at, revoked_at')
+          .isFilter('revoked_at', null)
+          .order('accepted_at', ascending: false)
+          .timeout(const Duration(seconds: 5), onTimeout: () => []);
+      final list = (res as List)
+          .map((row) => ConflictAcceptance.fromMap(row as Map<String, dynamic>))
+          .toList();
+      _activeAcceptancesCache = list;
+      _lastDataCacheTime ??= DateTime.now();
+      return List<ConflictAcceptance>.from(list);
+    } catch (e) {
+      // Se a tabela ainda não existir no ambiente, degrada graciosamente
+      return _activeAcceptancesCache != null
+          ? List<ConflictAcceptance>.from(_activeAcceptancesCache!)
+          : [];
+    }
+  }
+
+  /// Verifica em memória se o par (taskA, taskB) está aceito para [resourceType] + [resourceId].
+  static bool isPairAccepted(
+    List<ConflictAcceptance> acceptances, {
+    required String resourceType,
+    required String resourceId,
+    required String taskA,
+    required String taskB,
+  }) {
+    if (acceptances.isEmpty || taskA.isEmpty || taskB.isEmpty || taskA == taskB) {
+      return false;
+    }
+    return acceptances.any((a) => a.matches(resourceType, resourceId, taskA, taskB));
+  }
+
+  /// Registra aceite(s) de conflito entre pares de tarefas para um executor ou frota.
+  Future<List<ConflictAcceptance>> acceptConflictPairs(
+    List<ConflictAcceptanceDraft> drafts, {
+    String? reason,
+    String? acceptedBy,
+    String? acceptedByName,
+  }) async {
+    if (drafts.isEmpty) return [];
+
+    final uniquePayloads = <String, Map<String, dynamic>>{};
+    final trimmedReason = reason?.trim();
+    for (final d in drafts) {
+      if (d.resourceId.trim().isEmpty || d.taskIdA.trim().isEmpty || d.taskIdB.trim().isEmpty) {
+        continue;
+      }
+      if (d.taskIdA.trim() == d.taskIdB.trim()) continue;
+      final pair = ConflictAcceptance.canonicalPair(d.taskIdA.trim(), d.taskIdB.trim());
+      final type = d.resourceType.toUpperCase();
+      final resId = d.resourceId.trim();
+      final key = '$type|${resId.toLowerCase()}|${pair.$1}|${pair.$2}';
+      uniquePayloads[key] = {
+        'resource_type': type,
+        'resource_id': resId,
+        'resource_nome': d.resourceNome.trim(),
+        'task_id_a': pair.$1,
+        'task_id_b': pair.$2,
+        if (trimmedReason != null && trimmedReason.isNotEmpty) 'reason': trimmedReason,
+        if (acceptedBy != null && acceptedBy.trim().isNotEmpty) 'accepted_by': acceptedBy.trim(),
+        if (acceptedByName != null && acceptedByName.trim().isNotEmpty) 'accepted_by_name': acceptedByName.trim(),
+      };
+    }
+
+    if (uniquePayloads.isEmpty) return [];
+
+    final inserted = <ConflictAcceptance>[];
+    for (final payload in uniquePayloads.values) {
+      try {
+        final row = await _supabase
+            .from('conflict_acceptances')
+            .insert(payload)
+            .select()
+            .single();
+        inserted.add(ConflictAcceptance.fromMap(row));
+      } catch (e) {
+        final msg = e.toString().toLowerCase();
+        // Se já existe aceite ativo para esse par (23505 unique_violation), ignora duplicidade
+        if (!msg.contains('23505') && !msg.contains('duplicate')) {
+          rethrow;
+        }
+      }
+    }
+
+    invalidateCache();
+    return inserted;
+  }
+
+  /// Revoga (desfaz) um aceite de conflito existente, reativando a detecção.
+  Future<void> revokeAcceptance(String acceptanceId, {String? revokedBy}) async {
+    await _supabase
+        .from('conflict_acceptances')
+        .update({
+          'revoked_at': DateTime.now().toUtc().toIso8601String(),
+          if (revokedBy != null && revokedBy.trim().isNotEmpty) 'revoked_by': revokedBy.trim(),
+        })
+        .eq('id', acceptanceId);
+    invalidateCache();
+  }
+}
+
+/// Rascunho para criação de aceite de conflito.
+class ConflictAcceptanceDraft {
+  final String resourceType; // 'EXECUTOR' | 'FROTA'
+  final String resourceId;
+  final String resourceNome;
+  final String taskIdA;
+  final String taskIdB;
+
+  const ConflictAcceptanceDraft({
+    required this.resourceType,
+    required this.resourceId,
+    required this.resourceNome,
+    required this.taskIdA,
+    required this.taskIdB,
+  });
+}
+
+/// Aceite persistido de conflito entre um par de tarefas para um executor ou frota.
+class ConflictAcceptance {
+  final String id;
+  final String resourceType; // 'EXECUTOR' | 'FROTA'
+  final String resourceId;
+  final String resourceNome;
+  final String taskIdA;
+  final String taskIdB;
+  final String? reason;
+  final String? acceptedBy;
+  final String? acceptedByName;
+  final DateTime acceptedAt;
+  final DateTime? revokedAt;
+
+  const ConflictAcceptance({
+    required this.id,
+    required this.resourceType,
+    required this.resourceId,
+    required this.resourceNome,
+    required this.taskIdA,
+    required this.taskIdB,
+    this.reason,
+    this.acceptedBy,
+    this.acceptedByName,
+    required this.acceptedAt,
+    this.revokedAt,
+  });
+
+  static (String, String) canonicalPair(String t1, String t2) {
+    return t1.compareTo(t2) <= 0 ? (t1, t2) : (t2, t1);
+  }
+
+  bool matches(String type, String resId, String t1, String t2) {
+    if (revokedAt != null) return false;
+    if (resourceType.toUpperCase() != type.toUpperCase()) return false;
+    final resNorm = resId.trim().toLowerCase();
+    final selfIdNorm = resourceId.trim().toLowerCase();
+    final selfNameNorm = ConflictService.normalizeExecutorKey(resourceNome);
+    final resKeyNorm = ConflictService.normalizeExecutorKey(resId);
+    final sameResource = selfIdNorm == resNorm ||
+        (selfNameNorm.isNotEmpty && selfNameNorm == resKeyNorm);
+    if (!sameResource) return false;
+    final pair = canonicalPair(t1.trim(), t2.trim());
+    return taskIdA == pair.$1 && taskIdB == pair.$2;
+  }
+
+  factory ConflictAcceptance.fromMap(Map<String, dynamic> map) {
+    return ConflictAcceptance(
+      id: map['id']?.toString() ?? '',
+      resourceType: (map['resource_type']?.toString() ?? 'EXECUTOR').toUpperCase(),
+      resourceId: map['resource_id']?.toString() ?? '',
+      resourceNome: map['resource_nome']?.toString() ?? '',
+      taskIdA: map['task_id_a']?.toString() ?? '',
+      taskIdB: map['task_id_b']?.toString() ?? '',
+      reason: map['reason']?.toString(),
+      acceptedBy: map['accepted_by']?.toString(),
+      acceptedByName: map['accepted_by_name']?.toString(),
+      acceptedAt: DateTime.tryParse(map['accepted_at']?.toString() ?? '') ?? DateTime.now(),
+      revokedAt: map['revoked_at'] != null ? DateTime.tryParse(map['revoked_at'].toString()) : null,
+    );
   }
 }
 

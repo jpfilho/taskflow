@@ -138,6 +138,15 @@ enum TaskTableColumn {
     mobileWidth: 45,
     icon: Icons.warning_amber_outlined,
     isRequired: false,
+  ),
+  apoios(
+    id: 'apoios',
+    label: 'Apoios',
+    headerTitle: 'APOIOS',
+    defaultWidth: 44,
+    mobileWidth: 38,
+    icon: Icons.handshake_outlined,
+    isRequired: false,
   );
 
   final String id;
@@ -264,6 +273,7 @@ class TaskTableColumnService {
       TaskTableColumn.executor,
       TaskTableColumn.frota,
       TaskTableColumn.alertas,
+      TaskTableColumn.apoios,
     },
   );
 
@@ -330,6 +340,17 @@ class TaskTableColumnService {
         // Garantir que as obrigatórias sempre existam
         loaded.add(TaskTableColumn.status);
         loaded.add(TaskTableColumn.tarefa);
+
+        // Migração única: incluir coluna Apoios para usuários com seleção anterior à criação da coluna
+        const apoiosMigratedKey = 'taskflow_table_apoios_migrated_v1';
+        if (!(prefs.getBool(apoiosMigratedKey) ?? false)) {
+          loaded.add(TaskTableColumn.apoios);
+          await prefs.setBool(apoiosMigratedKey, true);
+          await prefs.setStringList(
+            _prefsKey,
+            loaded.map((c) => c.id).toList(),
+          );
+        }
 
         _visibleColumns = loaded;
         columnsNotifier.value = Set.unmodifiable(_visibleColumns);

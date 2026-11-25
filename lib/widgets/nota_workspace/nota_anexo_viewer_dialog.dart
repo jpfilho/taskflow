@@ -8,6 +8,7 @@ import '../../models/nota_sap.dart';
 import '../../models/nota_sap_analise.dart';
 import '../../services/nota_sap_analise_service.dart';
 import 'nota_anexo_annotation_editor.dart';
+import 'nota_video_player_widget.dart';
 import 'nota_comparador_visual_dialog.dart';
 import 'nota_vincular_evidencia_historica_dialog.dart';
 
@@ -261,13 +262,7 @@ class _NotaAnexoViewerDialogState extends State<NotaAnexoViewerDialog> {
 
   Future<void> _abrirExternamente() async {
     try {
-      final url = await widget.service.obterUrlAssinada(_anexoAtual);
-      final uri = Uri.parse(url);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-      } else {
-        throw Exception('Não foi possível abrir no aplicativo externo');
-      }
+      await widget.service.baixarOuAbrirAnexo(_anexoAtual);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -990,6 +985,32 @@ class _NotaAnexoViewerDialogState extends State<NotaAnexoViewerDialog> {
   // VIEWER TÉCNICO DE MÍDIAS NÃO-IMAGEM (PDF, VÍDEO, DOCUMENTO, ÁUDIO)
   // ---------------------------------------------------------------------------
   Widget _buildMediaTechnicalViewer(NotaSapAnexo anexo) {
+    final ext = (anexo.extensao ?? '').toLowerCase();
+    final isVideo = anexo.tipoArquivo == NotaAnexoTipo.video ||
+        ext == 'mp4' ||
+        ext == 'mov' ||
+        ext == 'webm' ||
+        ext == 'm4v';
+
+    if (isVideo) {
+      return NotaVideoPlayerWidget(
+        urlFuture: _futureUrlAtual ?? widget.service.obterUrlAssinada(anexo),
+        fileName: anexo.nomeExibicao,
+        onOpenExternal: _abrirExternamente,
+        onDownload: () async {
+          try {
+            await widget.service.baixarAnexo(anexo);
+          } catch (e) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Erro ao baixar vídeo: $e'), backgroundColor: Colors.red),
+              );
+            }
+          }
+        },
+      );
+    }
+
     IconData iconePrincipal;
     Color corIcone;
     String tipoLabel;

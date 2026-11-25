@@ -9,6 +9,7 @@ import 'executor_list_view.dart';
 import 'empresa_list_view.dart';
 import 'funcao_list_view.dart';
 import 'tipo_atividade_list_view.dart';
+import '../features/apoios_operacionais/presentation/views/tipo_apoio_list_view.dart';
 import '../features/media_albums/presentation/pages/status_album_list_view.dart';
 import 'equipe_list_view.dart';
 import 'feriado_list_view.dart';
@@ -266,6 +267,20 @@ class _ConfiguracaoViewState extends State<ConfiguracaoView> {
                 context,
                 MaterialPageRoute(
                   builder: (context) => const TipoAtividadeListView(),
+                ),
+              );
+            },
+          },
+          {
+            'icon': Icons.handshake_outlined,
+            'title': 'Tipos de Apoio',
+            'subtitle': 'Cadastro de tipos de apoio operacional entre unidades.',
+            'color': Colors.teal[600]!,
+            'onTap': () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const TipoApoioListView(),
                 ),
               );
             },

@@ -32,7 +32,7 @@ class TaskWarningsService {
       final response = await client.rpc(
         'get_task_warnings_for_user',
         params: {'p_user_id': userId},
-      ).timeout(const Duration(seconds: 8));
+      ).timeout(const Duration(seconds: 30));
       if (response == null) return {};
       // RPC que retorna TABLE devolve List. Às vezes vem dentro de chave (ex.: data).
       List<dynamic> list;

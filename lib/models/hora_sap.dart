@@ -6,6 +6,7 @@ class HoraSAP {
   final String? ordem;
   final String? operacao;
   final double? trabalhoReal;
+  final String? uniTrabRea;
   final String? tipoAtividadeReal;
   final String? numeroPessoa;
   final String? nomeEmpregado;
@@ -32,6 +33,7 @@ class HoraSAP {
     this.ordem,
     this.operacao,
     this.trabalhoReal,
+    this.uniTrabRea,
     this.tipoAtividadeReal,
     this.numeroPessoa,
     this.nomeEmpregado,
@@ -50,6 +52,14 @@ class HoraSAP {
     this.createdAt,
     this.updatedAt,
   });
+
+  /// Retorna `trabalhoReal` normalizado em horas (converte MIN/M dividindo por 60).
+  double get horasReaisEmHoras {
+    final valor = trabalhoReal ?? 0.0;
+    final u = (uniTrabRea ?? '').trim().toUpperCase();
+    if (u == 'MIN' || u == 'M') return valor / 60.0;
+    return valor;
+  }
 
   // Converter de Map (do Supabase)
   factory HoraSAP.fromMap(Map<String, dynamic> map) {
@@ -121,6 +131,7 @@ class HoraSAP {
       ordem: normalizeString(map['ordem']),
       operacao: normalizeString(map['operacao']),
       trabalhoReal: parseDouble(map['trabalho_real']),
+      uniTrabRea: normalizeString(map['uni_trab_rea']),
       tipoAtividadeReal: normalizeString(map['tipo_atividade_real']),
       numeroPessoa: normalizeString(map['numero_pessoa']),
       nomeEmpregado: normalizeString(map['nome_empregado']),
@@ -151,6 +162,7 @@ class HoraSAP {
       'ordem': ordem,
       'operacao': operacao,
       'trabalho_real': trabalhoReal,
+      'uni_trab_rea': uniTrabRea,
       'tipo_atividade_real': tipoAtividadeReal,
       'numero_pessoa': numeroPessoa,
       'nome_empregado': nomeEmpregado,

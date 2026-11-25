@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_cache_service.dart';
+import '../features/apoios_operacionais/data/services/apoios_auth_session_service.dart';
 
 // Classe simples para simular AuthResponse
 class AuthResponse {
@@ -83,6 +84,11 @@ class AuthServiceSimples {
       await _authCache.saveUser(usuario);
       // Garantir credencial local para login offline
       await _usuarioService.salvarUsuarioLocalComSenha(usuario, password);
+      // Obter token assinado para o gateway de Apoios Operacionais (sem bloquear login se offline)
+      await ApoiosAuthSessionService().authenticateWithPassword(
+        email: email,
+        password: password,
+      );
       return AuthResponse(
         usuario: usuario,
         sucesso: true,
@@ -149,6 +155,16 @@ class AuthServiceSimples {
       // Salva no banco local para permitir sessões offline
       await _usuarioService.salvarUsuarioLocalComSenha(usuarioCompleto, password);
 
+      final apoiosToken = data['apoiosToken']?.toString();
+      if (apoiosToken != null &&
+          apoiosToken.isNotEmpty &&
+          usuarioCompleto.id != null) {
+        await ApoiosAuthSessionService().setToken(
+          usuarioId: usuarioCompleto.id!,
+          token: apoiosToken,
+        );
+      }
+
       return AuthResponse(
         usuario: usuarioCompleto,
         sucesso: true,
@@ -203,9 +219,11 @@ class AuthServiceSimples {
 
   // Fazer logout
   Future<void> signOut() async {
+    final prevUserId = _usuarioAtual?.id;
     _usuarioAtual = null;
     await _clearSession();
     await _authCache.clear();
+    await ApoiosAuthSessionService().clearSession(usuarioId: prevUserId);
   }
 
   /// Atualizar usuário atual (usado após atualizar perfil).
@@ -320,6 +338,9 @@ class AuthServiceSimples {
       final cached = await _authCache.loadUser();
       if (cached != null) {
         _usuarioAtual = cached;
+        if (cached.id != null) {
+          await ApoiosAuthSessionService().restoreTokenForUser(cached.id!);
+        }
         return true;
       }
 

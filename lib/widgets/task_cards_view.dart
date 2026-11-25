@@ -3241,7 +3241,14 @@ class _TaskCardsViewState extends State<TaskCardsView> {
             ),
           ],
         ),
-        subtitle: si.tipo != null ? Text('Tipo: ${si.tipo}') : null,
+        subtitle: (si.tipo != null || si.resumoPeriodo != null)
+            ? Text(
+                [
+                  if (si.tipo != null) 'Tipo: ${si.tipo}',
+                  if (si.resumoPeriodo != null) si.resumoPeriodo!,
+                ].join(' · '),
+              )
+            : null,
         children: [
           Padding(
             padding: const EdgeInsets.all(16),
@@ -3262,8 +3269,12 @@ class _TaskCardsViewState extends State<TaskCardsView> {
                     'Data Início',
                     _formatDate(si.dataInicio!),
                   ),
+                if (si.horaInicioFormatada != null)
+                  _buildInfoRowModern('Hora Início', si.horaInicioFormatada),
                 if (si.dataFim != null)
                   _buildInfoRowModern('Data Fim', _formatDate(si.dataFim!)),
+                if (si.horaFimFormatada != null)
+                  _buildInfoRowModern('Hora Fim', si.horaFimFormatada),
               ],
             ),
           ),

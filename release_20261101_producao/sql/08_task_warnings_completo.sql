@@ -681,3 +681,4 @@ CREATE INDEX IF NOT EXISTS idx_tasks_regional_divisao_segmento ON public.tasks(r
 -- 7. RECARREGAR SCHEMA NO POSTGREST
 -- ------------------------------------------------------------------------------
 NOTIFY pgrst, 'reload schema';
+

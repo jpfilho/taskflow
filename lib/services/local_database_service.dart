@@ -11,7 +11,7 @@ class LocalDatabaseService {
 
   static Database? _database;
   static const String _databaseName = 'taskflow_local.db';
-  static const int _databaseVersion = 10;
+  static const int _databaseVersion = 11;
 
   Future<Database> get database async {
     if (_database != null) return _database!;
@@ -598,6 +598,69 @@ class LocalDatabaseService {
     await db.execute('CREATE INDEX idx_sync_queue_next_retry ON sync_queue(next_retry_at)');
     await db.execute('CREATE INDEX idx_melhorias_bugs_local_status ON melhorias_bugs_local(status)');
     await db.execute('CREATE INDEX idx_melhorias_bugs_local_versao_id ON melhorias_bugs_local(versao_id)');
+    await _createApoiosTables(db);
+  }
+
+  Future<void> _createApoiosTables(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS tasks_apoios_kv_local (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS tasks_apoios_solicitacoes_local (
+        id TEXT PRIMARY KEY,
+        usuario_id TEXT NOT NULL,
+        task_solicitante_id TEXT NOT NULL,
+        divisao_solicitante_id TEXT,
+        divisao_destino_id TEXT,
+        status TEXT,
+        versao INTEGER DEFAULT 1,
+        payload_json TEXT NOT NULL,
+        sync_status TEXT DEFAULT 'synced',
+        updated_at INTEGER NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS tasks_apoios_vinculos_local (
+        id TEXT PRIMARY KEY,
+        usuario_id TEXT NOT NULL,
+        solicitacao_id TEXT,
+        task_principal_id TEXT NOT NULL,
+        task_apoio_id TEXT,
+        ativo INTEGER DEFAULT 1,
+        versao INTEGER DEFAULT 1,
+        payload_json TEXT NOT NULL,
+        sync_status TEXT DEFAULT 'synced',
+        updated_at INTEGER NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS tasks_apoios_sync_queue_local (
+        queue_id TEXT PRIMARY KEY,
+        usuario_id TEXT NOT NULL,
+        operacao TEXT NOT NULL,
+        entidade_id TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        versao_esperada INTEGER DEFAULT 1,
+        payload_json TEXT NOT NULL,
+        sync_status TEXT DEFAULT 'pendente_sync',
+        erro_mensagem TEXT,
+        tentativas INTEGER DEFAULT 0,
+        criado_em INTEGER NOT NULL
+      )
+    ''');
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_apoios_sol_usuario ON tasks_apoios_solicitacoes_local(usuario_id)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_apoios_vinc_task ON tasks_apoios_vinculos_local(task_principal_id)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_apoios_queue_usuario ON tasks_apoios_sync_queue_local(usuario_id, sync_status)',
+    );
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -946,6 +1009,46 @@ class LocalDatabaseService {
         await db.execute('ALTER TABLE melhorias_bugs_local ADD COLUMN prazo INTEGER');
       } catch (_) {}
     }
+    if (oldVersion < 11) {
+      try {
+        await _createApoiosTables(db);
+      } catch (_) {}
+    }
+  }
+
+  Future<String?> getApoiosKv(String key) async {
+    final db = await database;
+    final rows = await db.query(
+      'tasks_apoios_kv_local',
+      columns: ['value'],
+      where: 'key = ?',
+      whereArgs: [key],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return rows.first['value'] as String?;
+  }
+
+  Future<void> setApoiosKv(String key, String value) async {
+    final db = await database;
+    await db.insert(
+      'tasks_apoios_kv_local',
+      {
+        'key': key,
+        'value': value,
+        'updated_at': DateTime.now().millisecondsSinceEpoch,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<void> deleteApoiosKv(String key) async {
+    final db = await database;
+    await db.delete(
+      'tasks_apoios_kv_local',
+      where: 'key = ?',
+      whereArgs: [key],
+    );
   }
 
   // Métodos para gerenciar fila de sincronização

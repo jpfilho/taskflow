@@ -158,10 +158,14 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _loadMensagens() async {
     setState(() => _isLoading = true);
     try {
-      final mensagens = await _chatService.listarMensagens(widget.grupoId);
+      // Buscar últimas 80 mensagens e dados do grupo em paralelo para resposta rápida
+      final results = await Future.wait<dynamic>([
+        _chatService.listarMensagens(widget.grupoId, limit: 80),
+        _chatService.obterGrupoPorId(widget.grupoId),
+      ]);
+      final mensagens = results[0] as List<Mensagem>;
+      final grupo = results[1] as GrupoChat?;
 
-      // Obter nome do grupo
-      final grupo = await _chatService.obterGrupoPorId(widget.grupoId);
       if (grupo == null) {
         // Tentar buscar por tarefa_id caso widget.grupoId seja o ID da tarefa
         final grupoPorTarefa = await _chatService.obterGrupoPorTarefaId(
@@ -187,7 +191,9 @@ class _ChatScreenState extends State<ChatScreen> {
       _marcarMensagensComoLidas();
     } catch (e) {
       print('Erro ao carregar mensagens: $e');
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
@@ -2553,14 +2559,27 @@ class _ChatScreenState extends State<ChatScreen> {
 
     try {
       final uri = Uri.parse(urlOriginal);
-      final bucketName = 'anexos-tarefas';
-      final idx = uri.pathSegments.indexOf(bucketName);
+      final segments = uri.pathSegments;
+      // Suporta qualquer bucket após /object/public/<bucket>/... ou /object/sign/<bucket>/...
+      final objIdx = segments.indexOf('object');
+      if (objIdx != -1 && objIdx + 2 < segments.length) {
+        final mode = segments[objIdx + 1];
+        if (mode == 'public' || mode == 'sign') {
+          final bucketName = segments[objIdx + 2];
+          if (objIdx + 3 < segments.length) {
+            final caminhoArquivo = segments.sublist(objIdx + 3).join('/');
+            return SupabaseConfig.client.storage
+                .from(bucketName)
+                .getPublicUrl(caminhoArquivo);
+          }
+        }
+      }
 
-      if (idx != -1 && idx < uri.pathSegments.length - 1) {
-        final pathParts = uri.pathSegments.sublist(idx + 1);
-        final caminhoArquivo = pathParts.join('/');
-
-        // Gera a public URL limpa e original do supabase SDK
+      // Fallback legado para bucket 'anexos-tarefas'
+      const bucketName = 'anexos-tarefas';
+      final idx = segments.indexOf(bucketName);
+      if (idx != -1 && idx < segments.length - 1) {
+        final caminhoArquivo = segments.sublist(idx + 1).join('/');
         return SupabaseConfig.client.storage
             .from(bucketName)
             .getPublicUrl(caminhoArquivo);
@@ -2577,20 +2596,107 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final urlPublica = _obterUrlPublicaDireto(urlOriginal);
 
-    return _buildAnexoWidgetWithUrl(mensagem, urlPublica, tipo, nomeArquivo);
+    return _buildAnexoWidgetWithUrl(
+      mensagem,
+      urlPublica,
+      tipo,
+      nomeArquivo,
+      fallbackUrl: urlOriginal != urlPublica ? urlOriginal : null,
+    );
+  }
+
+  Widget _buildImageErrorFallback(String urlToOpen) {
+    return Container(
+      width: 350,
+      height: 200,
+      color: Colors.grey[200],
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.broken_image_outlined, color: Colors.grey[600], size: 32),
+          const SizedBox(height: 8),
+          Text(
+            'Não foi possível exibir a imagem',
+            style: TextStyle(color: Colors.grey[700], fontSize: 12),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 8),
+          TextButton.icon(
+            onPressed: () async {
+              final uri = Uri.tryParse(urlToOpen);
+              if (uri != null && await canLaunchUrl(uri)) {
+                await launchUrl(uri, mode: LaunchMode.externalApplication);
+              }
+            },
+            icon: const Icon(Icons.open_in_new, size: 15),
+            label: const Text('Abrir no navegador', style: TextStyle(fontSize: 12)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNetworkImageWithFallback(String primaryUrl, {String? fallbackUrl}) {
+    if (kIsWeb) {
+      return Image.network(
+        primaryUrl,
+        fit: BoxFit.cover,
+        loadingBuilder: (context, child, loadingProgress) {
+          if (loadingProgress == null) return child;
+          return Container(
+            width: 350,
+            height: 220,
+            color: Colors.grey[200],
+            child: const Center(child: CircularProgressIndicator()),
+          );
+        },
+        errorBuilder: (context, error, stackTrace) {
+          if (fallbackUrl != null && fallbackUrl.isNotEmpty) {
+            return Image.network(
+              fallbackUrl,
+              fit: BoxFit.cover,
+              errorBuilder: (context, err2, st2) => _buildImageErrorFallback(primaryUrl),
+            );
+          }
+          return _buildImageErrorFallback(primaryUrl);
+        },
+      );
+    }
+
+    return CachedNetworkImage(
+      imageUrl: primaryUrl,
+      fit: BoxFit.cover,
+      placeholder: (context, url) => Container(
+        width: 350,
+        height: 220,
+        color: Colors.grey[200],
+        child: const Center(child: CircularProgressIndicator()),
+      ),
+      errorWidget: (context, url, error) {
+        if (fallbackUrl != null && fallbackUrl.isNotEmpty) {
+          return CachedNetworkImage(
+            imageUrl: fallbackUrl,
+            fit: BoxFit.cover,
+            errorWidget: (context, u2, e2) => _buildImageErrorFallback(primaryUrl),
+          );
+        }
+        return _buildImageErrorFallback(primaryUrl);
+      },
+    );
   }
 
   Widget _buildAnexoWidgetWithUrl(
     Mensagem mensagem,
     String url,
     String tipo,
-    String nomeArquivo,
-  ) {
-    // Para imagens: exibir diretamente
+    String nomeArquivo, {
+    String? fallbackUrl,
+  }) {
+    // Para imagens: exibir diretamente com fallback resiliente
     if (tipo == 'imagem' && url.isNotEmpty) {
       return GestureDetector(
         onTap: () {
-          // Abrir imagem em tela cheia
           _mostrarImagemFullScreen(url);
         },
         child: Container(
@@ -2608,34 +2714,7 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(8),
-            child: CachedNetworkImage(
-              imageUrl: url,
-              fit: BoxFit.cover,
-              placeholder: (context, url) => Container(
-                width: 350,
-                height: 250,
-                color: Colors.grey[200],
-                child: const Center(child: CircularProgressIndicator()),
-              ),
-              errorWidget: (context, url, error) {
-                return Container(
-                  width: 350,
-                  height: 250,
-                  color: Colors.grey[200],
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.error_outline, color: Colors.grey[600]),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Erro ao carregar imagem',
-                        style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
+            child: _buildNetworkImageWithFallback(url, fallbackUrl: fallbackUrl),
           ),
         ),
       );

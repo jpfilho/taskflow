@@ -782,7 +782,7 @@ class HoraSAPService {
       // Buscar todas as horas do perfil do usuário
       final centrosTrabalhoUsuario = await _obterCentrosTrabalhoUsuario();
       // Selecionar campos necessários; tipo_ordem para separar investimento (PROJ) e custeio (demais)
-      dynamic query = _supabase.from('horas_sap').select('id, numero_pessoa, nome_empregado, trabalho_real, data_lancamento, tipo_atividade_real, tipo_ordem');
+      dynamic query = _supabase.from('horas_sap').select('id, numero_pessoa, nome_empregado, trabalho_real, uni_trab_rea, data_lancamento, tipo_atividade_real, tipo_ordem');
 
       // Aplicar filtros de perfil
       if (usuario != null && !usuario.isRoot && centrosTrabalhoUsuario.isNotEmpty) {
@@ -888,11 +888,12 @@ class HoraSAPService {
         
         final dataLancamento = hora.dataLancamento!;
         final anoMes = '${dataLancamento.year}-${dataLancamento.month.toString().padLeft(2, '0')}';
+        final valorHoras = hora.horasReaisEmHoras;
         
         // Total de horas
         horasPorEmpregadoMes.putIfAbsent(numeroPessoa, () => {});
         horasPorEmpregadoMes[numeroPessoa]!.putIfAbsent(anoMes, () => 0.0);
-        horasPorEmpregadoMes[numeroPessoa]![anoMes] = horasPorEmpregadoMes[numeroPessoa]![anoMes]! + hora.trabalhoReal!;
+        horasPorEmpregadoMes[numeroPessoa]![anoMes] = horasPorEmpregadoMes[numeroPessoa]![anoMes]! + valorHoras;
         
         // Custeio = todos os tipos de ordem (PREV, INSP, ANOM, PRED, etc.). Investimento = apenas tipo_ordem PROJ.
         final tipoOrd = (hora.tipoOrdem ?? '').trim().toUpperCase();
@@ -905,11 +906,11 @@ class HoraSAPService {
         if (tipoOrd == 'PROJ') {
           horasInvestimentoPorEmpregadoMes.putIfAbsent(numeroPessoa, () => {});
           horasInvestimentoPorEmpregadoMes[numeroPessoa]!.putIfAbsent(anoMes, () => 0.0);
-          horasInvestimentoPorEmpregadoMes[numeroPessoa]![anoMes] = horasInvestimentoPorEmpregadoMes[numeroPessoa]![anoMes]! + hora.trabalhoReal!;
+          horasInvestimentoPorEmpregadoMes[numeroPessoa]![anoMes] = horasInvestimentoPorEmpregadoMes[numeroPessoa]![anoMes]! + valorHoras;
         } else {
           horasCusteioPorEmpregadoMes.putIfAbsent(numeroPessoa, () => {});
           horasCusteioPorEmpregadoMes[numeroPessoa]!.putIfAbsent(anoMes, () => 0.0);
-          horasCusteioPorEmpregadoMes[numeroPessoa]![anoMes] = horasCusteioPorEmpregadoMes[numeroPessoa]![anoMes]! + hora.trabalhoReal!;
+          horasCusteioPorEmpregadoMes[numeroPessoa]![anoMes] = horasCusteioPorEmpregadoMes[numeroPessoa]![anoMes]! + valorHoras;
         }
         
         // Horas extras: tipo_atividade_real que inicia com HH
@@ -917,36 +918,36 @@ class HoraSAPService {
         if (tipoAtividade.startsWith('HH')) {
           horasExtrasPorEmpregadoMes.putIfAbsent(numeroPessoa, () => {});
           horasExtrasPorEmpregadoMes[numeroPessoa]!.putIfAbsent(anoMes, () => 0.0);
-          horasExtrasPorEmpregadoMes[numeroPessoa]![anoMes] = horasExtrasPorEmpregadoMes[numeroPessoa]![anoMes]! + hora.trabalhoReal!;
+          horasExtrasPorEmpregadoMes[numeroPessoa]![anoMes] = horasExtrasPorEmpregadoMes[numeroPessoa]![anoMes]! + valorHoras;
           
           // Separar HHE em Investimento vs Custeio
           if (tipoOrd == 'PROJ') {
              horasExtrasInvestimentoPorEmpregadoMes.putIfAbsent(numeroPessoa, () => {});
              horasExtrasInvestimentoPorEmpregadoMes[numeroPessoa]!.putIfAbsent(anoMes, () => 0.0);
-             horasExtrasInvestimentoPorEmpregadoMes[numeroPessoa]![anoMes] = horasExtrasInvestimentoPorEmpregadoMes[numeroPessoa]![anoMes]! + hora.trabalhoReal!;
+             horasExtrasInvestimentoPorEmpregadoMes[numeroPessoa]![anoMes] = horasExtrasInvestimentoPorEmpregadoMes[numeroPessoa]![anoMes]! + valorHoras;
              // 50% ou 100%
              if (RegExp(r'HH.*050').hasMatch(tipoAtividade)) {
                horasExtras50InvestimentoPorEmpregadoMes.putIfAbsent(numeroPessoa, () => {});
                horasExtras50InvestimentoPorEmpregadoMes[numeroPessoa]!.putIfAbsent(anoMes, () => 0.0);
-               horasExtras50InvestimentoPorEmpregadoMes[numeroPessoa]![anoMes] = horasExtras50InvestimentoPorEmpregadoMes[numeroPessoa]![anoMes]! + hora.trabalhoReal!;
+               horasExtras50InvestimentoPorEmpregadoMes[numeroPessoa]![anoMes] = horasExtras50InvestimentoPorEmpregadoMes[numeroPessoa]![anoMes]! + valorHoras;
              } else if (RegExp(r'HH.*100').hasMatch(tipoAtividade)) {
                horasExtras100InvestimentoPorEmpregadoMes.putIfAbsent(numeroPessoa, () => {});
                horasExtras100InvestimentoPorEmpregadoMes[numeroPessoa]!.putIfAbsent(anoMes, () => 0.0);
-               horasExtras100InvestimentoPorEmpregadoMes[numeroPessoa]![anoMes] = horasExtras100InvestimentoPorEmpregadoMes[numeroPessoa]![anoMes]! + hora.trabalhoReal!;
+               horasExtras100InvestimentoPorEmpregadoMes[numeroPessoa]![anoMes] = horasExtras100InvestimentoPorEmpregadoMes[numeroPessoa]![anoMes]! + valorHoras;
              }
           } else {
              horasExtrasCusteioPorEmpregadoMes.putIfAbsent(numeroPessoa, () => {});
              horasExtrasCusteioPorEmpregadoMes[numeroPessoa]!.putIfAbsent(anoMes, () => 0.0);
-             horasExtrasCusteioPorEmpregadoMes[numeroPessoa]![anoMes] = horasExtrasCusteioPorEmpregadoMes[numeroPessoa]![anoMes]! + hora.trabalhoReal!;
+             horasExtrasCusteioPorEmpregadoMes[numeroPessoa]![anoMes] = horasExtrasCusteioPorEmpregadoMes[numeroPessoa]![anoMes]! + valorHoras;
              // 50% ou 100%
              if (RegExp(r'HH.*050').hasMatch(tipoAtividade)) {
                horasExtras50CusteioPorEmpregadoMes.putIfAbsent(numeroPessoa, () => {});
                horasExtras50CusteioPorEmpregadoMes[numeroPessoa]!.putIfAbsent(anoMes, () => 0.0);
-               horasExtras50CusteioPorEmpregadoMes[numeroPessoa]![anoMes] = horasExtras50CusteioPorEmpregadoMes[numeroPessoa]![anoMes]! + hora.trabalhoReal!;
+               horasExtras50CusteioPorEmpregadoMes[numeroPessoa]![anoMes] = horasExtras50CusteioPorEmpregadoMes[numeroPessoa]![anoMes]! + valorHoras;
              } else if (RegExp(r'HH.*100').hasMatch(tipoAtividade)) {
                horasExtras100CusteioPorEmpregadoMes.putIfAbsent(numeroPessoa, () => {});
                horasExtras100CusteioPorEmpregadoMes[numeroPessoa]!.putIfAbsent(anoMes, () => 0.0);
-               horasExtras100CusteioPorEmpregadoMes[numeroPessoa]![anoMes] = horasExtras100CusteioPorEmpregadoMes[numeroPessoa]![anoMes]! + hora.trabalhoReal!;
+               horasExtras100CusteioPorEmpregadoMes[numeroPessoa]![anoMes] = horasExtras100CusteioPorEmpregadoMes[numeroPessoa]![anoMes]! + valorHoras;
              }
           }
         }
@@ -1328,7 +1329,7 @@ class HoraSAPService {
       final firstDay = '$ano-$mesStr-01';
       dynamic query = _supabase
           .from('horas_sap')
-          .select('data_lancamento, trabalho_real, numero_pessoa')
+          .select('data_lancamento, trabalho_real, uni_trab_rea, numero_pessoa')
           .gte('data_lancamento', firstDay)
           .lt('data_lancamento', mes == 12 ? '${ano + 1}-01-01' : '$ano-${(mes + 1).toString().padLeft(2, '0')}-01');
       final usuario = _authService.currentUser;
@@ -1355,8 +1356,12 @@ class HoraSAPService {
       for (var row in response) {
         final r = row as Map<String, dynamic>;
         final dataLanc = r['data_lancamento'];
-        final trabalho = (r['trabalho_real'] as num?)?.toDouble();
-        if (dataLanc == null || trabalho == null) continue;
+        final trabalhoBruto = (r['trabalho_real'] as num?)?.toDouble();
+        if (dataLanc == null || trabalhoBruto == null) continue;
+        final unidade = (r['uni_trab_rea']?.toString() ?? '').trim().toUpperCase();
+        final trabalho = (unidade == 'MIN' || unidade == 'M')
+            ? trabalhoBruto / 60.0
+            : trabalhoBruto;
         DateTime? dt;
         if (dataLanc is String) {
           dt = DateTime.tryParse(dataLanc);

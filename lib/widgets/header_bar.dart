@@ -24,6 +24,7 @@ class HeaderBar extends StatefulWidget {
   final Function(String)? onSearch;
   final VoidCallback? onChat;
   final int unreadChatCount;
+  final Widget? notificationsButton;
   final VoidCallback? onConfig;
   final Future<void> Function()? onPerfilUpdated;
   final Function(String)? onViewModeChanged;
@@ -62,6 +63,7 @@ class HeaderBar extends StatefulWidget {
     this.onSearch,
     this.onChat,
     this.unreadChatCount = 0,
+    this.notificationsButton,
     this.onConfig,
     this.onPerfilUpdated,
     this.onViewModeChanged,
@@ -458,6 +460,10 @@ class _HeaderBarState extends State<HeaderBar> {
                         );
                       },
                     ),
+                    if (widget.notificationsButton != null) ...[
+                      const SizedBox(width: 2),
+                      widget.notificationsButton!,
+                    ],
                     if (widget.canEditTasks) ...[
                       const SizedBox(width: 2),
                       IconButton(
@@ -801,6 +807,8 @@ class _HeaderBarState extends State<HeaderBar> {
               );
             },
           ),
+          if (widget.notificationsButton != null)
+            widget.notificationsButton!,
           if (widget.canEditTasks)
             IconButton(
               icon: Icon(Icons.settings, color: iconColor),

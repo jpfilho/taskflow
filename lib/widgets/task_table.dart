@@ -25,6 +25,8 @@ import '../utils/clipboard_helper.dart';
 import '../models/task_table_column.dart';
 import 'common/task_table_column_picker_dialog.dart';
 import 'notas_sap_vinculadas_dialog.dart';
+import '../features/apoios_operacionais/presentation/task_apoio_ui_controller.dart';
+import '../features/apoios_operacionais/presentation/widgets/task_apoio_table_badge.dart';
 
 class TaskTable extends StatefulWidget {
   final List<Task> tasks;
@@ -53,6 +55,11 @@ class TaskTable extends StatefulWidget {
   /// Indica se as tarefas ainda estão sendo carregadas (evita mostrar 'Nenhuma tarefa encontrada' prematuramente).
   final bool isLoading;
 
+  /// Controller opcional de Apoios Operacionais (carregamento em lote desacoplado).
+  final TaskApoioUiController? apoioController;
+  final String? currentUserId;
+  final String? currentUserName;
+
   const TaskTable({
     super.key,
     required this.tasks,
@@ -73,6 +80,9 @@ class TaskTable extends StatefulWidget {
     this.onCountsLoaded,
     this.warningsByTaskId,
     this.isLoading = false,
+    this.apoioController,
+    this.currentUserId,
+    this.currentUserName,
   });
 
   @override
@@ -137,6 +147,7 @@ class _TaskTableState extends State<TaskTable> {
     _ownsBodyController = widget.horizontalController == null;
     _headerHorizontalController = ScrollController();
     TaskTableColumnService.instance.columnsNotifier.addListener(_onColumnsChanged);
+    unawaited(TaskTableColumnService.instance.loadColumns());
     // Corpo dirige o cabeçalho
     _bodyHorizontalController.addListener(() {
       if (!_headerHorizontalController.hasClients) return;
@@ -322,6 +333,15 @@ class _TaskTableState extends State<TaskTable> {
 
     try {
       final taskIds = widget.tasks.map((t) => t.id).toList();
+
+      // Carregamento em lote desacoplado de Apoios Operacionais (sem N+1 e sem bloquear a tabela)
+      if (widget.apoioController != null &&
+          TaskTableColumnService.instance.visibleColumns.contains(
+            TaskTableColumn.apoios,
+          )) {
+        widget.apoioController!.registrarTasksConhecidas(widget.tasks);
+        unawaited(widget.apoioController!.carregarResumosEmLote(taskIds));
+      }
 
       // Carregar contagens em paralelo
       final mensagensFuture = _chatService
@@ -1167,6 +1187,8 @@ class _TaskTableState extends State<TaskTable> {
           _buildHeaderCell('SI', TaskTableColumn.si.width(isMobile), isMobile),
         if (visibleCols.contains(TaskTableColumn.alertas))
           _buildHeaderCell('ALERTAS', TaskTableColumn.alertas.width(isMobile), isMobile),
+        if (visibleCols.contains(TaskTableColumn.apoios))
+          _buildHeaderCell('APOIOS', TaskTableColumn.apoios.width(isMobile), isMobile),
       ],
     );
   }
@@ -1389,6 +1411,7 @@ class _TaskTableState extends State<TaskTable> {
     final atsWidth = isMobile ? 38.0 : 42.0;
     final sisWidth = isMobile ? 38.0 : 42.0;
     final alertasWidth = isMobile ? 45.0 : 50.0;
+    final apoiosWidth = TaskTableColumn.apoios.width(isMobile);
 
     final visibleCols = TaskTableColumnService.instance.visibleColumns;
 
@@ -1536,6 +1559,32 @@ class _TaskTableState extends State<TaskTable> {
                 isMobile,
                 statusBackgroundColor,
                 taskWarnings,
+              ),
+            // Coluna de APOIOS (indicador discreto em lote)
+            if (visibleCols.contains(TaskTableColumn.apoios))
+              SizedBox(
+                width: apoiosWidth,
+                height: 50,
+                child: Center(
+                  child: isExecutorRow
+                      ? const Text('—')
+                      : AnimatedBuilder(
+                          animation: widget.apoioController ?? ChangeNotifier(),
+                          builder: (ctx, _) {
+                            final ctrl = widget.apoioController;
+                            if (ctrl == null) {
+                              return const Text('—');
+                            }
+                            return TaskApoioTableBadge(
+                              task: task,
+                              resumo: ctrl.resumoParaTask(task.id),
+                              controller: ctrl,
+                              usuarioAtualId: widget.currentUserId ?? '',
+                              usuarioAtualNome: widget.currentUserName,
+                            );
+                          },
+                        ),
+                ),
               ),
           ],
         ),
@@ -3733,7 +3782,14 @@ class _TaskTableState extends State<TaskTable> {
             ),
           ],
         ),
-        subtitle: si.tipo != null ? Text('Tipo: ${si.tipo}') : null,
+        subtitle: (si.tipo != null || si.resumoPeriodo != null)
+            ? Text(
+                [
+                  if (si.tipo != null) 'Tipo: ${si.tipo}',
+                  if (si.resumoPeriodo != null) si.resumoPeriodo!,
+                ].join(' · '),
+              )
+            : null,
         children: [
           Padding(
             padding: const EdgeInsets.all(16),
@@ -3754,8 +3810,12 @@ class _TaskTableState extends State<TaskTable> {
                     'Data Início',
                     _formatDate(si.dataInicio!),
                   ),
+                if (si.horaInicioFormatada != null)
+                  _buildInfoRowModern('Hora Início', si.horaInicioFormatada),
                 if (si.dataFim != null)
                   _buildInfoRowModern('Data Fim', _formatDate(si.dataFim!)),
+                if (si.horaFimFormatada != null)
+                  _buildInfoRowModern('Hora Fim', si.horaFimFormatada),
               ],
             ),
           ),

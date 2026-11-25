@@ -6,6 +6,7 @@ const axios = require('axios');
 const cron = require('node-cron');
 const geo = require('./geo_ingestors');
 const { authenticateAD } = require('./ad_auth');
+const { registerApoiosGateway, signApoiosToken } = require('./backend/apoios_gateway');
 
 // ==========================================
 // CONFIGURAÇÃO
@@ -235,6 +236,7 @@ app.post('/auth/ad-login', async (req, res) => {
     return res.json({
       ok: true,
       usuario: finalUser,
+      apoiosToken: signApoiosToken(finalUser),
       ad_info: {
         username: adUser.username,
         nome: adUser.nome,
@@ -3856,6 +3858,11 @@ async function setupListenNotify() {
     // Continuar sem LISTEN/NOTIFY (usar polling se necessário)
   }
 }
+
+// ==========================================
+// GATEWAY AUTENTICADO - APOIOS OPERACIONAIS
+// ==========================================
+registerApoiosGateway(app, supabase, { telegramBotToken: TELEGRAM_BOT_TOKEN });
 
 // ==========================================
 // INICIAR SERVIDOR

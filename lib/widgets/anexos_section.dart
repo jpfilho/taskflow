@@ -526,30 +526,36 @@ class _AnexosSectionState extends State<AnexosSection> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            const Text(
-              'Anexos',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
-            ),
-            ElevatedButton.icon(
-              onPressed: _isUploading ? null : _uploadArquivo,
-              icon: _isUploading
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.upload_file, size: 18),
-              label: Text(_isUploading ? 'Enviando...' : 'Adicionar arquivo'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF1E3A5F),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        SizedBox(
+          width: double.infinity,
+          child: Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              const Text(
+                'Anexos',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
               ),
-            ),
-          ],
+              ElevatedButton.icon(
+                onPressed: _isUploading ? null : _uploadArquivo,
+                icon: _isUploading
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.upload_file, size: 18),
+                label: Text(_isUploading ? 'Enviando...' : 'Adicionar arquivo'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF1E3A5F),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                ),
+              ),
+            ],
+          ),
         ),
         const SizedBox(height: 8),
         if (_isLoading)

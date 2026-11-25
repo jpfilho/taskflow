@@ -5,6 +5,7 @@ import '../../models/nota_sap.dart';
 import '../../models/nota_sap_analise.dart';
 import '../../models/task.dart';
 import '../../services/nota_sap_analise_service.dart';
+import '../nota_workspace/nota_video_player_widget.dart';
 import '../nota_analise_workspace.dart';
 import '../nota_workspace/nota_analise_badge.dart';
 
@@ -164,8 +165,8 @@ class _TaskSapNotesSectionState extends State<TaskSapNotesSection> {
   }
 
   void _visualizarAnexo(NotaSapAnexo anexo) {
-    if (anexo.tipoArquivo == NotaAnexoTipo.imagem) {
-      final url = _analiseService.obterUrlAnexo(anexo);
+    if (anexo.tipoArquivo == NotaAnexoTipo.video) {
+      final futureUrl = _analiseService.obterUrlAssinada(anexo);
       showDialog(
         context: context,
         builder: (ctx) => Dialog(
@@ -174,20 +175,60 @@ class _TaskSapNotesSectionState extends State<TaskSapNotesSection> {
           child: Stack(
             children: [
               Center(
-                child: PhotoView(
-                  imageProvider: NetworkImage(url),
-                  minScale: PhotoViewComputedScale.contained,
-                  maxScale: PhotoViewComputedScale.covered * 3.0,
-                  initialScale: PhotoViewComputedScale.contained,
-                  loadingBuilder: (context, event) => const Center(
-                    child: CircularProgressIndicator(color: Colors.white),
-                  ),
-                  errorBuilder: (context, error, stackTrace) => const Center(
-                    child: Text(
-                      'Não foi possível carregar a imagem.',
-                      style: TextStyle(color: Colors.white),
-                    ),
-                  ),
+                child: NotaVideoPlayerWidget(
+                  urlFuture: futureUrl,
+                  fileName: anexo.nomeExibicao,
+                  onOpenExternal: () => _analiseService.baixarOuAbrirAnexo(anexo),
+                  onDownload: () => _analiseService.baixarAnexo(anexo),
+                ),
+              ),
+              Positioned(
+                top: 8,
+                right: 8,
+                child: IconButton(
+                  icon: const Icon(Icons.close, color: Colors.white),
+                  onPressed: () => Navigator.of(ctx).pop(),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    } else if (anexo.tipoArquivo == NotaAnexoTipo.imagem) {
+      final futureUrl = _analiseService.obterUrlAssinada(anexo);
+      showDialog(
+        context: context,
+        builder: (ctx) => Dialog(
+          backgroundColor: Colors.black.withAlpha(235),
+          insetPadding: const EdgeInsets.all(16),
+          child: Stack(
+            children: [
+              Center(
+                child: FutureBuilder<String>(
+                  future: futureUrl,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(
+                        child: CircularProgressIndicator(color: Colors.white),
+                      );
+                    }
+                    final url = snapshot.data ?? _analiseService.obterUrlAnexo(anexo);
+                    return PhotoView(
+                      imageProvider: NetworkImage(url),
+                      minScale: PhotoViewComputedScale.contained,
+                      maxScale: PhotoViewComputedScale.covered * 3.0,
+                      initialScale: PhotoViewComputedScale.contained,
+                      loadingBuilder: (context, event) => const Center(
+                        child: CircularProgressIndicator(color: Colors.white),
+                      ),
+                      errorBuilder: (context, error, stackTrace) => const Center(
+                        child: Text(
+                          'Não foi possível carregar a imagem.',
+                          style: TextStyle(color: Colors.white),
+                        ),
+                      ),
+                    );
+                  },
                 ),
               ),
               Positioned(
@@ -222,18 +263,7 @@ class _TaskSapNotesSectionState extends State<TaskSapNotesSection> {
         ),
       );
     } else {
-      _analiseService.obterUrlAssinada(anexo).then((url) async {
-        final uri = Uri.parse(url);
-        if (await canLaunchUrl(uri)) {
-          await launchUrl(uri, mode: LaunchMode.externalApplication);
-        } else {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Não foi possível abrir o documento.')),
-            );
-          }
-        }
-      }).catchError((e) {
+      _analiseService.baixarOuAbrirAnexo(anexo).catchError((e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('Erro ao abrir documento: $e')),
@@ -900,14 +930,52 @@ class _TaskSapNotesSectionState extends State<TaskSapNotesSection> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(
-                          isImg
-                              ? Icons.image_outlined
-                              : Icons.picture_as_pdf_outlined,
-                          size: 28,
-                          color: isImg ? Colors.teal : Colors.red.shade700,
-                        ),
-                        const SizedBox(height: 4),
+                        if (isImg)
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(6),
+                            child: SizedBox(
+                              width: 124,
+                              height: 76,
+                              child: FutureBuilder<String>(
+                                future: _analiseService.obterUrlAssinada(anexo),
+                                builder: (context, snapshot) {
+                                  if (snapshot.connectionState == ConnectionState.waiting) {
+                                    return Container(
+                                      color: Colors.grey.shade200,
+                                      child: const Center(
+                                        child: SizedBox(
+                                          width: 18,
+                                          height: 18,
+                                          child: CircularProgressIndicator(strokeWidth: 2),
+                                        ),
+                                      ),
+                                    );
+                                  }
+                                  final thumbUrl = snapshot.data;
+                                  if (thumbUrl == null || thumbUrl.isEmpty) {
+                                    return Icon(Icons.image_outlined, size: 28, color: Colors.teal);
+                                  }
+                                  return Image.network(
+                                    thumbUrl,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, __, ___) => Container(
+                                      color: Colors.grey.shade200,
+                                      child: const Center(
+                                        child: Icon(Icons.broken_image_outlined, size: 24, color: Colors.grey),
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                          )
+                        else
+                          Icon(
+                            Icons.picture_as_pdf_outlined,
+                            size: 28,
+                            color: Colors.red.shade700,
+                          ),
+                        const SizedBox(height: 6),
                         Text(
                           anexo.nomeArquivo,
                           style: const TextStyle(

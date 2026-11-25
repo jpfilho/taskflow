@@ -244,4 +244,39 @@ class SI {
       updatedAt: updatedAt ?? this.updatedAt,
     );
   }
+
+  static String? _formatHoraLimpa(String? hora) {
+    if (hora == null) return null;
+    final trimmed = hora.trim();
+    if (trimmed.isEmpty || trimmed == '00:00:00') return null;
+    if (trimmed.length >= 5) return trimmed.substring(0, 5);
+    return trimmed;
+  }
+
+  static String _formatDataLimpa(DateTime d) {
+    return '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
+  }
+
+  String? get horaInicioFormatada => _formatHoraLimpa(horaInicio);
+  String? get horaFimFormatada => _formatHoraLimpa(horaFim);
+
+  /// Resumo legível do período e horários da SI (apenas campos preenchidos).
+  String? get resumoPeriodo {
+    final partes = <String>[];
+    final hIni = horaInicioFormatada;
+    final hFim = horaFimFormatada;
+
+    if (dataInicio != null || hIni != null) {
+      final d = dataInicio != null ? _formatDataLimpa(dataInicio!) : '';
+      final h = hIni != null ? ' $hIni' : '';
+      partes.add('Início: $d$h'.trim());
+    }
+    if (dataFim != null || hFim != null) {
+      final d = dataFim != null ? _formatDataLimpa(dataFim!) : '';
+      final h = hFim != null ? ' $hFim' : '';
+      partes.add('Fim: $d$h'.trim());
+    }
+    if (partes.isEmpty) return null;
+    return partes.join(' · ');
+  }
 }

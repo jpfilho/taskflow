@@ -523,6 +523,7 @@ class ConflictDetection {
     Map<String, List<ExecutionEventFromBackend>>? eventsByDayFromBackend,
     bool useBackendConflicts = false,
     List<Task>? allTasks,
+    List<ConflictAcceptance>? acceptedConflicts,
   }) {
     // 1. Identificar taskId real (desembrulhar linhas sintéticas de executor/frota)
     final realTaskId = (task.id.contains('_executor_') || task.id.contains('_frota_'))
@@ -584,13 +585,32 @@ class ConflictDetection {
         }
       }).toList();
 
-      final taskIds = matchedEvents.map((e) => e.taskId).where((id) => id.isNotEmpty).toSet();
-      final locationKeys = matchedEvents.map((e) => e.locationKey).where((k) => k.isNotEmpty).toSet();
+      final acc = acceptedConflicts ?? const <ConflictAcceptance>[];
+      final conflictingIdsBackend = <String>{};
+      for (int i = 0; i < matchedEvents.length; i++) {
+        for (int j = i + 1; j < matchedEvents.length; j++) {
+          final ev1 = matchedEvents[i];
+          final ev2 = matchedEvents[j];
+          if (ev1.executorId.trim().toLowerCase() != ev2.executorId.trim().toLowerCase()) continue;
+          if (ev1.locationKey == ev2.locationKey) continue;
+          if (ev1.taskId == ev2.taskId) continue;
+          if (ConflictService.isPairAccepted(
+            acc,
+            resourceType: 'EXECUTOR',
+            resourceId: ev1.executorId,
+            taskA: ev1.taskId,
+            taskB: ev2.taskId,
+          )) {
+            continue;
+          }
+          conflictingIdsBackend.add(ev1.taskId);
+          conflictingIdsBackend.add(ev2.taskId);
+        }
+      }
 
-      // Conflito confirmado se há múltiplas tarefas ou locais distintos
-      if (taskIds.length > 1 || locationKeys.length > 1) {
-        taskIds.add(realTaskId);
-        return taskIds;
+      if (conflictingIdsBackend.isNotEmpty) {
+        conflictingIdsBackend.add(realTaskId);
+        return conflictingIdsBackend;
       }
     }
 
@@ -609,6 +629,7 @@ class ConflictDetection {
       }
     }).toList();
 
+    final accLocal = acceptedConflicts ?? const <ConflictAcceptance>[];
     final conflictingTaskIds = <String>{};
     for (int i = 0; i < matchedLocalEvents.length; i++) {
       for (int j = i + 1; j < matchedLocalEvents.length; j++) {
@@ -616,6 +637,15 @@ class ConflictDetection {
         final ev2 = matchedLocalEvents[j];
         if (ev1.locationKey == ev2.locationKey) continue;
         if (ev1.taskId == ev2.taskId) continue;
+        if (ConflictService.isPairAccepted(
+          accLocal,
+          resourceType: 'EXECUTOR',
+          resourceId: ev1.executorId,
+          taskA: ev1.taskId,
+          taskB: ev2.taskId,
+        )) {
+          continue;
+        }
 
         final start1 = ev1.startTime ?? DateTime(day.year, day.month, day.day, 0, 0);
         final end1 = ev1.endTime ?? DateTime(day.year, day.month, day.day, 23, 59, 59);

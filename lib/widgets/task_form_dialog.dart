@@ -52,6 +52,10 @@ import '../services/nota_sap_grupo_service.dart';
 import '../models/nota_sap_grupo.dart';
 import '../services/nota_sap_analise_service.dart';
 import '../models/nota_sap_analise.dart';
+import '../features/apoios_operacionais/domain/models/task_apoio_solicitacao.dart';
+import '../features/apoios_operacionais/presentation/task_apoio_ui_controller.dart';
+import '../features/apoios_operacionais/presentation/widgets/task_apoio_form_section.dart';
+import '../features/apoios_operacionais/presentation/widgets/task_apoio_solicitar_dialog.dart';
 
 class TaskFormDialog extends StatefulWidget {
   final Task? task; // null para criar, Task para editar
@@ -61,6 +65,7 @@ class TaskFormDialog extends StatefulWidget {
   final NotaSAP? notaSAP; // Nota SAP para pré-preencher o formulário
   final List<NotaSAP>? notasSAPIniciais; // Grupo ou lista de notas SAP a vincular
   final Ordem? ordem; // Ordem para pré-preencher o formulário
+  final TaskApoioSolicitacao? apoioSolicitacao; // Solicitação de apoio para pré-preencher
 
   const TaskFormDialog({
     super.key,
@@ -71,14 +76,19 @@ class TaskFormDialog extends StatefulWidget {
     this.notaSAP,
     this.notasSAPIniciais,
     this.ordem,
+    this.apoioSolicitacao,
     this.initialTabIndex,
     this.initialExecutorIdToEdit,
     this.initialFrotaIdToEdit,
+    this.apoioController,
+    this.onRascunhosApoiosReady,
   });
 
   final int? initialTabIndex;
   final String? initialExecutorIdToEdit;
   final String? initialFrotaIdToEdit;
+  final TaskApoioUiController? apoioController;
+  final ValueChanged<List<TaskApoioSolicitacao>>? onRascunhosApoiosReady;
 
   @override
   State<TaskFormDialog> createState() => _TaskFormDialogState();
@@ -121,6 +131,91 @@ class _TaskFormDialogState extends State<TaskFormDialog>
   String? _segmentoId;
   String? _equipeId;
 
+  late final TaskApoioUiController _apoioFormController =
+      widget.apoioController ?? TaskApoioUiController();
+  final List<TaskApoioSolicitacao> _rascunhosApoios = [];
+
+  Future<void> _abrirDialogSolicitarApoio({TaskApoioSolicitacao? edicao}) async {
+    final tipos = await _apoioFormController.carregarTiposAtivos();
+    if (!mounted) return;
+    final currentUser = AuthServiceSimples().currentUser;
+    final regSolicitante = (_regionalId != null && _regionalId!.isNotEmpty)
+        ? _regionalId!
+        : (currentUser?.regionalIds.isNotEmpty == true
+            ? currentUser!.regionalIds.first
+            : (_regionaisList.isNotEmpty ? _regionaisList.first.id : ''));
+    final divSolicitante = (_divisaoId != null && _divisaoId!.isNotEmpty)
+        ? _divisaoId!
+        : (currentUser?.divisaoIds.isNotEmpty == true
+            ? currentUser!.divisaoIds.first
+            : (_divisoesList.isNotEmpty ? _divisoesList.first.id : ''));
+    final userSolicitante = currentUser?.id ?? '';
+
+    final res = await showDialog<TaskApoioSolicitacao>(
+      context: context,
+      builder: (_) => TaskApoioSolicitarDialog(
+        taskSolicitanteId: widget.task?.id,
+        taskSolicitanteTitulo: _tarefaController.text.trim().isEmpty
+            ? (_tarefa.isEmpty ? 'Nova atividade' : _tarefa)
+            : _tarefaController.text.trim(),
+        taskSolicitanteOrdem: _ordem,
+        regionalSolicitanteId: regSolicitante,
+        divisaoSolicitanteId: divSolicitante,
+        segmentoSolicitanteId: _segmentoId,
+        usuarioSolicitanteId: userSolicitante,
+        dataInicioSugerida: _dataInicio,
+        dataFimSugerida: _dataFim,
+        localSugerido: _locaisSelecionados.isNotEmpty
+            ? _locaisSelecionados
+                .whereType<Local>()
+                .map((l) => l.local)
+                .where((s) => s.isNotEmpty)
+                .join(', ')
+            : null,
+        tiposApoio: tipos,
+        regionais: (_todasRegionais.isNotEmpty ? _todasRegionais : _regionaisList)
+            .map((r) => TaskApoioUnidadeOpcao(id: r.id, nome: r.regional))
+            .toList(),
+        divisoes: (_todasDivisoes.isNotEmpty ? _todasDivisoes : _divisoesList)
+            .map(
+              (d) => TaskApoioUnidadeOpcao(
+                id: d.id,
+                nome: d.divisao,
+                parentId: d.regionalId,
+                parentIds: d.regionalIds,
+              ),
+            )
+            .toList(),
+        segmentos: _segmentosList
+            .map((s) => TaskApoioUnidadeOpcao(id: s.id, nome: s.segmento))
+            .toList(),
+        onCarregarSegmentosPorDivisao: (divId) async {
+          final segs = await _segmentoService.getSegmentosPorDivisao(divId);
+          return segs
+              .map(
+                (s) => TaskApoioUnidadeOpcao(
+                  id: s.id,
+                  nome: s.segmento,
+                  parentId: divId,
+                ),
+              )
+              .toList();
+        },
+        solicitacaoParaEditar: edicao,
+        isRascunhoPreSalvamento: widget.task == null,
+      ),
+    );
+    if (res == null || !mounted) return;
+    setState(() {
+      final idx = _rascunhosApoios.indexWhere((e) => e.id == res.id);
+      if (idx >= 0) {
+        _rascunhosApoios[idx] = res;
+      } else {
+        _rascunhosApoios.add(res);
+      }
+    });
+  }
+
   // Serviços
   final StatusService _statusService = StatusService();
   final RegionalService _regionalService = RegionalService();
@@ -148,6 +243,8 @@ class _TaskFormDialogState extends State<TaskFormDialog>
   List<Status> _statusList = [];
   List<Regional> _regionaisList = [];
   List<Divisao> _divisoesList = [];
+  List<Regional> _todasRegionais = [];
+  List<Divisao> _todasDivisoes = [];
   List<Local> _locaisList = [];
   List<Segmento> _segmentosList = [];
   List<Equipe> _equipesList = [];
@@ -466,6 +563,19 @@ class _TaskFormDialogState extends State<TaskFormDialog>
         _si = ordem.codigoSI ?? '-N/A-';
         _dataInicio = ordem.inicioBase ?? widget.startDate;
         _dataFim = ordem.fimBase ?? widget.endDate;
+      }
+
+      // Se há uma solicitação de apoio, pré-preencher campos
+      if (widget.apoioSolicitacao != null) {
+        final sol = widget.apoioSolicitacao!;
+        _tarefa = 'Apoio: ${sol.descricao}';
+        _observacoes =
+            'Atendimento à solicitação de apoio para: ${sol.taskSolicitanteTituloSnapshot}';
+        _dataInicio = sol.dataInicioAcordada ?? sol.dataInicioSolicitada;
+        _dataFim = sol.dataFimAcordada ?? sol.dataFimSolicitada;
+        _regionalId = sol.regionalDestinoId;
+        _divisaoId = sol.divisaoDestinoId;
+        _segmentoId = sol.segmentoDestinoId;
       }
     }
 
@@ -1234,6 +1344,10 @@ class _TaskFormDialogState extends State<TaskFormDialog>
           );
         }
 
+        // Guardar catálogo completo para solicitação de apoio entre unidades
+        _todasRegionais = todasRegionais;
+        _todasDivisoes = todasDivisoes;
+
         // Filtrar pelo perfil do usuário
         _regionaisList = _filtrarRegionaisPorPerfil(todasRegionais);
         _divisoesList = _filtrarDivisoesPorPerfil(todasDivisoes);
@@ -1361,7 +1475,7 @@ class _TaskFormDialogState extends State<TaskFormDialog>
           // Valores padrão para criação
           // Se for subtarefa, os campos já foram herdados em _loadParentTask
           // Caso contrário, usar valores padrão
-          if (widget.parentTaskId == null) {
+          if (widget.parentTaskId == null && widget.apoioSolicitacao == null) {
             if (_statusList.isNotEmpty) {
               _selectedStatus = _statusList.firstWhere(
                 (s) => s.codigo == 'PROG',
@@ -1383,7 +1497,7 @@ class _TaskFormDialogState extends State<TaskFormDialog>
             // Não selecionar local por padrão (usuário deve escolher)
             // Segmento será selecionado após carregar da divisão
           } else {
-            // Se for subtarefa, aplicar campos herdados após carregar as listas
+            // Se for subtarefa ou solicitação de apoio, aplicar campos herdados após carregar as listas
             // Status
             if (_statusId != null && _statusId!.isNotEmpty) {
               try {
@@ -1401,6 +1515,14 @@ class _TaskFormDialogState extends State<TaskFormDialog>
                   _selectedStatus = null;
                 }
               }
+            }
+            if (_selectedStatus == null && _statusList.isNotEmpty) {
+              _selectedStatus = _statusList.firstWhere(
+                (s) => s.codigo == 'PROG',
+                orElse: () => _statusList.first,
+              );
+              _status = _selectedStatus!.codigo;
+              _statusId = _selectedStatus!.id;
             }
             // Regional
             if (_regionalId != null && _regionalId!.isNotEmpty) {
@@ -2370,6 +2492,19 @@ class _TaskFormDialogState extends State<TaskFormDialog>
                                     (value) => _tarefa = value,
                                     maxLines: 3,
                                     controller: _tarefaController,
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                TaskApoioFormSection(
+                                  controller: _apoioFormController,
+                                  taskId: widget.task?.id,
+                                  rascunhosLocais: _rascunhosApoios,
+                                  onSolicitarApoio: _abrirDialogSolicitarApoio,
+                                  onEditarRascunho: (r) =>
+                                      _abrirDialogSolicitarApoio(edicao: r),
+                                  onRemoverRascunho: (r) => setState(
+                                    () => _rascunhosApoios
+                                        .removeWhere((e) => e.id == r.id),
                                   ),
                                 ),
                               ],
@@ -4269,6 +4404,37 @@ class _TaskFormDialogState extends State<TaskFormDialog>
 
       // Salvar posição do scroll antes de fechar o dialog
       _saveScrollPositions();
+
+      if (_rascunhosApoios.isNotEmpty) {
+        if (widget.task != null) {
+          final errosApoio =
+              await TaskApoioUiController.persistirRascunhosParaTask(
+            taskId: widget.task!.id,
+            taskTitulo: _tarefa,
+            rascunhos: _rascunhosApoios,
+            controller: _apoioFormController,
+          );
+          if (errosApoio.isNotEmpty) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    'Erro ao salvar solicitação de apoio: ${errosApoio.first}',
+                  ),
+                  backgroundColor: Colors.red,
+                ),
+              );
+            }
+            return;
+          }
+        } else {
+          TaskApoioUiController.anexarRascunhosANovaTask(
+            task,
+            _rascunhosApoios,
+          );
+        }
+        widget.onRascunhosApoiosReady?.call(List.unmodifiable(_rascunhosApoios));
+      }
 
       if (!mounted) return;
       Navigator.of(context).pop(task);

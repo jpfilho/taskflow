@@ -93,7 +93,7 @@ class _NotasSapVinculadasDialogState extends State<NotasSapVinculadasDialog> {
 
   void _abrirVisualizadorAnexo(NotaSAP nota, List<NotaSapAnexo> anexosDaNota, int index) {
     final anexo = anexosDaNota[index];
-    if (anexo.tipoArquivo == NotaAnexoTipo.imagem) {
+    if (anexo.tipoArquivo == NotaAnexoTipo.imagem || anexo.tipoArquivo == NotaAnexoTipo.video) {
       NotaAnexoViewerDialog.abrir(
         context: context,
         anexos: anexosDaNota,
@@ -104,16 +104,7 @@ class _NotasSapVinculadasDialogState extends State<NotasSapVinculadasDialog> {
       );
     } else {
       // Documento (PDF, DOCX, etc.)
-      _analiseService.obterUrlAssinada(anexo).then((url) async {
-        final uri = Uri.parse(url);
-        if (await canLaunchUrl(uri)) {
-          await launchUrl(uri, mode: LaunchMode.externalApplication);
-        } else if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Não foi possível abrir o anexo.')),
-          );
-        }
-      }).catchError((e) {
+      _analiseService.baixarOuAbrirAnexo(anexo).catchError((e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('Erro ao abrir anexo: $e')),

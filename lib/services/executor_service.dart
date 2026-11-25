@@ -1,5 +1,4 @@
 import '../models/executor.dart';
-import '../models/divisao.dart';
 import '../config/supabase_config.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/foundation.dart';
@@ -249,7 +248,6 @@ class ExecutorService {
     try {
       List<Executor> executores = await getExecutoresAtivos();
       final divisoes = await DivisaoService().getAllDivisoes();
-      final divisaoMap = {for (var d in divisoes) d.id: d};
 
       // 1. Filtrar por Regional (se especificada)
       if (regionalId != null && regionalId.isNotEmpty) {
@@ -271,22 +269,11 @@ class ExecutorService {
         executores = executores.where((e) => e.divisaoId == divisaoId).toList();
       }
 
-      // 3. Filtrar por Segmento (se especificado)
+      // 3. Filtrar por Segmento (se especificado): apenas executores cadastrados no segmento
       if (segmentoId != null && segmentoId.isNotEmpty) {
-        executores = executores.where((e) {
-          // 3a. Segmento direto no executor
-          if (e.segmentoIds.contains(segmentoId)) return true;
-          // 3b. Segmento herdado da divisão do executor
-          if (e.divisaoId != null && divisaoMap.containsKey(e.divisaoId)) {
-            final div = divisaoMap[e.divisaoId]!;
-            if (div.segmentoIds.contains(segmentoId)) return true;
-          }
-          // 3c. Executor sem segmento específico (generalista da divisão)
-          if (e.segmentoIds.isEmpty && (e.divisaoId == null || (divisaoMap[e.divisaoId]?.segmentoIds.isEmpty ?? true))) {
-            return true;
-          }
-          return false;
-        }).toList();
+        executores = executores
+            .where((e) => e.segmentoIds.contains(segmentoId))
+            .toList();
       }
 
       return executores;
@@ -667,21 +654,23 @@ class ExecutorService {
         final Set<String> allowedDivIds = {};
 
         for (final d in divisoes) {
-          final matchesReg = regionalIds.isNotEmpty && regionalIds.any((rId) => d.atuaNaRegional(rId));
-          final matchesDiv = divisaoIds.isNotEmpty && divisaoIds.contains(d.id);
-          if (matchesReg || matchesDiv) {
+          final matchesReg = regionalIds.isEmpty ||
+              regionalIds.any((rId) => d.atuaNaRegional(rId));
+          final matchesDiv =
+              divisaoIds.isEmpty || divisaoIds.contains(d.id);
+          if (matchesReg && matchesDiv) {
             allowedDivIds.add(d.id);
           }
         }
 
         final todos = await getExecutoresAtivos();
         return todos.where((e) {
-          if (allowedDivIds.isNotEmpty) {
-            if (e.divisaoId != null && !allowedDivIds.contains(e.divisaoId)) {
+          if (regionalIds.isNotEmpty || divisaoIds.isNotEmpty) {
+            if (e.divisaoId == null || !allowedDivIds.contains(e.divisaoId)) {
               return false;
             }
           }
-          if (segmentoIds.isNotEmpty && e.segmentoIds.isNotEmpty) {
+          if (segmentoIds.isNotEmpty) {
             final hasMatch = e.segmentoIds.any((s) => segmentoIds.contains(s));
             if (!hasMatch) return false;
           }

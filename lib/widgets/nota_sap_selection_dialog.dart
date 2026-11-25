@@ -39,6 +39,8 @@ class _NotaSAPSelectionDialogState extends State<NotaSAPSelectionDialog> {
   final ScrollController _scrollController = ScrollController();
   bool _filtersExpandedMobile = false;
   bool _filtersExpandedDesktop = false;
+  int? _sortColumnIndex;
+  bool _sortAscending = true;
 
   @override
   void initState() {
@@ -122,10 +124,106 @@ class _NotaSAPSelectionDialogState extends State<NotaSAPSelectionDialog> {
 
         return true;
       }).toList();
+      _sortFilteredNotas();
       // Resetar paginação quando filtrar
       _currentPage = 0;
       _displayedNotas = [];
       _loadMoreItems();
+    });
+  }
+
+  void _onSort(int columnIndex, bool ascending) {
+    setState(() {
+      _sortColumnIndex = columnIndex;
+      _sortAscending = ascending;
+      _sortFilteredNotas();
+      _currentPage = 0;
+      _displayedNotas = [];
+      _loadMoreItems();
+    });
+  }
+
+  int _priorityWeight(String? p) {
+    final norm = (p ?? '').trim().toLowerCase();
+    if (norm.contains('muito alta') || norm.contains('urg')) return 5;
+    if (norm.contains('alta')) return 4;
+    if (norm.contains('média') || norm.contains('media')) return 3;
+    if (norm.contains('baixa')) return 2;
+    if (norm.contains('oportunidade')) return 1;
+    return 0;
+  }
+
+  int _compareNullableStrings(String? a, String? b) {
+    final sa = (a ?? '').trim().toLowerCase();
+    final sb = (b ?? '').trim().toLowerCase();
+    if (sa.isEmpty && sb.isEmpty) return 0;
+    if (sa.isEmpty) return 1;
+    if (sb.isEmpty) return -1;
+    return sa.compareTo(sb);
+  }
+
+  int _compareNumericOrString(String? a, String? b) {
+    final sa = (a ?? '').trim();
+    final sb = (b ?? '').trim();
+    if (sa.isEmpty && sb.isEmpty) return 0;
+    if (sa.isEmpty) return 1;
+    if (sb.isEmpty) return -1;
+    final na = int.tryParse(sa);
+    final nb = int.tryParse(sb);
+    if (na != null && nb != null) return na.compareTo(nb);
+    return sa.toLowerCase().compareTo(sb.toLowerCase());
+  }
+
+  void _sortFilteredNotas() {
+    if (_sortColumnIndex == null) return;
+    final col = _sortColumnIndex!;
+    final asc = _sortAscending;
+
+    _filteredNotas.sort((a, b) {
+      int cmp;
+      switch (col) {
+        case 0: // Local
+          cmp = _compareNullableStrings(a.local, b.local);
+          break;
+        case 1: // Tipo
+          cmp = _compareNullableStrings(a.tipo, b.tipo);
+          break;
+        case 2: // Prioridade
+          cmp = _priorityWeight(a.textPrioridade).compareTo(_priorityWeight(b.textPrioridade));
+          if (cmp == 0) cmp = _compareNullableStrings(a.textPrioridade, b.textPrioridade);
+          break;
+        case 3: // Nota
+          cmp = _compareNumericOrString(a.nota, b.nota);
+          break;
+        case 4: // Sala
+          cmp = _compareNullableStrings(a.sala, b.sala);
+          break;
+        case 5: // Descrição
+          cmp = _compareNullableStrings(a.descricao, b.descricao);
+          break;
+        case 6: // Status
+          cmp = _compareNullableStrings(a.statusUsuario, b.statusUsuario);
+          break;
+        case 7: // Prazo
+          final da = a.dataVencimento;
+          final db = b.dataVencimento;
+          if (da == null && db == null) {
+            cmp = 0;
+          } else if (da == null) {
+            cmp = 1;
+          } else if (db == null) {
+            cmp = -1;
+          } else {
+            cmp = da.compareTo(db);
+          }
+          break;
+        case 8: // Ordem
+          cmp = _compareNumericOrString(a.ordem, b.ordem);
+          break;
+        default:
+          cmp = 0;
+      }
+      return asc ? cmp : -cmp;
     });
   }
 
@@ -1045,22 +1143,51 @@ class _NotaSAPSelectionDialogState extends State<NotaSAPSelectionDialog> {
               minWidth: MediaQuery.of(context).size.width * 0.85,
             ),
             child: DataTable(
+              sortColumnIndex: _sortColumnIndex,
+              sortAscending: _sortAscending,
               columnSpacing: 18,
               horizontalMargin: 12,
               headingRowHeight: 38,
               dataRowMinHeight: 32,
               dataRowMaxHeight: 40,
               headingRowColor: WidgetStateProperty.all(const Color(0xFFF1F5F9)),
-              columns: const [
-                DataColumn(label: Text('Local', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-                DataColumn(label: Text('Tipo', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-                DataColumn(label: Text('Prioridade', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-                DataColumn(label: Text('Nota', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-                DataColumn(label: Text('Sala', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-                DataColumn(label: Text('Descrição', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-                DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-                DataColumn(label: Text('Prazo', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-                DataColumn(label: Text('Ordem', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+              columns: [
+                DataColumn(
+                  label: const Text('Local', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                  onSort: _onSort,
+                ),
+                DataColumn(
+                  label: const Text('Tipo', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                  onSort: _onSort,
+                ),
+                DataColumn(
+                  label: const Text('Prioridade', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                  onSort: _onSort,
+                ),
+                DataColumn(
+                  label: const Text('Nota', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                  onSort: _onSort,
+                ),
+                DataColumn(
+                  label: const Text('Sala', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                  onSort: _onSort,
+                ),
+                DataColumn(
+                  label: const Text('Descrição', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                  onSort: _onSort,
+                ),
+                DataColumn(
+                  label: const Text('Status', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                  onSort: _onSort,
+                ),
+                DataColumn(
+                  label: const Text('Prazo', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                  onSort: _onSort,
+                ),
+                DataColumn(
+                  label: const Text('Ordem', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                  onSort: _onSort,
+                ),
               ],
               rows: [
                 ..._displayedNotas.map((nota) {

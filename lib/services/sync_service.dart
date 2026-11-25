@@ -7,6 +7,10 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'local_database_service.dart';
 import 'connectivity_service.dart';
 import 'performance_monitor.dart';
+import 'auth_service_simples.dart';
+import '../features/apoios_operacionais/data/repositories/supabase_apoios_gateway_repository.dart';
+import '../features/apoios_operacionais/data/repositories/task_apoio_offline_store.dart';
+import '../features/apoios_operacionais/data/services/apoios_auth_session_service.dart';
 
 class SyncService {
   static final SyncService _instance = SyncService._internal();
@@ -112,6 +116,9 @@ class SyncService {
       // Baixar dados atualizados do Supabase
       await _pullFromSupabase();
 
+      // Sincronizar fila offline de Apoios Operacionais (quando autenticado no gateway)
+      await _syncApoiosOperacionais();
+
       print('✅ Sincronização concluída');
     } catch (e) {
       print('❌ Erro na sincronização: $e');
@@ -121,6 +128,30 @@ class SyncService {
       _syncingController.add(false);
       PerformanceMonitor.stop('SyncService.syncAll');
       _clearHasLocalChangesIfNonePending();
+    }
+  }
+
+  Future<void> _syncApoiosOperacionais() async {
+    try {
+      final sessionService = ApoiosAuthSessionService();
+      final userId = AuthServiceSimples().currentUser?.id;
+      if (!sessionService.hasValidToken || userId == null || userId.isEmpty) {
+        return;
+      }
+      final store = TaskApoioOfflineStore(
+        usuarioAtualId: userId,
+        isOnline: _connectivity.isConnected,
+        backendAutenticadoDisponivel: true,
+        persistence: SqliteApoioPersistence(localDb: _localDb),
+      );
+      await store.trocarUsuario(userId);
+      if (store.listarFila().isEmpty) return;
+      final gatewayRepo = SupabaseApoiosGatewayRepository(
+        sessionService: sessionService,
+      );
+      await store.processarFilaSync(gatewayRepo);
+    } catch (_) {
+      // Nunca interrompe a sincronização principal por erro isolado em Apoios
     }
   }
 

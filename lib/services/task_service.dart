@@ -13,6 +13,7 @@ import 'connectivity_service.dart';
 import 'sync_service.dart';
 import 'tab_sync_service.dart';
 import 'package:sqflite/sqflite.dart';
+import '../features/apoios_operacionais/presentation/task_apoio_ui_controller.dart';
 
 class TaskService {
   /// Resolve o fuso horário forçando que a data vinda do Supabase seja
@@ -2191,6 +2192,29 @@ class TaskService {
     }
   }
 
+  /// Converte um payload de tarefa retornado pelo gateway protegido de apoios
+  /// (com `gantt_segments` embutidos) em um objeto [Task] somente leitura.
+  Task taskFromGatewayMap(Map<String, dynamic> response) {
+    final task = _taskFromMap(response);
+    final rawSegments = (response['gantt_segments'] as List?) ?? const [];
+    final segments = rawSegments
+        .whereType<Map>()
+        .map((m) => GanttSegment.fromMap(Map<String, dynamic>.from(m)))
+        .toList();
+    final finalSegments = segments.isEmpty
+        ? [
+            GanttSegment(
+              dataInicio: task.dataInicio,
+              dataFim: task.dataFim,
+              label: task.tarefa,
+              tipo: _mapTaskTypeToSegmentType(task.tipo),
+              tipoPeriodo: 'EXECUCAO',
+            ),
+          ]
+        : segments;
+    return task.copyWith(ganttSegments: finalSegments);
+  }
+
   Future<Task> createTask(Task task) async {
     final result = await createTaskWithResult(task);
     if (result.hasFalhaParcial) {
@@ -2207,6 +2231,8 @@ class TaskService {
   /// sem duplicar a tarefa.
   Future<TaskCreateResult> createTaskWithResult(Task task) async {
     _clearCache();
+    final rascunhosApoios =
+        TaskApoioUiController.consumirRascunhosDeNovaTask(task);
     // Filtrar períodos específicos por executor para conter apenas os selecionados
     final cleanExecutorPeriods = task.executorPeriods
         .where((ep) => task.executorIds.contains(ep.executorId))
@@ -2500,6 +2526,18 @@ class TaskService {
 
       // Atualizar a view de execuções para refletir o novo estado
       await refreshMvExecucoesDia();
+
+      if (rascunhosApoios.isNotEmpty) {
+        final errosApoio =
+            await TaskApoioUiController.persistirRascunhosParaTask(
+          taskId: createdTask.id,
+          taskTitulo: createdTask.tarefa,
+          rascunhos: rascunhosApoios,
+        );
+        if (errosApoio.isNotEmpty) {
+          print('⚠️ Erros ao salvar solicitações de apoio da nova tarefa: $errosApoio');
+        }
+      }
 
       // Notificar outras abas sobre a criação da tarefa
       if (kIsWeb) {
@@ -3036,6 +3074,8 @@ class TaskService {
 
   Future<Task> createSubtask(String parentId, Task subtask) async {
     _clearCache();
+    final rascunhosApoios =
+        TaskApoioUiController.consumirRascunhosDeNovaTask(subtask);
     final newSubtask = subtask.copyWith(
       parentId: parentId,
       dataCriacao: DateTime.now(),
@@ -3114,6 +3154,14 @@ class TaskService {
 
       // Atualizar a view de execuções para refletir a criação da subtarefa
       await refreshMvExecucoesDia();
+
+      if (rascunhosApoios.isNotEmpty) {
+        await TaskApoioUiController.persistirRascunhosParaTask(
+          taskId: createdSubtask.id,
+          taskTitulo: createdSubtask.tarefa,
+          rascunhos: rascunhosApoios,
+        );
+      }
 
       return createdSubtask.copyWith(ganttSegments: loadedSegments);
     } catch (e) {

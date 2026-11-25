@@ -2,12 +2,15 @@ import 'dart:async';
 import 'dart:io';
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../config/supabase_config.dart';
 import '../models/nota_sap_analise.dart';
 import '../models/nota_sap_analise_evidencia.dart';
 import '../models/nota_sap_anotacao.dart';
 import '../features/media_albums/data/models/media_image.dart';
+import '../utils/web_download.dart';
 import 'nota_anotacao_rasterizer_service.dart';
 
 /// Serviço dedicado para gestão da Análise Prévia de Notas SAP
@@ -942,6 +945,123 @@ class NotaSapAnaliseService {
     } catch (e) {
       debugPrint('⚠️ [obterUrlAssinada] Falha ao assinar ($cacheKey): $e');
       return obterUrlAnexo(anexo);
+    }
+  }
+
+  /// Resolve o nome final do arquivo para download garantindo que tenha extensão válida.
+  static String resolveDownloadFileName(NotaSapAnexo anexo) {
+    final base = anexo.nomeExibicao.trim().isNotEmpty ? anexo.nomeExibicao.trim() : 'anexo';
+    String? ext;
+    if (anexo.extensao != null && anexo.extensao!.trim().isNotEmpty) {
+      ext = anexo.extensao!.trim().replaceFirst('.', '').toLowerCase();
+    } else if (base.contains('.')) {
+      ext = base.split('.').last.trim().toLowerCase();
+    } else if (anexo.caminhoArquivo.contains('.')) {
+      ext = anexo.caminhoArquivo.split('.').last.trim().toLowerCase();
+    }
+    if ((ext == null || ext.isEmpty) && anexo.mimeType != null) {
+      final m = anexo.mimeType!.toLowerCase();
+      if (m.contains('wordprocessingml')) {
+        ext = 'docx';
+      } else if (m.contains('msword')) {
+        ext = 'doc';
+      } else if (m.contains('spreadsheetml')) {
+        ext = 'xlsx';
+      } else if (m.contains('ms-excel')) {
+        ext = 'xls';
+      } else if (m.contains('presentationml')) {
+        ext = 'pptx';
+      } else if (m.contains('pdf')) {
+        ext = 'pdf';
+      }
+    }
+    if (ext != null && ext.isNotEmpty && !base.toLowerCase().endsWith('.$ext')) {
+      return '$base.$ext';
+    }
+    return base;
+  }
+
+  static const Set<String> _inlineViewExtensions = {
+    'pdf',
+    'jpg',
+    'jpeg',
+    'png',
+    'webp',
+    'gif',
+    'mp4',
+    'mov',
+    'webm',
+    'm4v',
+    'mp3',
+    'wav',
+    'ogg',
+    'm4a',
+  };
+
+  /// Faz o download explícito do anexo preservando nome e extensão originais.
+  Future<void> baixarAnexo(NotaSapAnexo anexo) async {
+    final filename = resolveDownloadFileName(anexo);
+    final mime = mimeTypeForFileName(filename);
+
+    if (kIsWeb) {
+      Uint8List bytes;
+      try {
+        bytes = await _supabase.storage.from(anexo.bucketNome).download(anexo.caminhoArquivo);
+      } catch (_) {
+        final signedUrl = await obterUrlAssinada(anexo);
+        final resp = await http.get(Uri.parse(signedUrl));
+        if (resp.statusCode < 200 || resp.statusCode >= 300) {
+          throw Exception('Falha ao baixar anexo (HTTP ${resp.statusCode})');
+        }
+        bytes = resp.bodyBytes;
+      }
+      downloadBytesWeb(bytes, filename, mime);
+      return;
+    }
+
+    final url = await obterUrlAssinada(anexo);
+    final parsed = Uri.parse(url);
+    final targetUri = parsed.replace(
+      queryParameters: {
+        ...parsed.queryParameters,
+        'download': filename,
+      },
+    );
+    if (await canLaunchUrl(targetUri)) {
+      await launchUrl(targetUri, mode: LaunchMode.externalApplication);
+    } else {
+      throw Exception('Não foi possível baixar o anexo.');
+    }
+  }
+
+  /// Faz o download direto (no Web via Blob + filename preservando .docx/.xlsx/etc.)
+  /// ou abre a URL assinada quando for mídia reproduzível/visualizável (PDF, imagens, vídeos).
+  Future<void> baixarOuAbrirAnexo(NotaSapAnexo anexo) async {
+    final filename = resolveDownloadFileName(anexo);
+    final ext = filename.contains('.') ? filename.split('.').last.toLowerCase() : '';
+
+    // No Web, documentos Office/binários (como .docx/.xlsx) são contêineres ZIP (PK\x03\x04);
+    // baixar via bytes + Blob com MIME e `download` explícito impede o navegador de renomear para .zip.
+    if (kIsWeb && !_inlineViewExtensions.contains(ext)) {
+      await baixarAnexo(anexo);
+      return;
+    }
+
+    final url = await obterUrlAssinada(anexo);
+    final parsed = Uri.parse(url);
+    final targetUri = !_inlineViewExtensions.contains(ext)
+        ? parsed.replace(
+            queryParameters: {
+              ...parsed.queryParameters,
+              'download': filename,
+            },
+          )
+        : parsed;
+
+    if (await canLaunchUrl(targetUri)) {
+      await launchUrl(targetUri, mode: LaunchMode.externalApplication);
+    } else {
+      throw Exception('Não foi possível abrir o anexo.');
     }
   }
 
@@ -1991,18 +2111,69 @@ class NotaSapAnaliseService {
     return ext.isNotEmpty ? '$sanitized.$ext' : sanitized;
   }
 
-  String _getMimeType(String fileName) {
-    final ext = fileName.split('.').last.toLowerCase();
+  String _getMimeType(String fileName) => mimeTypeForFileName(fileName);
+
+  static String mimeTypeForFileName(String fileName) {
+    final ext = fileName.contains('.') ? fileName.split('.').last.toLowerCase() : '';
     switch (ext) {
       case 'jpg':
       case 'jpeg':
         return 'image/jpeg';
       case 'png':
         return 'image/png';
+      case 'webp':
+        return 'image/webp';
+      case 'gif':
+        return 'image/gif';
       case 'pdf':
         return 'application/pdf';
+      case 'docx':
+        return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      case 'doc':
+        return 'application/msword';
+      case 'xlsx':
+        return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      case 'xls':
+        return 'application/vnd.ms-excel';
+      case 'pptx':
+        return 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+      case 'ppt':
+        return 'application/vnd.ms-powerpoint';
+      case 'odt':
+        return 'application/vnd.oasis.opendocument.text';
+      case 'ods':
+        return 'application/vnd.oasis.opendocument.spreadsheet';
+      case 'txt':
+        return 'text/plain';
+      case 'csv':
+        return 'text/csv';
+      case 'rtf':
+        return 'application/rtf';
+      case 'kml':
+        return 'application/vnd.google-earth.kml+xml';
+      case 'kmz':
+        return 'application/vnd.google-earth.kmz';
+      case 'zip':
+        return 'application/zip';
       case 'mp4':
+      case 'm4v':
         return 'video/mp4';
+      case 'mov':
+        return 'video/quicktime';
+      case 'webm':
+        return 'video/webm';
+      case 'avi':
+        return 'video/x-msvideo';
+      case 'mkv':
+        return 'video/x-matroska';
+      case 'mp3':
+        return 'audio/mpeg';
+      case 'wav':
+        return 'audio/wav';
+      case 'ogg':
+        return 'audio/ogg';
+      case 'm4a':
+        return 'audio/mp4';
       default:
         return 'application/octet-stream';
     }

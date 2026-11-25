@@ -23,6 +23,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import '../utils/clipboard_helper.dart';
 import '../models/task.dart';
+import 'conflict_acceptance_dialog.dart';
 import '../models/status.dart';
 import 'package:task2026/widgets/common/taskflow_calendar_marker_tooltip.dart';
 import '../models/feriado.dart';
@@ -49,6 +50,8 @@ import '../services/sync_service.dart';
 import '../utils/responsive.dart';
 import '../utils/conflict_detection.dart';
 import '../features/warnings/warnings.dart';
+import '../features/apoios_operacionais/presentation/task_apoio_ui_controller.dart';
+import '../features/apoios_operacionais/presentation/widgets/task_apoio_table_badge.dart';
 import 'gantt_chart.dart' show GanttScale, GanttPeriod;
 import 'gantt_segment_widget.dart';
 import 'chat_view.dart';
@@ -85,6 +88,9 @@ class ActivityGanttView extends StatefulWidget {
   final VoidCallback? onConflictsLoaded;
   final Set<String>? conflictFilterTaskIds;
   final ValueChanged<Set<String>?>? onFilterConflictTasks;
+  final TaskApoioUiController? apoioController;
+  final String? currentUserId;
+  final String? currentUserName;
 
   const ActivityGanttView({
     super.key,
@@ -114,6 +120,9 @@ class ActivityGanttView extends StatefulWidget {
     this.onConflictsLoaded,
     this.conflictFilterTaskIds,
     this.onFilterConflictTasks,
+    this.apoioController,
+    this.currentUserId,
+    this.currentUserName,
   });
 
   @override
@@ -183,8 +192,13 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
   Map<String, List<ExecutionEventFromBackend>>? _eventsByDayFromBackend = _staticEventsByDayFromBackend;
   Map<String, ConflictInfo>? _conflictMapFrotaFromBackend = _staticConflictMapFrotaFromBackend;
   Map<String, List<FleetExecutionEventFromBackend>>? _fleetEventsByDayFromBackend = _staticFleetEventsByDayFromBackend;
-  bool _useBackendConflicts = false;
+  List<ConflictAcceptance> _acceptedConflicts = [];
+  bool _useBackendConflicts = _staticEventsByDayFromBackend != null;
   bool _useFleetConflictBackend = false;
+  DateTime? _activeConflictFilterDay;
+  List<String> _activeConflictFilterExecutorNames = [];
+  Set<String> _activeConflictFilterExecutorIds = {};
+  List<String> _activeConflictFilterDescriptions = [];
   bool _conflictPaintReady = true;
   int _conflictsVersion = 0;
   final ValueNotifier<int> _conflictsVersionNotifier = ValueNotifier<int>(0);
@@ -231,6 +245,7 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
 
     _ganttHorizController.addListener(_syncGanttHorizScroll);
     TaskTableColumnService.instance.columnsNotifier.addListener(_onColumnsChanged);
+    unawaited(TaskTableColumnService.instance.loadColumns());
     _ganttBottomHorizController.addListener(() {
       if (_isHorizScrolling || !_ganttBottomHorizController.hasClients) return;
       final offset = _ganttBottomHorizController.offset;
@@ -294,6 +309,13 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
           _showEmptyMessage = false;
         }
       });
+    }
+
+    if (oldWidget.conflictFilterTaskIds != null && widget.conflictFilterTaskIds == null) {
+      _activeConflictFilterDay = null;
+      _activeConflictFilterExecutorNames = [];
+      _activeConflictFilterExecutorIds = {};
+      _activeConflictFilterDescriptions = [];
     }
 
     if (tasksChanged || rangeChanged) {
@@ -508,6 +530,14 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
 
   Future<void> _loadCounts() async {
     if (widget.tasks.isEmpty || !mounted) return;
+    if (widget.apoioController != null &&
+        TaskTableColumnService.instance.visibleColumns.contains(
+          TaskTableColumn.apoios,
+        )) {
+      final taskIds = widget.tasks.map((t) => t.id).toList();
+      widget.apoioController!.registrarTasksConhecidas(widget.tasks);
+      unawaited(widget.apoioController!.carregarResumosEmLote(taskIds));
+    }
     try {
       final ids = widget.tasks.map((t) => t.id).toList();
       final results = await Future.wait([
@@ -568,17 +598,23 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
     }
   }
 
-  Future<void> _loadBackendConflicts() async {
+  Future<void> _loadBackendConflicts({bool forceRefresh = false}) async {
     PerformanceMonitor.start('Gantt.loadBackendConflicts');
     final cs = widget.conflictService;
     if (!mounted || cs == null) {
       PerformanceMonitor.stop('Gantt.loadBackendConflicts');
       return;
     }
-    
+
+    if (forceRefresh) {
+      cs.invalidateCache();
+      _lastTasksSignature = null;
+    }
+
     // Gerar uma assinatura das tarefas atuais para evitar recargas inúteis
     final currentSignature = widget.tasks.map((t) => t.id).join(',');
-    if (_lastFetchStart == widget.startDate && 
+    if (!forceRefresh &&
+        _lastFetchStart == widget.startDate && 
         _lastFetchEnd == widget.endDate && 
         _lastTasksSignature == currentSignature &&
         _useBackendConflicts) {
@@ -593,13 +629,22 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
       final start = widget.startDate;
       final end = widget.endDate;
 
-      // Otimização: Coletar apenas os IDs de executores e frotas presentes nestas tarefas
+      // Coletar os IDs de executores e frotas presentes nas tarefas visíveis
       final executorIds = <String>{};
       final frotaIds = <String>{};
-      for (final t in widget.tasks) {
+      final allTasksForIds = <Task>[
+        ...widget.tasks,
+        ..._loadedSubtasks.values.expand((l) => l),
+      ];
+      for (final t in allTasksForIds) {
         for (final id in t.executorIds) {
           if (_uuidRegex.hasMatch(id.trim())) {
             executorIds.add(id.trim());
+          }
+        }
+        for (final ep in t.executorPeriods) {
+          if (_uuidRegex.hasMatch(ep.executorId.trim())) {
+            executorIds.add(ep.executorId.trim());
           }
         }
         // Se o campo executor (nome) por acaso for um UUID, também incluímos
@@ -617,12 +662,15 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
       final ok = availability[0];
       final fleetOk = availability[1];
 
-      // 2. Buscar dados em paralelo para todo o período
+      final execIdList = executorIds.isNotEmpty ? executorIds.toList() : null;
+
+      // 2. Buscar dados em paralelo para todo o período (filtrando por executorIds para não truncar em 1000 linhas)
       final results = await Future.wait([
-        ok ? cs.getConflictsForRange(start, end) : Future.value(<String, ConflictInfo>{}),
-        ok ? cs.getExecutionEventsForRange(start, end) : Future.value(<String, List<ExecutionEventFromBackend>>{}),
+        ok ? cs.getConflictsForRange(start, end, executorIds: execIdList) : Future.value(<String, ConflictInfo>{}),
+        ok ? cs.getExecutionEventsForRange(start, end, executorIds: execIdList) : Future.value(<String, List<ExecutionEventFromBackend>>{}),
         fleetOk ? cs.getFleetConflictsForRange(start, end) : Future.value(<String, ConflictInfo>{}),
         fleetOk ? cs.getFleetExecutionEventsForRange(start, end) : Future.value(<String, List<FleetExecutionEventFromBackend>>{}),
+        cs.getActiveAcceptances(),
       ]);
 
       if (!mounted) return;
@@ -632,6 +680,7 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
         _eventsByDayFromBackend      = results[1] as Map<String, List<ExecutionEventFromBackend>>?;
         _conflictMapFrotaFromBackend = results[2] as Map<String, ConflictInfo>?;
         _fleetEventsByDayFromBackend = results[3] as Map<String, List<FleetExecutionEventFromBackend>>?;
+        _acceptedConflicts           = results[4] as List<ConflictAcceptance>;
         _useBackendConflicts         = ok;
         _useFleetConflictBackend     = fleetOk;
         _conflictsVersion++;
@@ -1314,15 +1363,57 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
     final days = <DateTime>{};
     var cur = start;
     while (!cur.isAfter(end)) {
+      bool hasDayConflict = false;
       for (final id in executorIds) {
         if (_hasConflictOnDayForExecutor(cur, id)) {
-          days.add(cur);
+          hasDayConflict = true;
           break;
         }
+      }
+      if (hasDayConflict && _acceptedConflicts.isNotEmpty && _eventsByDayFromBackend != null) {
+        hasDayConflict = _getDayConflictDetails(task, cur) != null;
+      }
+      if (hasDayConflict) {
+        days.add(cur);
       }
       cur = cur.add(const Duration(days: 1));
     }
     return days;
+  }
+
+  bool _hasUnacceptedFleetConflictOnDay(Task task, DateTime day, List<String> frotaIds) {
+    if (_acceptedConflicts.isEmpty || _fleetEventsByDayFromBackend == null) return true;
+    final key = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+    final allEvents = _fleetEventsByDayFromBackend![key] ?? [];
+    if (allEvents.isEmpty) return true;
+
+    final realTaskId = (task.id.contains('_executor_') || task.id.contains('_frota_'))
+        ? (task.parentId ?? task.id)
+        : task.id;
+    final frotaSet = frotaIds.map((id) => id.trim().toLowerCase()).toSet();
+
+    for (final fid in frotaSet) {
+      final group = allEvents.where((e) => e.frotaId.trim().toLowerCase() == fid).toList();
+      if (group.length < 2) continue;
+      for (int i = 0; i < group.length; i++) {
+        for (int j = i + 1; j < group.length; j++) {
+          final e1 = group[i];
+          final e2 = group[j];
+          if (e1.locationKey == e2.locationKey || e1.taskId == e2.taskId) continue;
+          if (e1.taskId != realTaskId && e2.taskId != realTaskId) continue;
+          if (!ConflictService.isPairAccepted(
+            _acceptedConflicts,
+            resourceType: 'FROTA',
+            resourceId: fid,
+            taskA: e1.taskId,
+            taskB: e2.taskId,
+          )) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
   }
 
   Set<DateTime> _getConflictDaysForSegmentFrota(Task task, DateTime start, DateTime end) {
@@ -1330,11 +1421,18 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
     final days = <DateTime>{};
     var cur = start;
     while (!cur.isAfter(end)) {
+      bool hasDayConflict = false;
       for (final id in frotaIds) {
         if (_hasConflictOnDayForFrota(cur, id)) {
-          days.add(cur);
+          hasDayConflict = true;
           break;
         }
+      }
+      if (hasDayConflict && !_hasUnacceptedFleetConflictOnDay(task, cur, frotaIds)) {
+        hasDayConflict = false;
+      }
+      if (hasDayConflict) {
+        days.add(cur);
       }
       cur = cur.add(const Duration(days: 1));
     }
@@ -1416,9 +1514,269 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
       task: task,
       day: day,
       eventsByDayFromBackend: _eventsByDayFromBackend,
-      useBackendConflicts: widget.conflictService != null && _useBackendConflicts && _eventsByDayFromBackend != null,
+      useBackendConflicts: widget.conflictService != null &&
+          (_useBackendConflicts || _eventsByDayFromBackend != null) &&
+          _eventsByDayFromBackend != null,
       allTasks: widget.tasksForConflictDetection ?? widget.tasks,
+      acceptedConflicts: _acceptedConflicts,
     );
+  }
+
+  /// Retorna os detalhes estruturados do conflito em [day] para [task],
+  /// isolando apenas os executores que realmente estão em conflito naquele dia.
+  DayConflictDetails? _getDayConflictDetails(Task task, DateTime day) {
+    final realTaskId = (task.id.contains('_executor_') || task.id.contains('_frota_'))
+        ? (task.parentId ?? task.id)
+        : task.id;
+    final dayKey =
+        '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+
+    final targetIds = <String>{};
+    for (final id in task.executorIds) {
+      if (id.trim().isNotEmpty) targetIds.add(id.trim().toLowerCase());
+    }
+    for (final ep in task.executorPeriods) {
+      if (ep.executorId.trim().isNotEmpty) targetIds.add(ep.executorId.trim().toLowerCase());
+    }
+    if (task.executor.trim().isNotEmpty && !task.executor.contains(',')) {
+      final t = task.executor.trim();
+      if (_uuidRegex.hasMatch(t) || RegExp(r'^\d+$').hasMatch(t)) {
+        targetIds.add(t.toLowerCase());
+      }
+    }
+
+    final targetNames = <String>{};
+    for (final n in task.executores) {
+      final k = ConflictService.normalizeExecutorKey(n);
+      if (k.isNotEmpty) targetNames.add(k);
+    }
+    for (final ep in task.executorPeriods) {
+      final k = ConflictService.normalizeExecutorKey(ep.executorNome);
+      if (k.isNotEmpty) targetNames.add(k);
+    }
+    if (task.executor.trim().isNotEmpty) {
+      for (final part in task.executor.split(',')) {
+        final k = ConflictService.normalizeExecutorKey(part);
+        if (k.isNotEmpty) targetNames.add(k);
+      }
+    }
+
+    final idToName = _executorIdToNameMap();
+    final useIdOnly = targetIds.isNotEmpty;
+
+    // 1. Tenta via eventos brutos do backend (fonte mais precisa)
+    if (_eventsByDayFromBackend != null) {
+      final allEvents = _eventsByDayFromBackend![dayKey] ?? [];
+      final relevantEvents = allEvents.where((e) {
+        if (useIdOnly) {
+          return targetIds.contains(e.executorId.trim().toLowerCase());
+        } else {
+          return targetNames.contains(ConflictService.normalizeExecutorKey(e.executorNome));
+        }
+      }).toList();
+
+      if (relevantEvents.isNotEmpty) {
+        final eventsByExec = <String, List<ExecutionEventFromBackend>>{};
+        for (final e in relevantEvents) {
+          final groupKey = e.executorId.trim().isNotEmpty
+              ? e.executorId.trim().toLowerCase()
+              : ConflictService.normalizeExecutorKey(e.executorNome);
+          eventsByExec.putIfAbsent(groupKey, () => []).add(e);
+        }
+
+        final conflictingExecIds = <String>{};
+        final conflictingExecNames = <String>{};
+        final conflictingTaskIds = <String>{};
+        final descriptions = <String>{};
+
+        for (final entry in eventsByExec.entries) {
+          final group = entry.value;
+          final unacceptedEvents = <ExecutionEventFromBackend>{};
+          for (int i = 0; i < group.length; i++) {
+            for (int j = i + 1; j < group.length; j++) {
+              final ev1 = group[i];
+              final ev2 = group[j];
+              final loc1 = ev1.locationKey.trim().toLowerCase();
+              final loc2 = ev2.locationKey.trim().toLowerCase();
+              if (loc1.isEmpty || loc2.isEmpty || loc1 == loc2 || ev1.taskId == ev2.taskId) {
+                continue;
+              }
+              if (ConflictService.isPairAccepted(
+                _acceptedConflicts,
+                resourceType: 'EXECUTOR',
+                resourceId: ev1.executorId.isNotEmpty ? ev1.executorId : entry.key,
+                taskA: ev1.taskId,
+                taskB: ev2.taskId,
+              )) {
+                continue;
+              }
+              unacceptedEvents.add(ev1);
+              unacceptedEvents.add(ev2);
+            }
+          }
+
+          if (unacceptedEvents.isNotEmpty) {
+            conflictingExecIds.add(entry.key);
+            final sample = unacceptedEvents.first;
+            final execNome = sample.executorNome.trim().isNotEmpty
+                ? sample.executorNome.trim()
+                : (idToName[sample.executorId] ??
+                    idToName[sample.executorId.toLowerCase()] ??
+                    sample.executorId);
+            if (execNome.isNotEmpty) conflictingExecNames.add(execNome);
+
+            for (final ev in unacceptedEvents) {
+              if (ev.taskId.isNotEmpty) conflictingTaskIds.add(ev.taskId);
+              final isCurrent = ev.taskId == realTaskId || ev.taskId == task.id;
+              final suffix = isCurrent ? ' (esta tarefa)' : '';
+              descriptions.add('$execNome • ${ev.description}$suffix');
+            }
+          }
+        }
+
+        if (conflictingExecNames.isNotEmpty || conflictingTaskIds.isNotEmpty) {
+          conflictingTaskIds.add(realTaskId);
+          final namesSorted = conflictingExecNames.toList()..sort();
+          final descsSorted = descriptions.toList()..sort();
+          final dayStr = '${day.day.toString().padLeft(2, '0')}/${day.month.toString().padLeft(2, '0')}/${day.year}';
+          return DayConflictDetails(
+            taskIds: conflictingTaskIds,
+            executorIds: conflictingExecIds,
+            executorNames: namesSorted,
+            descriptions: descsSorted,
+            reason:
+                'Em $dayStr, ${namesSorted.length > 1 ? 'os executores abaixo estão alocados' : 'este executor está alocado'} em mais de um local simultaneamente.',
+          );
+        }
+      }
+    }
+
+    // 2. Fallback para mapa resumido do backend (_conflictMapFromBackend)
+    final backendConflictingExecIds = <String>{};
+    final backendConflictingExecNames = <String>{};
+    final backendDescriptions = <String>{};
+    if (_conflictMapFromBackend != null) {
+      for (final eid in _getExecutorIdsForTask(task)) {
+        final info = _conflictMapFromBackend!['${eid.toLowerCase()}_$dayKey'] ??
+            _conflictMapFromBackend!['${ConflictService.normalizeExecutorKey(eid)}_$dayKey'];
+        if (info != null && info.hasConflict) {
+          backendConflictingExecIds.add(eid.toLowerCase());
+          final nome = idToName[eid] ?? idToName[eid.toLowerCase()] ?? eid;
+          backendConflictingExecNames.add(nome);
+          for (final d in info.descriptions) {
+            backendDescriptions.add('$nome • $d');
+          }
+        }
+      }
+      if (backendConflictingExecNames.isNotEmpty) {
+        final idsFromFallback = _getConflictTaskIdsForSingleDay(task, day);
+        idsFromFallback.add(realTaskId);
+        // Só retorna aqui se já encontrou múltiplas tarefas; caso contrário, tenta o fallback local abaixo
+        if (idsFromFallback.length > 1) {
+          return DayConflictDetails(
+            taskIds: idsFromFallback,
+            executorIds: backendConflictingExecIds,
+            executorNames: backendConflictingExecNames.toList()..sort(),
+            descriptions: backendDescriptions.toList()..sort(),
+          );
+        }
+      }
+    }
+
+    // 3. Fallback local completo (usando tasksForConflictDetection ?? tasks)
+    final pool = <Task>[
+      ...(widget.tasksForConflictDetection ?? widget.tasks),
+      ..._loadedSubtasks.values.expand((l) => l),
+    ];
+    if (pool.isNotEmpty) {
+      final localEvents = ConflictDetection.getExecutionEventsForDay(pool, day, pool);
+      final relevant = localEvents.where((e) {
+        final eIdLower = e.executorId.trim().toLowerCase();
+        final eNameNorm = ConflictService.normalizeExecutorKey(
+          idToName[e.executorId] ?? idToName[eIdLower] ?? e.executorId,
+        );
+        if (useIdOnly && targetIds.contains(eIdLower)) {
+          return true;
+        }
+        return targetNames.contains(eNameNorm) ||
+            targetNames.contains(ConflictService.normalizeExecutorKey(e.executorId));
+      }).toList();
+
+      final byExec = <String, List<ExecutionEvent>>{};
+      for (final e in relevant) {
+        final execKey = ConflictService.normalizeExecutorKey(
+          idToName[e.executorId] ?? idToName[e.executorId.trim().toLowerCase()] ?? e.executorId,
+        );
+        byExec.putIfAbsent(execKey.isNotEmpty ? execKey : e.executorId.toLowerCase(), () => []).add(e);
+      }
+
+      final conflictingExecIds = <String>{...backendConflictingExecIds};
+      final conflictingExecNames = <String>{...backendConflictingExecNames};
+      final conflictingTaskIds = <String>{};
+      final descriptions = <String>{...backendDescriptions};
+
+      for (final entry in byExec.entries) {
+        final group = entry.value;
+        final collidedEvents = <ExecutionEvent>{};
+        for (int i = 0; i < group.length; i++) {
+          for (int j = i + 1; j < group.length; j++) {
+            final ev1 = group[i];
+            final ev2 = group[j];
+            if (ev1.locationKey == ev2.locationKey || ev1.taskId == ev2.taskId) continue;
+            if (ConflictService.isPairAccepted(
+              _acceptedConflicts,
+              resourceType: 'EXECUTOR',
+              resourceId: ev1.executorId,
+              taskA: ev1.taskId,
+              taskB: ev2.taskId,
+            )) {
+              continue;
+            }
+            final s1 = ev1.startTime ?? DateTime(day.year, day.month, day.day, 0, 0);
+            final e1 = ev1.endTime ?? DateTime(day.year, day.month, day.day, 23, 59, 59);
+            final s2 = ev2.startTime ?? DateTime(day.year, day.month, day.day, 0, 0);
+            final e2 = ev2.endTime ?? DateTime(day.year, day.month, day.day, 23, 59, 59);
+            if (s1.isBefore(e2) && e1.isAfter(s2)) {
+              collidedEvents.add(ev1);
+              collidedEvents.add(ev2);
+            }
+          }
+        }
+        if (collidedEvents.isNotEmpty) {
+          conflictingExecIds.add(group.first.executorId.toLowerCase());
+          final execNome = idToName[group.first.executorId] ??
+              idToName[group.first.executorId.toLowerCase()] ??
+              group.first.executorId;
+          conflictingExecNames.add(execNome);
+          for (final ev in collidedEvents) {
+            conflictingTaskIds.add(ev.taskId);
+            final isCurrent = ev.taskId == realTaskId || ev.taskId == task.id;
+            descriptions.add('$execNome • ${ev.description}${isCurrent ? ' (esta tarefa)' : ''}');
+          }
+        }
+      }
+
+      if (conflictingTaskIds.isNotEmpty || conflictingExecNames.isNotEmpty) {
+        conflictingTaskIds.add(realTaskId);
+        return DayConflictDetails(
+          taskIds: conflictingTaskIds,
+          executorIds: conflictingExecIds,
+          executorNames: conflictingExecNames.toList()..sort(),
+          descriptions: descriptions.toList()..sort(),
+        );
+      }
+    }
+
+    if (backendConflictingExecNames.isNotEmpty) {
+      return DayConflictDetails(
+        taskIds: {realTaskId},
+        executorIds: backendConflictingExecIds,
+        executorNames: backendConflictingExecNames.toList()..sort(),
+        descriptions: backendDescriptions.toList()..sort(),
+      );
+    }
+
+    return null;
   }
 
   String? _getFleetConflictDetailsMessageForSingleDay(Task task, DateTime day) {
@@ -1547,6 +1905,40 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                   ),
                 ),
               ),
+              if (_scopedAcceptedConflicts.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: Tooltip(
+                    message: 'Gerenciar conflitos aceitos do período',
+                    child: InkWell(
+                      onTap: _openAcceptedConflictsDialog,
+                      borderRadius: BorderRadius.circular(4),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.green[50],
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: Colors.green[300]!),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.fact_check_outlined, size: isMobile ? 12 : 14, color: Colors.green[800]),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Aceitos (${_scopedAcceptedConflicts.length})',
+                              style: TextStyle(
+                                fontSize: isMobile ? 9 : 11,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.green[800],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               Tooltip(
                 message: 'Personalizar colunas (expandir área do Gantt)',
                 child: InkWell(
@@ -1624,6 +2016,8 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                     _buildTableHeaderCell('SI', w.sis, isMobile),
                   if (visibleCols.contains(TaskTableColumn.alertas))
                     _buildTableHeaderCell('ALERTAS', w.alertas, isMobile),
+                  if (visibleCols.contains(TaskTableColumn.apoios))
+                    _buildTableHeaderCell('APOIOS', w.apoios, isMobile),
                 ],
               ),
             ),
@@ -2254,19 +2648,13 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                         statusBg: statusBg,
                       ),
                     if (visibleCols.contains(TaskTableColumn.executor))
-                      _buildCell(
-                        isFrotaRow
-                            ? '—'
-                            : (task.equipeExecutores?.isNotEmpty == true
-                                ? '${task.equipes.isNotEmpty ? task.equipes.join(', ') : ''} (${task.equipeExecutores!.length})'
-                                : task.executores.isNotEmpty ? task.executores.join(', ') : task.executor),
+                      _buildExecutorTableCell(
+                        task,
                         w.executor,
                         isMobile,
-                        hasColoredBackground: statusBg != Colors.white,
-                        maxLines: 2,
-                        softWrap: true,
-                        overflow: TextOverflow.fade,
-                        fontWeight: isExecutorRow ? FontWeight.bold : null,
+                        statusBg: statusBg,
+                        isFrotaRow: isFrotaRow,
+                        isExecutorRow: isExecutorRow,
                       ),
                     if (visibleCols.contains(TaskTableColumn.coordenador))
                       _buildCell(
@@ -2298,10 +2686,743 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                       _buildSICell(task, w.sis, isMobile, statusBg),
                     if (visibleCols.contains(TaskTableColumn.alertas))
                       _buildAlertasCell(task, w.alertas, isMobile, statusBg, taskWarnings),
+                    if (visibleCols.contains(TaskTableColumn.apoios))
+                      SizedBox(
+                        width: w.apoios,
+                        height: 50,
+                        child: Center(
+                          child: isExecutorRow
+                              ? const Text('—')
+                              : AnimatedBuilder(
+                                  animation: widget.apoioController ?? ChangeNotifier(),
+                                  builder: (ctx, _) {
+                                    final ctrl = widget.apoioController;
+                                    if (ctrl == null) {
+                                      return const Text('—');
+                                    }
+                                    return TaskApoioTableBadge(
+                                      task: task,
+                                      resumo: ctrl.resumoParaTask(task.id),
+                                      controller: ctrl,
+                                      usuarioAtualId: widget.currentUserId ?? '',
+                                      usuarioAtualNome: widget.currentUserName,
+                                    );
+                                  },
+                                ),
+                        ),
+                      ),
                   ],
                 ),
               ),
           ),
+        ),
+      ),
+    );
+  }
+
+  // ── Banner de filtro de conflito e célula de executores ───────────────────
+
+  /// Filtra os aceites de conflito exibidos para mostrar apenas os que pertencem
+  /// às atividades do recorte atual (Regional/Divisão/Segmento do usuário e período visível).
+  List<ConflictAcceptance> get _scopedAcceptedConflicts {
+    if (_acceptedConflicts.isEmpty) return const [];
+    final scopedTasks = <Task>[
+      ...widget.tasks,
+      ..._loadedSubtasks.values.expand((l) => l),
+    ];
+    if (scopedTasks.isEmpty) return const [];
+
+    final periodStart = DateTime(widget.startDate.year, widget.startDate.month, widget.startDate.day);
+    final periodEnd = DateTime(widget.endDate.year, widget.endDate.month, widget.endDate.day);
+    final scopedIdsInPeriod = <String>{};
+    for (final t in scopedTasks) {
+      final tStart = DateTime(t.dataInicio.year, t.dataInicio.month, t.dataInicio.day);
+      final tEnd = DateTime(t.dataFim.year, t.dataFim.month, t.dataFim.day);
+      if (!tEnd.isBefore(periodStart) && !tStart.isAfter(periodEnd)) {
+        scopedIdsInPeriod.add(t.id);
+      }
+    }
+    if (scopedIdsInPeriod.isEmpty) return const [];
+
+    return _acceptedConflicts
+        .where((a) => scopedIdsInPeriod.contains(a.taskIdA) || scopedIdsInPeriod.contains(a.taskIdB))
+        .toList();
+  }
+
+  Future<void> _openAcceptedConflictsDialog() async {
+    final cs = widget.conflictService;
+    if (cs == null) return;
+    final list = await cs.getActiveAcceptances(forceRefresh: true);
+    if (!mounted) return;
+    setState(() => _acceptedConflicts = list);
+
+    final scopedList = _scopedAcceptedConflicts;
+    final allTasks = <Task>[
+      ...(widget.tasksForConflictDetection ?? widget.tasks),
+      ..._loadedSubtasks.values.expand((l) => l),
+    ];
+
+    await ConflictAcceptancesListDialog.show(
+      context,
+      acceptances: scopedList,
+      allTasks: allTasks,
+      onRevoke: (acceptance) async {
+        await cs.revokeAcceptance(
+          acceptance.id,
+          revokedBy: widget.currentUserId,
+        );
+        await _loadBackendConflicts(forceRefresh: true);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Aceite revogado para ${acceptance.resourceNome.isNotEmpty ? acceptance.resourceNome : acceptance.resourceId}.'),
+            ),
+          );
+        }
+      },
+    );
+  }
+
+  Future<void> _handleAcceptConflictForTask(
+    Task task,
+    DateTime day,
+    DayConflictDetails? execDetails, {
+    required bool hasExecutorConflict,
+    required bool hasFrotaConflict,
+  }) async {
+    final cs = widget.conflictService;
+    if (cs == null) return;
+
+    final realTaskId = (task.id.contains('_executor_') || task.id.contains('_frota_'))
+        ? (task.parentId ?? task.id)
+        : task.id;
+    final dayKey =
+        '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+
+    final candidates = <ConflictAcceptanceCandidate>[];
+    final seenCandidateKeys = <String>{};
+
+    void addCandidate(ConflictAcceptanceCandidate c) {
+      final pair = ConflictAcceptance.canonicalPair(c.taskIdA, c.taskIdB);
+      final key = '${c.resourceType}|${c.resourceId.toLowerCase()}|${pair.$1}|${pair.$2}';
+      if (seenCandidateKeys.add(key)) {
+        candidates.add(c);
+      }
+    }
+
+    // 1. Candidatos de Executor
+    if (hasExecutorConflict) {
+      var dayEvents = _eventsByDayFromBackend?[dayKey] ?? [];
+      if (dayEvents.isEmpty) {
+        final execIds = _getExecutorIdsForConflictLookup(task);
+        final fetched = await cs.getExecutionEventsForRange(
+          day,
+          day,
+          executorIds: execIds.isNotEmpty ? execIds.toList() : null,
+        );
+        dayEvents = fetched[dayKey] ?? [];
+      }
+
+      final targetIds = <String>{
+        for (final id in task.executorIds)
+          if (id.trim().isNotEmpty) id.trim().toLowerCase(),
+        for (final ep in task.executorPeriods)
+          if (ep.executorId.trim().isNotEmpty) ep.executorId.trim().toLowerCase(),
+      };
+      if (execDetails != null) {
+        for (final id in execDetails.executorIds) {
+          if (id.trim().isNotEmpty) targetIds.add(id.trim().toLowerCase());
+        }
+      }
+
+      final idToName = _executorIdToNameMap();
+      final byExec = <String, List<ExecutionEventFromBackend>>{};
+      for (final ev in dayEvents) {
+        final eid = ev.executorId.trim().toLowerCase();
+        if (targetIds.isNotEmpty && !targetIds.contains(eid)) continue;
+        byExec.putIfAbsent(eid, () => []).add(ev);
+      }
+
+      for (final entry in byExec.entries) {
+        final group = entry.value;
+        final currentEvents = group.where((e) => e.taskId == realTaskId).toList();
+        final otherEvents = group.where((e) => e.taskId != realTaskId && e.taskId.isNotEmpty).toList();
+        if (otherEvents.isEmpty) continue;
+
+        final curLocs = currentEvents.map((e) => e.locationKey.trim().toLowerCase()).toSet();
+        for (final other in otherEvents) {
+          final otherLoc = other.locationKey.trim().toLowerCase();
+          if (curLocs.isNotEmpty && curLocs.contains(otherLoc)) continue;
+          if (ConflictService.isPairAccepted(
+            _acceptedConflicts,
+            resourceType: 'EXECUTOR',
+            resourceId: entry.key,
+            taskA: realTaskId,
+            taskB: other.taskId,
+          )) {
+            continue;
+          }
+          final execNome = other.executorNome.trim().isNotEmpty
+              ? other.executorNome.trim()
+              : (idToName[other.executorId] ?? idToName[entry.key] ?? entry.key);
+          addCandidate(
+            ConflictAcceptanceCandidate(
+              resourceType: 'EXECUTOR',
+              resourceId: other.executorId.trim().isNotEmpty ? other.executorId.trim() : entry.key,
+              resourceNome: execNome,
+              taskIdA: realTaskId,
+              taskIdB: other.taskId,
+              otherTaskDescription: other.description,
+            ),
+          );
+        }
+      }
+
+      // Fallback local se backend não retornou eventos
+      if (candidates.isEmpty) {
+        final pool = <Task>[
+          ...(widget.tasksForConflictDetection ?? widget.tasks),
+          ..._loadedSubtasks.values.expand((l) => l),
+        ];
+        final localEvents = ConflictDetection.getExecutionEventsForDay(pool, day, pool);
+        final currentEvents = localEvents.where((e) => e.taskId == realTaskId).toList();
+        for (final curEv in currentEvents) {
+          for (final otherEv in localEvents) {
+            if (otherEv.taskId == realTaskId) continue;
+            if (ConflictService.normalizeExecutorKey(curEv.executorId) !=
+                ConflictService.normalizeExecutorKey(otherEv.executorId)) continue;
+            if (curEv.locationKey == otherEv.locationKey) continue;
+            if (ConflictService.isPairAccepted(
+              _acceptedConflicts,
+              resourceType: 'EXECUTOR',
+              resourceId: curEv.executorId,
+              taskA: realTaskId,
+              taskB: otherEv.taskId,
+            )) {
+              continue;
+            }
+            final execNome = idToName[curEv.executorId] ??
+                idToName[curEv.executorId.toLowerCase()] ??
+                curEv.executorId;
+            addCandidate(
+              ConflictAcceptanceCandidate(
+                resourceType: 'EXECUTOR',
+                resourceId: curEv.executorId,
+                resourceNome: execNome,
+                taskIdA: realTaskId,
+                taskIdB: otherEv.taskId,
+                otherTaskDescription: otherEv.description,
+              ),
+            );
+          }
+        }
+      }
+    }
+
+    // 2. Candidatos de Frota
+    if (hasFrotaConflict) {
+      var fleetEvents = _fleetEventsByDayFromBackend?[dayKey] ?? [];
+      if (fleetEvents.isEmpty && task.frotaIds.isNotEmpty) {
+        final fetched = await cs.getFleetExecutionEventsForRange(
+          day,
+          day,
+          frotaIds: task.frotaIds,
+        );
+        fleetEvents = fetched[dayKey] ?? [];
+      }
+      final frotaSet = task.frotaIds.map((f) => f.trim().toLowerCase()).toSet();
+      final byFrota = <String, List<FleetExecutionEventFromBackend>>{};
+      for (final ev in fleetEvents) {
+        final fid = ev.frotaId.trim().toLowerCase();
+        if (frotaSet.isNotEmpty && !frotaSet.contains(fid)) continue;
+        byFrota.putIfAbsent(fid, () => []).add(ev);
+      }
+
+      for (final entry in byFrota.entries) {
+        final group = entry.value;
+        final curLocs = group
+            .where((e) => e.taskId == realTaskId)
+            .map((e) => e.locationKey.trim().toLowerCase())
+            .toSet();
+        for (final other in group) {
+          if (other.taskId == realTaskId || other.taskId.isEmpty) continue;
+          if (curLocs.isNotEmpty && curLocs.contains(other.locationKey.trim().toLowerCase())) {
+            continue;
+          }
+          if (ConflictService.isPairAccepted(
+            _acceptedConflicts,
+            resourceType: 'FROTA',
+            resourceId: entry.key,
+            taskA: realTaskId,
+            taskB: other.taskId,
+          )) {
+            continue;
+          }
+          addCandidate(
+            ConflictAcceptanceCandidate(
+              resourceType: 'FROTA',
+              resourceId: other.frotaId.trim().isNotEmpty ? other.frotaId.trim() : entry.key,
+              resourceNome: other.frotaNome.trim().isNotEmpty ? other.frotaNome.trim() : entry.key,
+              taskIdA: realTaskId,
+              taskIdB: other.taskId,
+              otherTaskDescription: other.description,
+            ),
+          );
+        }
+      }
+    }
+
+    if (!mounted) return;
+    if (candidates.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Não foi possível identificar pares pendentes de conflito para aceitar.'),
+        ),
+      );
+      return;
+    }
+
+    final result = await ConflictAcceptanceDialog.show(
+      context,
+      currentTaskTitle: task.tarefa,
+      day: day,
+      candidates: candidates,
+    );
+    if (result == null || result.selected.isEmpty || !mounted) return;
+
+    try {
+      await cs.acceptConflictPairs(
+        result.selected.map((c) => c.toDraft()).toList(),
+        reason: result.reason,
+        acceptedBy: widget.currentUserId,
+        acceptedByName: widget.currentUserName,
+      );
+      await _loadBackendConflicts(forceRefresh: true);
+      if (!mounted) return;
+
+      // Se estava no filtro de conflitos ativo, atualiza o banner/filtro imediatamente
+      if (widget.conflictFilterTaskIds != null) {
+        final remaining = _getDayConflictDetails(task, day);
+        final frotaRemaining = _hasUnacceptedFleetConflictOnDay(task, day, _getFleetIdsForTask(task));
+        if (remaining == null && (!hasFrotaConflict || !frotaRemaining)) {
+          setState(() {
+            _activeConflictFilterDay = null;
+            _activeConflictFilterExecutorNames = [];
+            _activeConflictFilterExecutorIds = {};
+            _activeConflictFilterDescriptions = [];
+          });
+          widget.onFilterConflictTasks?.call(null);
+        } else if (remaining != null) {
+          setState(() {
+            _activeConflictFilterExecutorNames = remaining.executorNames;
+            _activeConflictFilterExecutorIds = remaining.executorIds;
+            _activeConflictFilterDescriptions = remaining.descriptions;
+          });
+        }
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${result.selected.length} ${result.selected.length == 1 ? 'conflito aceito' : 'conflitos aceitos'} com sucesso.',
+          ),
+          backgroundColor: Colors.green[700],
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Erro ao salvar aceite de conflito: $e'),
+          backgroundColor: Colors.red[700],
+        ),
+      );
+    }
+  }
+
+  Future<void> _enrichConflictFilterFromBackend(
+    Set<String> initialTaskIds,
+    DateTime day, {
+    Set<String>? executorIds,
+    List<String>? executorNames,
+  }) async {
+    final cs = widget.conflictService;
+    if (cs == null) return;
+    try {
+      final execIdsParam = (executorIds != null && executorIds.isNotEmpty)
+          ? executorIds.where((id) => _uuidRegex.hasMatch(id.trim())).toList()
+          : null;
+      final eventsByDay = await cs.getExecutionEventsForRange(
+        day,
+        day,
+        executorIds: (execIdsParam != null && execIdsParam.isNotEmpty) ? execIdsParam : null,
+      );
+      if (!mounted || widget.conflictFilterTaskIds == null) return;
+
+      final dayKey =
+          '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+      final dayEvents = eventsByDay[dayKey] ?? [];
+      if (dayEvents.isEmpty) return;
+
+      final targetIds = (executorIds ?? {}).map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty).toSet();
+      final targetNames = (executorNames ?? [])
+          .map((n) => ConflictService.normalizeExecutorKey(n))
+          .where((n) => n.isNotEmpty)
+          .toSet();
+
+      final matchedEvents = dayEvents.where((e) {
+        if (targetIds.isNotEmpty && targetIds.contains(e.executorId.trim().toLowerCase())) {
+          return true;
+        }
+        if (targetNames.isNotEmpty && targetNames.contains(ConflictService.normalizeExecutorKey(e.executorNome))) {
+          return true;
+        }
+        return false;
+      }).toList();
+
+      if (matchedEvents.isEmpty) return;
+
+      final enrichedIds = <String>{...initialTaskIds};
+      final descs = <String>{};
+      for (final ev in matchedEvents) {
+        if (ev.taskId.isNotEmpty) enrichedIds.add(ev.taskId);
+        final execNome = ev.executorNome.trim().isNotEmpty ? ev.executorNome.trim() : ev.executorId;
+        descs.add('$execNome • ${ev.description}');
+      }
+
+      if (mounted && widget.conflictFilterTaskIds != null) {
+        setState(() {
+          if (descs.isNotEmpty) {
+            _activeConflictFilterDescriptions = descs.toList()..sort();
+          }
+        });
+        if (enrichedIds.length > initialTaskIds.length) {
+          widget.onFilterConflictTasks?.call(enrichedIds);
+        }
+      }
+    } catch (e) {
+      debugPrint('⚠️ Erro ao enriquecer filtro de conflito: $e');
+    }
+  }
+
+  Widget _buildConflictFilterBanner(int visibleRowsCount) {
+    final dayStr = _activeConflictFilterDay != null
+        ? '${_activeConflictFilterDay!.day.toString().padLeft(2, '0')}/${_activeConflictFilterDay!.month.toString().padLeft(2, '0')}/${_activeConflictFilterDay!.year}'
+        : null;
+    final execNames = _activeConflictFilterExecutorNames;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFEF2F2),
+        border: Border(
+          bottom: BorderSide(color: Colors.red[200]!, width: 1),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.warning_amber_rounded, size: 18, color: Colors.red[700]),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Text(
+                  dayStr != null
+                      ? 'Conflito de agenda em $dayStr'
+                      : 'Filtro de conflito de agenda ativo',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.red[900],
+                  ),
+                ),
+                if (execNames.isNotEmpty) ...[
+                  Text(
+                    'Executor(es) em conflito:',
+                    style: TextStyle(fontSize: 12, color: Colors.red[800]),
+                  ),
+                  ...execNames.map(
+                    (name) => Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.red[700],
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        name,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+                Text(
+                  '($visibleRowsCount ${visibleRowsCount == 1 ? 'linha exibida' : 'linhas exibidas'})',
+                  style: TextStyle(fontSize: 11, color: Colors.red[700]),
+                ),
+                if (_activeConflictFilterDescriptions.isNotEmpty)
+                  Text(
+                    '• ${_activeConflictFilterDescriptions.join('  |  ')}',
+                    style: TextStyle(fontSize: 11, color: Colors.red[900]),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          TextButton.icon(
+            onPressed: () {
+              setState(() {
+                _activeConflictFilterDay = null;
+                _activeConflictFilterExecutorNames = [];
+                _activeConflictFilterExecutorIds = {};
+                _activeConflictFilterDescriptions = [];
+              });
+              widget.onFilterConflictTasks?.call(null);
+            },
+            icon: Icon(Icons.close, size: 15, color: Colors.red[800]),
+            label: Text(
+              'Limpar filtro',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: Colors.red[800],
+              ),
+            ),
+            style: TextButton.styleFrom(
+              backgroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(6),
+                side: BorderSide(color: Colors.red[300]!),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Verifica quais executores da [task] têm conflito conhecido (respeitando aceites).
+  Set<String> _getConflictingExecutorKeysForTask(Task task) {
+    final keys = <String>{};
+
+    if (_conflictMapFromBackend != null && widget.scale == GanttScale.daily) {
+      final execIds = _getExecutorIdsForTask(task);
+      final filterDay = _activeConflictFilterDay;
+
+      if (widget.conflictFilterTaskIds != null && filterDay != null) {
+        if (_acceptedConflicts.isNotEmpty || _eventsByDayFromBackend != null) {
+          final details = _getDayConflictDetails(task, filterDay);
+          if (details != null) {
+            for (final eid in details.executorIds) {
+              keys.add(eid.toLowerCase());
+            }
+            for (final name in details.executorNames) {
+              keys.add(ConflictService.normalizeExecutorKey(name));
+            }
+          }
+          return keys;
+        }
+        final dayKeyFilter =
+            '${filterDay.year}-${filterDay.month.toString().padLeft(2, '0')}-${filterDay.day.toString().padLeft(2, '0')}';
+        for (final eid in execIds) {
+          final info = _conflictMapFromBackend!['${eid.toLowerCase()}_$dayKeyFilter'] ??
+              _conflictMapFromBackend!['${ConflictService.normalizeExecutorKey(eid)}_$dayKeyFilter'];
+          if (info?.hasConflict ?? false) {
+            keys.add(eid.toLowerCase());
+            keys.add(ConflictService.normalizeExecutorKey(eid));
+          }
+        }
+        return keys;
+      } else {
+        // Verifica apenas os dias de EXECUÇÃO da tarefa (mesma regra do Gantt),
+        // evitando marcar em vermelho executores cujo conflito está fora da execução desta tarefa.
+        final execDays = <DateTime>[];
+        if (task.ganttSegments.isEmpty) {
+          var cur = DateTime(task.dataInicio.year, task.dataInicio.month, task.dataInicio.day);
+          final endNorm = DateTime(task.dataFim.year, task.dataFim.month, task.dataFim.day);
+          int guard = 0;
+          while (!cur.isAfter(endNorm) && guard < 60) {
+            execDays.add(cur);
+            cur = cur.add(const Duration(days: 1));
+            guard++;
+          }
+        } else {
+          for (final seg in task.ganttSegments) {
+            final tipo = (seg.tipoPeriodo ?? '').toUpperCase();
+            if (tipo == 'PLANEJAMENTO' || tipo == 'DESLOCAMENTO') continue;
+            var cur = DateTime(seg.dataInicio.year, seg.dataInicio.month, seg.dataInicio.day);
+            final segEnd = DateTime(seg.dataFim.year, seg.dataFim.month, seg.dataFim.day);
+            int guard = 0;
+            while (!cur.isAfter(segEnd) && guard < 60) {
+              execDays.add(cur);
+              cur = cur.add(const Duration(days: 1));
+              guard++;
+            }
+          }
+        }
+
+        for (final cur in execDays) {
+          if (_acceptedConflicts.isNotEmpty && _eventsByDayFromBackend != null) {
+            final details = _getDayConflictDetails(task, cur);
+            if (details != null) {
+              for (final eid in details.executorIds) {
+                keys.add(eid.toLowerCase());
+              }
+              for (final name in details.executorNames) {
+                keys.add(ConflictService.normalizeExecutorKey(name));
+              }
+            }
+          } else {
+            final dk = '${cur.year}-${cur.month.toString().padLeft(2, '0')}-${cur.day.toString().padLeft(2, '0')}';
+            for (final eid in execIds) {
+              final info = _conflictMapFromBackend!['${eid.toLowerCase()}_$dk'] ??
+                  _conflictMapFromBackend!['${ConflictService.normalizeExecutorKey(eid)}_$dk'];
+              if (info?.hasConflict ?? false) {
+                keys.add(eid.toLowerCase());
+                keys.add(ConflictService.normalizeExecutorKey(eid));
+              }
+            }
+          }
+        }
+      }
+    }
+    return keys;
+  }
+
+  Widget _buildExecutorTableCell(
+    Task task,
+    double width,
+    bool isMobile, {
+    required Color statusBg,
+    required bool isFrotaRow,
+    required bool isExecutorRow,
+  }) {
+    if (isFrotaRow || task.equipeExecutores?.isNotEmpty == true) {
+      final text = isFrotaRow
+          ? '—'
+          : '${task.equipes.isNotEmpty ? task.equipes.join(', ') : ''} (${task.equipeExecutores!.length})';
+      return _buildCell(
+        text,
+        width,
+        isMobile,
+        hasColoredBackground: statusBg != Colors.white,
+        maxLines: 2,
+        softWrap: true,
+        overflow: TextOverflow.fade,
+        fontWeight: isExecutorRow ? FontWeight.bold : null,
+      );
+    }
+
+    final names = task.executores.isNotEmpty
+        ? task.executores
+        : (task.executor.trim().isNotEmpty
+            ? task.executor.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList()
+            : <String>[]);
+
+    if (names.isEmpty) {
+      return _buildCell(
+        '',
+        width,
+        isMobile,
+        hasColoredBackground: statusBg != Colors.white,
+        fontWeight: isExecutorRow ? FontWeight.bold : null,
+      );
+    }
+
+    final conflictingKeys = _getConflictingExecutorKeysForTask(task);
+    if (conflictingKeys.isEmpty) {
+      return _buildCell(
+        names.join(', '),
+        width,
+        isMobile,
+        hasColoredBackground: statusBg != Colors.white,
+        maxLines: 2,
+        softWrap: true,
+        overflow: TextOverflow.fade,
+        fontWeight: isExecutorRow ? FontWeight.bold : null,
+      );
+    }
+
+    final baseColor = statusBg != Colors.white ? Colors.grey[800]! : Colors.black87;
+    final fontSize = isMobile ? 10.0 : 11.0;
+
+    final conflictingEntries = <String>[];
+    final normalEntries = <String>[];
+
+    for (var i = 0; i < names.length; i++) {
+      final name = names[i];
+      final normName = ConflictService.normalizeExecutorKey(name);
+      final execId = i < task.executorIds.length ? task.executorIds[i].trim().toLowerCase() : '';
+      final isConflicting = conflictingKeys.contains(normName) ||
+          (execId.isNotEmpty && conflictingKeys.contains(execId));
+      if (isConflicting) {
+        conflictingEntries.add(name);
+      } else {
+        normalEntries.add(name);
+      }
+    }
+
+    final orderedEntries = <({String name, bool isConflicting})>[
+      ...conflictingEntries.map((n) => (name: n, isConflicting: true)),
+      ...normalEntries.map((n) => (name: n, isConflicting: false)),
+    ];
+
+    final spans = <InlineSpan>[];
+    for (var i = 0; i < orderedEntries.length; i++) {
+      final entry = orderedEntries[i];
+      if (i > 0) {
+        spans.add(TextSpan(text: ', ', style: TextStyle(fontSize: fontSize, color: baseColor)));
+      }
+      if (entry.isConflicting) {
+        spans.add(
+          TextSpan(
+            text: entry.name,
+            style: TextStyle(
+              fontSize: fontSize,
+              color: Colors.red[700],
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        );
+      } else {
+        spans.add(
+          TextSpan(
+            text: entry.name,
+            style: TextStyle(
+              fontSize: fontSize,
+              color: baseColor,
+              fontWeight: isExecutorRow ? FontWeight.bold : FontWeight.normal,
+            ),
+          ),
+        );
+      }
+    }
+
+    return SizedBox(
+      width: width,
+      height: 50,
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: isMobile ? 3 : 6, vertical: isMobile ? 4 : 6),
+        decoration: BoxDecoration(
+          border: Border(right: BorderSide(color: Colors.grey[300]!, width: 0.5)),
+        ),
+        alignment: Alignment.centerLeft,
+        child: RichText(
+          text: TextSpan(children: spans),
+          maxLines: 2,
+          overflow: TextOverflow.fade,
         ),
       ),
     );
@@ -2802,16 +3923,28 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
 
                         final conflictTooltipMessageByDay = <DateTime, String>{};
                         final conflictTaskIdsByDay = <DateTime, Set<String>>{};
+                        final conflictDetailsByDay = <DateTime, DayConflictDetails>{};
                         if (conflictDays != null) {
                           for (final d in conflictDays) {
                             final dayNorm = DateTime(d.year, d.month, d.day);
-                            final msg = _getConflictDetailsMessageForSingleDay(task, dayNorm);
-                            if (msg != null && msg.isNotEmpty) {
-                              conflictTooltipMessageByDay[dayNorm] = msg;
-                            }
-                            final ids = _getConflictTaskIdsForSingleDay(task, dayNorm);
-                            if (ids.isNotEmpty) {
-                              conflictTaskIdsByDay[dayNorm] = ids;
+                            final details = _getDayConflictDetails(task, dayNorm);
+                            if (details != null) {
+                              conflictDetailsByDay[dayNorm] = details;
+                              if (details.taskIds.isNotEmpty) {
+                                conflictTaskIdsByDay[dayNorm] = details.taskIds;
+                              }
+                              if (details.reason != null && details.reason!.isNotEmpty) {
+                                conflictTooltipMessageByDay[dayNorm] = details.reason!;
+                              }
+                            } else {
+                              final msg = _getConflictDetailsMessageForSingleDay(task, dayNorm);
+                              if (msg != null && msg.isNotEmpty) {
+                                conflictTooltipMessageByDay[dayNorm] = msg;
+                              }
+                              final ids = _getConflictTaskIdsForSingleDay(task, dayNorm);
+                              if (ids.isNotEmpty) {
+                                conflictTaskIdsByDay[dayNorm] = ids;
+                              }
                             }
                           }
                         }
@@ -2848,6 +3981,8 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                             conflictTooltipMessage: null,
                             conflictTooltipMessageByDay: conflictTooltipMessageByDay.isEmpty ? null : conflictTooltipMessageByDay,
                             conflictTaskIdsByDay: conflictTaskIdsByDay.isEmpty ? null : conflictTaskIdsByDay,
+                            conflictDetailsByDay: conflictDetailsByDay.isEmpty ? null : conflictDetailsByDay,
+                            allTasksForConflict: widget.tasksForConflictDetection ?? widget.tasks,
                             conflictDaysFrota: conflictDaysFrota,
                             conflictTooltipMessageFrota: null,
                             conflictTooltipMessageByDayFrota: conflictTooltipMessageByDayFrota.isEmpty ? null : conflictTooltipMessageByDayFrota,
@@ -2861,6 +3996,42 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                                 widget.onFilterConflictTasks!(taskIds);
                               }
                             },
+                            onFilterConflictWithContext: (
+                              Set<String>? taskIds, {
+                              DateTime? day,
+                              List<String>? executorNames,
+                              Set<String>? executorIds,
+                              List<String>? descriptions,
+                            }) {
+                              setState(() {
+                                _activeConflictFilterDay = taskIds == null ? null : day;
+                                _activeConflictFilterExecutorNames =
+                                    taskIds == null ? [] : (executorNames ?? []);
+                                _activeConflictFilterExecutorIds =
+                                    taskIds == null ? {} : (executorIds ?? {});
+                                _activeConflictFilterDescriptions =
+                                    taskIds == null ? [] : (descriptions ?? []);
+                              });
+                              if (taskIds != null && taskIds.length <= 1 && day != null) {
+                                unawaited(_enrichConflictFilterFromBackend(
+                                  taskIds,
+                                  day,
+                                  executorIds: executorIds,
+                                  executorNames: executorNames,
+                                ));
+                              }
+                            },
+                            onAcceptConflict: widget.conflictService != null
+                                ? (day, details, {required hasExecutorConflict, required hasFrotaConflict}) {
+                                    unawaited(_handleAcceptConflictForTask(
+                                      task,
+                                      day,
+                                      details,
+                                      hasExecutorConflict: hasExecutorConflict,
+                                      hasFrotaConflict: hasFrotaConflict,
+                                    ));
+                                  }
+                                : null,
                             isConflictFilterActive: widget.conflictFilterTaskIds != null,
                           ),
                         );
@@ -3098,6 +4269,9 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                 )
               : const SizedBox(key: ValueKey('idle'), height: 3),
         ),
+        // ── Banner de filtro de conflito ativo ───────────────────────────────
+        if (widget.conflictFilterTaskIds != null)
+          _buildConflictFilterBanner(hierarchicalTasks.length),
         // ── Cabeçalho unificado ──────────────────────────────────────────────
         Row(
           children: [
@@ -3967,7 +5141,14 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
             ),
           ],
         ),
-        subtitle: si.tipo != null ? Text('Tipo: ${si.tipo}') : null,
+        subtitle: (si.tipo != null || si.resumoPeriodo != null)
+            ? Text(
+                [
+                  if (si.tipo != null) 'Tipo: ${si.tipo}',
+                  if (si.resumoPeriodo != null) si.resumoPeriodo!,
+                ].join(' · '),
+              )
+            : null,
         children: [
           Padding(
             padding: const EdgeInsets.all(16),
@@ -3985,8 +5166,12 @@ class _ActivityGanttViewState extends State<ActivityGanttView> {
                 _buildInfoRowModern('Atrib AT', si.atribAT),
                 if (si.dataInicio != null)
                   _buildInfoRowModern('Data Início', _formatDate(si.dataInicio!)),
+                if (si.horaInicioFormatada != null)
+                  _buildInfoRowModern('Hora Início', si.horaInicioFormatada),
                 if (si.dataFim != null)
                   _buildInfoRowModern('Data Fim', _formatDate(si.dataFim!)),
+                if (si.horaFimFormatada != null)
+                  _buildInfoRowModern('Hora Fim', si.horaFimFormatada),
               ],
             ),
           ),
@@ -4055,6 +5240,7 @@ class _TableColWidths {
   final double ats;
   final double sis;
   final double alertas;
+  final double apoios;
 
   _TableColWidths(bool isMobile)
       : acoes = TaskTableColumn.acoes.width(isMobile),
@@ -4071,7 +5257,8 @@ class _TableColWidths {
         ordens = TaskTableColumn.ordem.width(isMobile),
         ats = TaskTableColumn.at.width(isMobile),
         sis = TaskTableColumn.si.width(isMobile),
-        alertas = TaskTableColumn.alertas.width(isMobile);
+        alertas = TaskTableColumn.alertas.width(isMobile),
+        apoios = TaskTableColumn.apoios.width(isMobile);
 
   double get total => TaskTableColumnService.instance.calculateTotalWidth(false);
 }

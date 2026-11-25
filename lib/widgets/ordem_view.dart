@@ -18,6 +18,7 @@ import '../services/executor_service.dart';
 import 'task_view_dialog.dart';
 import 'multi_select_filter_dialog.dart';
 import 'ordem_calendar_view.dart';
+import 'ordem_visao_mensal_view.dart';
 import 'ordem_dashboard_view.dart';
 import 'gantt_chart.dart';
 import 'resizable_panel.dart';
@@ -975,6 +976,7 @@ class _OrdemViewState extends State<OrdemView> {
     final viewOptions = [
       ('tabela', Icons.table_chart, 'Tabela'),
       ('cards', Icons.view_module, 'Cards'),
+      ('mensal', Icons.calendar_view_month, 'Mês a Mês'),
       ('calendario', Icons.calendar_today, 'Calendário'),
       ('dashboard', Icons.dashboard, 'Dashboard'),
     ];
@@ -1413,6 +1415,18 @@ class _OrdemViewState extends State<OrdemView> {
                   ),
                 );
               }
+              if (_modoVisualizacao == 'mensal') {
+                return OrdemVisaoMensalView(
+                  ordens: _todasOrdens,
+                  ordensProgramadasInfo: _ordensProgramadasInfo,
+                  canEdit: _canEditTasks,
+                  onOrdemTap: (ordem) => _mostrarDetalhesOrdem(ordem),
+                  onCriarTarefa: _criarTarefaDaOrdem,
+                  onVincularTarefa: _vincularOrdemATarefaExistente,
+                  onVisualizarTarefa: (taskId) => _navegarParaTarefa(taskId),
+                  onEditarTarefa: _canEditTasks ? _editarTarefaPorId : null,
+                );
+              }
               return _modoVisualizacao == 'calendario'
                   ? OrdemCalendarView(
                       ordens: _todasOrdens,
@@ -1430,8 +1444,11 @@ class _OrdemViewState extends State<OrdemView> {
             })(),
           ),
 
-          // Paginação (não mostrar no dashboard nem no calendário)
-          if (_modoVisualizacao != 'dashboard' && _modoVisualizacao != 'calendario' && _totalOrdens > _itensPorPagina)
+          // Paginação (não mostrar no dashboard, mensal nem no calendário)
+          if (_modoVisualizacao != 'dashboard' &&
+              _modoVisualizacao != 'calendario' &&
+              _modoVisualizacao != 'mensal' &&
+              _totalOrdens > _itensPorPagina)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
@@ -2107,6 +2124,7 @@ class _OrdemViewState extends State<OrdemView> {
           context: context,
           builder: (context) => TaskViewDialog(
             task: task,
+            onEdit: _canEditTasks ? (t) => _editarTarefaPorId(t.id) : null,
             onUpdated: (updatedTask) {
               _loadOrdensProgramadas();
             },
@@ -2119,6 +2137,39 @@ class _OrdemViewState extends State<OrdemView> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Erro ao carregar tarefa: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _editarTarefaPorId(String taskId) async {
+    if (!_canEditTasks) return;
+    try {
+      final taskService = TaskService();
+      final task = await taskService.getTaskById(taskId);
+      if (task == null || !mounted) return;
+
+      final updated = await showDialog<Task>(
+        context: context,
+        builder: (context) => TaskFormDialog(
+          task: task,
+          startDate: task.dataInicio,
+          endDate: task.dataFim,
+        ),
+      );
+      if (updated != null) {
+        await taskService.updateTask(updated.id, updated);
+        if (mounted) {
+          await _loadOrdensProgramadas();
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erro ao editar tarefa: $e'),
             backgroundColor: Colors.red,
           ),
         );

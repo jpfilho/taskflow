@@ -15,6 +15,8 @@ class TooltipContent {
   final String? period;
   final String? actionLabel;
   final VoidCallback? onAction;
+  final String? secondaryActionLabel;
+  final VoidCallback? onSecondaryAction;
 
   const TooltipContent({
     required this.title,
@@ -26,6 +28,8 @@ class TooltipContent {
     this.period,
     this.actionLabel,
     this.onAction,
+    this.secondaryActionLabel,
+    this.onSecondaryAction,
   });
 }
 
@@ -52,6 +56,7 @@ class TaskFlowTooltip extends StatefulWidget {
 class _TaskFlowTooltipState extends State<TaskFlowTooltip> {
   OverlayEntry? _overlayEntry;
   bool _isHovering = false;
+  bool _isHoveringTooltip = false;
   Timer? _hideTimer;
   
   final LayerLink _layerLink = LayerLink();
@@ -78,12 +83,23 @@ class _TaskFlowTooltipState extends State<TaskFlowTooltip> {
   }
 
   void _onExit() {
-    _hideTimer = Timer(const Duration(milliseconds: 50), () {
-      if (mounted) {
+    _hideTimer?.cancel();
+    _hideTimer = Timer(const Duration(milliseconds: 220), () {
+      if (mounted && !_isHoveringTooltip) {
         setState(() => _isHovering = false);
         _hideOverlay();
       }
     });
+  }
+
+  void _onTooltipEnter() {
+    _hideTimer?.cancel();
+    _isHoveringTooltip = true;
+  }
+
+  void _onTooltipExit() {
+    _isHoveringTooltip = false;
+    _onExit();
   }
 
   void _showOverlay() {
@@ -94,6 +110,7 @@ class _TaskFlowTooltipState extends State<TaskFlowTooltip> {
   }
 
   void _hideOverlay() {
+    _isHoveringTooltip = false;
     _overlayEntry?.remove();
     _overlayEntry = null;
   }
@@ -118,10 +135,13 @@ class _TaskFlowTooltipState extends State<TaskFlowTooltip> {
             Positioned.fill(
               child: Listener(
                 onPointerDown: (e) {
-                  // Se houver qualquer clique fora, esconda o tooltip
-                  setState(() {
-                    _isHovering = false;
-                  });
+                  if (_isHoveringTooltip) return;
+                  // Se houver qualquer clique fora do card, esconda o tooltip
+                  if (mounted) {
+                    setState(() {
+                      _isHovering = false;
+                    });
+                  }
                   _hideOverlay();
                 },
                 behavior: HitTestBehavior.translucent, // Importante: não bloqueia hover!
@@ -139,8 +159,8 @@ class _TaskFlowTooltipState extends State<TaskFlowTooltip> {
               child: FractionalTranslation(
                 translation: Offset(0, showAbove ? -1.0 : 0.0),
                 child: MouseRegion(
-                  onEnter: (_) => _onEnter(),
-                  onExit: (_) => _onExit(),
+                  onEnter: (_) => _onTooltipEnter(),
+                  onExit: (_) => _onTooltipExit(),
                   child: Material(
                     color: Colors.transparent,
                     child: _buildTooltipContent(showAbove, alignLeft),
@@ -338,25 +358,51 @@ class _TaskFlowTooltipState extends State<TaskFlowTooltip> {
                     ),
                   ],
                   
-                  if (widget.content.actionLabel != null && widget.content.onAction != null) ...[
+                  if ((widget.content.actionLabel != null && widget.content.onAction != null) ||
+                      (widget.content.secondaryActionLabel != null && widget.content.onSecondaryAction != null)) ...[
                     const SizedBox(height: 16),
                     Align(
                       alignment: Alignment.centerRight,
-                      child: TextButton.icon(
-                        icon: Icon(Icons.filter_list, size: 16, color: severityColor),
-                        label: Text(
-                          widget.content.actionLabel!,
-                          style: TextStyle(color: severityColor, fontWeight: FontWeight.bold),
-                        ),
-                        style: TextButton.styleFrom(
-                          backgroundColor: severityColor.withOpacity(0.1),
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        ),
-                        onPressed: () {
-                          _hideOverlay();
-                          widget.content.onAction!();
-                        },
+                      child: Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        alignment: WrapAlignment.end,
+                        children: [
+                          if (widget.content.secondaryActionLabel != null && widget.content.onSecondaryAction != null)
+                            TextButton.icon(
+                              icon: const Icon(Icons.check_circle_outline, size: 16, color: Color(0xFF15803D)),
+                              label: Text(
+                                widget.content.secondaryActionLabel!,
+                                style: const TextStyle(color: Color(0xFF15803D), fontWeight: FontWeight.bold),
+                              ),
+                              style: TextButton.styleFrom(
+                                backgroundColor: const Color(0xFF16A34A).withOpacity(0.1),
+                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                              ),
+                              onPressed: () {
+                                _hideOverlay();
+                                widget.content.onSecondaryAction!();
+                              },
+                            ),
+                          if (widget.content.actionLabel != null && widget.content.onAction != null)
+                            TextButton.icon(
+                              icon: Icon(Icons.filter_list, size: 16, color: severityColor),
+                              label: Text(
+                                widget.content.actionLabel!,
+                                style: TextStyle(color: severityColor, fontWeight: FontWeight.bold),
+                              ),
+                              style: TextButton.styleFrom(
+                                backgroundColor: severityColor.withOpacity(0.1),
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                              ),
+                              onPressed: () {
+                                _hideOverlay();
+                                widget.content.onAction!();
+                              },
+                            ),
+                        ],
                       ),
                     ),
                   ],
