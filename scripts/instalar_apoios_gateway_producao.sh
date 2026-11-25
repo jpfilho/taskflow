@@ -62,8 +62,11 @@ EOF
   sed -i "s|^APOIOS_GATEWAY_SECRET=.*|APOIOS_GATEWAY_SECRET=${GATEWAY_SECRET}|" "$ENV_FILE"
 
   # Tentar capturar SERVICE_ROLE_KEY e POSTGRES_PASSWORD dos contêineres locais (se disponível)
-  AUTO_SERVICE_KEY="$(sudo docker exec supabase-rest printenv PGRST_JWT_SECRET 2>/dev/null || true)"
-  AUTO_SVC_ENV="$(sudo docker inspect supabase-auth --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | grep -E '^SUPABASE_SERVICE_KEY=|^GOTRUE_JWT_SECRET=' | head -n 1 || true)"
+  AUTO_SERVICE_KEY=""
+  for c in "supabase-studio" "supabase-storage" "supabase-edge-functions" "supabase-auth"; do
+    AUTO_SERVICE_KEY="$(sudo docker inspect "$c" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | awk -F= '/^(SUPABASE_SERVICE_KEY|SERVICE_ROLE_KEY|SUPABASE_SERVICE_ROLE_KEY)=/{print $2; exit}' || true)"
+    [ -n "$AUTO_SERVICE_KEY" ] && break
+  done
   AUTO_DB_PASS="$(sudo docker inspect supabase-db --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | awk -F= '/^POSTGRES_PASSWORD=/{print $2; exit}' || true)"
 
   if [ -n "$AUTO_DB_PASS" ]; then
@@ -75,11 +78,15 @@ EOF
     sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=${INPUT_DB_PASS}|" "$ENV_FILE"
   fi
 
-  # Para SUPABASE_SERVICE_KEY, perguntar se não conseguiu ler
-  CURRENT_SVC="$(grep '^SUPABASE_SERVICE_KEY=' "$ENV_FILE" | cut -d= -f2-)"
-  if [[ "$CURRENT_SVC" == *"<PREENCHER"* ]] || [ -z "$CURRENT_SVC" ]; then
-    read -rp "Cole a SUPABASE_SERVICE_KEY (service_role) de produção: " INPUT_SVC_KEY
-    sed -i "s|^SUPABASE_SERVICE_KEY=.*|SUPABASE_SERVICE_KEY=${INPUT_SVC_KEY}|" "$ENV_FILE"
+  if [ -n "$AUTO_SERVICE_KEY" ]; then
+    sed -i "s|^SUPABASE_SERVICE_KEY=.*|SUPABASE_SERVICE_KEY=${AUTO_SERVICE_KEY}|" "$ENV_FILE"
+    echo "✅ SUPABASE_SERVICE_KEY preenchido automaticamente a partir do contêiner local."
+  else
+    CURRENT_SVC="$(grep '^SUPABASE_SERVICE_KEY=' "$ENV_FILE" | cut -d= -f2-)"
+    if [[ "$CURRENT_SVC" == *"<PREENCHER"* ]] || [ -z "$CURRENT_SVC" ]; then
+      read -rp "Cole a SUPABASE_SERVICE_KEY (service_role) de produção: " INPUT_SVC_KEY
+      sed -i "s|^SUPABASE_SERVICE_KEY=.*|SUPABASE_SERVICE_KEY=${INPUT_SVC_KEY}|" "$ENV_FILE"
+    fi
   fi
 
   read -rp "Cole o TELEGRAM_BOT_TOKEN (ou deixe em branco se não usar): " INPUT_TG_TOKEN
