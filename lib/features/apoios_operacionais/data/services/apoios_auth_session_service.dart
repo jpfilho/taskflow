@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../../config/supabase_config.dart';
@@ -40,29 +41,46 @@ class ApoiosAuthSessionService extends ChangeNotifier {
   }) async {
     _currentUserId = usuarioId;
     _currentToken = token;
+    final storageKey = '$_storageKeyPrefix$usuarioId';
     try {
       await _secureStorage.write(
-        key: '$_storageKeyPrefix$usuarioId',
+        key: storageKey,
         value: token,
       );
     } catch (_) {
-      // Ignorar falha de secure storage em ambientes de teste sem plugin
+      // Ignorar falha de secure storage em ambientes Web HTTP ou testes sem plugin
+    }
+    if (kIsWeb) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(storageKey, token);
+      } catch (_) {}
     }
     notifyListeners();
   }
 
   Future<String?> restoreTokenForUser(String usuarioId) async {
+    final storageKey = '$_storageKeyPrefix$usuarioId';
+    String? saved;
     try {
-      final saved = await _secureStorage.read(
-        key: '$_storageKeyPrefix$usuarioId',
-      );
-      if (saved != null && saved.isNotEmpty && !_isJwtExpired(saved)) {
-        _currentUserId = usuarioId;
-        _currentToken = saved;
-        notifyListeners();
-        return saved;
+      saved = await _secureStorage.read(key: storageKey);
+    } catch (_) {
+      saved = null;
+    }
+    if ((saved == null || saved.isEmpty) && kIsWeb) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        saved = prefs.getString(storageKey);
+      } catch (_) {
+        saved = null;
       }
-    } catch (_) {}
+    }
+    if (saved != null && saved.isNotEmpty && !_isJwtExpired(saved)) {
+      _currentUserId = usuarioId;
+      _currentToken = saved;
+      notifyListeners();
+      return saved;
+    }
     return null;
   }
 
@@ -171,9 +189,16 @@ class ApoiosAuthSessionService extends ChangeNotifier {
     }
 
     if (targetUser != null && targetUser.isNotEmpty) {
+      final storageKey = '$_storageKeyPrefix$targetUser';
       try {
-        await _secureStorage.delete(key: '$_storageKeyPrefix$targetUser');
+        await _secureStorage.delete(key: storageKey);
       } catch (_) {}
+      if (kIsWeb) {
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.remove(storageKey);
+        } catch (_) {}
+      }
     }
     notifyListeners();
   }

@@ -353,6 +353,9 @@ class AuthServiceSimples {
       if (localUser != null) {
         _usuarioAtual = localUser;
         await _authCache.saveUser(localUser);
+        if (localUser.id != null) {
+          await ApoiosAuthSessionService().restoreTokenForUser(localUser.id!);
+        }
         return true;
       }
 
@@ -365,6 +368,9 @@ class AuthServiceSimples {
       }
       _usuarioAtual = usuario;
       await _authCache.saveUser(usuario);
+      if (usuario.id != null) {
+        await ApoiosAuthSessionService().restoreTokenForUser(usuario.id!);
+      }
       return true;
     } catch (e) {
       return false;
